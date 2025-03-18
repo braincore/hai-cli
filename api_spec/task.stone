@@ -1,0 +1,99 @@
+namespace task
+
+route put(TaskPutArg, Void, TaskPutError)
+    "Puts a task into the repo."
+
+struct TaskPutArg 
+    task_fqn String(min_length=3, max_length=64)
+        "Task's fully-qualified name"
+    config String(min_length=1, max_length=65536)
+        "TOML file describing task"
+
+union TaskPutError
+    no_permission
+    bad_fqn
+    bad_config BadConfigError
+        union
+            config_too_large
+            bad_toml
+            missing_name
+            missing_description
+            missing_version
+            missing_steps
+            too_many_steps
+            bad_name
+            bad_description
+            invalid_version
+            version_already_exists
+            version_nonmonotonic
+    too_many_tasks
+
+# --
+
+route get(TaskGetArg, TaskGetResult, TaskGetError)
+    "Gets a task from the repo."
+
+    attrs
+        auth = "user_optional"
+
+struct TaskGetArg
+    task_fqn String(min_length=1)
+        "Task's fully-qualified name"
+
+struct TaskGetResult 
+    task_id String(min_length=1)
+    task_fqn String(min_length=1)
+    task_version String(min_length=1)
+    config String(min_length=1)
+
+union TaskGetError
+    task_not_found
+    version_not_found
+
+
+# --
+
+route list_versions(TaskListVersionsArg, TaskListVersionsResult, TaskListVersionsError)
+    "Lists all versions of a task."
+
+    attrs
+        auth = "user_optional"
+
+struct TaskListVersionsArg
+    task_fqn String(min_length=1)
+        "Task's fully-qualified name"
+
+struct TaskListVersionsResult
+    versions List(String(min_length=1))
+
+union TaskListVersionsError
+    task_not_found
+
+# --
+
+route search(TaskSearchArg, TaskSearchResult, TaskSearchError)
+    "Search tasks both syntactically and semantically."
+
+    attrs
+        auth = "user_optional"
+
+struct TaskSearchArg
+    q String(min_length=1)
+        "The search query."
+
+struct TaskSearchResult
+    semantic_matches List(TaskSearchMatch)
+    syntactic_matches List(TaskSearchMatch)
+
+struct TaskSearchMatch
+    task_id String(min_length=1)
+    task_fqn String(min_length=1)
+    task_version String(min_length=1)
+    description String(min_length=1)?
+    downloads UInt64
+        "Number of times a task has been downloaded. This is an aggregate
+        across all versions."
+
+union TaskSearchError
+    bad_q
+

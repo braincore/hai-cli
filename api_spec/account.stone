@@ -1,0 +1,148 @@
+namespace account
+
+import common
+
+annotation PasswordRedactor = RedactedBlot()
+
+route register(AccountRegisterArg, AccountRegisterResult, AccountRegisterError)
+    "Create a new user account."
+
+    attrs
+        auth = "noauth"
+
+struct AccountRegisterArg
+    username String(min_length=3, max_length=64)
+    password String(min_length=8, max_length=64)
+        @PasswordRedactor
+    email String(min_length=1, max_length=64)?
+
+struct AccountRegisterResult
+    user_id String(min_length=1)
+    username String(min_length=1)
+    token String(min_length=1)
+
+union AccountRegisterError
+    bad_username
+        ":field:`AccountRegisterArg.username` is not a valid username."
+    username_taken
+        ":field:`AccountRegisterArg.username` is already registered."
+    bad_password
+    bad_email
+        ":field:`AccountRegisterArg.email` is not a valid email."
+    email_taken
+        ":field:`AccountRegisterArg.email` address is already registered."
+
+# --
+
+route token_from_login(AccountTokenFromLoginArg, AccountTokenFromLoginResult, AccountTokenFromLoginError)
+    "Gets a bearer token from login credentials."
+
+    attrs
+        auth = "noauth"
+
+struct AccountTokenFromLoginArg
+    username String(min_length=3, max_length=64)
+    password String(min_length=8, max_length=64)
+        @PasswordRedactor
+
+struct AccountTokenFromLoginResult
+    user_id String(min_length=1)
+    username String(min_length=1)
+    token String(min_length=1)
+
+union AccountTokenFromLoginError
+    bad_password
+
+# --
+
+route check_client_version(Void, AccountCheckClientVersionResult, Void)
+    "Checks the latest client version available so that clients can check
+    whether they are out-of-date."
+
+    attrs
+        auth = "noauth"
+
+struct AccountCheckClientVersionResult
+    version String(min_length=1)
+
+# --
+
+route whois(AccountWhoisArg, AccountWhoisResult, AccountWhoisError)
+    "Get information about a user."
+
+    attrs
+        auth = "user_optional"
+
+struct AccountWhoisArg
+    username String(min_length=1)
+
+struct AccountWhoisResult
+    user_id String(min_length=1)
+    username String(min_length=1)
+    joined_on common.UtcTimestamp
+    name String(min_length=1)?
+    bio String(min_length=1)?
+    tasks List(TaskShort)
+
+struct TaskShort
+    task_id String(min_length=1)
+    task_fqn String(min_length=1)
+
+union AccountWhoisError
+    user_not_found
+
+# --
+
+route set_name(AccountSetNameArg, Void, AccountSetNameError)
+    "Set name for account."
+
+    attrs
+        auth = "user"
+
+struct AccountSetNameArg
+    name String(min_length=1, max_length=128)?
+        "If unset, clears name."
+
+union AccountSetNameError
+    bad_name
+
+# --
+
+route set_bio(AccountSetBioArg, Void, AccountSetBioError)
+    "Set bio for account."
+
+    attrs
+        auth = "user"
+
+struct AccountSetBioArg
+    bio String(min_length=1, max_length=1024)?
+        "If unset, clears bio."
+
+union AccountSetBioError
+    bad_bio
+
+# --
+
+route get_balance(Void, AccountGetBalanceResult, Void)
+    "Get balance for account."
+
+    attrs
+        auth = "user"
+
+struct AccountGetBalanceResult
+    remaining Int32
+        "Remaining account balance, represented in US dollars as cents (e.g., $1.23 is represented as 123)."
+
+# --
+
+route get_subscribe_link (Void, AccountGetSubscribeLinkResult, AccountGetSubscribeLinkError)
+    "Get a link to subscribe to a plan."
+
+    attrs
+        auth = "user"
+
+struct AccountGetSubscribeLinkResult
+    subscribe_link String(min_length=1)
+
+union AccountGetSubscribeLinkError
+    already_subscribed

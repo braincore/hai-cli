@@ -1,0 +1,2144 @@
+use regex::Regex;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use crate::tool;
+
+#[derive(Clone, Debug)]
+/// Represents all possible commands in the program's REPL
+pub enum Cmd {
+    /// No-op
+    Noop,
+    /// New conversation
+    New,
+    /// Reset conversation but retain /load-ed and /pin-ed data
+    Reset,
+    /// Quit the REPL
+    Quit,
+    /// Halp!
+    Help(HelpCmd),
+    /// Prompt the AI
+    Prompt(PromptCmd),
+    /// Change directory
+    Cd(CdCmd),
+    /// Switch AI model
+    Ai(AiCmd),
+    /// Set default AI model
+    AiDefault(AiDefaultCmd),
+    /// Set AI Provider API key
+    SetKey(SetKeyCmd),
+    /// Set masking on/off
+    SetMaskSecrets(SetMaskSecretsCmd),
+    /// Set hai-router on/off
+    HaiRouter(HaiRouterCmd),
+    /// Get/set AI model temperature
+    Temperature(TemperatureCmd),
+    /// Executes a shell command
+    Exec(ExecCmd),
+    /// Print all haivars
+    PrintVars,
+    /// Set a haivar variable
+    SetVar(SetVarCmd),
+    /// Load files into conversation
+    Load(LoadCmd),
+    /// Load URL into conversation
+    LoadUrl(LoadUrlCmd),
+    /// Add pinned message to conversation
+    Pin(PinCmd),
+    /// Add a message without triggering an AI response
+    Prep(PrepCmd),
+    /// Get/set system prompt
+    SystemPrompt(SystemPromptCmd),
+    /// Forgot messages in the conversation
+    Forget(ForgetCmd),
+    /// Copy last message to clipboard
+    Clip,
+    /// Ask AI to use a tool
+    Tool(ToolCmd),
+    /// Enter tool mode
+    ToolMode(ToolModeCmd),
+    /// Exit tool mode
+    ToolModeExit,
+    /// Ask-human command to manually input data
+    AskHuman(AskHumanCmd),
+    /// Task-mode command for specific .haitask
+    Task(TaskCmd),
+    /// End current task-mode
+    TaskEnd,
+    /// Forget cached answers for ask-human in a specific .haitask
+    TaskForget(TaskForgetCmd),
+    /// Purge task from machine
+    TaskPurge(TaskPurgeCmd),
+    /// Download and cache task
+    TaskFetch(TaskFetchCmd),
+    /// Publishes a task to the repo
+    TaskPublish(TaskPublishCmd),
+    /// Include task cmds in conversation without entering task-mode
+    TaskInclude(TaskIncludeCmd),
+    /// Search for tasks in the repo
+    TaskSearch(TaskSearchCmd),
+    /// View the task config without running it
+    TaskView(TaskViewCmd),
+    /// List all versions of a task
+    TaskVersions(TaskVersionsCmd),
+    /// Creates a new asset
+    AssetNew(AssetNewCmd),
+    /// Edit an asset
+    AssetEdit(AssetEditCmd),
+    /// Push into an asset
+    AssetPush(AssetPushCmd),
+    /// List assets with matching prefix
+    AssetList(AssetListCmd),
+    /// Search assets semantically
+    AssetSearch(AssetSearchCmd),
+    /// Load an asset into the convo
+    AssetLoad(AssetLoadCmd),
+    /// View an asset
+    AssetView(AssetViewCmd),
+    /// Get link to an asset
+    AssetLink(AssetLinkCmd),
+    /// Remove an asset
+    AssetRemove(AssetRemoveCmd),
+    /// Show revisions of an asset
+    AssetRevisions(AssetRevisionsCmd),
+    /// Import an asset from the filesystem
+    AssetImport(AssetImportCmd),
+    /// Export an asset to the filesystem
+    AssetExport(AssetExportCmd),
+    /// Grant permission to an asset
+    AssetAcl(AssetAclCmd),
+    /// Load a chat
+    ChatLoad(ChatLoadCmd),
+    /// Save a chat
+    ChatSave(ChatSaveCmd),
+    /// Get current account (or if specified, switch to logged-in account)
+    Account(AccountCmd),
+    /// Make a new account
+    AccountNew,
+    /// Login to an account
+    AccountLogin,
+    /// Logout of account (remove local credentials)
+    AccountLogout(AccountLogoutCmd),
+    /// Balance of an account
+    AccountBalance,
+    /// Subscribe
+    AccountSubscribe,
+    /// Get whois info for a user
+    Whois(WhoisCmd),
+    /// See cost of models
+    Cost,
+    /// Dumps raw chat history (undocumented)
+    Dump,
+    /// Program info
+    About,
+}
+
+//
+// Structs for all named REPL commands
+//
+
+#[derive(Clone, Debug)]
+pub struct HelpCmd {
+    /// Whether to include help message in conversation history
+    pub history: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct PromptCmd {
+    /// The prompt to message the AI
+    pub prompt: String,
+    /// Whether to cache the AI response to re-use next time
+    pub cache: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct CdCmd {
+    /// Target directory to change to
+    pub path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AiCmd {
+    /// AI model to switch to
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AiDefaultCmd {
+    /// AI model to set as default
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetKeyCmd {
+    /// Provider name
+    pub provider: String,
+
+    /// API Key
+    pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetMaskSecretsCmd {
+    pub on: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HaiRouterCmd {
+    pub on: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TemperatureCmd {
+    pub temperature: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecCmd {
+    /// Shell command to execute
+    pub command: String,
+    /// Whether to cache the output to re-use next time
+    pub cache: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SetVarCmd {
+    /// Name of the variable
+    pub key: String,
+    /// Value to set
+    pub value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadCmd {
+    /// Path or glob pattern to load files from
+    pub path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadUrlCmd {
+    /// URL to load from
+    pub url: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PinCmd {
+    /// Message to pin to the conversation
+    pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrepCmd {
+    /// Message to send without triggering AI response
+    pub message: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SystemPromptCmd {
+    /// The system prompt
+    pub prompt: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ForgetCmd {
+    /// Number of messages to forget
+    pub n: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolCmd {
+    /// The tool to use
+    pub tool: tool::Tool,
+    /// Prompt to apply to tool
+    pub prompt: String,
+    /// Whether to require the use of the tool
+    pub require: bool,
+    /// Whether to cache the AI response to re-use next time
+    pub cache: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolModeCmd {
+    /// The tool to use
+    pub tool: tool::Tool,
+    /// Whether to require the use of the tool
+    pub require: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AskHumanCmd {
+    /// Question for the user to answer
+    pub question: String,
+    /// Whether to hide the answer in the UI
+    pub secret: bool,
+    /// Whether to cache the answer to re-use next time
+    pub cache: bool,
+}
+
+// A note on how tasks are referenced:
+// - task_fqn: The fully-qualified name of the task of the format
+//     `[username]/[task name]`. The fqn is specified as the `name` in task
+//     configs and is the name used in the global repository.
+// - task_path: This is exclusively a filesystem path to a task config on the
+//     local machine.
+// - task_ref: A reference to task can be either an fqn or a local path. If the
+//     ref begins with "/" it's treated as an absolute path. If it begins with
+//     "./" it's treated as a path relative to the cwd. Otherwise, it is
+//     interpreted as an fqn and is required to be `[username]/[task name]`.
+
+#[derive(Clone, Debug)]
+pub struct TaskCmd {
+    /// Task fqn or local path (prefix with ./ or /)
+    pub task_ref: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskForgetCmd {
+    /// Task fqn or local path to forget cached answers for
+    pub task_ref: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskPurgeCmd {
+    /// Task fqn to purge from machine
+    pub task_fqn: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskPublishCmd {
+    /// Path to local haitask file
+    pub task_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskFetchCmd {
+    /// Task fqn to download and cache
+    pub task_fqn: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskIncludeCmd {
+    /// Task fqn or local path (prefix with ./ or /)
+    pub task_ref: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskSearchCmd {
+    /// The search string to use
+    pub q: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskViewCmd {
+    /// Task fqn or local path (prefix with ./ or /)
+    pub task_ref: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskVersionsCmd {
+    /// Task fqn to list versions of
+    pub task_fqn: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetNewCmd {
+    /// Name of the asset (can include / for "foldering")
+    pub asset_name: String,
+    pub contents: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetEditCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetPushCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    pub contents: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetListCmd {
+    /// All assets with this prefix will be listed
+    /// Empty string is supported
+    pub prefix: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetSearchCmd {
+    /// The search string to use
+    pub q: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetLoadCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetViewCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetRevisionsCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetLinkCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetRemoveCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetImportCmd {
+    /// Name of the asset
+    pub target_asset_name: String,
+    /// Path to the file
+    pub source_file_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetExportCmd {
+    /// Name of the asset
+    pub source_asset_name: String,
+    /// Path to the file
+    pub target_file_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum AssetAcePermission {
+    ReadData,
+    ReadRevisions,
+    PushData,
+}
+
+#[derive(Clone, Debug)]
+pub enum AssetAceType {
+    Allow,
+    Deny,
+    Default,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAclCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Permission to grant
+    pub ace_permission: AssetAcePermission,
+    /// Permission to grant
+    pub ace_type: AssetAceType,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatLoadCmd {
+    /// Name of the chat log asset
+    pub chat_log_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatSaveCmd {
+    /// Name of the asset to save the chat log to
+    pub chat_log_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountCmd {
+    pub username: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountLogoutCmd {
+    pub username: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WhoisCmd {
+    pub username: String,
+}
+
+fn get_cmd_re() -> &'static Regex {
+    static CMD_RE: OnceLock<Regex> = OnceLock::new();
+    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z-]*)( |\(|$)").unwrap())
+}
+
+fn get_tool_re() -> &'static Regex {
+    static TOOL_RE: OnceLock<Regex> = OnceLock::new();
+    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+|'(?:\\'|[^'])*')?( |$)").unwrap())
+}
+
+/// Parses user/task input.
+///
+/// Errors are printed to the screen so the caller is not expected to.
+///
+/// In general, command-like strings that don't exactly match one of our
+/// commands are treated as prompts rather than errors. This is to minimize
+/// conflicts between prompts from the user (especially pasted code) and our
+/// command list. For example, we don't want a "//comment" input to trigger an
+/// error even though if you squint it looks like a cmd.
+pub fn parse_user_input(
+    input: &str,
+    last_tool_cmd: Option<ToolCmd>,
+    tool_mode: Option<ToolModeCmd>,
+) -> Option<Cmd> {
+    if input.trim().is_empty() {
+        return Some(Cmd::Noop);
+    }
+    // NOTE: We intentionally preserve whitespace at the start of the input.
+    // Why? Because a space at the start is the easiest way for a user to
+    // indicate that their message is definitely not a command, but a prompt.
+    if let Some(mut remaining) = input.strip_prefix('/') {
+        // Try parsing as a command
+        let input = input.trim_end();
+        let cmd_re = get_cmd_re();
+        let (mut remaining, cmd_name) = match cmd_re.captures(remaining) {
+            Some(captures) => {
+                if let Some(m) = captures.get(1) {
+                    remaining = &input[m.end() + 1..];
+                    (remaining, m.as_str())
+                } else {
+                    eprintln!("Warning: Did you intend to invoke a /command?");
+                    return Some(Cmd::Prompt(PromptCmd {
+                        prompt: input.into(),
+                        cache: false,
+                    }));
+                }
+            }
+            None => {
+                eprintln!("Warning: Did you intend to invoke a /command?");
+                return Some(Cmd::Prompt(PromptCmd {
+                    prompt: input.into(),
+                    cache: false,
+                }));
+            }
+        };
+        let options_re = Regex::new(r"(\([^\)]*\))?( |$)").unwrap();
+        let (remaining, options) = match options_re.captures(remaining) {
+            Some(captures) => {
+                if let Some(m) = captures.get(1) {
+                    remaining = &remaining[m.end()..];
+                    (remaining, parse_options(m.as_str()))
+                } else {
+                    (remaining, HashMap::new())
+                }
+            }
+            None => (remaining, HashMap::new()),
+        };
+        parse_command(cmd_name, options.clone(), remaining, input)
+    } else if let Some(mut remaining) = input.strip_prefix('!') {
+        // Try parsing as a tool-command
+        let input = input.trim_end();
+        let require = if remaining.starts_with("?") {
+            remaining = &remaining[1..];
+            false
+        } else {
+            true
+        };
+        // If the next char is blank, then we assume the user intends to use a
+        // previous tool so we leave the tool_name empty.
+        let (remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
+            (remaining, "".to_string())
+        } else {
+            let tool_re = get_tool_re();
+            match tool_re.captures(remaining) {
+                Some(captures) => {
+                    if let Some(m) = captures.get(1) {
+                        remaining = &remaining[m.end()..];
+                        (remaining, m.as_str().replace("\\'", "'"))
+                    } else {
+                        eprintln!("Warning: Did you intend to invoke a tool?");
+                        return Some(Cmd::Prompt(PromptCmd {
+                            prompt: input.into(),
+                            cache: false,
+                        }));
+                    }
+                }
+                None => {
+                    eprintln!("Warning: Did you intend to invoke a tool?");
+                    return Some(Cmd::Prompt(PromptCmd {
+                        prompt: input.into(),
+                        cache: false,
+                    }));
+                }
+            }
+        };
+        parse_tool_command(tool_name.as_str(), require, last_tool_cmd, remaining, input)
+    } else if input.ends_with("\n\n") {
+        let input = input.trim_end();
+        println!("Info: Message is queued up and will be sent with your next message.");
+        println!("It was not sent because it ended with two blank lines.");
+        Some(Cmd::Prep(PrepCmd {
+            message: input.into(),
+        }))
+    } else {
+        let input = input.trim_end();
+        /*Some(Cmd::Prompt(PromptCmd {
+            prompt: input.into(),
+            cache: false,
+        }))*/
+        if let Some(tool_mode) = tool_mode {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool_mode.tool,
+                prompt: input.into(),
+                require: tool_mode.require,
+                cache: false,
+            }))
+        } else {
+            Some(Cmd::Prompt(PromptCmd {
+                prompt: input.into(),
+                cache: false,
+            }))
+        }
+    }
+}
+
+fn split_arg_and_optional_body(s: &str) -> (String, Option<String>) {
+    s.split_once("\n")
+        .map(|(l, r)| (l.to_string(), Some(r.to_string())))
+        .unwrap_or((s.to_string(), None))
+}
+
+/// A single arg can't have spaces (see catchall variant)
+fn parse_one_arg(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace()) {
+        None
+    } else {
+        Some(trimmed.into())
+    }
+}
+
+/// The one arg has space around it trimmed, but otherwise can contain
+/// internal whitespace.
+fn parse_one_arg_catchall(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.into())
+    }
+}
+
+fn parse_two_arg(s: &str) -> Option<(String, String)> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        let args = trimmed.split_whitespace().collect::<Vec<&str>>();
+        if args.len() != 2 {
+            None
+        } else {
+            Some((args[0].into(), args[1].into()))
+        }
+    }
+}
+
+fn parse_two_arg_catchall(s: &str) -> Option<(String, String)> {
+    let trimmed = s.trim();
+    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
+
+    let first = parts.next();
+    let rest = parts.next();
+
+    match (first, rest) {
+        (Some(first), Some(rest)) => Some((first.to_string(), rest.to_string())),
+        _ => None,
+    }
+}
+
+/// If None is returned, it prints an error usage string.
+fn parse_command(
+    cmd_name: &str,
+    options: HashMap<String, String>,
+    remaining: &str,
+    full_input: &str, // Only for the fallback case
+) -> Option<Cmd> {
+    match cmd_name {
+        "quit" | "q" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Quit)
+        }
+        "help" | "h" | "?" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["history"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("history".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let history = options.get("history").map(|v| v == "true").unwrap_or(false);
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Help(HelpCmd { history }))
+        }
+        "new" | "n" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::New)
+        }
+        "reset" | "r" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Reset)
+        }
+        "clip" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Clip)
+        }
+        "printvars" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::PrintVars)
+        }
+        "dump" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Dump)
+        }
+        "about" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::About)
+        }
+        "cd" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::Cd(CdCmd {
+                path: parse_one_arg_catchall(remaining)?,
+            }))
+        }
+        "ai" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::Ai(AiCmd {
+                model: parse_one_arg(remaining),
+            }))
+        }
+        "ai-default" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AiDefault(AiDefaultCmd {
+                model: parse_one_arg(remaining),
+            }))
+        }
+        "set-key" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg(remaining) {
+                Some((provider, key)) => Some(Cmd::SetKey(SetKeyCmd { provider, key })),
+                None => {
+                    eprintln!("Usage: /set-key <provider> <key>");
+                    eprintln!("providers: openai, anthropic, deepseek, google");
+                    None
+                }
+            }
+        }
+        "set-mask-secrets" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(arg) => {
+                    if arg != "on" && arg != "off" {
+                        eprintln!("Usage: /set-mask-secrets <on/off>");
+                        None
+                    } else {
+                        Some(Cmd::SetMaskSecrets(SetMaskSecretsCmd {
+                            on: Some(arg == "on"),
+                        }))
+                    }
+                }
+                None => Some(Cmd::SetMaskSecrets(SetMaskSecretsCmd { on: None })),
+            }
+        }
+        "hai-router" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(arg) => {
+                    if arg != "on" && arg != "off" {
+                        eprintln!("Usage: /hai-router <on|off>");
+                        None
+                    } else {
+                        Some(Cmd::HaiRouter(HaiRouterCmd {
+                            on: Some(arg == "on"),
+                        }))
+                    }
+                }
+                None => Some(Cmd::HaiRouter(HaiRouterCmd { on: None })),
+            }
+        }
+        "temperature" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(arg) => {
+                    if arg == "none" {
+                        None
+                    } else {
+                        match arg.parse::<f32>() {
+                            Ok(value) => Some(Cmd::Temperature(TemperatureCmd {
+                                temperature: Some(value),
+                            })),
+                            Err(_) => {
+                                eprintln!("Error: Temperature must be a number or `none`.");
+                                None
+                            }
+                        }
+                    }
+                }
+                None => Some(Cmd::Temperature(TemperatureCmd { temperature: None })),
+            }
+        }
+        "setvar" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((key, value)) => Some(Cmd::SetVar(SetVarCmd { key, value })),
+                None => {
+                    eprintln!("Usage: /setvar <key> <value...>");
+                    None
+                }
+            }
+        }
+        "load" | "l" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(path) => Some(Cmd::Load(LoadCmd { path })),
+                None => {
+                    eprintln!("Usage: /load <glob path>");
+                    None
+                }
+            }
+        }
+        "load-url" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url })),
+                None => {
+                    eprintln!("Usage: /load-url <url>");
+                    None
+                }
+            }
+        }
+        "prep" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(message) => Some(Cmd::Prep(PrepCmd { message })),
+                None => {
+                    eprintln!("Usage: /prep <message>");
+                    None
+                }
+            }
+        }
+        "pin" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(message) => Some(Cmd::Pin(PinCmd { message })),
+                None => {
+                    eprintln!("Usage: /pin <message>");
+                    None
+                }
+            }
+        }
+        "system-prompt" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::SystemPrompt(SystemPromptCmd {
+                prompt: parse_one_arg_catchall(remaining),
+            }))
+        }
+        "forget" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let arg = parse_one_arg_catchall(remaining);
+            let n = if let Some(n_str) = arg {
+                match n_str.parse::<u32>() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        eprintln!("Usage: /forget <number>");
+                        return None;
+                    }
+                }
+            } else {
+                1
+            };
+            Some(Cmd::Forget(ForgetCmd { n }))
+        }
+        "exec" | "e" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            match parse_one_arg_catchall(remaining) {
+                Some(command) => Some(Cmd::Exec(ExecCmd { command, cache })),
+                None => {
+                    eprintln!("Usage: /exec(cache=false) <command>");
+                    None
+                }
+            }
+        }
+        "ask-human" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["secret", "cache"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([
+                ("secret".to_string(), OptionType::Bool),
+                ("cache".to_string(), OptionType::Bool),
+            ]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let secret = options.get("secret").map(|v| v == "true").unwrap_or(false);
+            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+
+            match parse_one_arg_catchall(remaining) {
+                Some(question) => Some(Cmd::AskHuman(AskHumanCmd {
+                    question,
+                    secret,
+                    cache,
+                })),
+                None => {
+                    eprintln!("Usage: /ask-human(secret=false,cache=false) <question>");
+                    None
+                }
+            }
+        }
+        "task" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(task_ref) => Some(Cmd::Task(TaskCmd { task_ref })),
+                None => {
+                    eprintln!("Usage: /task <task_ref>");
+                    None
+                }
+            }
+        }
+        "task-end" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::TaskEnd)
+        }
+        "task-forget" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref })),
+                None => {
+                    eprintln!("Usage: /task-forget <task_ref>");
+                    None
+                }
+            }
+        }
+        "task-purge" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(task_fqn) => Some(Cmd::TaskPurge(TaskPurgeCmd { task_fqn })),
+                None => {
+                    eprintln!("Usage: /task-purge <task_fqn>");
+                    None
+                }
+            }
+        }
+        "task-publish" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(task_path) => Some(Cmd::TaskPublish(TaskPublishCmd { task_path })),
+                None => {
+                    eprintln!("Usage: /task-publish <task_path>");
+                    None
+                }
+            }
+        }
+        "task-fetch" | "task-update" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(task_fqn) => Some(Cmd::TaskFetch(TaskFetchCmd { task_fqn })),
+                None => {
+                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    None
+                }
+            }
+        }
+        "task-include" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref })),
+                None => {
+                    eprintln!("Usage: /task-include <task_ref>");
+                    None
+                }
+            }
+        }
+        "task-search" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(q) => Some(Cmd::TaskSearch(TaskSearchCmd { q })),
+                None => {
+                    eprintln!("Usage: /task-search <query>");
+                    None
+                }
+            }
+        }
+        "task-view" | "task-cat" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(task_ref) => Some(Cmd::TaskView(TaskViewCmd { task_ref })),
+                None => {
+                    eprintln!("Usage: /{} <task_ref>", cmd_name);
+                    None
+                }
+            }
+        }
+        "task-versions" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(task_fqn) => Some(Cmd::TaskVersions(TaskVersionsCmd { task_fqn })),
+                None => {
+                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    None
+                }
+            }
+        }
+        "asset-new" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            match parse_one_arg(&cmd_arg) {
+                Some(asset_name) => Some(Cmd::AssetNew(AssetNewCmd {
+                    asset_name,
+                    contents,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-new <name> [⏎ <body>]");
+                    None
+                }
+            }
+        }
+        "asset-edit" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetEdit(AssetEditCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-edit <name>");
+                    None
+                }
+            }
+        }
+        "asset-push" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            match parse_one_arg(&cmd_arg) {
+                Some(asset_name) => Some(Cmd::AssetPush(AssetPushCmd {
+                    asset_name,
+                    contents,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-push <name> [⏎ <body>]");
+                    None
+                }
+            }
+        }
+        "asset-list" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(prefix) => Some(Cmd::AssetList(AssetListCmd { prefix })),
+                None => Some(Cmd::AssetList(AssetListCmd {
+                    prefix: "".to_string(),
+                })),
+            }
+        }
+        "asset-search" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q })),
+                None => {
+                    eprintln!("Usage: /asset-search <query>");
+                    None
+                }
+            }
+        }
+        "asset-load" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetLoad(AssetLoadCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-load <name>");
+                    None
+                }
+            }
+        }
+        "asset-view" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetView(AssetViewCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-view <name>");
+                    None
+                }
+            }
+        }
+        "asset-revisions" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetRevisions(AssetRevisionsCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-revisions <name>");
+                    None
+                }
+            }
+        }
+        "asset-link" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetLink(AssetLinkCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-link <name>");
+                    None
+                }
+            }
+        }
+        "asset-remove" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-remove <name>");
+                    None
+                }
+            }
+        }
+        "asset-import" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, file_path)) => Some(Cmd::AssetImport(AssetImportCmd {
+                    target_asset_name: asset_name,
+                    source_file_path: file_path,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-import <target_asset_name> <source_file_path>");
+                    None
+                }
+            }
+        }
+        "asset-export" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, file_path)) => Some(Cmd::AssetExport(AssetExportCmd {
+                    source_asset_name: asset_name,
+                    target_file_path: file_path,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-export <source_asset_name> <target_file_path>");
+                    None
+                }
+            }
+        }
+        "asset-acl" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, acl_cmd)) => {
+                    if let Some((ace_type, ace_perm)) = acl_cmd.split_once(":") {
+                        let asset_ace_type = match ace_type {
+                            "allow" => AssetAceType::Allow,
+                            "deny" => AssetAceType::Deny,
+                            "default" => AssetAceType::Default,
+                            _ => {
+                                eprintln!("error: unknown type: try allow, deny, default");
+                                return None;
+                            }
+                        };
+                        let asset_ace_perm = match ace_perm {
+                            "read-data" => AssetAcePermission::ReadData,
+                            "read-revisions" => AssetAcePermission::ReadRevisions,
+                            "push-data" => AssetAcePermission::PushData,
+                            _ => {
+                                eprintln!("error: unknown permission");
+                                return None;
+                            }
+                        };
+                        Some(Cmd::AssetAcl(AssetAclCmd {
+                            asset_name: asset_name,
+                            ace_permission: asset_ace_perm,
+                            ace_type: asset_ace_type,
+                        }))
+                    } else {
+                        eprintln!("error: bad format: try `allow:read-data`");
+                        None
+                    }
+                }
+                None => {
+                    eprintln!("Usage: /asset-acl <asset_name> <allow|deny|default>:<acl>");
+                    None
+                }
+            }
+        }
+        "chat-load" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(chat_log_name) => Some(Cmd::ChatLoad(ChatLoadCmd { chat_log_name })),
+                None => {
+                    eprintln!("Usage: /chat-load <name>");
+                    None
+                }
+            }
+        }
+        "chat-save" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::ChatSave(ChatSaveCmd {
+                chat_log_name: parse_one_arg(remaining),
+            }))
+        }
+        "account" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::Account(AccountCmd {
+                username: parse_one_arg_catchall(remaining),
+            }))
+        }
+        "account-new" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::AccountNew)
+        }
+        "account-login" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::AccountLogin)
+        }
+        "account-logout" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AccountLogout(AccountLogoutCmd {
+                username: parse_one_arg_catchall(remaining),
+            }))
+        }
+        "account-balance" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::AccountBalance)
+        }
+        "account-subscribe" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::AccountSubscribe)
+        }
+        "whois" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(username) => Some(Cmd::Whois(WhoisCmd { username })),
+                None => {
+                    eprintln!("Usage: /whois username");
+                    None
+                }
+            }
+        }
+        "cost" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if let Some(_) = parse_one_arg_catchall(remaining) {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Cost)
+        }
+        "prompt" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => Some(Cmd::Prompt(PromptCmd { prompt, cache })),
+                None => {
+                    eprintln!("Usage: /prompt(cache=false) <message>");
+                    None
+                }
+            }
+        }
+        _ => {
+            eprintln!("Warning: Did you intend to invoke a /command?");
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::Prompt(PromptCmd {
+                prompt: full_input.to_owned(),
+                cache: false,
+            }))
+        }
+    }
+}
+
+/// If None is returned, it prints an error usage string.
+fn parse_tool_command(
+    tool_name: &str,
+    require: bool,
+    last_tool_cmd: Option<ToolCmd>,
+    remaining: &str,
+    full_input: &str, // Only for the fallback case
+) -> Option<Cmd> {
+    match tool_name {
+        "clip" => {
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => {
+                    Some(Cmd::Tool(ToolCmd {
+                        tool: tool::Tool::CopyToClipboard,
+                        // Include !clip as it nudges AI to use the tool
+                        prompt: get_tool_prefixed_prompt(
+                            &tool::Tool::CopyToClipboard,
+                            require,
+                            &prompt,
+                        ),
+                        require,
+                        cache: false,
+                    }))
+                }
+                None => {
+                    eprintln!("Usage: !clip <prompt: what to clip>");
+                    None
+                }
+            }
+        }
+        "py" => {
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => {
+                    Some(Cmd::Tool(ToolCmd {
+                        tool: tool::Tool::ExecPythonScript,
+                        // Include !py as it nudges AI to use the tool
+                        prompt: get_tool_prefixed_prompt(
+                            &tool::Tool::ExecPythonScript,
+                            require,
+                            &prompt,
+                        ),
+                        require,
+                        cache: false,
+                    }))
+                }
+                None => Some(Cmd::ToolMode(ToolModeCmd {
+                    tool: tool::Tool::ExecPythonScript,
+                    require,
+                })),
+            }
+        }
+        "sh" => {
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => {
+                    Some(Cmd::Tool(ToolCmd {
+                        tool: tool::Tool::ShellExec,
+                        // Exclude !sh as it tends to make its way into the command itself
+                        prompt: get_tool_prefixed_prompt(&tool::Tool::ShellExec, require, &prompt),
+                        require,
+                        cache: false,
+                    }))
+                }
+                None => Some(Cmd::ToolMode(ToolModeCmd {
+                    tool: tool::Tool::ShellExec,
+                    require,
+                })),
+            }
+        }
+        "shscript" => match parse_one_arg_catchall(remaining) {
+            Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecShellScript,
+                prompt: get_tool_prefixed_prompt(&tool::Tool::ExecShellScript, require, &prompt),
+                require,
+                cache: false,
+            })),
+            None => Some(Cmd::ToolMode(ToolModeCmd {
+                tool: tool::Tool::ExecShellScript,
+                require,
+            })),
+        },
+        "hai" => match parse_one_arg_catchall(remaining) {
+            Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::HaiRepl,
+                prompt: get_tool_prefixed_prompt(&tool::Tool::HaiRepl, require, &prompt),
+                require,
+                cache: false,
+            })),
+            None => Some(Cmd::ToolMode(ToolModeCmd {
+                tool: tool::Tool::HaiRepl,
+                require,
+            })),
+        },
+        "exit" => Some(Cmd::ToolModeExit),
+        "" => {
+            // Tool (and possibly prompt) re-use
+            if let Some(last_tool_cmd) = last_tool_cmd {
+                match parse_one_arg_catchall(remaining) {
+                    // Repeat tool with new prompt
+                    Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                        tool: last_tool_cmd.tool.clone(),
+                        prompt: get_tool_prefixed_prompt(&last_tool_cmd.tool, require, &prompt),
+                        require,
+                        cache: false,
+                    })),
+                    // Repeat tool and prompt
+                    None => Some(Cmd::Tool(ToolCmd {
+                        tool: last_tool_cmd.tool,
+                        prompt: last_tool_cmd.prompt,
+                        require,
+                        cache: false,
+                    })),
+                }
+            } else {
+                eprintln!("Error: No tool was previously used");
+                None
+            }
+        }
+        _ => {
+            // Custom tool
+            if tool_name.starts_with("'") {
+                let shell_cmd = tool_name.trim_matches('\'').to_string();
+                match parse_one_arg_catchall(remaining) {
+                    Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                        tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
+                        prompt: get_tool_prefixed_prompt(
+                            &tool::Tool::ShellExecWithScript(shell_cmd),
+                            require,
+                            &prompt,
+                        ),
+                        require,
+                        cache: false,
+                    })),
+                    None => Some(Cmd::ToolMode(ToolModeCmd {
+                        tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
+                        require,
+                    })),
+                }
+            } else {
+                // Since the tool didn't match a known one, treat it as if the
+                // user never intended to make a !tool call and send it to the
+                // AI as a prompt.
+                eprintln!("Warning: Did you intend to invoke a tool?");
+                Some(Cmd::Prompt(PromptCmd {
+                    prompt: full_input.to_owned(),
+                    cache: false,
+                }))
+            }
+        }
+    }
+}
+
+/// Some tool calls are better handled by the AI when the tool-cmd is prefixed
+/// to the prompt. For other tool calls (e.g. !sh), the tool-cmd confuses the
+/// AI and causes mistakes (e.g. prefixing shell command with !).
+fn get_tool_prefixed_prompt(tool: &tool::Tool, require: bool, prompt: &String) -> String {
+    let tool_call_type = if require { "!" } else { "!?" };
+    let tool_call = match tool {
+        tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),
+        tool::Tool::ExecPythonScript => format!("{}py ", tool_call_type),
+        tool::Tool::HaiRepl => format!("{}hai ", tool_call_type),
+        tool::Tool::ShellExecWithScript(shell_cmd) => format!("{}'{}' ", tool_call_type, shell_cmd),
+        _ => "".to_string(),
+    };
+    format!("{}{}", tool_call, prompt)
+}
+
+/// Parse command options: /cmd(key=value, ...)
+///
+/// - `options_input`: The portion of the input between the parentheses. Do not
+///     include the `/cmd` nor what follows the command.
+fn parse_options(options_input: &str) -> HashMap<String, String> {
+    let mut options = HashMap::new();
+    let content = options_input.trim();
+    if content.starts_with('(') && content.ends_with(')') {
+        let content = &content[1..content.len() - 1];
+        for pair in content.split(',') {
+            if let Some((key, value)) = pair.split_once('=') {
+                options.insert(key.trim().to_string(), value.trim().to_string());
+            }
+        }
+    }
+    options
+}
+
+/// Validates the options for a command.
+///
+/// - `options`: The parsed options from the command.
+/// - `valid_keys`: A slice of valid keys for the command.
+///
+/// Returns:
+/// - `Ok(())` if all options are valid.
+/// - `Err(Vec<String>)` containing invalid keys if any invalid options are found.
+fn validate_options(
+    options: &HashMap<String, String>,
+    valid_keys: &[&str],
+) -> Result<(), Vec<String>> {
+    let invalid_keys: Vec<String> = options
+        .keys()
+        .filter(|key| !valid_keys.contains(&key.as_str()))
+        .cloned()
+        .collect();
+
+    if invalid_keys.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid_keys)
+    }
+}
+
+fn validate_options_and_print_err(
+    cmd: &str,
+    options: &HashMap<String, String>,
+    valid_keys: &[&str],
+) -> bool {
+    if let Err(invalid_keys) = validate_options(options, valid_keys) {
+        let invalid_keys_pretty = invalid_keys.join(", ");
+        eprintln!(
+            "Error: Invalid option(s) for /{}: {}",
+            cmd, invalid_keys_pretty
+        );
+        false
+    } else {
+        true
+    }
+}
+
+enum OptionType {
+    Bool,
+    #[allow(dead_code)]
+    Number,
+}
+
+/// Validates the types for a set of options.
+///
+/// - `options`: The parsed options from the command.
+/// - `expected_types`: A map specifying the expected type (`OptionType`) for each valid key.
+///
+/// Returns:
+/// - `Ok(())` if all options have valid types.
+/// - `Err(String)` containing an error message if a type mismatch is found.
+fn validate_option_types(
+    options: &HashMap<String, String>,
+    expected_types: &HashMap<String, OptionType>,
+) -> Result<(), String> {
+    for (key, value) in options {
+        if let Some(expected_type) = expected_types.get(key) {
+            match expected_type {
+                OptionType::Bool => {
+                    if value != "true" && value != "false" {
+                        return Err(format!(
+                            "Invalid value for '{}': expected a boolean (true/false), got '{}'",
+                            key, value
+                        ));
+                    }
+                }
+                OptionType::Number => {
+                    if value.parse::<f64>().is_err() {
+                        return Err(format!(
+                            "Invalid value for '{}': expected a number, got '{}'",
+                            key, value
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool;
+
+    #[test]
+    fn test_prefixed_whitespace() {
+        // Test that a user can add a space before any input so that it's
+        // treated as an AI prompt and never as a command. This eases issues
+        // with pasting code that looks like a command.
+        let input = " /load xyz";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
+                assert_eq!(prompt, input);
+            }
+            _ => panic!("Failed to parse no args"),
+        }
+    }
+
+    #[test]
+    fn test_arguments() {
+        // Test no arguments
+        let input = "/ask-human agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(!secret);
+                assert!(!cache);
+            }
+            _ => panic!("Failed to parse no args"),
+        }
+
+        // Test one argument
+        let input = "/ask-human(secret=true) agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(!cache);
+            }
+            _ => panic!("Failed to parse one args"),
+        }
+
+        // Test two arguments
+        let input = "/ask-human(secret=true,cache=true) agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse two args"),
+        }
+
+        // Test two arguments separated by space
+        let input = "/ask-human(secret=true, cache=true) agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse two args"),
+        }
+    }
+
+    #[test]
+    fn test_clip_tool_command() {
+        let input = "!clip Copy this to clipboard";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::CopyToClipboard,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, input);
+                assert!(require);
+            }
+            _ => panic!("Failed to parse !clip command properly"),
+        }
+    }
+
+    #[test]
+    fn test_py_tool_command() {
+        let input = "!py print('Hello, World!')";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, input);
+                assert!(require);
+            }
+            _ => panic!("Failed to parse !py command properly"),
+        }
+    }
+
+    #[test]
+    fn test_sh_tool_command() {
+        let input = "!sh ls -lah";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExec,
+                prompt,
+                require,
+                ..
+            })) => {
+                // Does not include !sh b/c it confuses the AI
+                assert_eq!(prompt, "ls -lah");
+                assert!(require);
+            }
+            _ => panic!("Failed to parse !sh command properly"),
+        }
+    }
+
+    #[test]
+    fn test_shscript_tool_command() {
+        let input = "!shscript echo 'Hello'";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecShellScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "echo 'Hello'");
+                assert!(require);
+            }
+            _ => panic!("Failed to parse !shscript command properly"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_tool_command() {
+        let input = "!invalid_tool Something";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
+                assert_eq!(prompt, input);
+            }
+            _ => panic!("Failed to parse no args"),
+        }
+    }
+
+    #[test]
+    fn test_optional_tool_command() {
+        let input = "!?py print('Hello, World!')";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, input);
+                assert!(!require);
+            }
+            _ => panic!("Failed to parse !?py command properly"),
+        }
+    }
+
+    #[test]
+    fn test_custom_tool_command() {
+        let input = "!?'psql' describe the user table";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql");
+                assert_eq!(prompt, input);
+                assert!(!require);
+            }
+            _ => panic!("Failed to parse ![psql] custom command properly"),
+        }
+
+        // custom tool with space
+        let input = "!?'psql -hlocalhost' describe the user table";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql -hlocalhost");
+                assert_eq!(prompt, input);
+                assert!(!require);
+            }
+            _ => panic!("Failed to parse ![psql] custom command properly"),
+        }
+
+        // custom tool with double-quotes
+        let input = "!?'psql -h \"localhost\"' describe the user table";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql -h \"localhost\"");
+                assert_eq!(prompt, input);
+                assert!(!require);
+            }
+            _ => panic!("Failed to parse ![psql] custom command properly"),
+        }
+
+        // custom tool with escaped single-quote
+        let input = "!?'psql -h loc\\'alhost' describe the user table";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql -h loc'alhost");
+                assert_eq!(prompt, "!?'psql -h loc'alhost' describe the user table");
+                assert!(!require);
+            }
+            _ => panic!("Failed to parse ![psql] custom command properly"),
+        }
+    }
+
+    #[test]
+    fn test_tool_reuse_command() {
+        let last_tool_cmd = ToolCmd {
+            tool: tool::Tool::ExecPythonScript,
+            prompt: "!py 1 + 2".to_string(),
+            require: true,
+            cache: false,
+        };
+
+        // Test tool re-use
+        let input = "! 3 + 4";
+        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "!py 3 + 4");
+                assert!(require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+
+        // Test tool re-use with !?
+        let input = "!? 3 + 4";
+        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "!?py 3 + 4");
+                assert!(!require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+
+        // Test tool & prompt re-use
+        let input = "!";
+        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "!py 1 + 2");
+                assert!(require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+
+        // Test tool & prompt re-use with extraneous space and !?
+        let input = "!? ";
+        let cmd = parse_user_input(input, Some(last_tool_cmd), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                // The prompt is taken from the previous one so isn't changed to !?
+                assert_eq!(prompt, "!py 1 + 2");
+                // The actual require bit is changed correctly
+                assert!(!require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+
+        //
+        // Test custom tool
+        //
+
+        let last_tool_cmd = ToolCmd {
+            tool: tool::Tool::ShellExecWithScript("psql -hlocalhost".to_string()),
+            prompt: "!'psql -hlocalhost' dump user table".to_string(),
+            require: true,
+            cache: false,
+        };
+
+        // Test tool re-use
+        let input = "! dump task table";
+        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql -hlocalhost");
+                assert_eq!(prompt, "!'psql -hlocalhost' dump task table");
+                assert!(require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+
+        // Test tool & prompt re-use
+        let input = "!";
+        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithScript(cmd),
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(cmd, "psql -hlocalhost");
+                assert_eq!(prompt, "!'psql -hlocalhost' dump user table");
+                assert!(require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+    }
+
+    #[test]
+    fn test_tool_mode() {
+        let last_tool_cmd = ToolCmd {
+            tool: tool::Tool::ShellExec,
+            prompt: "list home dir".to_string(),
+            require: true,
+            cache: false,
+        };
+
+        //
+        // Test entering tool mode
+        //
+
+        let cmd = parse_user_input("!py", None, None);
+        match cmd {
+            Some(Cmd::ToolMode(ToolModeCmd {
+                tool: tool::Tool::ExecPythonScript,
+                require,
+                ..
+            })) => {
+                assert!(require);
+            }
+            _ => panic!("Failed to enter tool mode"),
+        }
+
+        //
+        // Test tool mode
+        //
+
+        let tool_mode = ToolModeCmd {
+            tool: tool::Tool::ExecPythonScript,
+            require: true,
+        };
+        let input = "3 + 4";
+        let cmd = parse_user_input(input, None, Some(tool_mode.clone()));
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "3 + 4");
+                assert!(require);
+            }
+            _ => panic!("Failed to use tool mode"),
+        }
+
+        //
+        // Test tool mode abides by last_tool_cmd
+        //
+
+        let cmd = parse_user_input(
+            "! get system time",
+            Some(last_tool_cmd),
+            Some(tool_mode.clone()),
+        );
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExec,
+                prompt,
+                require,
+                ..
+            })) => {
+                assert_eq!(prompt, "get system time");
+                assert!(require);
+            }
+            _ => panic!("Failed to re-use tool"),
+        }
+    }
+}

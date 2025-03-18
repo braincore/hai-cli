@@ -1,0 +1,6 @@
+namespace stone_cfg
+
+struct Route
+    auth String = "user"
+        "The authentication type for the route. Valid values: user,
+        user_optional, and noauth."

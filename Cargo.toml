@@ -1,0 +1,54 @@
+[package]
+name = "hai-cli"
+version = "1.0.0"
+authors = ["Ken Elkabany <ken@elkabany.com>"]
+edition = "2021"
+license = "Apache-2.0"
+description = "A CLI with a REPL for hackers using LLMs."
+documentation = "https://github.com/braincore/hai-cli/blob/master/README.md"
+repository = "https://github.com/braincore/hai-cli"
+readme = "README.md"
+
+[[bin]]
+name = "hai"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22.1"
+bytes = "1.8.0"
+chrono = "0.4.39"
+clap = { version = "4.5.20", features = ["derive"] }
+colored = "2.2.0"
+copypasta = "0.10.1"
+copypasta-ext = "0.4.4"
+crossterm = "0.28.1"
+ctrlc = "3.4.5"
+dirs = "5.0.1"
+glob = "0.3.2"
+image = "0.25.4"
+jaq-core = "1.2.1"
+jaq-interpret = "1.2.1"
+jaq-parse = "1.0.2"
+jaq-std = "1.2.1"
+markdown = "1.0.0-alpha.23"
+mdast_util_to_markdown = "0.0.1"
+notify = "8.0.0"
+num-format = "0.4.4"
+reedline = "0.38.0"
+regex = "1.11.1"
+reqwest = { version = "0.12.12", features = ["json", "rustls-tls"] }
+rpassword = "7.3.1"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+semver = "1.0.25"
+serde = { version = "1.0.214", features = ["derive"] }
+serde_json = "1.0.132"
+shellexpand = "3.1.0"
+tempfile = "3.15.0"
+terminal_size = "0.4.0"
+tiktoken-rs = "0.6.0"
+tokio = { version = "1.41.0", features = ["full"] }
+tokio-util = "0.7.13"
+toml = "0.8.19"
+toml_edit = "0.22.22"
+uuid = { version = "1.11.0", features = ["std", "v7"] }
+viuer = "0.9.1"

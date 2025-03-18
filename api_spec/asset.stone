@@ -1,0 +1,300 @@
+namespace asset 
+
+# --
+
+route put(AssetPutArg, AssetPutResult, AssetPutError)
+    "Put an asset."
+
+struct AssetPutArg
+    name String(min_length=1, max_length=2048)
+    data Bytes
+    conflict_policy PutConflictPolicy = override
+
+union PutConflictPolicy
+    "Policy when the new asset has a :field:`AssetPutTextArg.name` that
+    conflicts with an existing asset."
+
+    reject
+    override
+
+struct AssetPutResult
+    entry AssetEntry
+
+struct AssetEntry
+    entry_id String(min_length=1)
+    name String(min_length=1)
+    op AssetEntryOp
+    asset AssetInfo
+
+struct AssetInfo
+    rev_id String(min_length=1)
+    created_by AssetCreatedBy
+        union
+            # Only one variant. In anticipation of assets by system operations.
+            user AssetCreatedByUser
+                struct
+                    username String(min_length=1)
+    size UInt64
+
+union AssetPutError
+    bad_name
+    no_permission
+    name_conflict
+        "Only returned if conflict policy is set to reject."
+    over_quota
+
+union AssetEntryOp
+    add
+    fork
+        "Functionally the same as an add, but indicates it was forked from
+        another asset chain due to conflict-policy."
+    edit
+    push
+    delete
+
+# --
+
+route put_text(AssetPutTextArg, AssetPutResult, AssetPutError)
+    "Put an asset that's text. Unlike :route:`put`, input is a string (not bytes)
+    and therefore does not need to be b64-serialized."
+
+struct AssetPutTextArg
+    name String(min_length=1, max_length=2048)
+    data String(max_length=1000000)
+    conflict_policy PutConflictPolicy = override
+
+# --
+
+route replace(AssetReplaceArg, AssetReplaceResult, AssetReplaceError)
+    "Replace an asset."
+
+struct AssetReplaceArg
+    entry_id String(min_length=1)
+    rev_id String(min_length=1)?
+    data Bytes
+    conflict_policy ReplaceConflictPolicy = reject
+
+union ReplaceConflictPolicy
+    "Policy when :field:`AssetReplaceArg.rev_id` is no longer the most recent
+    for the asset."
+
+    reject
+    fork
+
+struct AssetReplaceResult
+    entry AssetEntry
+
+union AssetReplaceError
+    bad_entry_id
+    no_permission
+    bad_rev_id
+    old_rev_id
+        "Revision ID is no longer the most recent for the asset."
+    over_quota
+
+# --
+
+route replace_text(AssetReplaceTextArg, AssetReplaceResult, AssetReplaceError)
+    "Replace an asset with text. Unlike :route:`replace`, input is a string
+    (not) bytes and therefore does not need to be b64-serialized."
+
+struct AssetReplaceTextArg
+    entry_id String(min_length=1)
+    rev_id String(min_length=1)?
+    data String(max_length=1000000)
+    conflict_policy ReplaceConflictPolicy = reject
+
+# --
+
+route remove(AssetRemoveArg, AssetRemoveResult, AssetRemoveError)
+    "Remove an asset."
+
+struct AssetRemoveArg 
+    name String(min_length=1)
+
+struct AssetRemoveResult
+    entry AssetEntry
+
+union AssetRemoveError
+    bad_name
+    no_permission
+
+# --
+
+route get(AssetGetArg, AssetGetResult, AssetGetError)
+    "Get an asset."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetGetArg
+    name String(min_length=1)
+
+struct AssetGetResult 
+    entry AssetEntry
+    data_url String(min_length=1)
+
+union AssetGetError
+    bad_name
+    no_permission
+
+# --
+
+route entry/list(AssetEntryListArg, AssetEntryListResult, AssetEntryListError)
+    "List assets. Non-iterative because it's a beta version."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetEntryListArg
+    prefix String?
+
+struct AssetEntryListResult
+    entries List(AssetEntry)
+
+union AssetEntryListError
+    no_permission
+    too_many_assets
+        "This beta endpoint isn't intended to be used for users with large
+        numbers of assets."
+
+# --
+
+route entry/search(AssetEntrySearchArg, AssetEntrySearchResult, AssetEntrySearchError)
+    "Search assets semantically."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetEntrySearchArg
+    q String(min_length=1, max_length=1024)
+    asset_pool_path String(min_length=1)?
+
+struct AssetEntrySearchResult
+    semantic_matches List(AssetEntry)
+
+union AssetEntrySearchError
+    bad_asset_pool_path
+    no_permission
+
+# --
+
+route revision/iter(AssetRevisionIterArg, AssetRevisionIterResult, AssetRevisionIterError)
+    "Iterate through revisions of an entry."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetRevisionIterArg
+    entry_ref EntryRef
+    limit UInt32 = 10
+
+union EntryRef
+    name String(min_length=1)
+    entry_id String(min_length=1)
+
+struct AssetRevisionIterResult
+    revisions List(AssetRevision)
+    next AssetRevisionCursor?
+    approx_remaining UInt32
+        "Approximate number of revisions remaining including those in :field:`revisions`."
+
+struct AssetRevisionCursor
+    cursor String(min_length=1)
+    is_fork Boolean
+        "If set, the next call will jump to the parent revision-chain that
+        forked into the one that's been iterating."
+
+struct AssetRevision
+    op AssetEntryOp
+    asset AssetInfo
+    data_url String(min_length=1)?
+
+union AssetRevisionIterError
+    bad_entry_ref
+    no_permission
+
+# --
+
+route revision/iter/next(AssetRevisionIterNextArg, AssetRevisionIterResult, AssetRevisionIterNextError)
+    "Iterate through the next set of revisions. Requires cursor from
+    :route:`revision/iter`."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetRevisionIterNextArg
+    cursor String(min_length=1)
+    limit UInt32 = 10
+
+union AssetRevisionIterNextError
+    bad_cursor
+    no_permission
+
+# --
+
+route push(AssetPushArg, AssetPushResult, AssetPushError)
+    "Push into an asset."
+
+struct AssetPushArg
+    name String(min_length=1, max_length=2048)
+    data Bytes
+
+struct AssetPushResult
+    entry AssetEntry
+
+union AssetPushError
+    bad_name
+    no_permission
+    over_quota
+
+# --
+
+route push_text(AssetPushTextArg, AssetPushResult, AssetPushError)
+    "Push into an asset.
+
+    Creates asset if it doesn't already exist."
+
+struct AssetPushTextArg
+    name String(min_length=1, max_length=2048)
+    data String(max_length=1000000)
+
+# --
+
+route entry/acl/set(AssetEntryAclSetArg, AssetEntryAcl, AssetEntryAclSetError)
+    "For now, this applies to the `everyone` implicit group and overrides the
+    asset-pool permission."
+
+union AceType
+    "Access Control Entry (ACE)"
+    allow
+    deny
+    default
+
+struct AssetEntryAclSetArg
+    entry_ref EntryRef
+    read_data AceType?
+    push_data AceType?
+    read_revisions AceType?
+
+union AssetEntryAclSetError
+    bad_entry_ref
+    no_permission
+
+struct AssetEntryAcl
+    read_data AceType
+    push_data AceType
+    read_revisions AceType
+
+# --
+
+route entry/acl/get(AssetEntryAclGetArg, AssetEntryAcl, AssetEntryAclGetError)
+    "Gets the acl associated with an asset. The acl specifies overrides of the
+    asset-pool permission."
+
+struct AssetEntryAclGetArg
+    entry_ref EntryRef
+
+union AssetEntryAclGetError
+    bad_entry_ref
+    no_permission
