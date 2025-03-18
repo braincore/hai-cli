@@ -52,3 +52,7 @@ toml = "0.8.19"
 toml_edit = "0.22.22"
 uuid = { version = "1.11.0", features = ["std", "v7"] }
 viuer = "0.9.1"
+
+[profile.release]
+strip = true
+lto = "fat"

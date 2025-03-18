@@ -463,7 +463,7 @@ async fn repl(
             } else {
                 "tar.gz"
             };
-            let asset_name = format!("hai-{}-{}.{}", version, get_machine_os_arch(), ext);
+            let asset_name = format!("hai-cli-{}-{}.{}", version, get_machine_os_arch(), ext);
             println!(
                 "  - download: `/asset-export /hai/client/{} {}`",
                 asset_name, asset_name
@@ -3727,7 +3727,7 @@ fn get_machine_os_arch() -> String {
     } else if cfg!(all(target_arch = "arm", target_feature = "v7")) {
         "armv7"
     } else if cfg!(target_arch = "aarch64") {
-        "aarch64"
+        "arm64"
     } else if cfg!(target_arch = "arm") {
         "arm"
     } else if cfg!(target_arch = "x86") {
