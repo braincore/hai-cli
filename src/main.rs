@@ -464,10 +464,7 @@ async fn repl(
                 "tar.gz"
             };
             let asset_name = format!("hai-cli-{}-{}.{}", version, get_machine_os_arch(), ext);
-            println!(
-                "  - download: `/asset-export /hai/client/{} {}`",
-                asset_name, asset_name
-            );
+            println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
             match env::current_exe() {
                 Ok(exe_path) => println!("  - install: unpack and copy to {:?}", exe_path),
                 Err(_) => {}
@@ -2580,6 +2577,15 @@ async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
+            // Special case if target is `.`
+            let target_file_path = if target_file_path == "." {
+                match source_asset_name.rsplit('/').next() {
+                    Some(filename) => filename.to_string(),
+                    None => source_asset_name.clone(), // If no slashes
+                }
+            } else {
+                target_file_path.to_owned()
+            };
             let target_file_path = match shellexpand::full(&target_file_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
