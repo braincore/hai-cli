@@ -1,5 +1,10 @@
 # hai ≡ Hacker AI
 
+[![Crates.io](https://img.shields.io/crates/v/hai-cli)](https://crates.io/crates/hai-cli)
+[![Crates.io](https://img.shields.io/crates/d/hai-cli)](https://crates.io/crates/hai-cli)
+![License](https://img.shields.io/crates/l/hai-cli)
+[![Discord](https://img.shields.io/badge/Discord-%235865F2.svg?logo=discord&logoColor=white)](https://discord.gg/2nzb4PSAWT)
+
 A CLI (`hai`) with a REPL for hackers using LLMs.
 
 ![](doc/hai-intro.gif)
