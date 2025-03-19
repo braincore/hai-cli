@@ -81,7 +81,9 @@ pub enum Cmd {
     TaskView(TaskViewCmd),
     /// List all versions of a task
     TaskVersions(TaskVersionsCmd),
-    /// Creates a new asset
+    /// Edit an asset (create if does not exist)
+    Asset(AssetCmd),
+    /// Create a new asset
     AssetNew(AssetNewCmd),
     /// Edit an asset
     AssetEdit(AssetEditCmd),
@@ -338,6 +340,15 @@ pub struct TaskViewCmd {
 pub struct TaskVersionsCmd {
     /// Task fqn to list versions of
     pub task_fqn: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCmd {
+    /// Name of the asset
+    pub asset_name: String,
+
+    /// Override of default editor
+    pub editor: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -655,6 +666,19 @@ fn parse_two_arg_catchall(s: &str) -> Option<(String, String)> {
 
     match (first, rest) {
         (Some(first), Some(rest)) => Some((first.to_string(), rest.to_string())),
+        _ => None,
+    }
+}
+
+fn parse_two_arg_one_optional_catchall(s: &str) -> Option<(String, Option<String>)> {
+    let trimmed = s.trim();
+    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
+
+    let first = parts.next();
+    let rest = parts.next();
+
+    match (first, rest) {
+        (Some(first), rest) => Some((first.to_string(), rest.map(|s| s.to_string()))),
         _ => None,
     }
 }
@@ -1090,6 +1114,18 @@ fn parse_command(
                 Some(task_fqn) => Some(Cmd::TaskVersions(TaskVersionsCmd { task_fqn })),
                 None => {
                     eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    None
+                }
+            }
+        }
+        "asset" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((asset_name, editor)) => Some(Cmd::Asset(AssetCmd { asset_name, editor })),
+                None => {
+                    eprintln!("Usage: /asset <name>");
                     None
                 }
             }

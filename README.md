@@ -212,13 +212,14 @@ print(distance)
 
 Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
-- `/asset-new <name>` - Create an asset
-- `/asset-edit <name>` - Edit an asset
+- `/asset <name>` - Open asset in editor (create if does not exist)
+- `/asset-new <name>` - Create a new asset and open editor
+- `/asset-edit <name>` - Open existing asset in editor
 - Create/edit will open a text editor defined in `~/.hai/hai.toml` (default
   `vim`).
 - `/asset-{import,export} <name> <path>` - Import / export from files
 - `asset-view <name>` - Add an asset to the conversation for the AI to use.
-  - `/asset-load <name>` - Add an asset without printing its contents.
+- `/asset-load <name>` - Add an asset without printing its contents.
 
 Asset names can mimic file paths with slashes.
 

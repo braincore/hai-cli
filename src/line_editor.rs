@@ -453,7 +453,8 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.ai_model_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
-            } else if line.starts_with("/asset-edit ")
+            } else if line.starts_with("/asset ")
+                || line.starts_with("/asset-edit ")
                 || line.starts_with("/asset-load ")
                 || line.starts_with("/asset-view ")
                 || line.starts_with("/asset-push ")

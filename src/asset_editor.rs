@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 /// Function to edit with an editor and watch for changes to trigger a callback
 pub fn edit_with_editor_api(
     api_client: &HaiClient,
+    shell: &str,
     editor: &str,
     initial_content: &[u8],
     asset_name: &str,
@@ -50,8 +51,9 @@ pub fn edit_with_editor_api(
         .expect("error: failed to watch for file changes");
 
     // Execute editor
-    let status = SyncCommand::new(editor)
-        .arg(file_path.clone())
+    let status = SyncCommand::new(shell)
+        .arg("-c")
+        .arg(format!("{} {}", editor, file_path.to_string_lossy()))
         .status()
         .expect("failed to launch editor");
 
@@ -116,8 +118,18 @@ pub async fn worker_update_asset(
     }
 }
 
+pub enum GetAssetError {
+    BadName,
+    DataFetchFailed,
+    NotText,
+}
+
 /// If returns None, responsible for printing error msg.
-pub async fn get_asset(api_client: &HaiClient, asset_name: &str) -> Option<Vec<u8>> {
+pub async fn get_asset(
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+) -> Result<Vec<u8>, GetAssetError> {
     use crate::api::types::asset::AssetGetArg;
     let asset_get_res = match api_client
         .asset_get(AssetGetArg {
@@ -127,34 +139,49 @@ pub async fn get_asset(api_client: &HaiClient, asset_name: &str) -> Option<Vec<u
     {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("error: {}", e);
-            return None;
+            if bad_name_ok
+                && matches!(
+                    e,
+                    crate::api::client::RequestError::Route(
+                        crate::api::types::asset::AssetGetError::BadName
+                    )
+                )
+            {
+                return Err(GetAssetError::BadName);
+            } else {
+                eprintln!("error: {}", e);
+            }
+            return Err(GetAssetError::BadName);
         }
     };
     let asset_get_resp = match reqwest::get(asset_get_res.data_url).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("error: {}", e);
-            return None;
+            return Err(GetAssetError::DataFetchFailed);
         }
     };
     if !asset_get_resp.status().is_success() {
         eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
-        return None;
+        return Err(GetAssetError::DataFetchFailed);
     }
     match asset_get_resp.bytes().await {
-        Ok(contents) => Some(contents.to_vec()),
+        Ok(contents) => Ok(contents.to_vec()),
         Err(e) => {
-            eprintln!("error: asset is non-text: {}", e);
-            return None;
+            eprintln!("error: failed to fetch asset: {}", e);
+            return Err(GetAssetError::DataFetchFailed);
         }
     }
 }
 
 /// If returns None, responsible for printing error msg.
-pub async fn get_asset_as_text(api_client: &HaiClient, asset_name: &str) -> Option<String> {
-    let asset_content = get_asset(api_client, asset_name).await;
-    asset_content.and_then(|bytes| String::from_utf8(bytes).ok())
+pub async fn get_asset_as_text(
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+) -> Result<String, GetAssetError> {
+    let asset_content = get_asset(api_client, asset_name, bad_name_ok).await;
+    asset_content.and_then(|bytes| String::from_utf8(bytes).map_err(|_e| GetAssetError::NotText))
 }
 
 pub async fn get_asset_raw(data_url: &str) -> Option<Vec<u8>> {

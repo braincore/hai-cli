@@ -276,6 +276,7 @@ async fn repl(
         "/setvar",
         "/set-key",
         "/set-mask-secrets",
+        "/asset",
         "/asset-new",
         "/asset-edit",
         "/asset-push",
@@ -2166,6 +2167,29 @@ async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Asset(cmd::AssetCmd { asset_name, editor }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            let asset_contents = match asset_editor::get_asset(&api_client, &asset_name, true).await
+            {
+                Ok(contents) => contents,
+                Err(asset_editor::GetAssetError::BadName) => vec![],
+                Err(_) => return ProcessCmdResult::Loop,
+            };
+            let _ = asset_editor::edit_with_editor_api(
+                &api_client,
+                &session.shell,
+                &editor.clone().unwrap_or(session.editor.clone()),
+                &asset_contents,
+                asset_name,
+                false,
+                update_asset_tx,
+            );
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetNew(cmd::AssetNewCmd {
             asset_name,
             contents,
@@ -2194,6 +2218,7 @@ async fn process_cmd(
             } else {
                 let _ = asset_editor::edit_with_editor_api(
                     &api_client,
+                    &session.shell,
                     &session.editor,
                     &[],
                     asset_name,
@@ -2209,12 +2234,14 @@ async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let api_client = mk_api_client(Some(session));
-            let asset_contents = match asset_editor::get_asset(&api_client, &asset_name).await {
-                Some(contents) => contents,
-                None => return ProcessCmdResult::Loop,
-            };
+            let asset_contents =
+                match asset_editor::get_asset(&api_client, &asset_name, false).await {
+                    Ok(contents) => contents,
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
             let _ = asset_editor::edit_with_editor_api(
                 &api_client,
+                &session.shell,
                 &session.editor,
                 &asset_contents,
                 asset_name,
@@ -2244,6 +2271,7 @@ async fn process_cmd(
             } else {
                 let _ = asset_editor::edit_with_editor_api(
                     &api_client,
+                    &session.shell,
                     &session.editor,
                     &[],
                     asset_name,
@@ -2330,9 +2358,9 @@ async fn process_cmd(
         | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_name }) => {
             let api_client = mk_api_client(Some(session));
             let asset_contents =
-                match asset_editor::get_asset_as_text(&api_client, &asset_name).await {
-                    Some(contents) => contents,
-                    None => return ProcessCmdResult::Loop,
+                match asset_editor::get_asset_as_text(&api_client, &asset_name, false).await {
+                    Ok(contents) => contents,
+                    Err(_) => return ProcessCmdResult::Loop,
                 };
             let asset_contents_with_delimeters = format!(
                 "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
@@ -2595,9 +2623,9 @@ async fn process_cmd(
             };
             let api_client = mk_api_client(Some(session));
             let asset_contents =
-                match asset_editor::get_asset(&api_client, &source_asset_name).await {
-                    Some(contents) => contents,
-                    None => return ProcessCmdResult::Loop,
+                match asset_editor::get_asset(&api_client, &source_asset_name, false).await {
+                    Ok(contents) => contents,
+                    Err(_) => return ProcessCmdResult::Loop,
                 };
             match fs::write(&target_file_path, asset_contents) {
                 Ok(_) => {}
@@ -2655,9 +2683,9 @@ async fn process_cmd(
             }
             let api_client = mk_api_client(Some(session));
             let chat_log_contents =
-                match asset_editor::get_asset_as_text(&api_client, chat_log_name).await {
-                    Some(contents) => contents,
-                    None => return ProcessCmdResult::Loop,
+                match asset_editor::get_asset_as_text(&api_client, chat_log_name, false).await {
+                    Ok(contents) => contents,
+                    Err(_) => return ProcessCmdResult::Loop,
                 };
             let history = match serde_json::from_str::<Vec<db::LogEntry>>(&chat_log_contents) {
                 Ok(res) => res,
@@ -3226,8 +3254,9 @@ Available Tools:
 --
 
 EXPERIMENTAL:
-/asset-new <name>            - Create a new `doc` asset and open editor
-/asset-edit <name>           - Open asset in editor
+/asset <name> [<editor>]     - Open asset in editor (create if does not exist)
+/asset-new <name>            - Create a new asset and open editor
+/asset-edit <name>           - Open existing asset in editor
 /asset-list <prefix>         - List all assets with the given (optional) prefix
 /asset-search <query>        - Search for assets semantically
 /asset-load <name>           - Load asset into the conversation
