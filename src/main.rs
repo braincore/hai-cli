@@ -3248,6 +3248,7 @@ Available Tools:
                                Searches for virtualenv in current dir & ancestors before falling back to python3
 !sh <prompt>                 - Ask AI to write shell cmd or pipeline that will be executed on your machine
 !shscript <prompt>           - Ask AI to write shell script and pipe it through stdin on your machine
+!hai <prompt>                - Ask AI to write and execute REPL command(s)
 !'<cmd>' <prompt>            - Ask AI to write script that will be piped to this cmd through stdin
                                e.g. !'PG_PASSWORD=secret psql -h localhost -p 5432 -U postgres -d db' how many users?
                                e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc

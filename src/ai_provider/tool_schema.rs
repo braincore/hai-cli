@@ -83,7 +83,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
         Tool::HaiRepl => json!({
             "name": tool_name,
             "description": r#"
-Executes a series of hai-commands in the Hacker-AI (hai) REPL.
+Executes a series of hai-repl-commands.
 
 Do not call this tool twice in one go, just use multiple elements in `cmds`.
 
@@ -94,6 +94,10 @@ can span multiple lines (e.g. /asset-new)
 After every hai-command, the output whether it's a local program execution,
 tool use, or AI response is available in the REPL-history that the next
 hai-command can read and use.
+
+If you don't have enough information to complete the prompt asked of you,
+consider PROMPTING YOURSELF by including a `!hai <revised prompt>` in the list
+of `cmds`.
 "#,
             schema_key_name: {
                 "type": "object",
@@ -130,9 +134,9 @@ Available Commands:
 --
 
 Available Tools:
-!hai <prompt>         - Use this to ask AI to generate REPL commands to fulfill the prompt with the
+!hai <prompt>         - Ask AI to generate REPL commands to fulfill the prompt with the
                         full conversation as context. It's a way for an AI to recursively call
-                        themselves to construct a new set of commands based on new information in
+                        itself to construct a new set of commands based on new information in
                         the conversation.
 !clip <prompt>        - Ask AI to copy a part of the conversation to your clipboard
 !py <prompt>          - Ask AI to write Python script that will be executed on your machine
