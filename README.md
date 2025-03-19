@@ -421,6 +421,9 @@ version = "1.0.0"
 
 description = "Playground for the Strava API"
 
+# Uncomment to hide this task from your /whois profile and search
+# unlisted = true
+
 steps = [
     "/load-url https://developers.strava.com/swagger/swagger.json",
     "/pin Loaded Strava API's swagger definition.",
@@ -441,6 +444,7 @@ with the `--pretty=all` flag. If unavailable, fallback to curl.
   tasks are namespaced by a username to avoid duplicates and confusion.
 - `version` - Must be a [semantic version](https://semver.org/) (semver).
 - `description` - Explain what the task is for. Helps for task search.
+- `unlisted` - Hides the task from search and your /whois profile.
 - `steps` - Every step is something you could have typed yourself into the CLI.
   At the conclusion of the steps, the user takes over with the context fully
   populated.
