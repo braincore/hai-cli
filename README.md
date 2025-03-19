@@ -25,6 +25,18 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 
 ## Installation
 
+### Installer [Linux, macOS]
+
+```
+curl -LsSf https://raw.githubusercontent.com/braincore/hai-cli/refs/heads/master/scripts/hai-installer.sh | sh
+```
+
+### Alt: Download binary [Linux, macOS, Windows]
+
+Go to [releases](https://github.com/braincore/hai-cli/releases) and download the version for your machine.
+
+### Alt: Build from source [Linux, macOS, Windows]
+
 ```
 cargo install hai-cli
 ```
