@@ -443,6 +443,13 @@ with the `--pretty=all` flag. If unavailable, fallback to curl.
   At the conclusion of the steps, the user takes over with the context fully
   populated.
 
+You can test your task by referencing it by file path. To avoid ambiguity with
+tasks in the repo, the file path must begin with `./`, `/`, or `~`:
+
+```
+/task ./path/to/strava-api.toml
+```
+
 When your task is ready to publish, run:
 
 ```
