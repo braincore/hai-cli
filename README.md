@@ -573,6 +573,81 @@ hai-tool[11]: /prompt Please write a numbered list of the headlines extracted fr
 ...
 ```
 
+#### !hai recursion
+
+Some AIs (`sonnet-3.7` was used below; `gpt-4o` never works) are able to work
+out whether they need to re-prompt themselves to act on intermediate
+information.
+
+In this example, only the first command is prompted by the user. The rest,
+prefixed by `hai-tool[ ]:`, are prompted by the AI. For brevity, user confirmations
+are omitted.
+
+```
+[0]: !hai get a random number. if it is even, ask the AI how large the sun is. if it is odd, delete `file1.txt`.
+
+↓↓↓
+
+- !py Generate a random number and determine if it's even or odd
+- !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
+
+⚙ ⚙ ⚙
+
+Pushed 2 command(s) into queue
+```
+
+```
+hai-tool[3]: !py Generate a random number and determine if it's even or odd
+
+↓↓↓
+
+import random
+
+# Generate a random number between 1 and 100
+random_number = random.randint(1, 100)
+
+# Check if the number is even or odd
+if random_number % 2 == 0:
+    result = "even"
+else:
+    result = "odd"
+
+print(f"The random number is: {random_number}")
+print(f"The number is {result}")
+
+⚙ ⚙ ⚙
+
+The random number is: 86
+The number is even
+```
+
+```
+hai-tool[6]: !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
+
+↓↓↓
+
+- /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+
+
+⚙ ⚙ ⚙
+
+Pushed 1 command(s) into queue
+```
+
+```
+hai-tool[9]: /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+
+↓↓↓
+
+# The Size of the Sun
+
+The Sun is enormously large compared to Earth. Here are the key measurements:
+
+- Sun's diameter: approximately 1.39 million kilometers (864,000 miles)
+- Sun's volume: approximately 1.41 × 10^18 cubic kilometers
+- Sun's mass: approximately 1.989 × 10^30 kilograms
+```
+
 ### Open Source
 
 > I don't like running software that I and others can't audit the code of.
