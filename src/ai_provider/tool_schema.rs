@@ -162,7 +162,8 @@ Assets:
 /asset-view <name>      - Prints asset contents and loads it into the conversation
 /asset-link <name>      - Prints link to asset (valid for 24hr) and loads it into the conversation
 /asset-revisions <name> - Lists revisions of an asset
-/asset-push <name>      - Push data into an asset. See pushed data w/ `/asset-revisions`
+/asset-push <name> ⏎<body> - Push data into an asset. See pushed data w/ `/asset-revisions`
+                            - Use a newline after `name` to push arbitrary multi-line content.
 /asset-import <name> <path>   - Imports <path> from local machine into asset with <name>
 /asset-export <name> <path>   - Exports asset with name to <path> on local machine
 /chat-save <asset_name>   - Save the conversation as an asset
