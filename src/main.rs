@@ -2013,7 +2013,14 @@ async fn process_cmd(
                 || task_ref.starts_with("/")
                 || task_ref.starts_with("~")
             {
-                match config::read_haitask(task_ref) {
+                let task_path = match shellexpand::full(&task_ref) {
+                    Ok(s) => s.into_owned(),
+                    Err(e) => {
+                        eprintln!("error: undefined path variable: {}", e.var_name);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+                match config::read_haitask(&task_path) {
                     Ok((_, task)) => task.name,
                     Err(e) => {
                         eprint!("error: failed to read task: {}", e);
