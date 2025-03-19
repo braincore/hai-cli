@@ -1142,7 +1142,9 @@ async fn process_cmd(
                         }
                     }
                     if ai_model_viable {
-                        if !config::is_ai_model_supported_by_hai_router(&selected_ai_model) {
+                        if session.use_hai_router
+                            && !config::is_ai_model_supported_by_hai_router(&selected_ai_model)
+                        {
                             eprintln!(
                                 "warning: disabling hai-router because it does not support {}",
                                 model_name
