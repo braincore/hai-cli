@@ -512,7 +512,7 @@ referencing it with a path-prefix such as dot-slash (`./`), home (`~`), or root
 - `hai bye '<cmd>'...` - Run any command(s) as if using the CLI without entering
   the CLI. Use single-quotes to minimize issues. Multiple commands can be
   specified. All printouts go to the terminal and `hai` exits at the end.
-  - e.g. `hai bye '!sh list all titles in HN front page, use jq'`
+  - e.g. `hai bye '!sh convert apple1.jpg to webp'`
   - If running in non-interactive mode (e.g. as a cron job), use `-y` to
     automatically confirm all user prompts.
 - `hai -i` - Enter incognito mode to keep no history. Pair with
