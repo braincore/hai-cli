@@ -52,9 +52,10 @@ package_target() {
     
     echo "Building for $target ($os-$arch)..."
     
-    # For the native target, use cargo directly; for others, use cross
     if [[ $target == "x86_64-unknown-linux-gnu" ]]; then
-        cargo build --release --target "$target" || return 1
+        # Even for native target, use cross so that an older glibc is built
+        # against.
+        cross build --release --target "$target" || return 1
     else
         cross build --release --target "$target" || return 1
     fi
