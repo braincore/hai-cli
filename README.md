@@ -51,6 +51,7 @@ cargo install hai-cli
 - Run `hai` in as many terminals as you'd like to have multiple simultaneous
   conversations.
 - Start a new conversation with `/new` (`/n` for short).
+  - Keep loaded files/assets/urls with `/reset` (`/r/`).
 
 ### Multi-AI
 
@@ -218,8 +219,9 @@ Assets are objects stored in the cloud for your direct and indirect use via AIs.
 - Create/edit will open a text editor defined in `~/.hai/hai.toml` (default
   `vim`).
 - `/asset-{import,export} <name> <path>` - Import / export from files
-- `asset-view <name>` - Add an asset to the conversation for the AI to use.
-- `/asset-load <name>` - Add an asset without printing its contents.
+- `/asset-view <name>` - Add an asset to the conversation for the AI to use.
+- `/asset-load <name>` - Add an asset without printing its contents (not cleared with `/reset`).
+- `/asset-list-revisions <name>` - Iterate through every revision of an asset.
 
 Asset names can mimic file paths with slashes.
 
@@ -463,6 +465,13 @@ Anyone can run your task by using its `name`:
 ```
 /task ken/strava-api
 ```
+
+#### Examples
+
+See the [hai tasks](https://github.com/braincore/hai-tasks) repo.
+
+Alternatively, you can whois a user (e.g. `/whois ken`), see what tasks they've
+published, and view them via `/task-view <username>/<task_name>`.
 
 #### Task-specific commands
 
