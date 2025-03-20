@@ -259,9 +259,9 @@ Asset names can mimic file paths with slashes.
 
 Public assets start with a frontslash followed by your username (`/<username>`):
 
-- Here's how I (`ken`) create a public file: `/asset-new /ken/public.txt`
-  - Here's how I create a private file: `/asset-new private.txt`
+- Here's how user `ken` creates a public file: `/asset /ken/public.txt`
 - Anyone can see it with: `/asset-view /ken/public.txt`
+- Here's how user `ken` creates a private file: `/asset private.txt`
 
 #### Search
 
