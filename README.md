@@ -128,18 +128,48 @@ You have two options:
 
 > I got tired of sending AI prompt-pasta to friends and coworkers.
 
-![](doc/hai-task.gif)
+A *task* in hai is a prompt-on-steroids that can be:
 
-- A hai-task is a prompt-on-steroids that can be published publicly
-  (`/task-publish <username>/<name>`)
-- A `hai` task is a list of `hai` REPL commands that setup context for a
-  conversation.
-- A task is a list of `hai` REPL commands that setup context for a conversation.
-  - Open files, fetch URLs, execute commands, ask the user questions, choose &
-    prompt the AI, ...
-- `/task <username>/<name>` - Run a task and enter task-mode
-  - `/new` (`/n`) - If in task-mode, resets back to a clean task.
-- `/task-view <username>/<name>` - View a task without running it
+1. Published publicly: `/task-publish <username>/<task_name>`
+2. Executed by anyone easily: `/task <username>/<task_name>`
+
+A *task* is made up of steps: a sequence of repl-commands. The commands are the
+same as the ones you use. A step can:
+
+- Provide context
+- Load resources (file, image, asset, URL)
+- Execute local commands
+- Prompt the user with a question
+- Prompt the AI
+- Cache local commands, prompt responses, and answers-to-questions.
+
+Tasks make sharing workflows easy and improve their reproducibility given the
+non-deterministic nature of LLMs.
+
+The [hai-tasks repo](https://github.com/braincore/hai-tasks) has examples.
+Here's `ken/pelican-bicycle`:
+
+```
+name = "ken/pelican-bicycle"
+version = "2.0.0"
+
+description = "Runs simonw's \"Pelicans on a bicycle\" test"
+
+steps = [
+    """/pin The test is simple: Ask an AI to draw a pelican on a bicycle.
+
+    https://github.com/simonw/pelican-bicycle
+    """,
+    "/pin Checking what image tools you have",
+    "/exec cairosvg --version",
+    "/exec convert -version",
+    "!shscript Generate an SVG of a pelican riding a bicycle and pipe it into `cairosvg` or `convert` and output a png named `pelican-bicycle.png`",
+    "/load pelican-bicycle.png",
+    "/prompt Describe this image in one sentence."
+]
+```
+
+![](doc/hai-pelican.gif)
 
 ### !Tools
 
@@ -479,6 +509,9 @@ published, and view them via `/task-view <username>/<task_name>`.
 
 #### Task-specific commands
 
+In task mode, `/new` (`/n`) resets the task to the beginning rather than
+clearing the entire conversation. To clear, use `/task-end`.
+
 There are some `hai`-repl command that are specifically made for tasks:
 
 - `/ask-human <prompt>` - Ask the question.
@@ -515,16 +548,6 @@ for expensive prompts.
   over-and-over again, just make a (pseudo-)task with your instructions and
   include it any time even if you're in another task-mode. For example, I have a
   `ken/be-terse` task and `ken/code-preference` task that I inject as necessary.
-
-#### Testing
-
-Before publishing, you can load a task from a path on your local machine by
-referencing it with a path-prefix such as dot-slash (`./`), home (`~`), or root
-(`/`). For example, assuming `api.toml` is a task:
-
-```
-/task ./src/app/api.toml
-```
 
 ### Command-line options
 
