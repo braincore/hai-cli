@@ -238,10 +238,11 @@ async fn repl(
 
     // Use a channel to make asset updates async
     let (update_asset_tx, update_asset_rx) =
-        tokio::sync::mpsc::channel::<(String, Vec<u8>, bool, HaiClient)>(100);
+        tokio::sync::mpsc::channel::<asset_editor::WorkerAssetMsg>(100);
     tokio::spawn(asset_editor::worker_update_asset(
         update_asset_rx,
         db.clone(),
+        debug,
     ));
 
     let autocomplete_repl_cmds: Vec<String> = [
@@ -631,6 +632,7 @@ async fn repl(
             &user_input,
             &task_step_signature,
             force_yes,
+            debug,
         )
         .await
         {
@@ -1067,13 +1069,14 @@ async fn process_cmd(
     session: &mut SessionState,
     cfg: &mut config::Config,
     db: Arc<Mutex<rusqlite::Connection>>,
-    update_asset_tx: tokio::sync::mpsc::Sender<(String, Vec<u8>, bool, HaiClient)>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_editor::WorkerAssetMsg>,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     cmd: &cmd::Cmd,
     raw_user_input: &str, // Avoid using this except for caching
     task_step_signature: &Option<(String, u32)>,
     force_yes: bool,
+    debug: bool,
 ) -> ProcessCmdResult {
     // Task steps only have a non-standard retention policy when they are
     // actioned as part of a process-wide task-mode.
@@ -2182,21 +2185,29 @@ async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let api_client = mk_api_client(Some(session));
-            let asset_contents = match asset_editor::get_asset(&api_client, &asset_name, true).await
-            {
-                Ok(contents) => contents,
-                Err(asset_editor::GetAssetError::BadName) => vec![],
-                Err(_) => return ProcessCmdResult::Loop,
-            };
+            let (asset_contents, asset_entry) =
+                match asset_editor::get_asset(&api_client, &asset_name, true)
+                    .await
+                    .map(|(ac, ae)| (ac, Some(ae)))
+                {
+                    Ok(contents) => contents,
+                    Err(asset_editor::GetAssetError::BadName) => (vec![], None),
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
+            let asset_entry_ref =
+                asset_entry.map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
             let _ = asset_editor::edit_with_editor_api(
                 &api_client,
                 &session.shell,
                 &editor.clone().unwrap_or(session.editor.clone()),
                 &asset_contents,
                 asset_name,
+                asset_entry_ref,
                 false,
                 update_asset_tx,
-            );
+                debug,
+            )
+            .await;
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetNew(cmd::AssetNewCmd {
@@ -2217,11 +2228,15 @@ async fn process_cmd(
             let api_client = mk_api_client(Some(session));
             if let Some(contents) = contents {
                 let _ = update_asset_tx
-                    .send((
-                        asset_name.to_owned(),
-                        contents.clone().into_bytes(),
-                        false,
-                        api_client,
+                    .send(asset_editor::WorkerAssetMsg::Update(
+                        asset_editor::WorkerAssetUpdate {
+                            asset_name: asset_name.to_owned(),
+                            asset_entry_ref: None,
+                            new_contents: contents.clone().into_bytes(),
+                            is_push: false,
+                            api_client,
+                            one_shot: true,
+                        },
                     ))
                     .await;
             } else {
@@ -2231,9 +2246,12 @@ async fn process_cmd(
                     &session.editor,
                     &[],
                     asset_name,
+                    None,
                     false,
                     update_asset_tx,
-                );
+                    debug,
+                )
+                .await;
             }
             ProcessCmdResult::Loop
         }
@@ -2243,20 +2261,28 @@ async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let api_client = mk_api_client(Some(session));
-            let asset_contents =
-                match asset_editor::get_asset(&api_client, &asset_name, false).await {
-                    Ok(contents) => contents,
+            let (asset_contents, asset_entry) =
+                match asset_editor::get_asset(&api_client, &asset_name, false)
+                    .await
+                    .map(|(ac, ae)| (ac, Some(ae)))
+                {
+                    Ok(asset_get_res) => asset_get_res,
                     Err(_) => return ProcessCmdResult::Loop,
                 };
+            let asset_entry_ref =
+                asset_entry.map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
             let _ = asset_editor::edit_with_editor_api(
                 &api_client,
                 &session.shell,
                 &session.editor,
                 &asset_contents,
                 asset_name,
+                asset_entry_ref,
                 false,
                 update_asset_tx,
-            );
+                debug,
+            )
+            .await;
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetPush(cmd::AssetPushCmd {
@@ -2270,11 +2296,15 @@ async fn process_cmd(
             let api_client = mk_api_client(Some(session));
             if let Some(contents) = contents {
                 let _ = update_asset_tx
-                    .send((
-                        asset_name.to_owned(),
-                        contents.clone().into_bytes(),
-                        true,
-                        api_client,
+                    .send(asset_editor::WorkerAssetMsg::Update(
+                        asset_editor::WorkerAssetUpdate {
+                            asset_name: asset_name.to_owned(),
+                            asset_entry_ref: None,
+                            new_contents: contents.clone().into_bytes(),
+                            is_push: true,
+                            api_client,
+                            one_shot: true,
+                        },
                     ))
                     .await;
             } else {
@@ -2284,9 +2314,12 @@ async fn process_cmd(
                     &session.editor,
                     &[],
                     asset_name,
+                    None,
                     true,
                     update_asset_tx,
-                );
+                    debug,
+                )
+                .await;
             }
             ProcessCmdResult::Loop
         }
@@ -2631,7 +2664,7 @@ async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            let asset_contents =
+            let (asset_contents, _) =
                 match asset_editor::get_asset(&api_client, &source_asset_name, false).await {
                     Ok(contents) => contents,
                     Err(_) => return ProcessCmdResult::Loop,

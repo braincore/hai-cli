@@ -245,7 +245,7 @@ impl HaiClient {
     }
 
     #[allow(dead_code)]
-    pub async fn asset_replace_(
+    pub async fn asset_replace(
         &self,
         arg: asset::AssetReplaceArg,
     ) -> Result<asset::AssetReplaceResult, RequestError<asset::AssetReplaceError>> {

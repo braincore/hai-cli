@@ -273,6 +273,12 @@ Or, they can be searched semantically:
 
 `/asset-search cooking salmon`
 
+#### Conflicts
+
+When the same asset is modified simultaneously by two separate `hai` processes,
+a conflict occurs. The version that loses the race will be preserved as a
+new asset with the same name as the original but with a random suffix.
+
 ## Advanced Usage
 
 See all client commands with `/help` (`/h`).
