@@ -17,18 +17,19 @@ pub async fn edit_with_editor_api(
     is_push: bool,
     tx: Sender<WorkerAssetMsg>,
     debug: bool,
-) -> io::Result<String> {
+) -> io::Result<Vec<u8>> {
     // Create a temporary file with the initial content
     let mut temp_file = NamedTempFile::new()?;
     temp_file.write_all(initial_content)?;
     let file_path = temp_file.path().to_owned();
 
-    let tx_to_send_done = tx.clone();
+    let tx_main = tx.clone();
 
     // Create a thread-safe notify watcher
     let api_client_cloned = api_client.clone();
     let asset_name_cloned = asset_name.to_string();
     let asset_entry_ref_cloned = asset_entry_ref
+        .as_ref()
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .clone();
     let file_path_cloned = file_path.clone();
@@ -66,7 +67,7 @@ pub async fn edit_with_editor_api(
                 Err(e) => eprintln!("Watch error: {:?}", e),
             }
         },
-        notify::Config::default(),
+        notify::Config::default().with_compare_contents(true),
     )
     .expect("error: failed to create watcher");
 
@@ -83,12 +84,27 @@ pub async fn edit_with_editor_api(
         .expect("failed to launch editor");
 
     // Stop watching once the editor exits
+    // Sometimes the watcher hasn't even finished reporting events (noticed on
+    // macOS with fsevent) so we do a final check for changed contents below.
     drop(watcher);
+
+    // Check the final modified contents
+    // Worker is responsible for no-oping if contents unchanged
+    let final_contents = fs::read(file_path)?;
+    let final_update_msg = WorkerAssetMsg::Update(WorkerAssetUpdate {
+        asset_name: asset_name.to_string(),
+        asset_entry_ref,
+        new_contents: final_contents.clone(),
+        is_push,
+        api_client: api_client.clone(),
+        one_shot: false,
+    });
+    let _ = tx_main.send(final_update_msg).await;
 
     // Send an async message to the worker thread that the edits are done so it
     // can clean its state.
-    let msg = WorkerAssetMsg::Done(asset_name.to_string());
-    let _ = tx_to_send_done.send(msg).await;
+    let done_msg = WorkerAssetMsg::Done(asset_name.to_string());
+    let _ = tx_main.send(done_msg).await;
 
     if !status.success() {
         eprintln!("error: editor did not exit successfully");
@@ -98,10 +114,7 @@ pub async fn edit_with_editor_api(
         ));
     }
 
-    // Check the final modified contents
-    let edited_content = fs::read_to_string(file_path)?;
-
-    Ok(edited_content)
+    Ok(final_contents)
 }
 
 // --
@@ -131,6 +144,7 @@ pub struct WorkerAssetUpdate {
     pub one_shot: bool,
 }
 
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 pub async fn worker_update_asset(
@@ -138,8 +152,8 @@ pub async fn worker_update_asset(
     _db: Arc<Mutex<rusqlite::Connection>>,
     debug: bool,
 ) {
-    // asset_name -> (entry_id, asset_rev_id)
-    let mut asset_bottom_map: HashMap<String, (String, String)> = HashMap::new();
+    // asset_name -> (entry_id, asset_rev_id, content_sha256_hash)
+    let mut asset_bottom_map: HashMap<String, (String, String, Vec<u8>)> = HashMap::new();
     // Track errors because the editor sometimes swallows the errors so instead
     // we print them once the user has exited.
     // asset_name -> vec[errors]
@@ -154,6 +168,19 @@ pub async fn worker_update_asset(
                 api_client,
                 one_shot,
             }) => {
+                let new_hash = Sha256::digest(&new_contents).to_vec();
+                // Check if the hash matches the last known hash
+                if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name) {
+                    if &new_hash == last_hash {
+                        if debug {
+                            let _ = crate::config::write_to_debug_log(format!(
+                                "worker-update-asset: skipped update for '{}' (hash unchanged)\n",
+                                asset_name
+                            ));
+                        }
+                        continue;
+                    }
+                }
                 if is_push {
                     match api_client
                         .asset_push(AssetPushArg {
@@ -183,8 +210,8 @@ pub async fn worker_update_asset(
                     let bottom = asset_bottom_map
                         .get(&asset_name)
                         .cloned()
-                        .or(asset_entry_ref);
-                    if let Some((entry_id, rev_id)) = bottom {
+                        .or(asset_entry_ref.map(|(id, rev)| (id, rev, vec![])));
+                    if let Some((entry_id, rev_id, ..)) = bottom {
                         match api_client
                             .asset_replace(AssetReplaceArg {
                                 entry_id,
@@ -217,10 +244,10 @@ pub async fn worker_update_asset(
                                 }
 
                                 if !one_shot {
-                                    // Update the asset_bottom_map with the new entry_id and rev_id
+                                    // Update the asset_bottom_map with new leaf node
                                     asset_bottom_map.insert(
                                         asset_name.clone(),
-                                        (res.entry.entry_id, res.entry.asset.rev_id),
+                                        (res.entry.entry_id, res.entry.asset.rev_id, new_hash),
                                     );
                                 }
                             }

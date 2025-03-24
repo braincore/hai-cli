@@ -32,7 +32,7 @@ jaq-parse = "1.0.2"
 jaq-std = "1.2.1"
 markdown = "1.0.0-alpha.23"
 mdast_util_to_markdown = "0.0.1"
-notify = "8.0.0"
+notify = { version = "8.0.0", features = ["macos_fsevent"] }
 num-format = "0.4.4"
 reedline = "0.38.0"
 regex = "1.11.1"
@@ -42,6 +42,7 @@ rusqlite = { version = "0.32.1", features = ["bundled"] }
 semver = "1.0.25"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
+sha2 = "0.10.8"
 shellexpand = "3.1.0"
 tempfile = "3.15.0"
 terminal_size = "0.4.0"
