@@ -367,7 +367,7 @@ pub async fn get_asset_raw(data_url: &str) -> Option<Vec<u8>> {
         Ok(contents) => Some(contents.to_vec()),
         Err(e) => {
             eprintln!("error: asset is non-text: {}", e);
-            return None;
+            None
         }
     }
 }

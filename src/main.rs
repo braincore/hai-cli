@@ -179,9 +179,9 @@ enum ReplMode {
     Task(String),
 }
 
-const HAI_BYE_TASK_NAME: &'static str = "hai-bye";
-const INIT_TASK_NAME: &'static str = "init";
-const INTERNAL_TASK_NAME: &'static str = "_hai";
+const HAI_BYE_TASK_NAME: &str = "hai-bye";
+const INIT_TASK_NAME: &str = "init";
+const INTERNAL_TASK_NAME: &str = "_hai";
 
 struct SessionState {
     repl_mode: ReplMode,
@@ -215,6 +215,7 @@ struct SessionState {
     use_hai_router: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn repl(
     config_path_override: &Option<String>,
     debug: bool,
@@ -467,9 +468,8 @@ async fn repl(
             };
             let asset_name = format!("hai-cli-{}-{}.{}", version, get_machine_os_arch(), ext);
             println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
-            match env::current_exe() {
-                Ok(exe_path) => println!("  - install: unpack and copy to {:?}", exe_path),
-                Err(_) => {}
+            if let Ok(exe_path) = env::current_exe() {
+                println!("  - install: unpack and copy to {:?}", exe_path);
             }
         }
         println!(
@@ -741,13 +741,12 @@ async fn repl(
                     // the cache value will be updated to a compatible
                     // schema once the user enters a new value.
                     db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, &prompt)
-                        .map(|cached_serialized_output| {
+                        .and_then(|cached_serialized_output| {
                             serde_json::from_str::<Vec<chat::ChatCompletionResponse>>(
                                 &cached_serialized_output,
                             )
                             .ok()
                         })
-                        .flatten()
                 } else {
                     None
                 };
@@ -1082,7 +1081,7 @@ async fn process_cmd(
     // actioned as part of a process-wide task-mode.
     let is_task_mode_step =
         matches!(session.repl_mode, ReplMode::Task(_)) && task_step_signature.is_some();
-    const ASSET_ACCOUNT_REQ_MSG: &'static str =
+    const ASSET_ACCOUNT_REQ_MSG: &str =
         "You must be logged-in to use assets. Try /account-login or /account-new";
 
     match cmd {
@@ -1484,7 +1483,7 @@ async fn process_cmd(
                 }
             }
             session_history_add_user_cmd_and_reply_entries(
-                &command,
+                command,
                 &shell_exec_output,
                 session,
                 bpe_tokenizer,
@@ -1548,7 +1547,7 @@ async fn process_cmd(
                 session.masked_strings.insert(answer.clone());
             }
             session_history_add_user_text_entry(
-                &question,
+                question,
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
@@ -1568,7 +1567,7 @@ async fn process_cmd(
                 db::LogEntryRetentionPolicy::None
             };
             session_history_add_user_text_entry(
-                &message,
+                message,
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, retention_policy),
@@ -2186,7 +2185,7 @@ async fn process_cmd(
             }
             let api_client = mk_api_client(Some(session));
             let (asset_contents, asset_entry) =
-                match asset_editor::get_asset(&api_client, &asset_name, true)
+                match asset_editor::get_asset(&api_client, asset_name, true)
                     .await
                     .map(|(ac, ae)| (ac, Some(ae)))
                 {
@@ -2262,7 +2261,7 @@ async fn process_cmd(
             }
             let api_client = mk_api_client(Some(session));
             let (asset_contents, asset_entry) =
-                match asset_editor::get_asset(&api_client, &asset_name, false)
+                match asset_editor::get_asset(&api_client, asset_name, false)
                     .await
                     .map(|(ac, ae)| (ac, Some(ae)))
                 {
@@ -2400,7 +2399,7 @@ async fn process_cmd(
         | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_name }) => {
             let api_client = mk_api_client(Some(session));
             let asset_contents =
-                match asset_editor::get_asset_as_text(&api_client, &asset_name, false).await {
+                match asset_editor::get_asset_as_text(&api_client, asset_name, false).await {
                     Ok(contents) => contents,
                     Err(_) => return ProcessCmdResult::Loop,
                 };
@@ -2437,11 +2436,8 @@ async fn process_cmd(
                 is_task_mode_step: bool,
             ) {
                 println!("Revision ID: {}", revision.asset.rev_id);
-                match &revision.asset.created_by {
-                    AssetCreatedBy::User(user) => {
-                        println!("By: {}", user.username);
-                    }
-                    _ => {}
+                if let AssetCreatedBy::User(user) = &revision.asset.created_by {
+                    println!("By: {}", user.username);
                 }
                 println!(
                     "Op: {}",
@@ -2665,7 +2661,7 @@ async fn process_cmd(
             };
             let api_client = mk_api_client(Some(session));
             let (asset_contents, _) =
-                match asset_editor::get_asset(&api_client, &source_asset_name, false).await {
+                match asset_editor::get_asset(&api_client, source_asset_name, false).await {
                     Ok(contents) => contents,
                     Err(_) => return ProcessCmdResult::Loop,
                 };
@@ -2768,7 +2764,7 @@ async fn process_cmd(
                 if username == "_" {
                     account_nobody_setup_session(session, db).await;
                 } else {
-                    let account = match db::switch_account(&*db.lock().await, &username) {
+                    let account = match db::switch_account(&*db.lock().await, username) {
                         Ok(Some(account)) => account,
                         Ok(None) => {
                             eprintln!(
@@ -2987,7 +2983,7 @@ async fn process_cmd(
         cmd::Cmd::AccountLogout(cmd::AccountLogoutCmd { username }) => {
             if let Some(cur_account) = &session.account {
                 let target_username = username.as_ref().unwrap_or(&cur_account.username);
-                let _ = db::remove_account(&*db.lock().await, &target_username);
+                let _ = db::remove_account(&*db.lock().await, target_username);
                 account_nobody_setup_session(session, db).await;
             } else {
                 // no-op since not logged-in
@@ -3028,7 +3024,7 @@ async fn process_cmd(
                         whois_lines.push("—".to_string());
                     } else {
                         for task in &res.tasks {
-                            whois_lines.push(format!("{}", task.task_fqn));
+                            whois_lines.push(task.task_fqn.to_string());
                         }
                         whois_lines.push("".to_string());
                         whois_lines.push("Use `/task-view <task_name>` to learn more".to_string());
@@ -3828,7 +3824,7 @@ fn session_history_add_user_text_entry(
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
 ) -> u32 {
-    let asset_tokens = bpe_tokenizer.encode_with_special_tokens(&contents);
+    let asset_tokens = bpe_tokenizer.encode_with_special_tokens(contents);
     let token_count = asset_tokens.len() as u32;
     if matches!(
         retention_policy.1,

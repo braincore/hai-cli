@@ -695,7 +695,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -711,7 +711,7 @@ fn parse_command(
                 return None;
             }
             let history = options.get("history").map(|v| v == "true").unwrap_or(false);
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -721,7 +721,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -731,7 +731,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -741,7 +741,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -751,7 +751,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -761,7 +761,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -771,7 +771,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -1313,7 +1313,7 @@ fn parse_command(
                             }
                         };
                         Some(Cmd::AssetAcl(AssetAclCmd {
-                            asset_name: asset_name,
+                            asset_name,
                             ace_permission: asset_ace_perm,
                             ace_type: asset_ace_type,
                         }))
@@ -1360,7 +1360,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -1370,7 +1370,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -1388,7 +1388,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -1398,7 +1398,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }
@@ -1420,7 +1420,7 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if let Some(_) = parse_one_arg_catchall(remaining) {
+            if parse_one_arg_catchall(remaining).is_some() {
                 eprintln!("Usage: /{cmd_name} takes no arguments");
                 return None;
             }

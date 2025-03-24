@@ -45,6 +45,7 @@ pub enum MessageStreamResponse {
     },
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
@@ -448,7 +449,7 @@ pub async fn send_to_anthropic(
                                     ContentBlockType::ToolUse { id, name } => {
                                         // Bit of a HACK, but an extra space tends to be necessary
                                         // before tool-use instructions.
-                                        println!("");
+                                        println!();
                                         tool_calls.insert(
                                             index,
                                             JsonObjectAccumulator::new(
@@ -461,13 +462,12 @@ pub async fn send_to_anthropic(
                                 }
                             }
                             MessageStreamResponse::ContentBlockStop { index } => {
-                                match content_blocks.get(&index) {
-                                    Some(ContentBlockType::Thinking { .. }) => {
-                                        println!();
-                                        println!();
-                                        println!("{}", "🧠 end".white().on_black());
-                                    }
-                                    _ => {}
+                                if let Some(ContentBlockType::Thinking { .. }) =
+                                    content_blocks.get(&index)
+                                {
+                                    println!();
+                                    println!();
+                                    println!("{}", "🧠 end".white().on_black());
                                 }
                             }
                             MessageStreamResponse::Error { error } => {
