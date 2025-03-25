@@ -149,7 +149,7 @@ non-deterministic nature of LLMs.
 The [hai-tasks repo](https://github.com/braincore/hai-tasks) has examples.
 Here's `ken/pelican-bicycle`:
 
-```
+```toml
 name = "ken/pelican-bicycle"
 version = "2.0.0"
 
@@ -451,7 +451,7 @@ your next prompt. Useful when you've loaded lots of files for context.
 Tasks are defined in toml. For example, here's the `ken/strava-api` task defined
 in a file on my machine called `strava-api.toml`.
 
-```
+```toml
 name = "ken/strava-api"
 version = "1.0.0"
 
