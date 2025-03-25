@@ -704,6 +704,13 @@ The Sun is enormously large compared to Earth. Here are the key measurements:
 The `hai` CLI is available under the Apache 2.0 license. You can freely use it,
 modify it, and contribute back.
 
+You can enter a prompt with the source code loaded as context using the
+`hai/code` task:
+
+```
+/task hai/code
+```
+
 ### Security warning
 
 The primary attack vector to defend against is a published task that's crafted
