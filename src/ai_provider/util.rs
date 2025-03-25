@@ -33,16 +33,16 @@ pub fn run_jaq(query: &str, input: &Value) -> Result<Value, String> {
     }
 }
 
-pub struct TextAccumulator {
-    printer: MaskedPrinter,
+pub struct TextAccumulator<'a> {
+    printer: MaskedPrinter<'a>,
     // The printed text is masked
     pub printed_text: String,
     // An unmasked version of the printed text
     pub unmasked_printed_text: String,
 }
 
-impl TextAccumulator {
-    pub fn new(masked_strings: HashSet<String>) -> TextAccumulator {
+impl<'a> TextAccumulator<'a> {
+    pub fn new(masked_strings: HashSet<String>) -> Self {
         TextAccumulator {
             printer: MaskedPrinter::new(masked_strings),
             printed_text: String::new(),
@@ -55,6 +55,7 @@ impl TextAccumulator {
         self.printed_text.push_str(&acc_result.printed_text_chunk);
         self.unmasked_printed_text
             .push_str(&acc_result.unmasked_printed_text_chunk);
+        //self.sh_printer.acc(&acc_result.printed_text_chunk);
     }
 
     pub fn end(&mut self) {
@@ -62,20 +63,24 @@ impl TextAccumulator {
         self.printed_text.push_str(&acc_result.printed_text_chunk);
         self.unmasked_printed_text
             .push_str(&acc_result.unmasked_printed_text_chunk);
+        //self.sh_printer.acc(&acc_result.printed_text_chunk);
+        //self.sh_printer.end();
     }
 }
 
 /// Responsible for printing output while masking specified strings which may
 /// necessitate it buffer while checking for incoming string matches.
-pub struct MaskedPrinter {
+pub struct MaskedPrinter<'a> {
+    sh_printer: SyntaxHighlighterPrinter<'a>,
     buffer: String,
     masked_buffer: String,
     masked_strings: HashSet<String>,
 }
 
-impl MaskedPrinter {
-    pub fn new(masked_strings: HashSet<String>) -> MaskedPrinter {
+impl<'a> MaskedPrinter<'a> {
+    pub fn new(masked_strings: HashSet<String>) -> Self {
         MaskedPrinter {
+            sh_printer: SyntaxHighlighterPrinter::new(),
             buffer: String::new(),
             masked_buffer: String::new(),
             masked_strings,
@@ -101,8 +106,9 @@ impl MaskedPrinter {
         }
         let printable_unmasked_text = self.buffer[..printable_length].to_string();
         let printable_masked_text = self.masked_buffer[..printable_length].to_string();
-        print!("{}", printable_masked_text);
-        io::stdout().flush().unwrap(); // Flush to skip line-buffer
+        //print!("{}", printable_masked_text);
+        self.sh_printer.acc(&printable_masked_text);
+        //io::stdout().flush().unwrap(); // Flush to skip line-buffer
         remove_first_n_chars(&mut self.buffer, printable_length);
         remove_first_n_chars(&mut self.masked_buffer, printable_length);
 
@@ -114,13 +120,272 @@ impl MaskedPrinter {
     }
 
     pub fn end(&mut self) -> PrinterAccResult {
-        print!("{}", self.masked_buffer);
-        io::stdout().flush().unwrap(); // Flush to skip line-buffer
+        //print!("{}", self.masked_buffer);
+        self.sh_printer.acc(&self.masked_buffer);
+        //io::stdout().flush().unwrap(); // Flush to skip line-buffer
         PrinterAccResult {
             printed_text_chunk: self.masked_buffer.clone(),
             unmasked_printed_text_chunk: self.buffer.clone(),
             remaining: Some("".to_string()),
         }
+    }
+}
+
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Style, Theme, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
+//use syntect::util::as_24_bit_terminal_escaped;
+use crate::term::{as_terminal_escaped, terminal_color_capability, ColorCapability};
+
+use std::sync::OnceLock;
+//use syntect::parsing::SyntaxSet;
+//use syntect::highlighting::ThemeSet;
+
+// Global static OnceLocks
+static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
+
+// Function to get the syntax set, initializing it if necessary
+fn get_syntax_set() -> &'static SyntaxSet {
+    SYNTAX_SET.get_or_init(|| {
+        // This closure will only be called once, the first time get_or_init is called
+        SyntaxSet::load_defaults_newlines()
+    })
+}
+
+// Function to get the theme set, initializing it if necessary
+fn get_theme_set() -> &'static ThemeSet {
+    THEME_SET.get_or_init(|| ThemeSet::load_defaults())
+}
+
+use crossterm::{
+    cursor::{EnableBlinking, MoveToColumn, MoveUp},
+    terminal::{Clear, ClearType},
+    ExecutableCommand,
+};
+use regex::Regex;
+use unicode_width::UnicodeWidthStr;
+
+fn get_markdown_code_block_re() -> &'static Regex {
+    static MARKDOWN_CODE_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
+    MARKDOWN_CODE_BLOCK_RE.get_or_init(|| Regex::new(r"^```([a-zA-Z0-9_+-]+)?$").unwrap())
+}
+
+pub struct SyntaxHighlighterPrinter<'a> {
+    buffer: String,
+    line_start_cursor_position: Option<(u16, u16)>,
+    highlighter: Option<HighlightLines<'a>>,
+    terminal_color_capability: Option<ColorCapability>,
+}
+
+impl<'a> SyntaxHighlighterPrinter<'a> {
+    pub fn new() -> Self {
+        SyntaxHighlighterPrinter {
+            buffer: String::new(),
+            line_start_cursor_position: None,
+            highlighter: None,
+            terminal_color_capability: terminal_color_capability(),
+        }
+    }
+
+    pub fn set_highlighter(&mut self, token: &str) {
+        let ps = get_syntax_set();
+        let ts = get_theme_set();
+        if let Some(syntax) = ps.find_syntax_by_token(token) {
+            self.highlighter = Some(HighlightLines::new(syntax, &ts.themes["Solarized (dark)"]));
+        }
+    }
+
+    /// Assumes line has no trailing newline
+    pub fn highlighter_check(&mut self, line: &str) {
+        if line == "```" {
+            self.highlighter = None;
+        } else {
+            let markdown_code_block_re = get_markdown_code_block_re();
+            if let Some(captures) = markdown_code_block_re.captures(line) {
+                if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
+                    self.set_highlighter(&lang);
+                }
+            }
+        }
+    }
+
+    pub fn highlighter_check_start(&mut self, line: &str) {
+        let markdown_code_block_re = get_markdown_code_block_re();
+        if let Some(captures) = markdown_code_block_re.captures(line) {
+            if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
+                self.set_highlighter(&lang);
+            }
+        }
+    }
+
+    pub fn highlighter_check_end(&mut self, line: &str) {
+        if line == "```" {
+            self.highlighter = None;
+        }
+    }
+
+    // FIXME: When piping...
+    // - Do not move cursor at all
+    // - Do not try to read cursor position
+    // - Do not try to clear from cursor down
+    // - Do not try to highlight
+
+    // When opening with non-truecolor
+    // - Will need to customize as_24_bit_terminal_escaped()
+
+    // Truecolor
+    // - Fix how printing is done...
+    //
+    // Markdown
+    // - Try it...
+    //
+
+    pub fn acc(&mut self, next: &str) {
+        let color_capability =
+            if let Some(color_capability) = self.terminal_color_capability.clone() {
+                color_capability
+            } else {
+                self.buffer.push_str(next);
+                print!("{}", next);
+                io::stdout().flush().unwrap(); // Flush to skip line-buffer
+                return;
+            };
+
+        //crossterm::execute!(io::stdout(), EnableBlinking,);
+        let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
+        if lines.len() > 1 {
+            let (terminal_width, _) = crossterm::terminal::size().unwrap();
+            let ps = get_syntax_set();
+
+            // Finish the current line
+            println!("{}", &lines[0]);
+            io::stdout().flush().unwrap();
+
+            let full_first_line = format!("{}{}", self.buffer, &lines[0]);
+            self.buffer.clear();
+
+            self.highlighter_check_start(&full_first_line);
+
+            // check if highlighter set... if so, rewrite previous line
+            if let Some(highlighter) = self.highlighter.as_mut() {
+                if let Some((x, y)) = self.line_start_cursor_position.take() {
+                    let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
+                    let height = (line_width / terminal_width)
+                        + if line_width % terminal_width > 0 {
+                            1
+                        } else {
+                            0
+                        };
+                    crossterm::execute!(
+                        io::stdout(),
+                        crossterm::cursor::MoveTo(x, y - height),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+                    )
+                    .unwrap();
+
+                    let line_with_ending = format!("{}\n", full_first_line);
+                    let ranges: Vec<(Style, &str)> =
+                        highlighter.highlight_line(&line_with_ending, &ps).unwrap();
+                    //let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                    for (style, text) in ranges {
+                        let escaped =
+                            as_terminal_escaped(style, text, &color_capability, false, None);
+                        print!("{}", escaped);
+                    }
+                    //print!("{}", escaped);
+                    //print!("\x1b[0m");
+                    io::stdout().flush().unwrap();
+                }
+            }
+
+            // Check if this first line changed the highlighter
+            self.highlighter_check_end(&full_first_line);
+
+            // All lines in the middle are printed fully
+            for middle_line in &lines[1..lines.len() - 1] {
+                let middle_line_with_ending = format!("{}\n", middle_line);
+                if let Some(highlighter) = self.highlighter.as_mut() {
+                    let ranges: Vec<(Style, &str)> = highlighter
+                        .highlight_line(&middle_line_with_ending, &ps)
+                        .unwrap();
+
+                    for (style, text) in ranges {
+                        let escaped =
+                            as_terminal_escaped(style, text, &color_capability, false, None);
+                        print!("{}", escaped);
+                    }
+
+                    //let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                    //print!("{}", escaped);
+                    //print!("\x1b[0m");
+                    io::stdout().flush().unwrap();
+                } else {
+                    print!("{}", middle_line_with_ending);
+                    io::stdout().flush().unwrap();
+                }
+                self.highlighter_check(&middle_line);
+            }
+
+            let last_line_partial = &lines[lines.len() - 1].to_owned();
+            //if !last_line_partial.is_empty() {
+            self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
+            print!("{}", last_line_partial);
+            io::stdout().flush().unwrap();
+            self.buffer.push_str(last_line_partial)
+            //}
+        } else {
+            if self.line_start_cursor_position.is_none() {
+                self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
+            }
+            self.buffer.push_str(next);
+            print!("{}", next);
+            io::stdout().flush().unwrap(); // Flush to skip line-buffer
+        }
+    }
+
+    fn clear_previous_line(&self) -> std::io::Result<()> {
+        std::io::stdout()
+            .execute(MoveUp(1))?
+            .execute(MoveToColumn(0))?
+            .execute(Clear(ClearType::CurrentLine))?
+            .flush()?;
+        Ok(())
+    }
+
+    fn clear_current_line(&self) -> std::io::Result<()> {
+        std::io::stdout()
+            .execute(MoveToColumn(0))?
+            .execute(Clear(ClearType::CurrentLine))?
+            .flush()?;
+        Ok(())
+    }
+
+    pub fn end(&mut self) {
+        /*if !self.buffer.is_empty() {
+            self.clear_current_line().unwrap();
+            print!("{}", self.buffer);
+            io::stdout().flush().unwrap();
+            self.buffer.clear();
+        }*/
+        // though... might have to rewrite just this line with highlighting
+        /*
+        if let Some(highlighter) = self.highlighter.as_mut() {
+            if let Some((x, y)) = self.line_start_cursor_position.take() {
+                std::io::stdout().execute(crossterm::cursor::MoveTo(x, y)).unwrap()
+                    .execute(crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)).unwrap()
+                    .flush().unwrap();
+
+                let line_with_ending = format!("{}\n", full_first_line);
+                let ranges: Vec<(Style, &str)> =
+                    highlighter.highlight_line(&line_with_ending, &ps).unwrap();
+                let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                print!("{}", escaped);
+                print!("\x1b[0m");
+                io::stdout().flush().unwrap();
+            }
+        }
+         */
     }
 }
 

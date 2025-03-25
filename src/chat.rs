@@ -128,6 +128,43 @@ pub async fn prompt_to_chat_message_content(
                         }
                     }
                 }
+                markdown::mdast::Node::Code(code_node) => {
+                    use syntect::easy::HighlightLines;
+                    use syntect::highlighting::{Style, ThemeSet};
+                    use syntect::parsing::SyntaxSet;
+                    use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+
+                    // Load these once at the start of your program
+                    let ps = SyntaxSet::load_defaults_newlines();
+                    let ts = ThemeSet::load_defaults();
+
+                    // List all theme names
+                    for theme_name in ts.themes.keys() {
+                        println!("{}", theme_name);
+                    }
+
+                    //let syntax = ps.find_syntax_by_extension("rs").unwrap();
+                    let syntax = if let Some(ref lang) = code_node.lang {
+                        ps.find_syntax_by_token(lang)
+                    } else {
+                        ps.find_syntax_by_token(&code_node.value)
+                    }
+                    .unwrap_or(ps.find_syntax_plain_text());
+
+                    println!("Syntax: {:?}", syntax.name);
+
+                    //let mut h = HighlightLines::new(syntax, &ts.themes["base16-ocean.dark"]);
+                    let mut h = HighlightLines::new(syntax, &ts.themes["Solarized (dark)"]);
+                    //let s = "pub struct Wow { hi: u64 }\nfn blah() -> u64 {}";
+                    println!("```{}", code_node.lang.unwrap_or("".to_string()));
+                    for line in LinesWithEndings::from(&code_node.value) {
+                        let ranges: Vec<(Style, &str)> = h.highlight_line(line, &ps).unwrap();
+                        let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+                        print!("{}", escaped);
+                    }
+                    print!("\n");
+                    println!("```");
+                }
                 _ => {
                     cur_md_group.push(child);
                 }
