@@ -708,7 +708,19 @@ You can enter a prompt with the source code loaded as context using the
 `hai/code` task:
 
 ```
-/task hai/code
+[0]: /task hai/code
+```
+```
+hai/code[22]: is hai privacy conscious? does it keep my data safe?
+```
+```
+↓↓↓
+
+The `hai` CLI takes steps to respect user privacy and provide options for users
+to safeguard their information. Here's a detailed analysis based on the code
+and documentation:
+
+...
 ```
 
 ### Security warning
