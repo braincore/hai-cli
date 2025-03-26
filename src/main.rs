@@ -183,6 +183,13 @@ const HAI_BYE_TASK_NAME: &str = "hai-bye";
 const INIT_TASK_NAME: &str = "init";
 const INTERNAL_TASK_NAME: &str = "_hai";
 
+#[derive(Clone)]
+pub enum HaiRouterState {
+    On,
+    OffForModel,
+    Off,
+}
+
 struct SessionState {
     repl_mode: ReplMode,
     /// AI model in active use
@@ -211,8 +218,8 @@ struct SessionState {
     last_tool_cmd: Option<cmd::ToolCmd>,
     /// The tool activated in tool-mode
     tool_mode: Option<cmd::ToolModeCmd>,
-    /// Whether to use hai-router for compatible AI prompts
-    use_hai_router: bool,
+    /// Whether to use hai-router for compatible AI models
+    use_hai_router: HaiRouterState,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -408,7 +415,7 @@ async fn repl(
         account: account.clone(),
         last_tool_cmd: None,
         tool_mode: None,
-        use_hai_router: false,
+        use_hai_router: HaiRouterState::Off,
     };
 
     if let Some(account) = &account {
@@ -422,7 +429,7 @@ async fn repl(
         .await;
     }
 
-    if !session.use_hai_router {
+    if matches!(session.use_hai_router, HaiRouterState::Off) {
         // Prints error if API key not available
         check_api_key(&session.ai, &cfg);
     }
@@ -496,7 +503,7 @@ async fn repl(
         //
         editor_prompt.set_index(session.history.len().try_into().unwrap());
         editor_prompt.set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
-        editor_prompt.set_using_hai_router(session.use_hai_router);
+        editor_prompt.set_hai_router(session.use_hai_router.clone());
         editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
         if let ReplMode::Task(task_fqn) = &session.repl_mode {
             editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
@@ -659,7 +666,9 @@ async fn repl(
         }
 
         // Check api-key for ai provider is set (prints error msg to stderr)
-        if !session.use_hai_router && !check_api_key(&session.ai, &cfg) {
+        if !matches!(session.use_hai_router, HaiRouterState::On)
+            && !check_api_key(&session.ai, &cfg)
+        {
             continue;
         }
 
@@ -1144,14 +1153,22 @@ async fn process_cmd(
                         }
                     }
                     if ai_model_viable {
-                        if session.use_hai_router
+                        if matches!(session.use_hai_router, HaiRouterState::On)
                             && !config::is_ai_model_supported_by_hai_router(&selected_ai_model)
                         {
                             eprintln!(
                                 "warning: disabling hai-router because it does not support {}",
                                 model_name
                             );
-                            session.use_hai_router = false;
+                            session.use_hai_router = HaiRouterState::OffForModel;
+                        } else if matches!(session.use_hai_router, HaiRouterState::OffForModel)
+                            && config::is_ai_model_supported_by_hai_router(&selected_ai_model)
+                        {
+                            eprintln!(
+                                "notice: activating hai-router because {} is supported",
+                                model_name
+                            );
+                            session.use_hai_router = HaiRouterState::On;
                         }
                         session.ai = selected_ai_model;
                     }
@@ -1288,25 +1305,35 @@ async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::HaiRouter(cmd::HaiRouterCmd { on }) => {
-            let account = if let Some(account) = &session.account {
-                account
+            let username = if let Some(account) = &session.account {
+                account.username.clone()
             } else {
                 eprintln!("You must be logged-in to use hai-router. Try /account-login");
                 return ProcessCmdResult::Loop;
             };
             if let Some(on) = on {
-                session.use_hai_router = *on;
+                hai_router_set(session, *on);
                 db::set_misc_entry(
                     &*db.lock().await,
-                    &account.username,
+                    &username,
                     "hai-router",
-                    if session.use_hai_router { "on" } else { "off" },
+                    if matches!(session.use_hai_router, HaiRouterState::Off) {
+                        "off"
+                    } else {
+                        "on"
+                    },
                 )
                 .expect("failed to write to db");
             } else {
                 println!(
                     "hai router: {}",
-                    if session.use_hai_router { "on" } else { "off" }
+                    if matches!(session.use_hai_router, HaiRouterState::Off) {
+                        "off"
+                    } else if matches!(session.use_hai_router, HaiRouterState::OffForModel) {
+                        "off (unsupported model)"
+                    } else {
+                        "on"
+                    }
                 );
             }
             ProcessCmdResult::Loop
@@ -2908,7 +2935,7 @@ async fn process_cmd(
                     match client.account_get_balance(()).await {
                         Ok(balance_res) => {
                             if balance_res.remaining > 0 {
-                                session.use_hai_router = true;
+                                hai_router_try_activate(session);
                                 db::set_misc_entry(
                                     &*db.lock().await,
                                     &res.username,
@@ -3194,7 +3221,7 @@ async fn account_login_setup_session(
     });
     match db::get_misc_entry(&*db.lock().await, username, "hai-router") {
         Ok(Some((hai_router_value, _))) => {
-            session.use_hai_router = hai_router_value == "on";
+            hai_router_set(session, hai_router_value == "on");
         }
         Ok(_) => {}
         Err(e) => {
@@ -3211,7 +3238,7 @@ async fn account_nobody_setup_session(
         db::switch_to_nobody_account(&*db.lock().await, &cur_account.username)
             .expect("failed to write login info");
         session.account = None;
-        session.use_hai_router = false;
+        hai_router_set(session, false);
     }
 }
 
@@ -3514,67 +3541,68 @@ async fn prompt_ai(
         config::AiModel::OpenAi(_) | config::AiModel::Google(_) | config::AiModel::DeepSeek(_) => {
             let deepseek_flatten_nonuser_content =
                 matches!(session.ai, config::AiModel::DeepSeek(_));
-            let (base_url, api_key, provider_header) = if session.use_hai_router
-                && config::is_ai_model_supported_by_hai_router(&session.ai)
-            {
-                let api_key = if let Some(ref account) = session.account {
-                    account.token.clone()
+            let (base_url, api_key, provider_header) =
+                if matches!(session.use_hai_router, HaiRouterState::On)
+                    && config::is_ai_model_supported_by_hai_router(&session.ai)
+                {
+                    let api_key = if let Some(ref account) = session.account {
+                        account.token.clone()
+                    } else {
+                        eprintln!("error: you must be logged-in to use the hai-router");
+                        return vec![];
+                    };
+                    let provider_header = match session.ai {
+                        config::AiModel::OpenAi(_) => "openai".to_string(),
+                        config::AiModel::Google(_) => "google".to_string(),
+                        config::AiModel::DeepSeek(_) => "deepseek".to_string(),
+                        _ => {
+                            eprintln!("error: unexpected provider");
+                            return vec![];
+                        }
+                    };
+                    used_hai_router = true;
+                    (Some(api_base_url.deref()), api_key, Some(provider_header))
                 } else {
-                    eprintln!("error: you must be logged-in to use the hai-router");
-                    return vec![];
-                };
-                let provider_header = match session.ai {
-                    config::AiModel::OpenAi(_) => "openai".to_string(),
-                    config::AiModel::Google(_) => "google".to_string(),
-                    config::AiModel::DeepSeek(_) => "deepseek".to_string(),
-                    _ => {
-                        eprintln!("error: unexpected provider");
-                        return vec![];
+                    match session.ai {
+                        config::AiModel::OpenAi(_) => (
+                            None,
+                            cfg.openai
+                                .as_ref()
+                                .unwrap()
+                                .api_key
+                                .as_ref()
+                                .unwrap()
+                                .clone(),
+                            None,
+                        ),
+                        config::AiModel::Google(_) => (
+                            Some("https://generativelanguage.googleapis.com/v1beta/openai"),
+                            cfg.google
+                                .as_ref()
+                                .unwrap()
+                                .api_key
+                                .as_ref()
+                                .unwrap()
+                                .clone(),
+                            None,
+                        ),
+                        config::AiModel::DeepSeek(_) => (
+                            Some("https://api.deepseek.com/v1"),
+                            cfg.deepseek
+                                .as_ref()
+                                .unwrap()
+                                .api_key
+                                .as_ref()
+                                .unwrap()
+                                .clone(),
+                            None,
+                        ),
+                        _ => {
+                            eprintln!("error: unexpected provider");
+                            return vec![];
+                        }
                     }
                 };
-                used_hai_router = true;
-                (Some(api_base_url.deref()), api_key, Some(provider_header))
-            } else {
-                match session.ai {
-                    config::AiModel::OpenAi(_) => (
-                        None,
-                        cfg.openai
-                            .as_ref()
-                            .unwrap()
-                            .api_key
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        None,
-                    ),
-                    config::AiModel::Google(_) => (
-                        Some("https://generativelanguage.googleapis.com/v1beta/openai"),
-                        cfg.google
-                            .as_ref()
-                            .unwrap()
-                            .api_key
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        None,
-                    ),
-                    config::AiModel::DeepSeek(_) => (
-                        Some("https://api.deepseek.com/v1"),
-                        cfg.deepseek
-                            .as_ref()
-                            .unwrap()
-                            .api_key
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        None,
-                    ),
-                    _ => {
-                        eprintln!("error: unexpected provider");
-                        return vec![];
-                    }
-                }
-            };
             openai::send_to_openai(
                 base_url,
                 &api_key,
@@ -3591,32 +3619,33 @@ async fn prompt_ai(
             .await
         }
         config::AiModel::Anthropic(ref anthropic_model) => {
-            let (api_url, api_key, provider_header) = if session.use_hai_router {
-                let api_key = if let Some(ref account) = session.account {
-                    account.token.clone()
+            let (api_url, api_key, provider_header) =
+                if matches!(session.use_hai_router, HaiRouterState::On) {
+                    let api_key = if let Some(ref account) = session.account {
+                        account.token.clone()
+                    } else {
+                        eprintln!("error: you must be logged-in to use the hai-router");
+                        return vec![];
+                    };
+                    used_hai_router = true;
+                    (
+                        Some(format!("{}/chat/completions", get_api_base_url())),
+                        api_key,
+                        Some("anthropic".to_string()),
+                    )
                 } else {
-                    eprintln!("error: you must be logged-in to use the hai-router");
-                    return vec![];
+                    (
+                        None,
+                        cfg.anthropic
+                            .as_ref()
+                            .unwrap()
+                            .api_key
+                            .as_ref()
+                            .unwrap()
+                            .clone(),
+                        None,
+                    )
                 };
-                used_hai_router = true;
-                (
-                    Some(format!("{}/chat/completions", get_api_base_url())),
-                    api_key,
-                    Some("anthropic".to_string()),
-                )
-            } else {
-                (
-                    None,
-                    cfg.anthropic
-                        .as_ref()
-                        .unwrap()
-                        .api_key
-                        .as_ref()
-                        .unwrap()
-                        .clone(),
-                    None,
-                )
-            };
             let use_thinking = match anthropic_model {
                 config::AnthropicModel::Sonnet37(use_thinking) => *use_thinking,
                 _ => false,
@@ -3662,7 +3691,7 @@ async fn prompt_ai(
                     .contains("402 payment required")
             {
                 eprintln!("error: account needs funds, disabling hai-router");
-                session.use_hai_router = false;
+                hai_router_set(session, false);
             }
             vec![]
         }
@@ -3906,4 +3935,26 @@ fn session_history_add_user_image_entry(
         retention_policy,
     });
     token_count
+}
+
+/// Attempts to activate the hai-router.
+///
+/// May not be possible due to the AI model. If so, it puts the hai-router into
+/// a special state so that it will be activated if the model is switched to
+/// one that is supported.
+fn hai_router_try_activate(session: &mut SessionState) {
+    session.use_hai_router = if config::is_ai_model_supported_by_hai_router(&session.ai) {
+        HaiRouterState::On
+    } else {
+        HaiRouterState::OffForModel
+    };
+}
+
+/// Uses `hai_router_try_activate` for special handling.
+fn hai_router_set(session: &mut SessionState, on: bool) {
+    if on {
+        hai_router_try_activate(session);
+    } else {
+        session.use_hai_router = HaiRouterState::Off;
+    }
 }

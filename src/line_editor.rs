@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::api::client::HaiClient;
-use crate::config;
+use crate::{config, HaiRouterState};
 
 pub struct LineEditor {
     pub reedline: Reedline,
@@ -143,7 +143,7 @@ pub struct EditorPrompt {
     pub task_mode: Option<String>,
     pub incognito: bool,
     pub tool_mode: Option<String>,
-    pub using_hai_router: bool,
+    pub hai_router: HaiRouterState,
     pub is_dev: bool,
     pub username: Option<String>,
 }
@@ -157,7 +157,7 @@ impl EditorPrompt {
             task_mode: None,
             incognito: false,
             tool_mode: None,
-            using_hai_router: false,
+            hai_router: HaiRouterState::Off,
             is_dev: false,
             username: None,
         }
@@ -187,8 +187,8 @@ impl EditorPrompt {
         self.tool_mode = tool_mode;
     }
 
-    pub fn set_using_hai_router(&mut self, using_hai_router: bool) {
-        self.using_hai_router = using_hai_router;
+    pub fn set_hai_router(&mut self, hai_router: HaiRouterState) {
+        self.hai_router = hai_router;
     }
 
     pub fn set_is_dev(&mut self, is_dev: bool) {
@@ -224,7 +224,11 @@ impl Prompt for EditorPrompt {
             .unwrap_or("".to_string());
         let now: DateTime<Local> = Local::now();
         let formatted_time = now.format("%m/%d/%y %I:%M:%S %p").to_string();
-        let hai_router_icon = if self.using_hai_router { "🌐" } else { "" };
+        let hai_router_icon = match self.hai_router {
+            HaiRouterState::Off => "",
+            HaiRouterState::OffForModel => "🟡",
+            HaiRouterState::On => "🌐",
+        };
         Cow::Owned(format!(
             "{}{} {}-toks {}{} {}",
             username_str,
