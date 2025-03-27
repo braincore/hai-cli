@@ -464,6 +464,7 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/asset-push ")
                 || line.starts_with("/asset-link ")
                 || line.starts_with("/asset-revisions ")
+                || line.starts_with("/asset-remove ")
             {
                 let (cmd_word, arg_prefix) = line
                     .split_once(char::is_whitespace)

@@ -301,6 +301,7 @@ async fn repl(
         "/asset-import",
         "/asset-export",
         "/asset-acl",
+        "/asset-remove",
         "/account",
         "/account-new",
         "/account-login",
@@ -3403,8 +3404,9 @@ EXPERIMENTAL:
                                type: allow, deny, default
                                permission: read-data, read-revisions, push-data
 /asset-push <name>           - Push data into an asset. See pushed data w/ `/asset-revisions`
-/asset-import <n> <p>        - Imports  <path> into asset with  <name>
-/asset-export <n> <p>        - Exports asset with name to  <path>
+/asset-import <n> <p>        - Imports <path> into asset with <name>
+/asset-export <n> <p>        - Exports asset with name to <path>
+/asset-remove <name>         - Removes an asset
 
 /chat-save [<asset_name>]    - Save the conversation as an asset
                                If asset name omitted, name automatically generated
