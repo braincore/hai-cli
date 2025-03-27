@@ -129,28 +129,29 @@ impl<'a> MaskedPrinter<'a> {
 
 use regex::Regex;
 use std::sync::OnceLock;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use two_face::re_exports::syntect::easy::HighlightLines;
+use two_face::re_exports::syntect::highlighting::Style;
+use two_face::re_exports::syntect::parsing::SyntaxSet;
+use two_face::theme::EmbeddedLazyThemeSet;
 use unicode_width::UnicodeWidthStr;
 
 use crate::term::{as_terminal_escaped, terminal_color_capability, ColorCapability};
 
 // Cache syntax & themes b/c they're large per syntect docs
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME_SET: OnceLock<ThemeSet> = OnceLock::new();
+static THEME_SET: OnceLock<EmbeddedLazyThemeSet> = OnceLock::new();
 
 /// Lazy-load syntax set
 fn get_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
         // This closure will only be called once, the first time get_or_init is called
-        SyntaxSet::load_defaults_newlines()
+        two_face::syntax::extra_newlines()
     })
 }
 
 /// Lazy-load theme set
-fn get_theme_set() -> &'static ThemeSet {
-    THEME_SET.get_or_init(|| ThemeSet::load_defaults())
+fn get_theme_set() -> &'static EmbeddedLazyThemeSet {
+    THEME_SET.get_or_init(|| two_face::theme::extra())
 }
 
 /// Regex to extract language for markdown code block
@@ -180,7 +181,10 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
         let ps = get_syntax_set();
         let ts = get_theme_set();
         if let Some(syntax) = ps.find_syntax_by_token(token) {
-            self.highlighter = Some(HighlightLines::new(syntax, &ts.themes["Solarized (dark)"]));
+            self.highlighter = Some(HighlightLines::new(
+                syntax,
+                &ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
+            ));
         }
     }
 
@@ -235,7 +239,9 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
             let full_first_line = format!("{}{}", self.buffer, &lines[0]);
             self.buffer.clear();
 
-            self.highlighter_check_start(&full_first_line);
+            // If this line is the end of a code block, end it before
+            // triggering the highlight logic.
+            self.highlighter_check_end(&full_first_line);
 
             // If highlighter is set, clear the previous line and reprint with
             // colors.
@@ -268,8 +274,10 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                 }
             }
 
-            // Check if this first line changed the highlighter
-            self.highlighter_check_end(&full_first_line);
+            // It's important to activate highlighting after the start so that
+            // the ``` isn't treated as part of the code. Otherwise, in some
+            // languages it will be interpreted as a multi-line comment.
+            self.highlighter_check_start(&full_first_line);
 
             // All lines in the middle are printed fully
             for middle_line in &lines[1..lines.len() - 1] {

@@ -59,7 +59,7 @@ pub fn ask_question_readline(prompt: &str) -> Option<String> {
 use nu_ansi_term::Color::{self, Fixed, Rgb};
 use nu_ansi_term::{self, Style};
 
-use syntect::highlighting::{self, FontStyle};
+use two_face::re_exports::syntect::highlighting::{self, FontStyle};
 
 /// Function taken unmodified from `bat` crate (sharkdp/bat)
 pub fn to_ansi_color(color: highlighting::Color, true_color: bool) -> Option<nu_ansi_term::Color> {

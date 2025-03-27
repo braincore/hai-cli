@@ -46,7 +46,6 @@ serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
 sha2 = "0.10.8"
 shellexpand = "3.1.0"
-syntect = { version = "5.2.0", default-features = false, features = ["default-fancy"] }
 tempfile = "3.15.0"
 terminal_size = "0.4.0"
 tiktoken-rs = "0.6.0"
@@ -54,6 +53,7 @@ tokio = { version = "1.41.0", features = ["full"] }
 tokio-util = "0.7.13"
 toml = "0.8.19"
 toml_edit = "0.22.22"
+two-face = { version = "0.4.3", default-features = false, features = ["syntect-default-fancy"] }
 unicode-width = "0.1.14"
 uuid = { version = "1.11.0", features = ["std", "v7"] }
 viuer = "0.9.1"
