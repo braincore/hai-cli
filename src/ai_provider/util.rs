@@ -2,6 +2,11 @@ use jaq_interpret::{Ctx, FilterT, ParseCtx, RcIter, Val};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io::{self, Write};
+use two_face::re_exports::syntect::easy::HighlightLines;
+use two_face::re_exports::syntect::highlighting::Style;
+use unicode_width::UnicodeWidthStr;
+
+use crate::term_color;
 
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
@@ -127,44 +132,11 @@ impl<'a> MaskedPrinter<'a> {
 
 // --
 
-use regex::Regex;
-use std::sync::OnceLock;
-use two_face::re_exports::syntect::easy::HighlightLines;
-use two_face::re_exports::syntect::highlighting::Style;
-use two_face::re_exports::syntect::parsing::SyntaxSet;
-use two_face::theme::EmbeddedLazyThemeSet;
-use unicode_width::UnicodeWidthStr;
-
-use crate::term::{as_terminal_escaped, terminal_color_capability, ColorCapability};
-
-// Cache syntax & themes b/c they're large per syntect docs
-static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-static THEME_SET: OnceLock<EmbeddedLazyThemeSet> = OnceLock::new();
-
-/// Lazy-load syntax set
-fn get_syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(|| {
-        // This closure will only be called once, the first time get_or_init is called
-        two_face::syntax::extra_newlines()
-    })
-}
-
-/// Lazy-load theme set
-fn get_theme_set() -> &'static EmbeddedLazyThemeSet {
-    THEME_SET.get_or_init(|| two_face::theme::extra())
-}
-
-/// Regex to extract language for markdown code block
-fn get_markdown_code_block_re() -> &'static Regex {
-    static MARKDOWN_CODE_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
-    MARKDOWN_CODE_BLOCK_RE.get_or_init(|| Regex::new(r"^```([a-zA-Z0-9_+-]+)?$").unwrap())
-}
-
 pub struct SyntaxHighlighterPrinter<'a> {
     buffer: String,
     line_start_cursor_position: Option<(u16, u16)>,
     highlighter: Option<HighlightLines<'a>>,
-    terminal_color_capability: Option<ColorCapability>,
+    terminal_color_capability: Option<term_color::ColorCapability>,
 }
 
 impl<'a> SyntaxHighlighterPrinter<'a> {
@@ -173,13 +145,13 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
             buffer: String::new(),
             line_start_cursor_position: None,
             highlighter: None,
-            terminal_color_capability: terminal_color_capability(),
+            terminal_color_capability: term_color::terminal_color_capability(),
         }
     }
 
     pub fn set_highlighter(&mut self, token: &str) {
-        let ps = get_syntax_set();
-        let ts = get_theme_set();
+        let ps = term_color::get_syntax_set();
+        let ts = term_color::get_theme_set();
         if let Some(syntax) = ps.find_syntax_by_token(token) {
             self.highlighter = Some(HighlightLines::new(
                 syntax,
@@ -193,7 +165,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
         if line == "```" {
             self.highlighter = None;
         } else {
-            let markdown_code_block_re = get_markdown_code_block_re();
+            let markdown_code_block_re = term_color::get_markdown_code_block_re();
             if let Some(captures) = markdown_code_block_re.captures(line) {
                 if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
                     self.set_highlighter(&lang);
@@ -203,7 +175,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
     }
 
     pub fn highlighter_check_start(&mut self, line: &str) {
-        let markdown_code_block_re = get_markdown_code_block_re();
+        let markdown_code_block_re = term_color::get_markdown_code_block_re();
         if let Some(captures) = markdown_code_block_re.captures(line) {
             if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
                 self.set_highlighter(&lang);
@@ -230,7 +202,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
 
         let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
         if lines.len() > 1 {
-            let ps = get_syntax_set();
+            let ps = term_color::get_syntax_set();
 
             // Finish the current line
             println!("{}", &lines[0]);
@@ -266,8 +238,13 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&line_with_ending, &ps).unwrap();
                     for (style, text) in highlighted_parts {
-                        let escaped =
-                            as_terminal_escaped(style, text, &color_capability, false, None);
+                        let escaped = term_color::as_terminal_escaped(
+                            style,
+                            text,
+                            &color_capability,
+                            false,
+                            None,
+                        );
                         print!("{}", escaped);
                     }
                     io::stdout().flush().unwrap();
@@ -288,8 +265,13 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                         .unwrap();
 
                     for (style, text) in highlighted_parts {
-                        let escaped =
-                            as_terminal_escaped(style, text, &color_capability, false, None);
+                        let escaped = term_color::as_terminal_escaped(
+                            style,
+                            text,
+                            &color_capability,
+                            false,
+                            None,
+                        );
                         print!("{}", escaped);
                     }
                     io::stdout().flush().unwrap();
@@ -327,7 +309,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
         if let Some(color_capability) = self.terminal_color_capability.clone() {
             if let Some(highlighter) = self.highlighter.as_mut() {
                 if let Some((x, y)) = self.line_start_cursor_position.take() {
-                    let ps = get_syntax_set();
+                    let ps = term_color::get_syntax_set();
                     let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
                     let height = line_width / terminal_width;
@@ -340,8 +322,13 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&self.buffer, &ps).unwrap();
                     for (style, text) in highlighted_parts {
-                        let escaped =
-                            as_terminal_escaped(style, text, &color_capability, false, None);
+                        let escaped = term_color::as_terminal_escaped(
+                            style,
+                            text,
+                            &color_capability,
+                            false,
+                            None,
+                        );
                         print!("{}", escaped);
                     }
                     io::stdout().flush().unwrap();

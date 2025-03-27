@@ -33,6 +33,7 @@ mod db;
 mod line_editor;
 mod loader;
 mod term;
+mod term_color;
 mod tool;
 
 use api::client::HaiClient;
@@ -2169,7 +2170,7 @@ async fn process_cmd(
                 // FUTURE: Consider pretty printing config. For now, print the
                 // raw config so that it's easier for people to copy + paste
                 // for their own purposes.
-                println!("{}", config);
+                term_color::print_with_syntax_highlighting(config.as_str(), "toml");
                 session_history_add_user_text_entry(
                     &config,
                     session,
