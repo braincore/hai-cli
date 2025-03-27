@@ -19,8 +19,9 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - ⚙ Give AI the power to run programs on your computer.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
 - 📂 Load images, code, or text into the conversation.
-- ☁ Store and share data on the cloud for easy access by AIs.
+- 🎨 Highlights syntax for code snippets.
 - 💾 Auto-saves last conversation for easy resumption.
+- ☁ Store and share data on the cloud for easy access by AIs.
 - 🛠 Open source: Apache License 2.0
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
