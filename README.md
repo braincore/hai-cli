@@ -15,7 +15,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 🗯 Run many instances for simultaneous conversations.
 - 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, and Ollama (local)
   all in a single conversation.
-- 🕶 Go incognito with a simple flag.
+- 🕶 Go incognito `hai -i`.
 - ⚙ Give AI the power to run programs on your computer.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
 - 📂 Load images, code, or text into the conversation.
