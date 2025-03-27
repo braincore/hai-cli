@@ -10,8 +10,6 @@ pub struct Message {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
-    #[serde(skip)]
-    pub tokens: u32,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

@@ -215,6 +215,8 @@ struct SessionState {
     mask_secrets: bool,
     /// Information about logged-in account
     account: Option<db::Account>,
+    /// Whether the session is in incognito mode (history-less)
+    incognito: bool,
     /// The last tool that was used (for ! shortcut)
     last_tool_cmd: Option<cmd::ToolCmd>,
     /// The tool activated in tool-mode
@@ -306,7 +308,7 @@ async fn repl(
         "/account-balance",
         "/account-subscribe",
         "/chat-save",
-        "/chat-load",
+        "/chat-resume",
         "/whois",
         "/hai-router",
         "/cost",
@@ -414,6 +416,7 @@ async fn repl(
         masked_strings: HashSet::new(),
         mask_secrets: false,
         account: account.clone(),
+        incognito,
         last_tool_cmd: None,
         tool_mode: None,
         use_hai_router: HaiRouterState::Off,
@@ -716,8 +719,8 @@ async fn repl(
                 content: msg_content,
                 tool_calls: None,
                 tool_call_id: None,
-                tokens,
             },
+            tokens,
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
         });
 
@@ -859,8 +862,8 @@ async fn repl(
                             content: vec![chat::MessageContent::Text { text: text.clone() }],
                             tool_calls: None,
                             tool_call_id: None,
-                            tokens,
                         },
+                        tokens,
                         retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                     });
                 }
@@ -885,8 +888,8 @@ async fn repl(
                                 },
                             }]),
                             tool_call_id: None,
-                            tokens,
                         },
+                        tokens,
                         retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                     });
                 }
@@ -958,8 +961,8 @@ async fn repl(
                                 content: vec![chat::MessageContent::Text { text: error_text }],
                                 tool_calls: None,
                                 tool_call_id: Some(tool_id.clone()),
-                                tokens,
                             },
+                            tokens,
                             retention_policy: (
                                 is_task_mode_step,
                                 db::LogEntryRetentionPolicy::None,
@@ -1011,8 +1014,8 @@ async fn repl(
                                 content: vec![chat::MessageContent::Text { text: output_text }],
                                 tool_calls: None,
                                 tool_call_id: Some(tool_id.clone()),
-                                tokens,
                             },
+                            tokens,
                             retention_policy: (
                                 is_task_mode_step,
                                 db::LogEntryRetentionPolicy::None,
@@ -1030,6 +1033,10 @@ async fn repl(
         println!();
         println!("{}", "---".white().on_black());
         println!();
+    }
+
+    if !exit_when_done {
+        save_chat_to_db(&session, db).await;
     }
 
     Ok(())
@@ -1350,6 +1357,7 @@ async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::New => {
+            save_chat_to_db(&session, db).await;
             // In task-mode, we keep all task-mode initialization steps regardless
             // of standard retention policy.
             session
@@ -1365,6 +1373,7 @@ async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Reset => {
+            save_chat_to_db(&session, db).await;
             session.history.retain(|log_entry| {
                 log_entry.retention_policy.0
                     || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
@@ -1635,9 +1644,9 @@ async fn process_cmd(
                 message:
                     chat::Message {
                         role: chat::MessageRole::System,
-                        tokens,
                         ..
                     },
+                tokens,
                 ..
             }) = session.history.first()
             {
@@ -1659,8 +1668,8 @@ async fn process_cmd(
                         }],
                         tool_calls: None,
                         tool_call_id: None,
-                        tokens,
                     },
+                    tokens,
                     // Treat like a /pin. /new clears it unless in task-mode.
                     retention_policy: (
                         is_task_mode_step,
@@ -1697,7 +1706,7 @@ async fn process_cmd(
                 };
                 let mut preview = String::new();
                 if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-                    session.input_loaded_tokens -= log_entry.message.tokens;
+                    session.input_loaded_tokens -= log_entry.tokens;
                     if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
                         preview.push_str(text.split_once("\n").unwrap().0);
                     } else if let chat::MessageContent::ImageUrl { image_url } =
@@ -1706,7 +1715,7 @@ async fn process_cmd(
                         preview.push_str(&image_url.url[..10]);
                     }
                 } else {
-                    session.input_tokens -= log_entry.message.tokens;
+                    session.input_tokens -= log_entry.tokens;
                     for part in log_entry.message.content {
                         match part {
                             chat::MessageContent::Text { text } => {
@@ -2742,17 +2751,32 @@ async fn process_cmd(
                 .await;
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::ChatLoad(cmd::ChatLoadCmd { chat_log_name }) => {
-            if session.account.is_none() {
-                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
-                return ProcessCmdResult::Loop;
-            }
-            let api_client = mk_api_client(Some(session));
-            let chat_log_contents =
+        cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
+            let chat_log_contents = if let Some(chat_log_name) = chat_log_name {
+                if session.account.is_none() {
+                    eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                    return ProcessCmdResult::Loop;
+                }
+                let api_client = mk_api_client(Some(session));
                 match asset_editor::get_asset_as_text(&api_client, chat_log_name, false).await {
                     Ok(contents) => contents,
                     Err(_) => return ProcessCmdResult::Loop,
+                }
+            } else {
+                let username = if let Some(account) = session.account.as_ref() {
+                    account.username.clone()
+                } else {
+                    "".to_string()
                 };
+                if let Some(res) = db::get_misc_entry(&*db.lock().await, &username, "chat-last")
+                    .expect("failed to write to db")
+                {
+                    res.0
+                } else {
+                    eprintln!("error: no chat saved");
+                    return ProcessCmdResult::Loop;
+                }
+            };
             let history = match serde_json::from_str::<Vec<db::LogEntry>>(&chat_log_contents) {
                 Ok(res) => res,
                 Err(e) => {
@@ -2761,6 +2785,50 @@ async fn process_cmd(
                 }
             };
             session.history = history;
+
+            // Print out conversation to help user regain context
+            for (i, log_entry) in session.history.iter().enumerate() {
+                let role_name = match log_entry.message.role {
+                    chat::MessageRole::Assistant => "assistant",
+                    chat::MessageRole::User => "user",
+                    chat::MessageRole::Tool => "tool",
+                    chat::MessageRole::System => break,
+                };
+
+                if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
+                    session.input_loaded_tokens += log_entry.tokens;
+                    if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
+                        println!("{}[{}]: {}", role_name, i, text.split_once("\n").unwrap().0);
+                        println!();
+                    } else if let chat::MessageContent::ImageUrl { image_url } =
+                        &log_entry.message.content[0]
+                    {
+                        println!("{}[{}]:", role_name, i);
+                        match loader::resolve_image_b64(&image_url.url).await {
+                            Ok(img_png_b64) => {
+                                term::print_image_to_term(&img_png_b64).unwrap();
+                                println!();
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to load image: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    let mut entry_body = String::new();
+                    session.input_tokens += log_entry.tokens;
+                    for part in &log_entry.message.content {
+                        match part {
+                            chat::MessageContent::Text { text } => {
+                                entry_body.push_str(&text);
+                            }
+                            chat::MessageContent::ImageUrl { .. } => entry_body.push_str("[image]"),
+                        }
+                        entry_body.push('\n');
+                    }
+                    print!("{}[{}]: {}", role_name, i, entry_body);
+                }
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatSave(cmd::ChatSaveCmd { chat_log_name }) => {
@@ -3098,14 +3166,14 @@ async fn process_cmd(
             for log in &session.history {
                 if matches!(log.message.role, chat::MessageRole::Assistant) {
                     // AI was prompted, so compute cost
-                    agg_output_tokens += log.message.tokens;
+                    agg_output_tokens += log.tokens;
                     agg_input_tokens += cur_input_tokens;
 
                     // The AI output becomes part of the next input
-                    cur_input_tokens += log.message.tokens;
+                    cur_input_tokens += log.tokens;
                 } else {
                     // AI wasn't prompted, so only increment input token count
-                    cur_input_tokens += log.message.tokens;
+                    cur_input_tokens += log.tokens;
                 }
             }
             if let Some((input_cost_in_mills_per_million, output_cost_in_mills_per_million)) =
@@ -3337,8 +3405,11 @@ EXPERIMENTAL:
 /asset-push <name>           - Push data into an asset. See pushed data w/ `/asset-revisions`
 /asset-import <n> <p>        - Imports  <path> into asset with  <name>
 /asset-export <n> <p>        - Exports asset with name to  <path>
+
 /chat-save [<asset_name>]    - Save the conversation as an asset
-/chat-load <asset_name>      - Replaces conversation with previously saved one"##;
+                               If asset name omitted, name automatically generated
+/chat-resume [<asset_name>]  - Replaces current chat with chat saved to asset via `/chat-save`
+                               If asset name omitted, resumes last auto-saved chat"##;
 
 /// Prints error to terminal if key not set.
 fn check_api_key(ai: &config::AiModel, cfg: &config::Config) -> bool {
@@ -3750,11 +3821,11 @@ fn replace_haivars(s: &str, haivars: &HashMap<String, String>) -> String {
 fn recalculate_input_tokens(session: &mut SessionState) {
     let mut input_tokens = 0;
     let mut input_loaded_tokens = 0;
-    for message in &session.history {
-        if message.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-            input_loaded_tokens += message.message.tokens;
+    for log_entry in &session.history {
+        if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
+            input_loaded_tokens += log_entry.tokens;
         } else {
-            input_tokens += message.message.tokens;
+            input_tokens += log_entry.tokens;
         }
     }
     session.input_tokens = input_tokens;
@@ -3873,8 +3944,8 @@ fn session_history_add_user_text_entry(
             }],
             tool_calls: None,
             tool_call_id: None,
-            tokens: token_count,
         },
+        tokens: token_count,
         retention_policy,
     });
     token_count
@@ -3931,8 +4002,8 @@ fn session_history_add_user_image_entry(
             }],
             tool_calls: None,
             tool_call_id: None,
-            tokens: token_count,
         },
+        tokens: token_count,
         retention_policy,
     });
     token_count
@@ -3958,4 +4029,31 @@ fn hai_router_set(session: &mut SessionState, on: bool) {
     } else {
         session.use_hai_router = HaiRouterState::Off;
     }
+}
+
+// --
+
+/// Saves chat to the local db for the session user.
+///
+/// Does not save if session is incognito, or if it has yet to have a
+/// user-generated message excluding task-setup ones.
+async fn save_chat_to_db(session: &SessionState, db: Arc<Mutex<rusqlite::Connection>>) {
+    if session.incognito {
+        return;
+    }
+    if !session.history.iter().any(|entry| {
+        matches!(entry.message.role, chat::MessageRole::User) && !entry.retention_policy.0
+    }) {
+        // If the history doesn't have a user-generated message (task-setup
+        // step doesn't count), then no-op.
+        return;
+    }
+    let username = if let Some(account) = session.account.as_ref() {
+        account.username.clone()
+    } else {
+        "".to_string()
+    };
+    let serialized_log = serde_json::to_string_pretty(&session.history).unwrap();
+    db::set_misc_entry(&*db.lock().await, &username, "chat-last", &serialized_log)
+        .expect("failed to write to db");
 }

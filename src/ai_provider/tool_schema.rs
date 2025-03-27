@@ -166,8 +166,6 @@ Assets:
                             - Use a newline after `name` to push arbitrary multi-line content.
 /asset-import <name> <path>   - Imports <path> from local machine into asset with <name>
 /asset-export <name> <path>   - Exports asset with name to <path> on local machine
-/chat-save <asset_name>   - Save the conversation as an asset
-/chat-load <asset_name>   - Replaces conversation with previously saved one
 
 --
 

@@ -7,6 +7,7 @@ use crate::{chat, config};
 pub struct LogEntry {
     pub uuid: String,
     pub message: chat::Message,
+    pub tokens: u32,
     /// If bool true, log_entry from task-mode step.
     pub retention_policy: (bool, LogEntryRetentionPolicy),
 }

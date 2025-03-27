@@ -109,8 +109,8 @@ pub enum Cmd {
     AssetExport(AssetExportCmd),
     /// Grant permission to an asset
     AssetAcl(AssetAclCmd),
-    /// Load a chat
-    ChatLoad(ChatLoadCmd),
+    /// Resume a chat
+    ChatResume(ChatResumeCmd),
     /// Save a chat
     ChatSave(ChatSaveCmd),
     /// Get current account (or if specified, switch to logged-in account)
@@ -455,9 +455,10 @@ pub struct AssetAclCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChatLoadCmd {
+pub struct ChatResumeCmd {
     /// Name of the chat log asset
-    pub chat_log_name: String,
+    /// If omitted, queries the local db for last chat
+    pub chat_log_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1328,17 +1329,13 @@ fn parse_command(
                 }
             }
         }
-        "chat-load" => {
+        "chat-resume" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            match parse_one_arg(remaining) {
-                Some(chat_log_name) => Some(Cmd::ChatLoad(ChatLoadCmd { chat_log_name })),
-                None => {
-                    eprintln!("Usage: /chat-load <name>");
-                    None
-                }
-            }
+            Some(Cmd::ChatResume(ChatResumeCmd {
+                chat_log_name: parse_one_arg_catchall(remaining),
+            }))
         }
         "chat-save" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

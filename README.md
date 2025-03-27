@@ -20,6 +20,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
 - 📂 Load images, code, or text into the conversation.
 - ☁ Store and share data on the cloud for easy access by AIs.
+- 💾 Auto-saves last conversation for easy resumption.
 - 🛠 Open source: Apache License 2.0
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
