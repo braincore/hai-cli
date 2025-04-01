@@ -109,6 +109,14 @@ pub enum Cmd {
     AssetExport(AssetExportCmd),
     /// Grant permission to an asset
     AssetAcl(AssetAclCmd),
+    /// Get metadata for asset
+    AssetMdGet(AssetMdGetCmd),
+    /// Set metadata for asset
+    AssetMdSet(AssetMdSetCmd),
+    /// Set key in asset metadata
+    AssetMdSetKey(AssetMdSetKeyCmd),
+    /// Delete key in asset metadata
+    AssetMdDelKey(AssetMdDelKeyCmd),
     /// Resume a chat
     ChatResume(ChatResumeCmd),
     /// Save a chat
@@ -455,6 +463,42 @@ pub struct AssetAclCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct AssetMdGetCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetMdSetCmd {
+    /// Name of the asset
+    pub asset_name: String,
+
+    /// Metadata (must be JSON-encoded object)
+    pub metadata: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetMdSetKeyCmd {
+    /// Name of the asset
+    pub asset_name: String,
+
+    /// Top-level key of metadata to set
+    pub key: String,
+
+    /// A JSON-encoded value
+    pub value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetMdDelKeyCmd {
+    /// Name of the asset
+    pub asset_name: String,
+
+    /// Top-level key of metadata to delete
+    pub key: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct ChatResumeCmd {
     /// Name of the chat log asset
     /// If omitted, queries the local db for last chat
@@ -680,6 +724,22 @@ fn parse_two_arg_one_optional_catchall(s: &str) -> Option<(String, Option<String
 
     match (first, rest) {
         (Some(first), rest) => Some((first.to_string(), rest.map(|s| s.to_string()))),
+        _ => None,
+    }
+}
+
+fn parse_three_arg_catchall(s: &str) -> Option<(String, String, String)> {
+    let trimmed = s.trim();
+    let mut parts = trimmed.splitn(3, |c: char| c.is_whitespace());
+
+    let first = parts.next();
+    let second = parts.next();
+    let rest = parts.next();
+
+    match (first, second, rest) {
+        (Some(first), Some(second), Some(rest)) => {
+            Some((first.to_string(), second.to_string(), rest.to_string()))
+        }
         _ => None,
     }
 }
@@ -1325,6 +1385,63 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-acl <asset_name> <allow|deny|default>:<acl>");
+                    None
+                }
+            }
+        }
+        "asset-md-get" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetMdGet(AssetMdGetCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-md-get <name>");
+                    None
+                }
+            }
+        }
+        "asset-md-set" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, metadata)) => Some(Cmd::AssetMdSet(AssetMdSetCmd {
+                    asset_name,
+                    metadata,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-md-set <asset_name> <metadata>");
+                    None
+                }
+            }
+        }
+        "asset-md-set-key" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_three_arg_catchall(remaining) {
+                Some((asset_name, key, value)) => Some(Cmd::AssetMdSetKey(AssetMdSetKeyCmd {
+                    asset_name,
+                    key,
+                    value,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-md-set-key <asset_name> <key> <value>");
+                    None
+                }
+            }
+        }
+        "asset-md-del-key" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, key)) => {
+                    Some(Cmd::AssetMdDelKey(AssetMdDelKeyCmd { asset_name, key }))
+                }
+                None => {
+                    eprintln!("Usage: /asset-md-del-key <asset_name> <key>");
                     None
                 }
             }

@@ -302,6 +302,10 @@ async fn repl(
         "/asset-export",
         "/asset-acl",
         "/asset-remove",
+        "/asset-md-get",
+        "/asset-md-set",
+        "/asset-md-set-key",
+        "/asset-md-del-key",
         "/account",
         "/account-new",
         "/account-login",
@@ -2375,14 +2379,8 @@ async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
-            use crate::api::types::asset::AssetEntryOp;
             for entry in &asset_list_res.entries {
-                let symbol = if matches!(entry.op, AssetEntryOp::Push) {
-                    "📥"
-                } else {
-                    ""
-                };
-                println!("{}{}", entry.name, symbol);
+                print_asset_entry(entry);
             }
             let asset_list_output = asset_list_res
                 .entries
@@ -2416,7 +2414,7 @@ async fn process_cmd(
                 }
             };
             for entry in &asset_search_res.semantic_matches {
-                println!("{}", entry.name)
+                print_asset_entry(entry);
             }
             let asset_search_output = asset_search_res
                 .semantic_matches
@@ -2494,6 +2492,9 @@ async fn process_cmd(
                         }
                         AssetEntryOp::Fork => {
                             "fork"
+                        }
+                        AssetEntryOp::Metadata => {
+                            "metadata"
                         }
                         AssetEntryOp::Other => {
                             "other"
@@ -2750,6 +2751,213 @@ async fn process_cmd(
                     },
                 })
                 .await;
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::AssetGetArg;
+            match api_client
+                .asset_get(AssetGetArg {
+                    name: asset_name.to_string(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    if let Some(metadata_url) = res.metadata_url {
+                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
+                        {
+                            let contents = String::from_utf8_lossy(&contents_bin);
+                            let md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata");
+                            let contents_pretty = serde_json::to_string_pretty(&md_json)
+                                .expect("failed to pretty-print md json");
+                            println!("{}", &contents_pretty);
+                            session_history_add_user_cmd_and_reply_entries(
+                                raw_user_input,
+                                &contents_pretty,
+                                session,
+                                bpe_tokenizer,
+                                (is_task_mode_step, LogEntryRetentionPolicy::None),
+                            );
+                        }
+                    } else {
+                        println!("no metadata");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetMdSet(cmd::AssetMdSetCmd {
+            asset_name,
+            metadata,
+        }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+            match api_client
+                .asset_metadata_put(AssetMetadataPutArg {
+                    name: asset_name.to_owned(),
+                    data: metadata.clone(),
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: metadata put failed: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            session_history_add_user_text_entry(
+                raw_user_input,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetMdSetKey(cmd::AssetMdSetKeyCmd {
+            asset_name,
+            key,
+            value,
+        }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let value_json = match serde_json::from_str::<serde_json::Value>(value) {
+                Ok(value_json) => value_json,
+                Err(e) => {
+                    eprintln!("error: not a json value: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::AssetGetArg;
+            match api_client
+                .asset_get(AssetGetArg {
+                    name: asset_name.to_string(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    let mut md_json = if let Some(metadata_url) = res.metadata_url {
+                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
+                        {
+                            let contents = String::from_utf8_lossy(&contents_bin);
+                            serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata")
+                        } else {
+                            return ProcessCmdResult::Loop;
+                        }
+                    } else {
+                        serde_json::json!({})
+                    };
+                    if let Some(map) = md_json.as_object_mut() {
+                        map.insert(key.clone(), value_json);
+                    } else {
+                        eprintln!("unexpected: metadata is not a map");
+                        return ProcessCmdResult::Loop;
+                    }
+                    let md_contents =
+                        serde_json::to_string(&md_json).expect("failed to serialize metadata");
+                    use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                    match api_client
+                        .asset_metadata_put(AssetMetadataPutArg {
+                            name: asset_name.to_owned(),
+                            data: md_contents,
+                            conflict_policy: PutConflictPolicy::Override,
+                        })
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    };
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetMdDelKey(cmd::AssetMdDelKeyCmd { asset_name, key }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::AssetGetArg;
+            match api_client
+                .asset_get(AssetGetArg {
+                    name: asset_name.to_string(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    let mut md_json = if let Some(metadata_url) = res.metadata_url {
+                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
+                        {
+                            let contents = String::from_utf8_lossy(&contents_bin);
+                            serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata")
+                        } else {
+                            return ProcessCmdResult::Loop;
+                        }
+                    } else {
+                        serde_json::json!({})
+                    };
+                    if let Some(map) = md_json.as_object_mut() {
+                        map.remove(key);
+                    } else {
+                        eprintln!("unexpected: metadata is not a map");
+                        return ProcessCmdResult::Loop;
+                    }
+                    let md_contents =
+                        serde_json::to_string(&md_json).expect("failed to serialize metadata");
+                    use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                    match api_client
+                        .asset_metadata_put(AssetMetadataPutArg {
+                            name: asset_name.to_owned(),
+                            data: md_contents,
+                            conflict_policy: PutConflictPolicy::Override,
+                        })
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    };
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
@@ -3407,6 +3615,10 @@ EXPERIMENTAL:
 /asset-import <n> <p>        - Imports <path> into asset with <name>
 /asset-export <n> <p>        - Exports asset with name to <path>
 /asset-remove <name>         - Removes an asset
+/asset-md-get <name>         - Get the metadata of an asset
+/asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object.
+/asset-md-set-key <name> <k> <v> - Set key to JSON value.
+/asset-md-del-key <name> <k> - Delete a key from an asset's metadata.
 
 /chat-save [<asset_name>]    - Save the conversation as an asset
                                If asset name omitted, name automatically generated
@@ -4058,4 +4270,24 @@ async fn save_chat_to_db(session: &SessionState, db: Arc<Mutex<rusqlite::Connect
     let serialized_log = serde_json::to_string_pretty(&session.history).unwrap();
     db::set_misc_entry(&*db.lock().await, &username, "chat-last", &serialized_log)
         .expect("failed to write to db");
+}
+
+// --
+
+use crate::api::types::asset::{AssetEntry, AssetEntryOp};
+
+fn print_asset_entry(entry: &AssetEntry) {
+    let symbol = if matches!(entry.op, AssetEntryOp::Push) {
+        "📥"
+    } else {
+        ""
+    };
+    let title = entry
+        .metadata
+        .as_ref()
+        .map(|md| md.title.clone())
+        .flatten()
+        .map(|md_title| format!(" [{}]", md_title))
+        .unwrap_or("".to_string());
+    println!("{}{}{}", entry.name, symbol, title);
 }

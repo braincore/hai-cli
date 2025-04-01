@@ -1,0 +1,18 @@
+namespace asset
+
+# --
+
+route pool/quota/get(AssetPoolQuotaGetArg, AssetPoolQuotaGetResult, AssetPoolQuotaGetError)
+    "Get the space quota for an asset pool."
+
+struct AssetPoolQuotaGetArg
+    mount_point String(max_length=2048)
+
+struct AssetPoolQuotaGetResult
+    active_count UInt64
+    active_size UInt64
+    total_count UInt64
+    total_size UInt64
+
+union AssetPoolQuotaGetError
+    bad_mount_point

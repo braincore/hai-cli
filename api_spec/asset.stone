@@ -25,16 +25,31 @@ struct AssetEntry
     name String(min_length=1)
     op AssetEntryOp
     asset AssetInfo
+    metadata AssetMetadataInfo?
+    total_size UInt64
+        "The total size of all revisions of a given asset and metadata. This is
+        important because a user's quota is based on the sum of all revisions."
 
 struct AssetInfo
     rev_id String(min_length=1)
     created_by AssetCreatedBy
-        union
-            # Only one variant. In anticipation of assets by system operations.
-            user AssetCreatedByUser
-                struct
-                    username String(min_length=1)
     size UInt64
+        "Number of bytes. Deleted assets have a size of 0."
+
+union AssetCreatedBy
+    # Only one variant. In anticipation of assets by system operations.
+    user AssetCreatedByUser
+        struct
+            username String(min_length=1)
+
+struct AssetMetadataInfo
+    rev_id String(min_length=1)
+    created_by AssetCreatedBy
+    size UInt64
+        "Number of bytes. Deleted assets have a size of 0."
+    title String?
+        "If the metadata specified a `title` key with string value, this is a
+        reproduction of it truncated to 64-chars."
 
 union AssetPutError
     bad_name
@@ -51,6 +66,8 @@ union AssetEntryOp
     edit
     push
     delete
+    metadata
+        "Metadata for asset was added, modified, or removed."
 
 # --
 
@@ -133,6 +150,7 @@ struct AssetGetArg
 struct AssetGetResult 
     entry AssetEntry
     data_url String(min_length=1)
+    metadata_url String(min_length=1)?
 
 union AssetGetError
     bad_name
@@ -298,3 +316,23 @@ struct AssetEntryAclGetArg
 union AssetEntryAclGetError
     bad_entry_ref
     no_permission
+
+# --
+
+route metadata/put(AssetMetadataPutArg, AssetPutResult, AssetPutError)
+    "Put metadata for an asset."
+
+struct AssetMetadataPutArg
+    name String(min_length=1, max_length=2048)
+    data String(max_length=1000000)
+        "Must be JSON"
+    conflict_policy PutConflictPolicy = override
+
+union AssetMetadataPutError
+    bad_name
+    no_permission
+    conflict
+        "Only returned if conflict policy is set to reject."
+    over_quota
+    bad_metadata
+        "Metadata must be valid JSON."

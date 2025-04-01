@@ -243,20 +243,37 @@ pub struct AssetEntry {
     pub name: String,
     pub op: AssetEntryOp,
     pub asset: AssetInfo,
+    /// The total size of all revisions of a given asset and metadata. This is important because a
+    /// user's quota is based on the sum of all revisions.
+    pub total_size: u64,
+    pub metadata: Option<AssetMetadataInfo>,
 }
 
 impl AssetEntry {
-    pub fn new(entry_id: String, name: String, op: AssetEntryOp, asset: AssetInfo) -> Self {
+    pub fn new(
+        entry_id: String,
+        name: String,
+        op: AssetEntryOp,
+        asset: AssetInfo,
+        total_size: u64,
+    ) -> Self {
         AssetEntry {
             entry_id,
             name,
             op,
             asset,
+            total_size,
+            metadata: None,
         }
+    }
+
+    pub fn with_metadata(mut self, value: AssetMetadataInfo) -> Self {
+        self.metadata = Some(value);
+        self
     }
 }
 
-const ASSET_ENTRY_FIELDS: &[&str] = &["entry_id", "name", "op", "asset"];
+const ASSET_ENTRY_FIELDS: &[&str] = &["entry_id", "name", "op", "asset", "total_size", "metadata"];
 impl AssetEntry {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -272,6 +289,8 @@ impl AssetEntry {
         let mut field_name = None;
         let mut field_op = None;
         let mut field_asset = None;
+        let mut field_total_size = None;
+        let mut field_metadata = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -300,6 +319,18 @@ impl AssetEntry {
                     }
                     field_asset = Some(map.next_value()?);
                 }
+                "total_size" => {
+                    if field_total_size.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("total_size"));
+                    }
+                    field_total_size = Some(map.next_value()?);
+                }
+                "metadata" => {
+                    if field_metadata.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("metadata"));
+                    }
+                    field_metadata = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -315,6 +346,9 @@ impl AssetEntry {
             name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
             op: field_op.ok_or_else(|| ::serde::de::Error::missing_field("op"))?,
             asset: field_asset.ok_or_else(|| ::serde::de::Error::missing_field("asset"))?,
+            total_size: field_total_size
+                .ok_or_else(|| ::serde::de::Error::missing_field("total_size"))?,
+            metadata: field_metadata.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -328,6 +362,10 @@ impl AssetEntry {
         s.serialize_field("name", &self.name)?;
         s.serialize_field("op", &self.op)?;
         s.serialize_field("asset", &self.asset)?;
+        s.serialize_field("total_size", &self.total_size)?;
+        if let Some(val) = &self.metadata {
+            s.serialize_field("metadata", val)?;
+        }
         Ok(())
     }
 }
@@ -354,7 +392,7 @@ impl ::serde::ser::Serialize for AssetEntry {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntry", 4)?;
+        let mut s = serializer.serialize_struct("AssetEntry", 6)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -1121,6 +1159,8 @@ pub enum AssetEntryOp {
     Edit,
     Push,
     Delete,
+    /// Metadata for asset was added, modified, or removed.
+    Metadata,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -1147,13 +1187,14 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryOp {
                     "edit" => AssetEntryOp::Edit,
                     "push" => AssetEntryOp::Push,
                     "delete" => AssetEntryOp::Delete,
+                    "metadata" => AssetEntryOp::Metadata,
                     _ => AssetEntryOp::Other,
                 };
                 super::eat_json_fields(&mut map)?;
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["add", "fork", "edit", "push", "delete", "other"];
+        const VARIANTS: &[&str] = &["add", "fork", "edit", "push", "delete", "metadata", "other"];
         deserializer.deserialize_struct("AssetEntryOp", VARIANTS, EnumVisitor)
     }
 }
@@ -1191,6 +1232,12 @@ impl ::serde::ser::Serialize for AssetEntryOp {
                 // unit
                 let mut s = serializer.serialize_struct("AssetEntryOp", 1)?;
                 s.serialize_field(".tag", "delete")?;
+                s.end()
+            }
+            AssetEntryOp::Metadata => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryOp", 1)?;
+                s.serialize_field(".tag", "metadata")?;
                 s.end()
             }
             AssetEntryOp::Other => Err(::serde::ser::Error::custom(
@@ -1640,15 +1687,25 @@ impl ::std::fmt::Display for AssetGetError {
 pub struct AssetGetResult {
     pub entry: AssetEntry,
     pub data_url: String,
+    pub metadata_url: Option<String>,
 }
 
 impl AssetGetResult {
     pub fn new(entry: AssetEntry, data_url: String) -> Self {
-        AssetGetResult { entry, data_url }
+        AssetGetResult {
+            entry,
+            data_url,
+            metadata_url: None,
+        }
+    }
+
+    pub fn with_metadata_url(mut self, value: String) -> Self {
+        self.metadata_url = Some(value);
+        self
     }
 }
 
-const ASSET_GET_RESULT_FIELDS: &[&str] = &["entry", "data_url"];
+const ASSET_GET_RESULT_FIELDS: &[&str] = &["entry", "data_url", "metadata_url"];
 impl AssetGetResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -1662,6 +1719,7 @@ impl AssetGetResult {
     ) -> Result<Option<AssetGetResult>, V::Error> {
         let mut field_entry = None;
         let mut field_data_url = None;
+        let mut field_metadata_url = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -1678,6 +1736,12 @@ impl AssetGetResult {
                     }
                     field_data_url = Some(map.next_value()?);
                 }
+                "metadata_url" => {
+                    if field_metadata_url.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("metadata_url"));
+                    }
+                    field_metadata_url = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1691,6 +1755,7 @@ impl AssetGetResult {
             entry: field_entry.ok_or_else(|| ::serde::de::Error::missing_field("entry"))?,
             data_url: field_data_url
                 .ok_or_else(|| ::serde::de::Error::missing_field("data_url"))?,
+            metadata_url: field_metadata_url.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -1702,6 +1767,9 @@ impl AssetGetResult {
         use serde::ser::SerializeStruct;
         s.serialize_field("entry", &self.entry)?;
         s.serialize_field("data_url", &self.data_url)?;
+        if let Some(val) = &self.metadata_url {
+            s.serialize_field("metadata_url", val)?;
+        }
         Ok(())
     }
 }
@@ -1728,7 +1796,7 @@ impl ::serde::ser::Serialize for AssetGetResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetGetResult", 2)?;
+        let mut s = serializer.serialize_struct("AssetGetResult", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -1739,6 +1807,7 @@ impl ::serde::ser::Serialize for AssetGetResult {
 pub struct AssetInfo {
     pub rev_id: String,
     pub created_by: AssetCreatedBy,
+    /// Number of bytes. Deleted assets have a size of 0.
     pub size: u64,
 }
 
@@ -1842,6 +1911,666 @@ impl ::serde::ser::Serialize for AssetInfo {
         // struct serializer
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("AssetInfo", 3)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetMetadataInfo {
+    pub rev_id: String,
+    pub created_by: AssetCreatedBy,
+    /// Number of bytes. Deleted assets have a size of 0.
+    pub size: u64,
+    /// If the metadata specified a `title` key with string value, this is a reproduction of it
+    /// truncated to 64-chars.
+    pub title: Option<String>,
+}
+
+impl AssetMetadataInfo {
+    pub fn new(rev_id: String, created_by: AssetCreatedBy, size: u64) -> Self {
+        AssetMetadataInfo {
+            rev_id,
+            created_by,
+            size,
+            title: None,
+        }
+    }
+
+    pub fn with_title(mut self, value: String) -> Self {
+        self.title = Some(value);
+        self
+    }
+}
+
+const ASSET_METADATA_INFO_FIELDS: &[&str] = &["rev_id", "created_by", "size", "title"];
+impl AssetMetadataInfo {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetMetadataInfo, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetMetadataInfo>, V::Error> {
+        let mut field_rev_id = None;
+        let mut field_created_by = None;
+        let mut field_size = None;
+        let mut field_title = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "rev_id" => {
+                    if field_rev_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("rev_id"));
+                    }
+                    field_rev_id = Some(map.next_value()?);
+                }
+                "created_by" => {
+                    if field_created_by.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("created_by"));
+                    }
+                    field_created_by = Some(map.next_value()?);
+                }
+                "size" => {
+                    if field_size.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("size"));
+                    }
+                    field_size = Some(map.next_value()?);
+                }
+                "title" => {
+                    if field_title.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("title"));
+                    }
+                    field_title = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetMetadataInfo {
+            rev_id: field_rev_id.ok_or_else(|| ::serde::de::Error::missing_field("rev_id"))?,
+            created_by: field_created_by
+                .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
+            size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
+            title: field_title.and_then(Option::flatten),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("rev_id", &self.rev_id)?;
+        s.serialize_field("created_by", &self.created_by)?;
+        s.serialize_field("size", &self.size)?;
+        if let Some(val) = &self.title {
+            s.serialize_field("title", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMetadataInfo {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetMetadataInfo;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMetadataInfo struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetMetadataInfo::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetMetadataInfo",
+            ASSET_METADATA_INFO_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMetadataInfo {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetMetadataInfo", 4)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetMetadataPutArg {
+    pub name: String,
+    /// Must be JSON
+    pub data: String,
+    pub conflict_policy: PutConflictPolicy,
+}
+
+impl AssetMetadataPutArg {
+    pub fn new(name: String, data: String) -> Self {
+        AssetMetadataPutArg {
+            name,
+            data,
+            conflict_policy: PutConflictPolicy::Override,
+        }
+    }
+
+    pub fn with_conflict_policy(mut self, value: PutConflictPolicy) -> Self {
+        self.conflict_policy = value;
+        self
+    }
+}
+
+const ASSET_METADATA_PUT_ARG_FIELDS: &[&str] = &["name", "data", "conflict_policy"];
+impl AssetMetadataPutArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetMetadataPutArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetMetadataPutArg>, V::Error> {
+        let mut field_name = None;
+        let mut field_data = None;
+        let mut field_conflict_policy = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                "data" => {
+                    if field_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("data"));
+                    }
+                    field_data = Some(map.next_value()?);
+                }
+                "conflict_policy" => {
+                    if field_conflict_policy.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("conflict_policy"));
+                    }
+                    field_conflict_policy = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetMetadataPutArg {
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+            data: field_data.ok_or_else(|| ::serde::de::Error::missing_field("data"))?,
+            conflict_policy: field_conflict_policy.unwrap_or(PutConflictPolicy::Override),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("data", &self.data)?;
+        if self.conflict_policy != PutConflictPolicy::Override {
+            s.serialize_field("conflict_policy", &self.conflict_policy)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMetadataPutArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetMetadataPutArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMetadataPutArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetMetadataPutArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetMetadataPutArg",
+            ASSET_METADATA_PUT_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMetadataPutArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetMetadataPutArg", 3)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetMetadataPutError {
+    BadName,
+    NoPermission,
+    /// Only returned if conflict policy is set to reject.
+    Conflict,
+    OverQuota,
+    /// Metadata must be valid JSON.
+    BadMetadata,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMetadataPutError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetMetadataPutError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMetadataPutError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_name" => AssetMetadataPutError::BadName,
+                    "no_permission" => AssetMetadataPutError::NoPermission,
+                    "conflict" => AssetMetadataPutError::Conflict,
+                    "over_quota" => AssetMetadataPutError::OverQuota,
+                    "bad_metadata" => AssetMetadataPutError::BadMetadata,
+                    _ => AssetMetadataPutError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "bad_name",
+            "no_permission",
+            "conflict",
+            "over_quota",
+            "bad_metadata",
+            "other",
+        ];
+        deserializer.deserialize_struct("AssetMetadataPutError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMetadataPutError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetMetadataPutError::BadName => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "bad_name")?;
+                s.end()
+            }
+            AssetMetadataPutError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetMetadataPutError::Conflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "conflict")?;
+                s.end()
+            }
+            AssetMetadataPutError::OverQuota => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "over_quota")?;
+                s.end()
+            }
+            AssetMetadataPutError::BadMetadata => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "bad_metadata")?;
+                s.end()
+            }
+            AssetMetadataPutError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetMetadataPutError {}
+
+impl ::std::fmt::Display for AssetMetadataPutError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetMetadataPutError::Conflict => {
+                f.write_str("Only returned if conflict policy is set to reject.")
+            }
+            AssetMetadataPutError::BadMetadata => f.write_str("Metadata must be valid JSON."),
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolQuotaGetArg {
+    pub mount_point: String,
+}
+
+impl AssetPoolQuotaGetArg {
+    pub fn new(mount_point: String) -> Self {
+        AssetPoolQuotaGetArg { mount_point }
+    }
+}
+
+const ASSET_POOL_QUOTA_GET_ARG_FIELDS: &[&str] = &["mount_point"];
+impl AssetPoolQuotaGetArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolQuotaGetArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolQuotaGetArg>, V::Error> {
+        let mut field_mount_point = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "mount_point" => {
+                    if field_mount_point.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("mount_point"));
+                    }
+                    field_mount_point = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolQuotaGetArg {
+            mount_point: field_mount_point
+                .ok_or_else(|| ::serde::de::Error::missing_field("mount_point"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("mount_point", &self.mount_point)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolQuotaGetArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolQuotaGetArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolQuotaGetArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolQuotaGetArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolQuotaGetArg",
+            ASSET_POOL_QUOTA_GET_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolQuotaGetArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolQuotaGetArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetPoolQuotaGetError {
+    BadMountPoint,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolQuotaGetError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetPoolQuotaGetError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolQuotaGetError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_mount_point" => AssetPoolQuotaGetError::BadMountPoint,
+                    _ => AssetPoolQuotaGetError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_mount_point", "other"];
+        deserializer.deserialize_struct("AssetPoolQuotaGetError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolQuotaGetError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetPoolQuotaGetError::BadMountPoint => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolQuotaGetError", 1)?;
+                s.serialize_field(".tag", "bad_mount_point")?;
+                s.end()
+            }
+            AssetPoolQuotaGetError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetPoolQuotaGetError {}
+
+impl ::std::fmt::Display for AssetPoolQuotaGetError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolQuotaGetResult {
+    pub active_count: u64,
+    pub active_size: u64,
+    pub total_count: u64,
+    pub total_size: u64,
+}
+
+impl AssetPoolQuotaGetResult {
+    pub fn new(active_count: u64, active_size: u64, total_count: u64, total_size: u64) -> Self {
+        AssetPoolQuotaGetResult {
+            active_count,
+            active_size,
+            total_count,
+            total_size,
+        }
+    }
+}
+
+const ASSET_POOL_QUOTA_GET_RESULT_FIELDS: &[&str] =
+    &["active_count", "active_size", "total_count", "total_size"];
+impl AssetPoolQuotaGetResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolQuotaGetResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolQuotaGetResult>, V::Error> {
+        let mut field_active_count = None;
+        let mut field_active_size = None;
+        let mut field_total_count = None;
+        let mut field_total_size = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "active_count" => {
+                    if field_active_count.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("active_count"));
+                    }
+                    field_active_count = Some(map.next_value()?);
+                }
+                "active_size" => {
+                    if field_active_size.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("active_size"));
+                    }
+                    field_active_size = Some(map.next_value()?);
+                }
+                "total_count" => {
+                    if field_total_count.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("total_count"));
+                    }
+                    field_total_count = Some(map.next_value()?);
+                }
+                "total_size" => {
+                    if field_total_size.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("total_size"));
+                    }
+                    field_total_size = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolQuotaGetResult {
+            active_count: field_active_count
+                .ok_or_else(|| ::serde::de::Error::missing_field("active_count"))?,
+            active_size: field_active_size
+                .ok_or_else(|| ::serde::de::Error::missing_field("active_size"))?,
+            total_count: field_total_count
+                .ok_or_else(|| ::serde::de::Error::missing_field("total_count"))?,
+            total_size: field_total_size
+                .ok_or_else(|| ::serde::de::Error::missing_field("total_size"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("active_count", &self.active_count)?;
+        s.serialize_field("active_size", &self.active_size)?;
+        s.serialize_field("total_count", &self.total_count)?;
+        s.serialize_field("total_size", &self.total_size)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolQuotaGetResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolQuotaGetResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolQuotaGetResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolQuotaGetResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolQuotaGetResult",
+            ASSET_POOL_QUOTA_GET_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolQuotaGetResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolQuotaGetResult", 4)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
