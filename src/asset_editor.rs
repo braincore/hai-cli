@@ -18,8 +18,15 @@ pub async fn edit_with_editor_api(
     tx: Sender<WorkerAssetMsg>,
     debug: bool,
 ) -> io::Result<Vec<u8>> {
-    // Create a temporary file with the initial content
-    let mut temp_file = NamedTempFile::new()?;
+    // Extract extension from asset_name if it has one
+    let extension = std::path::Path::new(asset_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!(".{}", ext))
+        .unwrap_or_default();
+
+    // Create a temporary file with the correct extension
+    let mut temp_file = NamedTempFile::with_suffix(&extension)?;
     temp_file.write_all(initial_content)?;
     let file_path = temp_file.path().to_owned();
 
