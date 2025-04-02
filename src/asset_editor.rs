@@ -168,6 +168,29 @@ pub async fn worker_update_asset(
                 api_client,
                 one_shot,
             }) => {
+                // Treat asset as markdown if it has .md extension or does not
+                // have an extension
+                let is_markdown = {
+                    let path = std::path::Path::new(&asset_name);
+                    match path.extension() {
+                        None => true,
+                        Some(ext) => ext.to_string_lossy().to_lowercase() == "md", // .md extension
+                    }
+                };
+                let mut md_title = None;
+                if is_markdown {
+                    if let Ok(content_str) = std::str::from_utf8(&new_contents) {
+                        if let Some(first_line) = content_str.lines().next() {
+                            if first_line.starts_with("# ") {
+                                let title = first_line[2..].trim().to_string();
+                                if !title.is_empty() {
+                                    md_title = Some(serde_json::Value::String(title));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let new_hash = Sha256::digest(&new_contents).to_vec();
                 // Check if the hash matches the last known hash
                 if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name) {
@@ -287,6 +310,32 @@ pub async fn worker_update_asset(
                             }
                         }
                     };
+                    if is_markdown {
+                        match asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
+                            .await
+                        {
+                            Ok(asset_entry) => {
+                                if !one_shot {
+                                    if let Some((_, _, existing_hash)) =
+                                        asset_bottom_map.get(&asset_name)
+                                    {
+                                        // Metadata updates change the revision
+                                        // ID which we need to update to avoid
+                                        // forking.
+                                        asset_bottom_map.insert(
+                                            asset_name.clone(),
+                                            (
+                                                asset_entry.entry_id,
+                                                asset_entry.asset.rev_id,
+                                                existing_hash.clone(),
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                            Err(_) => {}
+                        };
+                    }
                 }
             }
             WorkerAssetMsg::Done(asset_name) => {
@@ -409,4 +458,81 @@ pub fn get_invalid_asset_name_re() -> &'static Regex {
     ASSET_NAME_RE.get_or_init(|| {
         Regex::new(r##"(?://{1,})|[\[@+!#\$%^&\*<>,?\\|}{~:;\[\]\s"'=`]"##).unwrap()
     })
+}
+
+// --
+
+/// On error, prints reason.
+pub async fn asset_metadata_set_key(
+    api_client: &HaiClient,
+    asset_name: &str,
+    key: &str,
+    value: Option<serde_json::Value>,
+) -> Result<AssetEntry, ()> {
+    use crate::api::types::asset::AssetGetArg;
+    match api_client
+        .asset_get(AssetGetArg {
+            name: asset_name.to_string(),
+        })
+        .await
+    {
+        Ok(res) => {
+            let mut md_json = if let Some(metadata_url) = res.metadata_url {
+                if let Some(contents_bin) = get_asset_raw(&metadata_url).await {
+                    let contents = String::from_utf8_lossy(&contents_bin);
+                    serde_json::from_str::<serde_json::Value>(&contents)
+                        .expect("failed to parse metadata")
+                } else {
+                    return Err(());
+                }
+            } else {
+                serde_json::json!({})
+            };
+            // Check if the current value is the same as the target value
+            let needs_update = if let Some(map) = md_json.as_object() {
+                match (&value, map.get(key)) {
+                    (Some(target_value), Some(current_value)) => target_value != current_value,
+                    (None, None) => false,
+                    _ => true,
+                }
+            } else {
+                // If metadata is not a map, we'll need to update
+                value.is_some()
+            };
+            if !needs_update {
+                return Ok(res.entry);
+            }
+            if let Some(map) = md_json.as_object_mut() {
+                if let Some(value) = value {
+                    map.insert(key.to_string(), value);
+                } else {
+                    map.remove(key);
+                }
+            } else {
+                eprintln!("unexpected: metadata is not a map");
+                return Err(());
+            }
+            let md_contents =
+                serde_json::to_string(&md_json).expect("failed to serialize metadata");
+            use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+            match api_client
+                .asset_metadata_put(AssetMetadataPutArg {
+                    name: asset_name.to_owned(),
+                    data: md_contents,
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => Ok(res.entry),
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    Err(())
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            Err(())
+        }
+    }
 }

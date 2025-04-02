@@ -2840,49 +2840,15 @@ async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            use crate::api::types::asset::AssetGetArg;
-            match api_client
-                .asset_get(AssetGetArg {
-                    name: asset_name.to_string(),
-                })
-                .await
+            match asset_editor::asset_metadata_set_key(
+                &api_client,
+                asset_name,
+                key,
+                Some(value_json),
+            )
+            .await
             {
-                Ok(res) => {
-                    let mut md_json = if let Some(metadata_url) = res.metadata_url {
-                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
-                        {
-                            let contents = String::from_utf8_lossy(&contents_bin);
-                            serde_json::from_str::<serde_json::Value>(&contents)
-                                .expect("failed to parse metadata")
-                        } else {
-                            return ProcessCmdResult::Loop;
-                        }
-                    } else {
-                        serde_json::json!({})
-                    };
-                    if let Some(map) = md_json.as_object_mut() {
-                        map.insert(key.clone(), value_json);
-                    } else {
-                        eprintln!("unexpected: metadata is not a map");
-                        return ProcessCmdResult::Loop;
-                    }
-                    let md_contents =
-                        serde_json::to_string(&md_json).expect("failed to serialize metadata");
-                    use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                    match api_client
-                        .asset_metadata_put(AssetMetadataPutArg {
-                            name: asset_name.to_owned(),
-                            data: md_contents,
-                            conflict_policy: PutConflictPolicy::Override,
-                        })
-                        .await
-                    {
-                        Ok(res) => res,
-                        Err(e) => {
-                            eprintln!("error: {}", e);
-                            return ProcessCmdResult::Loop;
-                        }
-                    };
+                Ok(_) => {
                     session_history_add_user_text_entry(
                         raw_user_input,
                         session,
@@ -2890,11 +2856,8 @@ async fn process_cmd(
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                 }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            };
+                Err(_) => {}
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetMdDelKey(cmd::AssetMdDelKeyCmd { asset_name, key }) => {
@@ -2903,49 +2866,8 @@ async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let api_client = mk_api_client(Some(session));
-            use crate::api::types::asset::AssetGetArg;
-            match api_client
-                .asset_get(AssetGetArg {
-                    name: asset_name.to_string(),
-                })
-                .await
-            {
-                Ok(res) => {
-                    let mut md_json = if let Some(metadata_url) = res.metadata_url {
-                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
-                        {
-                            let contents = String::from_utf8_lossy(&contents_bin);
-                            serde_json::from_str::<serde_json::Value>(&contents)
-                                .expect("failed to parse metadata")
-                        } else {
-                            return ProcessCmdResult::Loop;
-                        }
-                    } else {
-                        serde_json::json!({})
-                    };
-                    if let Some(map) = md_json.as_object_mut() {
-                        map.remove(key);
-                    } else {
-                        eprintln!("unexpected: metadata is not a map");
-                        return ProcessCmdResult::Loop;
-                    }
-                    let md_contents =
-                        serde_json::to_string(&md_json).expect("failed to serialize metadata");
-                    use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                    match api_client
-                        .asset_metadata_put(AssetMetadataPutArg {
-                            name: asset_name.to_owned(),
-                            data: md_contents,
-                            conflict_policy: PutConflictPolicy::Override,
-                        })
-                        .await
-                    {
-                        Ok(res) => res,
-                        Err(e) => {
-                            eprintln!("error: {}", e);
-                            return ProcessCmdResult::Loop;
-                        }
-                    };
+            match asset_editor::asset_metadata_set_key(&api_client, asset_name, key, None).await {
+                Ok(_) => {
                     session_history_add_user_text_entry(
                         raw_user_input,
                         session,
@@ -2953,11 +2875,8 @@ async fn process_cmd(
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                 }
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            };
+                Err(_) => {}
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
