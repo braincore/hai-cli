@@ -254,6 +254,7 @@ Assets are objects stored in the cloud for your direct and indirect use via AIs.
 - `/asset-view <name>` - Add an asset to the conversation for the AI to use.
 - `/asset-load <name>` - Add an asset without printing its contents (not cleared with `/reset`).
 - `/asset-list-revisions <name>` - Iterate through every revision of an asset.
+- `/asset-link <name>` - Generate a link to an asset (valid for 24 hours).
 
 Asset names can mimic file paths with slashes.
 
@@ -698,6 +699,39 @@ The Sun is enormously large compared to Earth. Here are the key measurements:
 - Sun's volume: approximately 1.41 × 10^18 cubic kilometers
 - Sun's mass: approximately 1.989 × 10^30 kilograms
 ```
+
+### More on Assets
+
+#### Metadata
+
+Each asset can have a JSON object associated with it to store metadata:
+
+- `/asset-md-get <name>` - Fetches metadata for an asset and adds it to the
+  conversation.
+- `/asset-md-set <name> <json>` - Sets the entire metadata blob.
+- `/asset-md-set-key <name> <key> <value>` - Sets/replaces a metadata key.
+- `/asset-md-del-key <name> <key>` - Delete a metadata key.
+
+If a `title` metadata key is set, it's shown in `/asset-list` and
+`/asset-search` in `[]` brackets.
+
+#### Asset Push & ACL
+
+Your public assets (prefixed by your username `/username/...`) can have ACLs
+set so that an asset can be used as a write-only "asset/document drop".
+
+```
+/asset-acl /ken/hai-feedback deny:read-data
+/asset-acl /ken/hai-feedback allow:push-data
+```
+
+With these ACLs, any user can push data (`/asset-push`) into the
+`/ken/hai-feedback` asset, but no one except the owner can read what's been
+pushed.
+
+The owner (user `ken` in this example) can read the contents of
+`/ken/hai-feedback` using `/asset-list-revisions` and can access revisions with
+`/asset-get-revision`.
 
 ### Open Source
 
