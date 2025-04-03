@@ -336,6 +336,8 @@ async fn repl(
         "flash",
         "flash20",
         "flash15",
+        "gemini25pro",
+        "gemini15pro",
         "deepseek",
         "v3",
         "r1",

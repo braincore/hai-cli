@@ -68,6 +68,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         }
         "flash15" | "geminiflash15" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
         "flash158b" | "geminiflash158b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
+        "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
@@ -284,6 +285,7 @@ pub enum DeepSeekModel {
 
 #[derive(Debug)]
 pub enum GoogleModel {
+    Gemini25Pro,
     Gemini20Flash,
     Gemini15Flash,
     Gemini15Flash8B,
@@ -321,6 +323,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
+            GoogleModel::Gemini25Pro => "gemini-2.5-pro-exp-03-25",
             GoogleModel::Gemini20Flash => "gemini-2.0-flash",
             GoogleModel::Gemini15Flash => "gemini-1.5-flash",
             GoogleModel::Gemini15Flash8B => "gemini-1.5-flash-8b",
@@ -357,6 +360,7 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
+            GoogleModel::Gemini25Pro => "gemini-2.5-pro",
             GoogleModel::Gemini20Flash => "flash-2.0",
             GoogleModel::Gemini15Flash => "flash-1.5",
             GoogleModel::Gemini15Flash8B => "flash-1.5-8b",
@@ -417,7 +421,8 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             },
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini20Flash
+            GoogleModel::Gemini25Pro
+            | GoogleModel::Gemini20Flash
             | GoogleModel::Gemini15Flash
             | GoogleModel::Gemini15Flash8B
             | GoogleModel::Gemini15Pro => AiModelCapability {
@@ -511,6 +516,9 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             DeepSeekModel::Other(_) => None,
         },
         AiModel::Google(model) => match model {
+            // NOTE: gemini-2.5-pro is currently free because it's experimental.
+            // It's currently set to the price of gemini-1.5-pro.
+            GoogleModel::Gemini25Pro => Some((1250, 5000)),
             GoogleModel::Gemini20Flash => Some((100, 400)),
             GoogleModel::Gemini15Flash => Some((75, 300)),
             GoogleModel::Gemini15Flash8B => Some((38, 150)),
