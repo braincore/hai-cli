@@ -733,6 +733,30 @@ The owner (user `ken` in this example) can read the contents of
 `/ken/hai-feedback` using `/asset-list-revisions` and can access revisions with
 `/asset-get-revision`.
 
+### Saving and resuming chats
+
+You can resume your last chat using:
+
+```
+/chat-resume
+```
+
+Your last chat is saved locally when exiting `hai` or starting a new
+conversation via `/new` or `/reset`.
+
+To save a chat for the long term as an asset, use:
+
+```
+/chat-save [<name>]
+```
+
+If `name` is omitted, a default name `chat/...` is used. Specify the name to
+resume it:
+
+```
+/chat-resume <name>
+```
+
 ### Open Source
 
 > I don't like running software that I and others can't audit the code of.
