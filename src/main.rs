@@ -2970,17 +2970,65 @@ async fn process_cmd(
                 let now = chrono::Local::now();
                 format!("chat/{}", now.format("%Y-%m-%d-%H%M%S"))
             };
+
+            let abridged_history = get_abridged_history(&session.history);
+            let abridged_history_tokens =
+                bpe_tokenizer.encode_with_special_tokens(&abridged_history);
+            let chat_title = if abridged_history.len() > 100 {
+                print!(
+                    "Generating title ({} tokens)... ",
+                    abridged_history_tokens
+                        .len()
+                        .to_formatted_string(&Locale::en)
+                );
+                use std::io::Write;
+                std::io::stdout().flush().unwrap();
+                prompt_ai_simple(
+                    &format!(
+                        r#"Generate a short title for the included chat log.
+Do not quote it.
+Do not include anything besides the title.
+Since the chat is already known as a conversation, do
+not include words that imply its a conversation or
+lesson (e.g. "understanding").\n\n{}"#,
+                        abridged_history
+                    ),
+                    session,
+                    cfg,
+                    ctrlc_handler,
+                    debug,
+                )
+                .await
+            } else {
+                None
+            };
             println!("Saving to asset: {}", chat_log_asset_name);
             let serialized_log = serde_json::to_string_pretty(&session.history).unwrap();
             let api_client = mk_api_client(Some(session));
             use api::types::asset::{AssetPutTextArg, PutConflictPolicy};
-            let _ = api_client
+            match api_client
                 .asset_put_text(AssetPutTextArg {
-                    name: chat_log_asset_name,
+                    name: chat_log_asset_name.clone(),
                     data: serialized_log,
                     conflict_policy: PutConflictPolicy::Override,
                 })
-                .await;
+                .await
+            {
+                Ok(_) => {
+                    if let Some(chat_title) = chat_title {
+                        let _ = asset_editor::asset_metadata_set_key(
+                            &api_client,
+                            &chat_log_asset_name,
+                            &"title",
+                            Some(serde_json::Value::String(chat_title)),
+                        )
+                        .await;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to save chat log: {}", e);
+                }
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Account(cmd::AccountCmd { username }) => {
@@ -3903,6 +3951,39 @@ async fn prompt_ai(
     }
 }
 
+async fn prompt_ai_simple(
+    prompt: &str,
+    session: &mut SessionState,
+    cfg: &config::Config,
+    ctrlc_handler: &mut CtrlcHandler,
+    debug: bool,
+) -> Option<String> {
+    let msg_history = vec![chat::Message {
+        role: chat::MessageRole::User,
+        content: vec![chat::MessageContent::Text {
+            text: prompt.to_string(),
+        }],
+        tool_call_id: None,
+        tool_calls: None,
+    }];
+    let res = prompt_ai(
+        &msg_history,
+        &None,
+        &HashSet::new(),
+        session,
+        cfg,
+        ctrlc_handler,
+        debug,
+    )
+    .await;
+    for chat_response in &res {
+        if let chat::ChatCompletionResponse::Message { text } = chat_response {
+            return Some(text.clone());
+        }
+    }
+    None
+}
+
 fn mk_api_client(session: Option<&SessionState>) -> HaiClient {
     let mut client = HaiClient::new(&get_api_base_url());
     if let Some(session) = session {
@@ -4209,4 +4290,65 @@ fn print_asset_entry(entry: &AssetEntry) {
         .map(|md_title| format!(" [{}]", md_title))
         .unwrap_or("".to_string());
     println!("{}{}{}", entry.name, symbol, title);
+}
+
+// --
+
+/// Abridges history in three ways:
+/// 1. Only includes User and Assistant messages.
+/// 2. Truncates each message to the first 100 characters.
+/// 3. Limits the total number of messages to 10.
+pub fn get_abridged_history(history: &Vec<db::LogEntry>) -> String {
+    let mut result = String::new();
+    let mut count = 0;
+
+    for entry in history.iter().filter(|entry| {
+        matches!(
+            entry.message.role,
+            chat::MessageRole::User | chat::MessageRole::Assistant
+        )
+    }) {
+        if count >= 10 {
+            break;
+        }
+
+        let message = &entry.message;
+
+        let role_str = match message.role {
+            chat::MessageRole::User => "User",
+            chat::MessageRole::Assistant => "Assistant",
+            // These roles are filtered out earlier
+            _ => continue,
+        };
+
+        // Extract text content from the message
+        let content_str = message
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                chat::MessageContent::Text { text } => Some(text.clone()),
+                chat::MessageContent::ImageUrl { .. } => Some("[Image]".to_string()),
+            })
+            .collect::<Vec<String>>()
+            .join(" ");
+
+        // Take the first 100 chars (or less if the message is shorter)
+        let truncated_content = if content_str.len() > 100 {
+            format!("{}...", &content_str[..100])
+        } else {
+            content_str
+        };
+
+        // Add delimiter if this isn't the first message
+        if count > 0 {
+            result.push_str("\n\n");
+        }
+
+        // Add the formatted message
+        result.push_str(&format!("{}: {}", role_str, truncated_content));
+
+        count += 1;
+    }
+
+    result
 }
