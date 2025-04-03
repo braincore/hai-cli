@@ -2545,7 +2545,22 @@ async fn process_cmd(
             loop {
                 println!("Press any key to continue... CTRL+C to stop");
                 let _ = crossterm::terminal::enable_raw_mode();
-                let _ = crossterm::event::read();
+                match crossterm::event::read() {
+                    Ok(event) => {
+                        if let crossterm::event::Event::Key(key_event) = event {
+                            // Stop on Ctrl+C
+                            if key_event.code == crossterm::event::KeyCode::Char('c')
+                                && key_event
+                                    .modifiers
+                                    .contains(crossterm::event::KeyModifiers::CONTROL)
+                            {
+                                let _ = crossterm::terminal::disable_raw_mode();
+                                return ProcessCmdResult::Loop;
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
                 let _ = crossterm::terminal::disable_raw_mode();
                 if let Some(next) = revision_cursor {
                     revision_cursor = match api_client
