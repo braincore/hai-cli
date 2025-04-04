@@ -1471,43 +1471,55 @@ async fn process_cmd(
             let shell_exec_handler_id = ctrlc_handler.add_handler(|| {
                 println!("Shell Exec Interrupted");
             });
+            let api_client = mk_api_client(Some(session));
 
-            let (shell_exec_output, from_cache) =
-                if let Some((ref task_fqn, step_index)) = task_step_signature {
-                    let cached_output = if *cache {
-                        db::get_task_step_cache(
-                            &*db.lock().await,
-                            task_fqn,
-                            *step_index,
-                            raw_user_input,
-                        )
-                    } else {
-                        None
-                    };
-                    if let Some(cached_output) = cached_output {
-                        (cached_output, true)
-                    } else {
-                        // If we're initializing a task, it's critical that we ask the
-                        // user for confirmation. Otherwise, a destructive command could
-                        // be hidden in a task.
-                        if !force_yes {
-                            println!();
-                            let answer = term::ask_question_default_empty(
-                                "Execute above command? y/[n]:",
-                                false,
-                            );
-                            let answered_yes = answer.starts_with('y');
-                            if !answered_yes {
-                                println!("USER CANCELLED EXEC. TASK MAY MALFUNCTION.");
-                                return ProcessCmdResult::Loop;
-                            }
-                        }
-                        (shell_exec(&session.shell, command).await.unwrap(), false)
-                    }
+            let (shell_exec_output, from_cache) = if let Some((ref task_fqn, step_index)) =
+                task_step_signature
+            {
+                let cached_output = if *cache {
+                    db::get_task_step_cache(
+                        &*db.lock().await,
+                        task_fqn,
+                        *step_index,
+                        raw_user_input,
+                    )
                 } else {
-                    println!();
-                    (shell_exec(&session.shell, command).await.unwrap(), false)
+                    None
                 };
+                if let Some(cached_output) = cached_output {
+                    (cached_output, true)
+                } else {
+                    // If we're initializing a task, it's critical that we ask the
+                    // user for confirmation. Otherwise, a destructive command could
+                    // be hidden in a task.
+                    if !force_yes {
+                        println!();
+                        let answer = term::ask_question_default_empty(
+                            "Execute above command? y/[n]:",
+                            false,
+                        );
+                        let answered_yes = answer.starts_with('y');
+                        if !answered_yes {
+                            println!("USER CANCELLED EXEC. TASK MAY MALFUNCTION.");
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
+                    (
+                        shell_exec_with_asset_substitution(&api_client, &session.shell, command)
+                            .await
+                            .unwrap(),
+                        false,
+                    )
+                }
+            } else {
+                println!();
+                (
+                    shell_exec_with_asset_substitution(&api_client, &session.shell, command)
+                        .await
+                        .unwrap(),
+                    false,
+                )
+            };
 
             ctrlc_handler.remove_handler(shell_exec_handler_id);
 
@@ -3557,6 +3569,9 @@ const HELP_MSG: &str = r##"Available Commands:
                                Supports text files or PNG/JPG images
 /load-url <url>              - Load url into the conversation
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
+                               @asset can be used in place of file paths. These assets will be
+                               transparently downloaded. If specified as a shell output redirect
+                               (>), the output will be uploaded as an asset.
 !!<cmd>                      - Alternative to `/exec` not to be confused with tools.
 /prep                        - Queue a message to be sent with your next message (or, end with two blank lines)
 /pin                         - Like /prep but the message is retained on /reset
@@ -4030,6 +4045,49 @@ pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::e
         .spawn()?;
 
     tool::collect_and_print_command_output(&mut child).await
+}
+
+pub async fn shell_exec_with_asset_substitution(
+    api_client: &HaiClient,
+    shell: &str,
+    cmd: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    match asset_editor::prepare_assets(api_client, cmd).await {
+        Ok((updated_cmd, asset_map, output_assets)) => {
+            let res = shell_exec(shell, &updated_cmd).await;
+            for output_asset in output_assets {
+                let (temp_file, _temp_file_path) =
+                    asset_map.get(&output_asset).expect("missing asset");
+                let asset_contents = match fs::read(temp_file) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        let err_msg = format!("error: failed to read output file: {}", e);
+                        eprintln!("{}", err_msg);
+                        return Ok(err_msg);
+                    }
+                };
+                use crate::api::types::asset::{AssetPutArg, PutConflictPolicy};
+                match api_client
+                    .asset_put(AssetPutArg {
+                        name: output_asset,
+                        data: asset_contents,
+                        conflict_policy: PutConflictPolicy::Override,
+                    })
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("error: failed to put: {}", e);
+                    }
+                }
+            }
+            res
+        }
+        Err(e) => {
+            eprintln!("failed to prepare assets: {}", e);
+            Ok(e.into())
+        }
+    }
 }
 
 fn get_haivar_re() -> &'static Regex {

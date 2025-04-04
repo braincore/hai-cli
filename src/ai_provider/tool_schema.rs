@@ -126,7 +126,13 @@ Available Commands:
 /load <glob path>     - Load files into the conversation (e.g., `/load src/**/*.py`)
                         Supports text files or PNG/JPG images
 /load-url <url>       - Load the URL into the conversation
-/exec <cmd>           - Executes a shell command and adds the output to this conversation
+/exec <cmd>           - Executes a shell command and adds the output to this conversation.
+                        The <cmd> can be treated as a bash shell command. One deviation
+                        is the use of `@name` where a file would typically be specified.
+                        `@name` will transparently be converted to the referenced asset
+                        by `name` which avoids the need to `/asset-import` them to the
+                        local filesystem. Shell output redirection (>) to `@name` will
+                        be uploaded to the `@name` asset avoiding `/asset-export`.
 /prep                 - Queue a message to be sent with your next message (or, end with two blank lines)
 /pin                  - Like /prep but the message is retained on /reset
 /clip                 - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
