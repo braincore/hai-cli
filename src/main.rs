@@ -293,6 +293,7 @@ async fn repl(
         "/asset-edit",
         "/asset-push",
         "/asset-list",
+        "/ls",
         "/asset-search",
         "/asset-load",
         "/asset-view",
@@ -3586,7 +3587,7 @@ EXPERIMENTAL:
 /asset <name> [<editor>]     - Open asset in editor (create if does not exist)
 /asset-new <name>            - Create a new asset and open editor
 /asset-edit <name>           - Open existing asset in editor
-/asset-list <prefix>         - List all assets with the given (optional) prefix
+/ls /asset-list <prefix>     - List all assets with the given (optional) prefix
 /asset-search <query>        - Search for assets semantically
 /asset-load <name>           - Load asset into the conversation
 /asset-view <name>           - Prints asset contents and loads it into the conversation
