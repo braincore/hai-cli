@@ -351,7 +351,8 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Haiku35 => "haiku-3.5",
             AnthropicModel::Sonnet35 => "sonnet-3.5",
-            AnthropicModel::Sonnet37(_) => "sonnet-3.7",
+            AnthropicModel::Sonnet37(false) => "sonnet-3.7",
+            AnthropicModel::Sonnet37(true) => "sonnet-3.7-thinking",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
