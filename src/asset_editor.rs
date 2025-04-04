@@ -543,3 +543,169 @@ pub async fn asset_metadata_set_key(
         }
     }
 }
+
+// --
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+/// Prepares @assets in shell commands and handles redirections.
+///
+/// This function:
+/// 1. Identifies all @asset references in the command
+/// 2. Downloads input assets to temporary files on the local machine
+/// 3. Creates appropriate temporary files for output assets
+/// 4. Handles append operations (>>) by downloading existing assets first
+/// 5. Rewrites the shell command to use the local file paths
+///
+/// # Returns
+/// * A tuple containing:
+///   - The modified command with @assets replaced by file paths
+///   - A map of asset names to their temporary files and paths
+///   - A set of asset names that are used as outputs (via > or >>)
+///
+/// # Examples
+///
+/// ```
+/// // Original: !!cat @input > @output
+/// // Modified: !!cat /tmp/asset_123.txt > /tmp/asset_456.txt
+/// let (modified_cmd, asset_map, output_assets) = prepare_assets(&client, "!!cat @input > @output").await?;
+/// // output_assets contains "output"
+/// ```
+
+pub async fn prepare_assets(
+    api_client: &HaiClient,
+    cmd: &str,
+) -> Result<
+    (
+        String,
+        HashMap<String, (tempfile::NamedTempFile, PathBuf)>,
+        HashSet<String>,
+    ),
+    String,
+> {
+    let asset_regex = Regex::new(r"@([^\s]+)").expect("Invalid regex");
+
+    let append_regex = Regex::new(r">>\s*@([^\s]+)").expect("Invalid regex");
+    let output_regex = Regex::new(r"(?:>|>>)\s*@([^\s]+)").expect("Invalid regex");
+
+    let mut append_assets = HashSet::new();
+    let mut output_assets = HashSet::new();
+
+    let mut asset_map = HashMap::new();
+
+    // Original @asset name and the temp file path it will be replaced by.
+    let mut replacements = Vec::new();
+
+    // First identify output assets and append assets
+    for cap in output_regex.captures_iter(cmd) {
+        let output_asset = cap[1].to_string();
+        output_assets.insert(output_asset);
+    }
+
+    for cap in append_regex.captures_iter(cmd) {
+        let append_asset = cap[1].to_string();
+        append_assets.insert(append_asset);
+    }
+
+    // Process all assets
+    for cap in asset_regex.captures_iter(cmd) {
+        let full_match = cap[0].to_string();
+        let asset_path = cap[1].to_string();
+
+        // Skip if we've already processed this asset
+        if asset_map.contains_key(&asset_path) {
+            continue;
+        }
+
+        // For append assets (>>), we need to download them first
+        // For output assets with (>), we can just create an empty file
+        // For input assets, download them
+        let (temp_file, temp_file_path) =
+            if output_assets.contains(&asset_path) && !append_assets.contains(&asset_path) {
+                // Simple output with > (overwrite), just create empty file
+                create_empty_temp_file(&asset_path)?
+            } else {
+                // Either an input asset or an append asset (>>), download it
+                download_asset(api_client, &asset_path).await?
+            };
+
+        replacements.push((full_match, temp_file_path.to_string_lossy().to_string()));
+
+        // Store the mapping
+        asset_map.insert(asset_path.clone(), (temp_file, temp_file_path));
+    }
+
+    // Perform replacements of @asset with temp files from longest first to
+    // avoid collisions with assets whose names are subsets of one another.
+    replacements.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+    let mut modified_cmd = cmd.to_string();
+    for (pattern, replacement) in replacements {
+        modified_cmd = modified_cmd.replace(&pattern, &replacement);
+    }
+
+    Ok((modified_cmd, asset_map, output_assets))
+}
+
+/// Download an asset to a temporary file
+///
+/// NOTE: The NamedTempFile is returned. When it eventually goes out of scope,
+/// the temporary file will be removed.
+async fn download_asset(
+    api_client: &HaiClient,
+    asset_name: &str,
+) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
+    // Create a temporary file copying the extension
+    let extension = Path::new(asset_name)
+        .extension()
+        .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
+        .unwrap_or_else(|| String::new());
+    let temp_file = tempfile::Builder::new()
+        .prefix("asset_")
+        .suffix(&extension)
+        .tempfile()
+        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+
+    // Get the path to the temporary file
+    let temp_file_path = temp_file.path().to_path_buf();
+
+    let (asset_contents, _) = match get_asset(&api_client, asset_name, false).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            return Err(match e {
+                GetAssetError::BadName => format!("bad name: {}", asset_name),
+                GetAssetError::DataFetchFailed => format!("fetch failed: {}", asset_name),
+                _ => format!("unexpected error: {}", asset_name),
+            });
+        }
+    };
+
+    match fs::write(&temp_file_path, asset_contents) {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("error: failed to save: {}", e);
+        }
+    }
+
+    Ok((temp_file, temp_file_path))
+}
+
+/// Create an empty temporary file for output assets
+fn create_empty_temp_file(asset_name: &str) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
+    // Create a temporary file copying the extension
+    let extension = Path::new(asset_name)
+        .extension()
+        .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
+        .unwrap_or_else(|| String::new());
+
+    let temp_file = tempfile::Builder::new()
+        .prefix("asset_")
+        .suffix(&extension)
+        .tempfile()
+        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+
+    // Get the path to the temporary file
+    let temp_file_path = temp_file.path().to_path_buf();
+
+    Ok((temp_file, temp_file_path))
+}

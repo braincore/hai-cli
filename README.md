@@ -270,11 +270,49 @@ Public assets start with a frontslash followed by your username (`/<username>`):
 
 Assets can be listed by prefix:
 
-`/asset-list todo_docs/2025-`
+```
+/asset-list todo_docs/2025-
+# OR use /ls as shorthand
+/ls todo_docs/2025-
+```
 
 Or, they can be searched semantically:
 
-`/asset-search cooking salmon`
+```
+/asset-search cooking salmon
+```
+
+#### Using with shell
+
+When running a shell command, use `@name` to reference an asset. The asset will
+be transparently downloaded.
+
+```
+[0] !!cat @/hai/changelog | grep -A 2 v1.3.0
+equivalent to:
+[0] !!!grep -A 2 v1.3.0 @/hai/changelog
+```
+```
+## v1.3.0
+
+- Add syntax highlighting for code blocks.
+```
+
+Note: `!!` is shorthand for `/exec`.
+
+If a shell redirects (`>` or `>>`) to an @asset, the output file will be
+uploaded as well.
+
+```
+[0] !!grep -A 2 v1.3.0 @/hai/changelog > @changes-v1.3.0
+```
+
+This processes a public asset from the `hai` account and saves a filtered
+version to the `changes-v1.3.0` private asset.
+
+**Limitations:** The implementation uses simple string substitution to replace
+`@asset` markers with temporary files. Complex shell operations involving
+quotes or escapes around asset references may not work as expected.
 
 #### Conflicts
 
