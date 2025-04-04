@@ -332,6 +332,7 @@ async fn repl(
         "sonnet",
         "sonnet35",
         "sonnet37",
+        "sonnet37-thinking",
         "llama32",
         "llama32-vision",
         "flash",
