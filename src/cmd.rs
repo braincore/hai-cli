@@ -1240,7 +1240,7 @@ fn parse_command(
                 }
             }
         }
-        "asset-list" => {
+        "asset-list" | "ls" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
