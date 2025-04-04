@@ -553,6 +553,15 @@ pub fn parse_user_input(
     if input.trim().is_empty() {
         return Some(Cmd::Noop);
     }
+    // EXPERIMENT: Add !!cmd as a short hand for exec. It's not ideal b/c it's
+    // similar to the tool notations (! and !?). But, "/e " has proven to be
+    // rather awkward to type. The "/" is tough to reach and the " " before the
+    // command conflicts with muscle memory from other programs (ipython).
+    let input = if input.starts_with("!!") {
+        format!("/exec {}", &input[2..])
+    } else {
+        input.to_string()
+    };
     // NOTE: We intentionally preserve whitespace at the start of the input.
     // Why? Because a space at the start is the easiest way for a user to
     // indicate that their message is definitely not a command, but a prompt.
@@ -641,10 +650,6 @@ pub fn parse_user_input(
         }))
     } else {
         let input = input.trim_end();
-        /*Some(Cmd::Prompt(PromptCmd {
-            prompt: input.into(),
-            cache: false,
-        }))*/
         if let Some(tool_mode) = tool_mode {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool_mode.tool,

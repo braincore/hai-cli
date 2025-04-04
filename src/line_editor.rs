@@ -575,6 +575,7 @@ impl CmdAndFileCompleter {
 
     fn tool_completer(&self, tool_cmd_prefix: &str) -> Vec<Suggestion> {
         let commands: Vec<String> = [
+            "!!",
             "!py",
             "!?py",
             "!sh",

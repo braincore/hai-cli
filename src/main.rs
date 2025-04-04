@@ -3555,6 +3555,7 @@ const HELP_MSG: &str = r##"Available Commands:
                                Supports text files or PNG/JPG images
 /load-url <url>              - Load url into the conversation
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
+!!<cmd>                      - Alternative to `/exec` not to be confused with tools.
 /prep                        - Queue a message to be sent with your next message (or, end with two blank lines)
 /pin                         - Like /prep but the message is retained on /reset
 /system-prompt               - Set a system prompt for the conversation
