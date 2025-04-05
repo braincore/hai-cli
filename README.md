@@ -249,7 +249,7 @@ print(distance)
 
 Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
-- `/asset <name>` - Open asset in editor (create if does not exist)
+- `/asset <name>` - Open/create asset in editor (`/a` shorthand)
 - `/asset-new <name>` - Create a new asset and open editor
 - `/asset-edit <name>` - Open existing asset in editor
 - Create/edit will open a text editor defined in `~/.hai/hai.toml` (default
@@ -468,8 +468,8 @@ SELECT version();
 
 ### For general software development
 
-Use `/load <path>` to load files (e.g. code) as context for the AI. You can use
-globs, e.g. `/load src/**/*.rs`.
+Use `/load <path>` (`/l <path>`) to load files (e.g. code) as context for the
+AI. You can use globs, e.g. `/load src/**/*.rs`.
 
 Instead of `/new`, you can use `/reset` (`/r`) to keep context from `/load`
 while clearing the rest of the conversation.

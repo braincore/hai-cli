@@ -1184,7 +1184,7 @@ fn parse_command(
                 }
             }
         }
-        "asset" => {
+        "asset" | "a" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }

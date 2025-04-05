@@ -3600,7 +3600,7 @@ Available Tools:
 --
 
 EXPERIMENTAL:
-/asset <name> [<editor>]     - Open asset in editor (create if does not exist)
+/a /asset <name> [<editor>]  - Open asset in editor (create if does not exist)
 /asset-new <name>            - Create a new asset and open editor
 /asset-edit <name>           - Open existing asset in editor
 /ls /asset-list <prefix>     - List all assets with the given (optional) prefix

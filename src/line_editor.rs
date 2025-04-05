@@ -458,6 +458,7 @@ impl Completer for CmdAndFileCompleter {
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
             } else if line.starts_with("/asset ")
+                || line.starts_with("/a ")
                 || line.starts_with("/asset-edit ")
                 || line.starts_with("/asset-load ")
                 || line.starts_with("/asset-view ")
