@@ -1512,7 +1512,6 @@ async fn process_cmd(
                     )
                 }
             } else {
-                println!();
                 (
                     shell_exec_with_asset_substitution(&api_client, &session.shell, command)
                         .await
@@ -1520,6 +1519,7 @@ async fn process_cmd(
                     false,
                 )
             };
+            println!();
 
             ctrlc_handler.remove_handler(shell_exec_handler_id);
 
