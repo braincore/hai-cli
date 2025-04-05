@@ -531,12 +531,6 @@ impl Completer for CmdAndFileCompleter {
     }
 }
 
-// completer init: /asset-import      te pos=21 offset=8 cmd_length=13 cmd_word="/asset-import" arg_index=Some(19) arg_prefix="te"
-// suggestion: value=test (span-start=19) (span-end=21)
-
-// cmd is /asset-import (it has a length of 13, but not that relevant..)
-// arg_prefix starts at 19
-
 fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize, debug: bool) {
     for suggestion in suggestions {
         suggestion.span.start += offset;
