@@ -372,11 +372,11 @@ fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
 }
 
 impl Completer for CmdAndFileCompleter {
-    fn complete(&mut self, line: &str, _pos: usize) -> Vec<Suggestion> {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         if self.debug {
-            let _ = config::write_to_debug_log(format!("completer init: {} pos={}\n", line, _pos,));
+            let _ = config::write_to_debug_log(format!("completer init: {} pos={}\n", line, pos,));
         }
-        if line.starts_with('/') {
+        if line.starts_with('/') || line.starts_with("!!") {
             if line.starts_with("/load ")
                 || line.starts_with("/l ")
                 || line.starts_with("/cd ")
@@ -416,7 +416,7 @@ impl Completer for CmdAndFileCompleter {
                     task_cache_prefix.to_string_lossy().to_string().len() + 1;
                 task_cache_prefix.push(arg_prefix);
                 let cmd_length = cmd_word.len();
-                let offset = cmp::max(0, _pos - cmd_length + task_cache_prefix_offset);
+                let offset = cmp::max(0, pos - cmd_length + task_cache_prefix_offset);
 
                 let mut completions = self.file_completer(
                     task_cache_prefix.to_string_lossy().as_ref(),
@@ -478,12 +478,39 @@ impl Completer for CmdAndFileCompleter {
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
                         "completer init: {} pos={} cmd_length={} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
-                        line, _pos, cmd_length, cmd_word, arg_index, arg_prefix, line.find(arg_prefix).unwrap()
+                        line, pos, cmd_length, cmd_word, arg_index, arg_prefix, line.find(arg_prefix).unwrap()
                     ));
                 }
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
+            } else if line.starts_with("/exec ") || line.starts_with("!!") {
+                // For /exec command, complete asset references
+                let substring_before_cursor = &line[..pos];
+
+                // Find/extract current token
+                let last_whitespace_pos = substring_before_cursor
+                    .rfind(char::is_whitespace)
+                    .unwrap_or(0);
+                let current_token = &substring_before_cursor[last_whitespace_pos..].trim_start();
+
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "exec completer: line={} pos={} last_whitespace={} current_token={:?}\n",
+                        line, pos, last_whitespace_pos, current_token
+                    ));
+                }
+
+                // If the token starts with '@', it's an asset lookup
+                if current_token.starts_with('@') {
+                    let asset_prefix = &current_token[1..]; // Remove the '@' prefix
+                    let mut completions = self.asset_completer(asset_prefix);
+                    realign_suggestions(&mut completions, last_whitespace_pos + 2, self.debug);
+                    completions
+                } else {
+                    // No completions yet for non-assets (e.g. local file paths)
+                    vec![]
+                }
             } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
                 let (cmd_word, arg1_prefix) = line
                     .split_once(char::is_whitespace)
@@ -508,7 +535,7 @@ impl Completer for CmdAndFileCompleter {
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
                         "completer init: {} pos={} cmd_length={} cmd_word={:?} arg1_index={:?} arg1_prefix={:?} arg2_index={:?} arg2_prefix={:?}\n",
-                        line, _pos, cmd_length, cmd_word, arg1_index, arg1_prefix, arg2_index, arg2_prefix,
+                        line, pos, cmd_length, cmd_word, arg1_index, arg1_prefix, arg2_index, arg2_prefix,
                     ));
                 }
                 if let Some(arg2_prefix) = arg2_prefix {
