@@ -129,12 +129,15 @@ You have two options:
 
 ### Tasks
 
+> I often need to setup the same conversation context repeatedly.
+
 > I got tired of sending AI prompt-pasta to friends and coworkers.
 
 A *task* in hai is a prompt-on-steroids that can be:
 
-1. Published publicly: `/task-publish <username>/<task_name>`
+1. Published publicly: `/task-publish <path>`
 2. Executed by anyone easily: `/task <username>/<task_name>`
+3. Or, loaded from a local file: `/task <path>`
 
 A *task* is made up of steps: a sequence of repl-commands. The commands are the
 same as the ones you use. A step can:
