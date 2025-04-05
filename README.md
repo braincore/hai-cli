@@ -137,7 +137,7 @@ A *task* in hai is a prompt-on-steroids that can be:
 
 1. Published publicly: `/task-publish <path>`
 2. Executed by anyone easily: `/task <username>/<task_name>`
-3. Or, loaded from a local file: `/task <path>`
+3. Or, executed from a local file: `/task <path>`
 
 A *task* is made up of steps: a sequence of repl-commands. The commands are the
 same as the ones you use. A step can:
@@ -608,13 +608,15 @@ for expensive prompts.
   specified. All printouts go to the terminal and `hai` exits at the end.
   - e.g. `hai bye '!sh convert apple1.jpg to webp'`
   - If running in non-interactive mode (e.g. as a cron job), use `-y` to
-    automatically confirm all user prompts.
+    confirm all user prompts, `-m` to set the model, and `-u` to set the user
+    account.
 - `hai -i` - Enter incognito mode to keep no history. Pair with
   `default_incognito_ai_model` to a local LLM (e.g. ollama) to be fully
   incognito.
-- `hai -u <username>` - Guarantees you use a specific account rather than the
+- `hai -u <username>` - Force the user account rather than use the
   last active account. Pairs well with `hai task ...` and `hai bye ...` for
   multi-account setups.
+- `hai -m <model>` - Force the AI model.
 - `hai set-key <provider> <key>` - Set API keys for providers (openai,
   anthropic, deepseek, google). You don't need to do this if you've subscribed
   to hai.
