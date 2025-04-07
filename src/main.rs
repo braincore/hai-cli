@@ -2517,6 +2517,18 @@ async fn process_cmd(
                         }
                     }
                 );
+                if let Some(metadata_url) = revision.metadata_url.clone() {
+                    if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await {
+                        let contents = String::from_utf8_lossy(&contents_bin);
+                        println!("Metadata: {}", &contents);
+                        session_history_add_user_text_entry(
+                            &contents,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                    }
+                }
                 if let Some(data_url) = revision.data_url.clone() {
                     if let Some(contents_bin) = asset_editor::get_asset_raw(&data_url).await {
                         let contents = String::from_utf8_lossy(&contents_bin);
