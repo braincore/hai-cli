@@ -218,19 +218,14 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
             // If highlighter is set, clear the previous line and reprint with
             // colors.
             if let Some(highlighter) = self.highlighter.as_mut() {
-                if let Some((x, y)) = self.line_start_cursor_position.take() {
+                if let Some((_x, y)) = self.line_start_cursor_position.take() {
                     let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
-                    let height = (line_width / terminal_width)
-                        + if line_width % terminal_width > 0 {
-                            1
-                        } else {
-                            0
-                        };
+                    let height = (line_width / terminal_width) + 1;
                     crossterm::execute!(
                         io::stdout(),
-                        crossterm::cursor::MoveTo(x, y - height),
-                        crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+                        crossterm::cursor::MoveTo(0, y - height),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown),
                     )
                     .unwrap();
 
