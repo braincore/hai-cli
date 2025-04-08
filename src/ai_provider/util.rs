@@ -184,7 +184,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
     }
 
     pub fn highlighter_check_end(&mut self, line: &str) {
-        if self.highlighter.is_some() && line.trim_ascii_end() == "```" {
+        if self.highlighter.is_some() && line.trim_ascii() == "```" {
             self.highlighter = None;
         }
     }

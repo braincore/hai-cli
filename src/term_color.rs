@@ -161,7 +161,7 @@ pub fn get_theme_set() -> &'static EmbeddedLazyThemeSet {
 /// Regex to extract language for markdown code block
 pub fn get_markdown_code_block_re() -> &'static Regex {
     static MARKDOWN_CODE_BLOCK_RE: OnceLock<Regex> = OnceLock::new();
-    MARKDOWN_CODE_BLOCK_RE.get_or_init(|| Regex::new(r"^```([a-zA-Z0-9_+-]+)?$").unwrap())
+    MARKDOWN_CODE_BLOCK_RE.get_or_init(|| Regex::new(r"^\s*```([a-zA-Z0-9_+-]+)?$").unwrap())
 }
 
 // --
