@@ -93,19 +93,17 @@ pub fn copy_to_clipboard(text: &str) -> Result<String, Box<dyn std::error::Error
 
 /// `exec_python_script` is the execution of a python3 process that's fed a
 /// script via stdin.
-pub async fn exec_python_script(script: &String) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn exec_python_script(script: &str) -> Result<String, Box<dyn std::error::Error>> {
     // Use the `.venv/bin/python` if found, otherwise fallback to "python3"
     let python_exec = find_python_in_venv();
     let mut child = Command::new(python_exec)
-        .stdin(Stdio::piped())
+        .arg("-c")
+        .arg(script)
+        // Allow the script to read from the terminal's stdin
+        .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(script.as_bytes()).await?;
-    } else {
-        return Err("Failed to open stdin".into());
-    }
     collect_and_print_command_output(&mut child).await
 }
 
@@ -148,15 +146,13 @@ pub async fn exec_shell_script(
     script: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut child = Command::new(shell)
-        .stdin(Stdio::piped())
+        .arg("-c")
+        .arg(script)
+        // Allow the script to read from the terminal's stdin
+        .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(script.as_bytes()).await?;
-    } else {
-        return Err("Failed to open stdin".into());
-    }
     collect_and_print_command_output(&mut child).await
 }
 
