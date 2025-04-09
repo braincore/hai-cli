@@ -408,6 +408,8 @@ pub struct AssetViewCmd {
 pub struct AssetRevisionsCmd {
     /// Name of the asset
     pub asset_name: String,
+    /// Number of revisions to show
+    pub count: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -1291,10 +1293,23 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetRevisions(AssetRevisionsCmd { asset_name })),
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((asset_name, count_str)) => {
+                    let count = if let Some(count_str) = count_str {
+                        match count_str.parse::<u32>() {
+                            Ok(count) => Some(count),
+                            Err(_) => {
+                                eprintln!("Usage: /asset-revisions <name> [<count>]");
+                                return None;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    Some(Cmd::AssetRevisions(AssetRevisionsCmd { asset_name, count }))
+                }
                 None => {
-                    eprintln!("Usage: /asset-revisions <name>");
+                    eprintln!("Usage: /asset-revisions <name> [<count>]");
                     None
                 }
             }

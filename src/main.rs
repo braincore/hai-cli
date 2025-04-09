@@ -2473,7 +2473,7 @@ async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd { asset_name }) => {
+        cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd { asset_name, count }) => {
             let api_client = mk_api_client(Some(session));
 
             use crate::api::types::asset::{
@@ -2543,7 +2543,7 @@ async fn process_cmd(
                 }
                 println!();
             }
-
+            let mut remaining = count.clone();
             let mut revision_cursor = match api_client
                 .asset_revision_iter(AssetRevisionIterArg {
                     entry_ref: EntryRef::Name(asset_name.to_owned()),
@@ -2558,6 +2558,12 @@ async fn process_cmd(
                     );
                     println!();
                     for revision in iter_res.revisions {
+                        if let Some(n) = remaining {
+                            if n == 0 {
+                                break;
+                            }
+                            remaining = Some(n - 1);
+                        }
                         print_revision(&revision, session, bpe_tokenizer, is_task_mode_step).await;
                     }
                     iter_res.next
@@ -2571,25 +2577,32 @@ async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             loop {
-                println!("Press any key to continue... CTRL+C to stop");
-                let _ = crossterm::terminal::enable_raw_mode();
-                match crossterm::event::read() {
-                    Ok(event) => {
-                        if let crossterm::event::Event::Key(key_event) = event {
-                            // Stop on Ctrl+C
-                            if key_event.code == crossterm::event::KeyCode::Char('c')
-                                && key_event
-                                    .modifiers
-                                    .contains(crossterm::event::KeyModifiers::CONTROL)
-                            {
-                                let _ = crossterm::terminal::disable_raw_mode();
-                                return ProcessCmdResult::Loop;
+                if let Some(n) = remaining {
+                    if n == 0 {
+                        break;
+                    }
+                    remaining = Some(n - 1);
+                } else {
+                    println!("Press any key to continue... CTRL+C to stop");
+                    let _ = crossterm::terminal::enable_raw_mode();
+                    match crossterm::event::read() {
+                        Ok(event) => {
+                            if let crossterm::event::Event::Key(key_event) = event {
+                                // Stop on Ctrl+C
+                                if key_event.code == crossterm::event::KeyCode::Char('c')
+                                    && key_event
+                                        .modifiers
+                                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                                {
+                                    let _ = crossterm::terminal::disable_raw_mode();
+                                    return ProcessCmdResult::Loop;
+                                }
                             }
                         }
+                        Err(_) => {}
                     }
-                    Err(_) => {}
+                    let _ = crossterm::terminal::disable_raw_mode();
                 }
-                let _ = crossterm::terminal::disable_raw_mode();
                 if let Some(next) = revision_cursor {
                     revision_cursor = match api_client
                         .asset_revision_iter_next(AssetRevisionIterNextArg {
@@ -3620,7 +3633,8 @@ EXPERIMENTAL:
 /asset-load <name>           - Load asset into the conversation
 /asset-view <name>           - Prints asset contents and loads it into the conversation
 /asset-link <name>           - Prints link to asset (valid for 24hr) and loads it into the conversation
-/asset-revisions <name>      - Lists revisions of an asset
+/asset-revisions <name> [<n>]- Lists revisions of an asset one at a time, waiting for user input
+                               If `n` is set, displays `n` revisions without needing user input
 /asset-acl <name> <ace>      - Changes ACL on an asset
                                `ace` is formatted as `type:permission`
                                type: allow, deny, default
