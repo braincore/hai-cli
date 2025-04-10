@@ -315,6 +315,22 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_entry_iter(
+        &self,
+        arg: asset::AssetEntryIterArg,
+    ) -> Result<asset::AssetEntryIterResult, RequestError<asset::AssetEntryIterError>> {
+        self.mk_api_request::<_, _, _>("/asset/entry/iter", &arg)
+            .await
+    }
+
+    pub async fn asset_entry_iter_next(
+        &self,
+        arg: asset::AssetEntryIterNextArg,
+    ) -> Result<asset::AssetEntryIterResult, RequestError<asset::AssetEntryIterNextError>> {
+        self.mk_api_request::<_, _, _>("/asset/entry/iter/next", &arg)
+            .await
+    }
+
     pub async fn asset_entry_search(
         &self,
         arg: asset::AssetEntrySearchArg,

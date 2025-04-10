@@ -22,6 +22,7 @@ struct AssetPutResult
 
 struct AssetEntry
     entry_id String(min_length=1)
+    seq_id Int64
     name String(min_length=1)
     op AssetEntryOp
     asset AssetInfo
@@ -35,6 +36,8 @@ struct AssetInfo
     created_by AssetCreatedBy
     size UInt64
         "Number of bytes. Deleted assets have a size of 0."
+    hash String?
+        "SHA-256 hash of the content. Unset if it's a deletion."
 
 union AssetCreatedBy
     # Only one variant. In anticipation of assets by system operations.
@@ -47,6 +50,8 @@ struct AssetMetadataInfo
     created_by AssetCreatedBy
     size UInt64
         "Number of bytes. Deleted assets have a size of 0."
+    hash String?
+        "SHA-256 hash of the content. Unset if it's a deletion."
     title String?
         "If the metadata specified a `title` key with string value, this is a
         reproduction of it truncated to 64-chars."
@@ -175,6 +180,49 @@ union AssetEntryListError
     too_many_assets
         "This beta endpoint isn't intended to be used for users with large
         numbers of assets."
+
+# --
+
+route entry/iter (AssetEntryIterArg, AssetEntryIterResult, AssetEntryIterError)
+    "More than just for iteration, it contains the necessary information for
+    incrementally syncing."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetEntryIterArg
+    prefix String?
+    limit UInt32 = 100
+        "The maximum number of entries to return at once. For internal reasons,
+        fewer than `limit` may be returned."
+
+struct AssetEntryIterResult
+    entries List(AssetEntry)
+    cursor String(min_length=1)
+    has_more Boolean
+
+union AssetEntryIterError
+    empty
+        "If a pool has never had an asset, this is returned since pools are
+        created lazily."
+    no_permission
+
+# --
+
+route entry/iter/next (AssetEntryIterNextArg, AssetEntryIterResult, AssetEntryIterNextError)
+    attrs
+        auth = "user_optional"
+
+struct AssetEntryIterNextArg
+    cursor String(min_length=1)
+        "Use the cursor from :field:`AssetEntryIterResult.cursor`."
+    limit UInt32 = 100
+        "The maximum number of entries to return at once. For internal reasons,
+        fewer than `limit` may be returned."
+
+union AssetEntryIterNextError
+    bad_cursor
+    no_permission
 
 # --
 

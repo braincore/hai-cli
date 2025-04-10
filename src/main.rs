@@ -2381,25 +2381,74 @@ async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
-            use crate::api::types::asset::AssetEntryListArg;
+            use crate::api::types::asset::{
+                AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg,
+            };
             let api_client = mk_api_client(Some(session));
-            let asset_list_res = match api_client
-                .asset_entry_list(AssetEntryListArg {
+            let mut entries = vec![];
+            let mut asset_iter_res = match api_client
+                .asset_entry_iter(AssetEntryIterArg {
                     prefix: Some(prefix.into()),
+                    limit: 200,
                 })
                 .await
             {
                 Ok(res) => res,
                 Err(e) => {
-                    eprintln!("error: {}", e);
+                    match e {
+                        api::client::RequestError::Route(AssetEntryIterError::Empty) => {
+                            eprintln!("[empty]");
+                        }
+                        _ => {
+                            eprintln!("error: {}", e);
+                        }
+                    }
                     return ProcessCmdResult::Loop;
                 }
             };
-            for entry in &asset_list_res.entries {
-                print_asset_entry(entry);
+            if asset_iter_res.has_more {
+                println!("[Listing assets unsorted due to size]");
+                let mut seen = HashSet::new();
+                loop {
+                    entries.extend_from_slice(&asset_iter_res.entries);
+                    for entry in &asset_iter_res.entries {
+                        if entry.op == AssetEntryOp::Delete {
+                            continue;
+                        }
+                        if seen.contains(&entry.name) {
+                            // In case an entry is modified during iteration
+                            // (e.g. asset edited; metadata added)
+                            continue;
+                        }
+                        seen.insert(entry.name.clone());
+                        print_asset_entry(entry);
+                    }
+                    if !asset_iter_res.has_more {
+                        break;
+                    }
+                    asset_iter_res = match api_client
+                        .asset_entry_iter_next(AssetEntryIterNextArg {
+                            cursor: asset_iter_res.cursor,
+                            limit: 200,
+                        })
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    };
+                }
+            } else {
+                // If all entries are fetched in one-go, sort them.
+                entries.extend_from_slice(&asset_iter_res.entries);
+                entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+                for entry in &entries {
+                    print_asset_entry(entry);
+                }
             }
-            let asset_list_output = asset_list_res
-                .entries
+            let asset_list_output = entries
                 .iter()
                 .map(|entry| entry.name.clone())
                 .collect::<Vec<String>>()
