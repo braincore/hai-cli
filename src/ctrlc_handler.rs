@@ -45,3 +45,9 @@ impl CtrlcHandler {
         handlers.remove(&id);
     }
 }
+
+impl Default for CtrlcHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}

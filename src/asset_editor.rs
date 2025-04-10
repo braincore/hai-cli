@@ -188,8 +188,8 @@ pub async fn worker_update_asset(
                 if is_markdown {
                     if let Ok(content_str) = std::str::from_utf8(&new_contents) {
                         if let Some(first_line) = content_str.lines().next() {
-                            if first_line.starts_with("# ") {
-                                let title = first_line[2..].trim().to_string();
+                            if let Some(title_candidate) = first_line.strip_prefix("# ") {
+                                let title = title_candidate.trim().to_string();
                                 if !title.is_empty() {
                                     md_title = Some(serde_json::Value::String(title));
                                 }
@@ -318,30 +318,28 @@ pub async fn worker_update_asset(
                         }
                     };
                     if is_markdown {
-                        match asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
-                            .await
+                        if let Ok(asset_entry) =
+                            asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
+                                .await
                         {
-                            Ok(asset_entry) => {
-                                if !one_shot {
-                                    if let Some((_, _, existing_hash)) =
-                                        asset_bottom_map.get(&asset_name)
-                                    {
-                                        // Metadata updates change the revision
-                                        // ID which we need to update to avoid
-                                        // forking.
-                                        asset_bottom_map.insert(
-                                            asset_name.clone(),
-                                            (
-                                                asset_entry.entry_id,
-                                                asset_entry.asset.rev_id,
-                                                existing_hash.clone(),
-                                            ),
-                                        );
-                                    }
+                            if !one_shot {
+                                if let Some((_, _, existing_hash)) =
+                                    asset_bottom_map.get(&asset_name)
+                                {
+                                    // Metadata updates change the revision
+                                    // ID which we need to update to avoid
+                                    // forking.
+                                    asset_bottom_map.insert(
+                                        asset_name.clone(),
+                                        (
+                                            asset_entry.entry_id,
+                                            asset_entry.asset.rev_id,
+                                            existing_hash.clone(),
+                                        ),
+                                    );
                                 }
                             }
-                            Err(_) => {}
-                        };
+                        }
                     }
                 }
             }
@@ -572,7 +570,6 @@ use std::path::{Path, PathBuf};
 /// let (modified_cmd, asset_map, output_assets) = prepare_assets(&client, "!!cat @input > @output").await?;
 /// // output_assets contains "output"
 /// ```
-
 pub async fn prepare_assets(
     api_client: &HaiClient,
     cmd: &str,
@@ -659,7 +656,7 @@ async fn download_asset(
     let extension = Path::new(asset_name)
         .extension()
         .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
-        .unwrap_or_else(|| String::new());
+        .unwrap_or_default();
     let temp_file = tempfile::Builder::new()
         .prefix("asset_")
         .suffix(&extension)
@@ -669,7 +666,7 @@ async fn download_asset(
     // Get the path to the temporary file
     let temp_file_path = temp_file.path().to_path_buf();
 
-    let (asset_contents, _) = match get_asset(&api_client, asset_name, false).await {
+    let (asset_contents, _) = match get_asset(api_client, asset_name, false).await {
         Ok(contents) => contents,
         Err(e) => {
             return Err(match e {
@@ -696,7 +693,7 @@ fn create_empty_temp_file(asset_name: &str) -> Result<(tempfile::NamedTempFile, 
     let extension = Path::new(asset_name)
         .extension()
         .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
-        .unwrap_or_else(|| String::new());
+        .unwrap_or_default();
 
     let temp_file = tempfile::Builder::new()
         .prefix("asset_")

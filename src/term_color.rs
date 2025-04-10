@@ -153,7 +153,7 @@ pub fn get_syntax_set() -> &'static SyntaxSet {
 
 /// Lazy-load theme set
 pub fn get_theme_set() -> &'static EmbeddedLazyThemeSet {
-    THEME_SET.get_or_init(|| two_face::theme::extra())
+    THEME_SET.get_or_init(two_face::theme::extra)
 }
 
 // --
@@ -182,7 +182,7 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
     let mut highlighter = if let Some(syntax) = ps.find_syntax_by_token(lang_token) {
         HighlightLines::new(
             syntax,
-            &ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
+            ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
         )
     } else {
         print!("{}", text);
@@ -197,7 +197,7 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
             line.clone()
         };
         let highlighted_parts: Vec<(highlighting::Style, &str)> =
-            highlighter.highlight_line(&line_with_ending, &ps).unwrap();
+            highlighter.highlight_line(&line_with_ending, ps).unwrap();
 
         for (style, text) in highlighted_parts {
             let escaped = as_terminal_escaped(style, text, &color_capability, false, None);

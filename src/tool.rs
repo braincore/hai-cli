@@ -229,7 +229,7 @@ pub async fn collect_and_print_command_output(
             } else {
                 Ok(format!(
                     "{}Process exited with status: {}",
-                    if output_text.len() > 0 {
+                    if !output_text.is_empty() {
                         format!("{}\n", output_text)
                     } else {
                         "".to_string()

@@ -505,8 +505,7 @@ impl Completer for CmdAndFileCompleter {
                 }
 
                 // If the token starts with '@', it's an asset lookup
-                if current_token.starts_with('@') {
-                    let asset_prefix = &current_token[1..]; // Remove the '@' prefix
+                if let Some(asset_prefix) = current_token.strip_prefix('@') {
                     let mut completions = self.asset_completer(asset_prefix);
                     realign_suggestions(&mut completions, last_whitespace_pos + 2, self.debug);
                     completions

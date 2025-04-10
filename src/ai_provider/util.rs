@@ -46,7 +46,7 @@ pub struct TextAccumulator<'a> {
     pub unmasked_printed_text: String,
 }
 
-impl<'a> TextAccumulator<'a> {
+impl TextAccumulator<'_> {
     pub fn new(masked_strings: HashSet<String>) -> Self {
         TextAccumulator {
             printer: MaskedPrinter::new(masked_strings),
@@ -79,7 +79,7 @@ pub struct MaskedPrinter<'a> {
     masked_strings: HashSet<String>,
 }
 
-impl<'a> MaskedPrinter<'a> {
+impl MaskedPrinter<'_> {
     pub fn new(masked_strings: HashSet<String>) -> Self {
         MaskedPrinter {
             sh_printer: SyntaxHighlighterPrinter::new(),
@@ -139,7 +139,7 @@ pub struct SyntaxHighlighterPrinter<'a> {
     terminal_color_capability: Option<term_color::ColorCapability>,
 }
 
-impl<'a> SyntaxHighlighterPrinter<'a> {
+impl SyntaxHighlighterPrinter<'_> {
     pub fn new() -> Self {
         SyntaxHighlighterPrinter {
             buffer: String::new(),
@@ -155,7 +155,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
         if let Some(syntax) = ps.find_syntax_by_token(token) {
             self.highlighter = Some(HighlightLines::new(
                 syntax,
-                &ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
+                ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
             ));
         }
     }
@@ -231,7 +231,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
 
                     let line_with_ending = format!("{}\n", full_first_line);
                     let highlighted_parts: Vec<(Style, &str)> =
-                        highlighter.highlight_line(&line_with_ending, &ps).unwrap();
+                        highlighter.highlight_line(&line_with_ending, ps).unwrap();
                     for (style, text) in highlighted_parts {
                         let escaped = term_color::as_terminal_escaped(
                             style,
@@ -256,7 +256,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                 let middle_line_with_ending = format!("{}\n", middle_line);
                 if let Some(highlighter) = self.highlighter.as_mut() {
                     let highlighted_parts: Vec<(Style, &str)> = highlighter
-                        .highlight_line(&middle_line_with_ending, &ps)
+                        .highlight_line(&middle_line_with_ending, ps)
                         .unwrap();
 
                     for (style, text) in highlighted_parts {
@@ -274,7 +274,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                     print!("{}", middle_line_with_ending);
                     io::stdout().flush().unwrap();
                 }
-                self.highlighter_check(&middle_line);
+                self.highlighter_check(middle_line);
             }
 
             // The last line is only partial (unless this is the last acc() call)
@@ -315,7 +315,7 @@ impl<'a> SyntaxHighlighterPrinter<'a> {
                     )
                     .unwrap();
                     let highlighted_parts: Vec<(Style, &str)> =
-                        highlighter.highlight_line(&self.buffer, &ps).unwrap();
+                        highlighter.highlight_line(&self.buffer, ps).unwrap();
                     for (style, text) in highlighted_parts {
                         let escaped = term_color::as_terminal_escaped(
                             style,

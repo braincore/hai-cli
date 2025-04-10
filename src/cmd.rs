@@ -559,8 +559,8 @@ pub fn parse_user_input(
     // similar to the tool notations (! and !?). But, "/e " has proven to be
     // rather awkward to type. The "/" is tough to reach and the " " before the
     // command conflicts with muscle memory from other programs (ipython).
-    let input = if input.starts_with("!!") {
-        format!("/exec {}", &input[2..])
+    let input = if let Some(shell_cmd) = input.strip_prefix("!!") {
+        format!("/exec {}", shell_cmd)
     } else {
         input.to_string()
     };
