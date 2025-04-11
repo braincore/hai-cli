@@ -357,6 +357,54 @@ fn format_tok_count(number: u32) -> String {
 
 // --
 
+enum TokenType {
+    CmdWord,
+    ToolWord,
+    AssetName,
+    FilePath,
+    AiModel,
+}
+
+struct CommandSpec {
+    tokens: Vec<TokenType>,
+    allow_duplicate: bool, // Allow duplicate tokens if required
+}
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Regex to extract language for markdown code block
+fn get_command_specs() -> &'static HashMap<&'static str, CommandSpec> {
+    static COMMAND_SPECS: OnceLock<HashMap<&'static str, CommandSpec>> = OnceLock::new();
+    COMMAND_SPECS.get_or_init(|| {
+        let mut spec_map = HashMap::new();
+        spec_map.insert(
+            "/task-publish",
+            CommandSpec {
+                tokens: vec![TokenType::CmdWord, TokenType::FilePath],
+                allow_duplicate: false,
+            },
+        );
+        spec_map.insert(
+            "/ai",
+            CommandSpec {
+                tokens: vec![TokenType::CmdWord, TokenType::AiModel],
+                allow_duplicate: true,
+            },
+        );
+        spec_map.insert(
+            "/asset-list",
+            CommandSpec {
+                tokens: vec![TokenType::CmdWord, TokenType::AssetName],
+                allow_duplicate: false,
+            },
+        );
+        spec_map
+    })
+}
+
+// --
+
 struct CmdAndFileCompleter {
     debug: bool,
     autocomplete_repl_cmds: Vec<String>,
@@ -376,6 +424,12 @@ impl Completer for CmdAndFileCompleter {
         if self.debug {
             let _ = config::write_to_debug_log(format!("completer init: {} pos={}\n", line, pos,));
         }
+
+        let command_specs = get_command_specs();
+        if let Some(rest) = line.strip_prefix("/") {
+            
+        }
+
         if line.starts_with('/') || line.starts_with("!!") {
             if line.starts_with("/load ")
                 || line.starts_with("/l ")
@@ -469,6 +523,7 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/asset-remove ")
                 || line.starts_with("/asset-list ")
                 || line.starts_with("/ls ")
+                || line.starts_with("/asset-md-get ")
             {
                 let (cmd_word, arg_prefix) = line
                     .split_once(char::is_whitespace)
