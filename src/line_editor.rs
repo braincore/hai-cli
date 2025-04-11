@@ -462,6 +462,7 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/asset-edit ")
                 || line.starts_with("/asset-load ")
                 || line.starts_with("/asset-view ")
+                || line.starts_with("/asset-temp ")
                 || line.starts_with("/asset-push ")
                 || line.starts_with("/asset-link ")
                 || line.starts_with("/asset-revisions ")

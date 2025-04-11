@@ -317,6 +317,7 @@ pub async fn process_cmd(
                 .history
                 .retain(|log_entry| log_entry.retention_policy.0);
             recalculate_input_tokens(session);
+            session.temp_files.retain(|(_, is_task_step)| *is_task_step);
             if let ReplMode::Task(ref task_fqn) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -332,6 +333,7 @@ pub async fn process_cmd(
                     || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
             });
             recalculate_input_tokens(session);
+            session.temp_files.retain(|(_, is_task_step)| *is_task_step);
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(_)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
@@ -954,6 +956,7 @@ pub async fn process_cmd(
                 session.repl_mode = ReplMode::Normal;
                 session.history.clear();
                 recalculate_input_tokens(session);
+                session.temp_files.clear();
                 println!("info: task ended");
             } else {
                 eprintln!("error: not in task mode");
@@ -1754,6 +1757,73 @@ pub async fn process_cmd(
                     eprintln!("error: failed to save: {}", e);
                 }
             }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name }) => {
+            let api_client = mk_api_client(Some(session));
+            let (data_contents, metadata_contents, _asset_entry) =
+                match asset_editor::get_asset_and_metadata(&api_client, asset_name, false).await {
+                    Ok(res) => res,
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
+
+            let (data_temp_file, data_temp_file_path) =
+                match asset_editor::create_empty_temp_file(asset_name) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: failed to download: {}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+            match fs::write(&data_temp_file_path, data_contents) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: failed to save: {}", e);
+                }
+            }
+            session.temp_files.push((data_temp_file, is_task_mode_step));
+            let mut msgs = vec![];
+            let msg = format!(
+                "Asset '{}' copied to '{}'",
+                asset_name,
+                data_temp_file_path.display()
+            );
+            println!("{}", msg);
+            msgs.push(msg);
+            if let Some(metadata_contents) = metadata_contents {
+                let metadata_name = format!("{}.metadata", asset_name);
+                let (metadata_temp_file, metadata_temp_file_path) =
+                    match asset_editor::create_empty_temp_file(&metadata_name) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            eprintln!("error: failed to download: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    };
+                match fs::write(&metadata_temp_file_path, metadata_contents) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("error: failed to save: {}", e);
+                    }
+                }
+                session
+                    .temp_files
+                    .push((metadata_temp_file, is_task_mode_step));
+                let msg = format!(
+                    "Metadata of '{}' copied to '{}'",
+                    asset_name,
+                    metadata_temp_file_path.display()
+                );
+                println!("{}", msg);
+                msgs.push(msg);
+            }
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &msgs.join("\n"),
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetAcl(cmd::AssetAclCmd {

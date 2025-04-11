@@ -248,6 +248,7 @@ async fn repl(
         "/asset-link",
         "/asset-import",
         "/asset-export",
+        "/asset-temp",
         "/asset-acl",
         "/asset-remove",
         "/asset-md-get",
@@ -376,6 +377,7 @@ async fn repl(
         last_tool_cmd: None,
         tool_mode: None,
         use_hai_router: HaiRouterState::Off,
+        temp_files: vec![],
     };
 
     if let Some(account) = &account {

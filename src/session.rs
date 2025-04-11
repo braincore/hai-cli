@@ -59,6 +59,8 @@ pub struct SessionState {
     pub tool_mode: Option<cmd::ToolModeCmd>,
     /// Whether to use hai-router for compatible AI models
     pub use_hai_router: HaiRouterState,
+    /// (Temporary asset file, is task step?)
+    pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
 }
 
 /// Recalculates token count based on history.

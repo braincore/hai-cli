@@ -365,6 +365,8 @@ pub async fn worker_update_asset(
     }
 }
 
+// --
+
 pub enum GetAssetError {
     BadName,
     DataFetchFailed,
@@ -377,14 +379,25 @@ pub async fn get_asset(
     asset_name: &str,
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
-    use crate::api::types::asset::AssetGetArg;
-    let asset_get_res = match api_client
+    let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
+    let data_contents = download_asset(&asset_get_res.data_url).await?;
+    Ok((data_contents, asset_get_res.entry))
+}
+
+use crate::api::types::asset::{AssetGetArg, AssetGetResult};
+
+pub async fn get_asset_entry(
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+) -> Result<AssetGetResult, GetAssetError> {
+    match api_client
         .asset_get(AssetGetArg {
             name: asset_name.to_string(),
         })
         .await
     {
-        Ok(res) => res,
+        Ok(res) => Ok(res),
         Err(e) => {
             if bad_name_ok
                 && matches!(
@@ -398,10 +411,13 @@ pub async fn get_asset(
             } else {
                 eprintln!("error: {}", e);
             }
-            return Err(GetAssetError::BadName);
+            Err(GetAssetError::BadName)
         }
-    };
-    let asset_get_resp = match reqwest::get(asset_get_res.data_url).await {
+    }
+}
+
+pub async fn download_asset(url: &str) -> Result<Vec<u8>, GetAssetError> {
+    let asset_get_resp = match reqwest::get(url).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("error: {}", e);
@@ -413,13 +429,33 @@ pub async fn get_asset(
         return Err(GetAssetError::DataFetchFailed);
     }
     match asset_get_resp.bytes().await {
-        Ok(contents) => Ok((contents.to_vec(), asset_get_res.entry)),
+        Ok(contents) => Ok(contents.to_vec()),
         Err(e) => {
             eprintln!("error: failed to fetch asset: {}", e);
             Err(GetAssetError::DataFetchFailed)
         }
     }
 }
+
+// --
+
+/// If returns None, responsible for printing error msg.
+pub async fn get_asset_and_metadata(
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
+    let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
+    let data_contents = download_asset(&asset_get_res.data_url).await?;
+    let metadata_contents = if let Some(metadata_url) = asset_get_res.metadata_url {
+        Some(download_asset(&metadata_url).await?)
+    } else {
+        None
+    };
+    Ok((data_contents, metadata_contents, asset_get_res.entry))
+}
+
+// --
 
 /// If returns None, responsible for printing error msg.
 pub async fn get_asset_as_text(
@@ -624,7 +660,7 @@ pub async fn prepare_assets(
                 create_empty_temp_file(&asset_path)?
             } else {
                 // Either an input asset or an append asset (>>), download it
-                download_asset(api_client, &asset_path).await?
+                download_asset_to_temp(api_client, &asset_path).await?
             };
 
         replacements.push((full_match, temp_file_path.to_string_lossy().to_string()));
@@ -648,24 +684,11 @@ pub async fn prepare_assets(
 ///
 /// NOTE: The NamedTempFile is returned. When it eventually goes out of scope,
 /// the temporary file will be removed.
-async fn download_asset(
+async fn download_asset_to_temp(
     api_client: &HaiClient,
     asset_name: &str,
 ) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
-    // Create a temporary file copying the extension
-    let extension = Path::new(asset_name)
-        .extension()
-        .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
-        .unwrap_or_default();
-    let temp_file = tempfile::Builder::new()
-        .prefix("asset_")
-        .suffix(&extension)
-        .tempfile()
-        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
-
-    // Get the path to the temporary file
-    let temp_file_path = temp_file.path().to_path_buf();
-
+    let (temp_file, temp_file_path) = create_empty_temp_file(asset_name)?;
     let (asset_contents, _) = match get_asset(api_client, asset_name, false).await {
         Ok(contents) => contents,
         Err(e) => {
@@ -676,19 +699,19 @@ async fn download_asset(
             });
         }
     };
-
     match fs::write(&temp_file_path, asset_contents) {
         Ok(_) => {}
         Err(e) => {
             eprintln!("error: failed to save: {}", e);
         }
     }
-
     Ok((temp_file, temp_file_path))
 }
 
 /// Create an empty temporary file for output assets
-fn create_empty_temp_file(asset_name: &str) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
+pub fn create_empty_temp_file(
+    asset_name: &str,
+) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
     // Create a temporary file copying the extension
     let extension = Path::new(asset_name)
         .extension()

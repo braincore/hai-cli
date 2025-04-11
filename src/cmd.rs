@@ -107,6 +107,8 @@ pub enum Cmd {
     AssetImport(AssetImportCmd),
     /// Export an asset to the filesystem
     AssetExport(AssetExportCmd),
+    /// Temporarily replicate asset onto local filesystem
+    AssetTemp(AssetTempCmd),
     /// Grant permission to an asset
     AssetAcl(AssetAclCmd),
     /// Get metadata for asset
@@ -438,6 +440,12 @@ pub struct AssetExportCmd {
     pub source_asset_name: String,
     /// Path to the file
     pub target_file_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetTempCmd {
+    /// Name of the asset
+    pub asset_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1364,6 +1372,18 @@ fn parse_command(
                 })),
                 None => {
                     eprintln!("Usage: /asset-export <source_asset_name> <target_file_path>");
+                    None
+                }
+            }
+        }
+        "asset-temp" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetTemp(AssetTempCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-temp <asset_name>");
                     None
                 }
             }
