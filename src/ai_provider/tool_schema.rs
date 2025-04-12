@@ -172,6 +172,8 @@ Assets:
                             - Use a newline after `name` to push arbitrary multi-line content.
 /asset-import <name> <path>   - Imports <path> from local machine into asset with <name>
 /asset-export <name> <path>   - Exports asset with name to <path> on local machine
+/asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
+                              - If count specified, that number of revisions is exported.
 /asset-remove <name>    - Removes an asset
 
 --
