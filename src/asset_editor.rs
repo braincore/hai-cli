@@ -657,7 +657,7 @@ pub async fn prepare_assets(
         let (temp_file, temp_file_path) =
             if output_assets.contains(&asset_path) && !append_assets.contains(&asset_path) {
                 // Simple output with > (overwrite), just create empty file
-                create_empty_temp_file(&asset_path)?
+                create_empty_temp_file(&asset_path, None)?
             } else {
                 // Either an input asset or an append asset (>>), download it
                 download_asset_to_temp(api_client, &asset_path).await?
@@ -688,7 +688,7 @@ async fn download_asset_to_temp(
     api_client: &HaiClient,
     asset_name: &str,
 ) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
-    let (temp_file, temp_file_path) = create_empty_temp_file(asset_name)?;
+    let (temp_file, temp_file_path) = create_empty_temp_file(asset_name, None)?;
     let (asset_contents, _) = match get_asset(api_client, asset_name, false).await {
         Ok(contents) => contents,
         Err(e) => {
@@ -711,15 +711,20 @@ async fn download_asset_to_temp(
 /// Create an empty temporary file for output assets
 pub fn create_empty_temp_file(
     asset_name: &str,
+    rev_id: Option<&str>,
 ) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
     // Create a temporary file copying the extension
     let extension = Path::new(asset_name)
         .extension()
         .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
         .unwrap_or_default();
-
+    let mut prefix = "asset_".to_string();
+    if let Some(rev_id) = rev_id {
+        prefix.push_str(rev_id);
+        prefix.push('_');
+    }
     let temp_file = tempfile::Builder::new()
-        .prefix("asset_")
+        .prefix(&prefix)
         .suffix(&extension)
         .tempfile()
         .map_err(|e| format!("Failed to create temporary file: {}", e))?;

@@ -2,7 +2,7 @@ use colored::*;
 use glob::glob;
 use num_format::{Locale, ToFormattedString};
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -1759,71 +1759,298 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name }) => {
+        cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
             let api_client = mk_api_client(Some(session));
-            let (data_contents, metadata_contents, _asset_entry) =
-                match asset_editor::get_asset_and_metadata(&api_client, asset_name, false).await {
-                    Ok(res) => res,
-                    Err(_) => return ProcessCmdResult::Loop,
+
+            if let Some(count) = count {
+                use crate::api::types::asset::{
+                    AssetCreatedBy, AssetEntryOp, AssetRevision, AssetRevisionIterArg,
+                    AssetRevisionIterNextArg, EntryRef,
                 };
 
-            let (data_temp_file, data_temp_file_path) =
-                match asset_editor::create_empty_temp_file(asset_name) {
-                    Ok(res) => res,
+                async fn save_revision_to_temp(
+                    asset_name: &str,
+                    revision: &AssetRevision,
+                    seen_revisions_map: &mut HashMap<String, std::path::PathBuf>,
+                ) -> (
+                    Vec<String>,
+                    Vec<(tempfile::NamedTempFile, std::path::PathBuf)>,
+                ) {
+                    let mut temp_files = vec![];
+                    let mut msgs = vec![];
+                    msgs.push(format!("Revision ID: {}", revision.asset.rev_id));
+                    if let AssetCreatedBy::User(user) = &revision.asset.created_by {
+                        msgs.push(format!("By: {}", user.username));
+                    }
+                    let action = match revision.op {
+                        AssetEntryOp::Add => "add",
+                        AssetEntryOp::Push => "push",
+                        AssetEntryOp::Delete => "delete",
+                        AssetEntryOp::Edit => "edit",
+                        AssetEntryOp::Fork => "fork",
+                        AssetEntryOp::Metadata => "metadata",
+                        AssetEntryOp::Other => "other",
+                    };
+                    msgs.push(format!("Op: {}", action));
+                    if let Some(data_url) = revision.data_url.clone() {
+                        if let Some(existing_data_temp_file_path) =
+                            seen_revisions_map.get(&revision.asset.rev_id)
+                        {
+                            msgs.push(format!(
+                                "Data of '{}' copied to '{}'",
+                                asset_name,
+                                existing_data_temp_file_path.display()
+                            ));
+                        } else if let Some(data_contents) =
+                            asset_editor::get_asset_raw(&data_url).await
+                        {
+                            match asset_editor::create_empty_temp_file(
+                                asset_name,
+                                Some(&revision.asset.rev_id),
+                            ) {
+                                Ok((data_temp_file, data_temp_file_path)) => {
+                                    match fs::write(&data_temp_file_path, data_contents) {
+                                        Ok(_) => {
+                                            msgs.push(format!(
+                                                "Data of '{}' copied to '{}'",
+                                                asset_name,
+                                                data_temp_file_path.display()
+                                            ));
+                                            temp_files.push((
+                                                data_temp_file,
+                                                data_temp_file_path.clone(),
+                                            ));
+                                            seen_revisions_map.insert(
+                                                revision.asset.rev_id.clone(),
+                                                data_temp_file_path,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!("error: failed to save: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("error: failed to download: {}", e);
+                                }
+                            };
+                        }
+                    }
+                    if let Some(metadata_url) = revision.metadata_url.clone() {
+                        let metadata = revision
+                            .metadata
+                            .as_ref()
+                            .expect("missing metadata, but metadata_url set");
+                        if let Some(existing_metadata_temp_file_path) =
+                            seen_revisions_map.get(&metadata.rev_id)
+                        {
+                            msgs.push(format!(
+                                "Metadata of '{}' copied to '{}'",
+                                asset_name,
+                                existing_metadata_temp_file_path.display()
+                            ));
+                        } else if let Some(metadata_contents) =
+                            asset_editor::get_asset_raw(&metadata_url).await
+                        {
+                            match asset_editor::create_empty_temp_file(
+                                &format!("{}.metadata", asset_name),
+                                Some(
+                                    &revision
+                                        .metadata
+                                        .as_ref()
+                                        .expect("missing metadata, but metadata_url set")
+                                        .rev_id,
+                                ),
+                            ) {
+                                Ok((metadata_temp_file, metadata_temp_file_path)) => {
+                                    match fs::write(&metadata_temp_file_path, metadata_contents) {
+                                        Ok(_) => {
+                                            msgs.push(format!(
+                                                "Metadata of '{}' copied to '{}'",
+                                                asset_name,
+                                                metadata_temp_file_path.display()
+                                            ));
+                                            temp_files.push((
+                                                metadata_temp_file,
+                                                metadata_temp_file_path.clone(),
+                                            ));
+                                            seen_revisions_map.insert(
+                                                metadata.rev_id.clone(),
+                                                metadata_temp_file_path,
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!("error: failed to save: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("error: failed to download: {}", e);
+                                }
+                            };
+                        }
+                    }
+                    (msgs, temp_files)
+                }
+                let mut seen_revisions_map: HashMap<String, std::path::PathBuf> = HashMap::new();
+                let mut all_msgs = vec![];
+                let mut remaining = *count;
+                let mut revision_cursor = match api_client
+                    .asset_revision_iter(AssetRevisionIterArg {
+                        entry_ref: EntryRef::Name(asset_name.to_owned()),
+                        limit: std::cmp::min(3, remaining),
+                    })
+                    .await
+                {
+                    Ok(iter_res) => {
+                        for revision in iter_res.revisions {
+                            if remaining == 0 {
+                                break;
+                            }
+                            remaining -= 1;
+                            let (msgs, temp_files) = save_revision_to_temp(
+                                asset_name,
+                                &revision,
+                                &mut seen_revisions_map,
+                            )
+                            .await;
+                            session.temp_files.extend(
+                                temp_files
+                                    .into_iter()
+                                    .map(|(temp_file, _)| (temp_file, is_task_mode_step)),
+                            );
+                            for msg in &msgs {
+                                println!("{}", msg);
+                            }
+                            println!();
+                            all_msgs.extend(msgs);
+                        }
+                        iter_res.next
+                    }
                     Err(e) => {
-                        eprintln!("error: failed to download: {}", e);
+                        eprintln!("error: failed to get revisions: {}", e);
                         return ProcessCmdResult::Loop;
                     }
                 };
-            match fs::write(&data_temp_file_path, data_contents) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("error: failed to save: {}", e);
+                if revision_cursor.is_none() {
+                    return ProcessCmdResult::Loop;
                 }
-            }
-            session.temp_files.push((data_temp_file, is_task_mode_step));
-            let mut msgs = vec![];
-            let msg = format!(
-                "Asset '{}' copied to '{}'",
-                asset_name,
-                data_temp_file_path.display()
-            );
-            println!("{}", msg);
-            msgs.push(msg);
-            if let Some(metadata_contents) = metadata_contents {
-                let metadata_name = format!("{}.metadata", asset_name);
-                let (metadata_temp_file, metadata_temp_file_path) =
-                    match asset_editor::create_empty_temp_file(&metadata_name) {
+                loop {
+                    if remaining == 0 {
+                        break;
+                    }
+                    remaining -= 1;
+                    if let Some(next) = revision_cursor {
+                        revision_cursor = match api_client
+                            .asset_revision_iter_next(AssetRevisionIterNextArg {
+                                cursor: next.cursor,
+                                limit: std::cmp::min(10, remaining),
+                            })
+                            .await
+                        {
+                            Ok(iter_next_res) => {
+                                for revision in iter_next_res.revisions {
+                                    let (msgs, temp_files) = save_revision_to_temp(
+                                        asset_name,
+                                        &revision,
+                                        &mut seen_revisions_map,
+                                    )
+                                    .await;
+                                    session.temp_files.extend(
+                                        temp_files
+                                            .into_iter()
+                                            .map(|(temp_file, _)| (temp_file, is_task_mode_step)),
+                                    );
+                                    for msg in &msgs {
+                                        println!("{}", msg);
+                                    }
+                                    println!();
+                                    all_msgs.extend(msgs);
+                                }
+                                iter_next_res.next
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to get revisions: {}", e);
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                session_history_add_user_cmd_and_reply_entries(
+                    raw_user_input,
+                    &all_msgs.join("\n"),
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
+            } else {
+                let (data_contents, metadata_contents, _asset_entry) =
+                    match asset_editor::get_asset_and_metadata(&api_client, asset_name, false).await
+                    {
+                        Ok(res) => res,
+                        Err(_) => return ProcessCmdResult::Loop,
+                    };
+
+                let (data_temp_file, data_temp_file_path) =
+                    match asset_editor::create_empty_temp_file(asset_name, None) {
                         Ok(res) => res,
                         Err(e) => {
                             eprintln!("error: failed to download: {}", e);
                             return ProcessCmdResult::Loop;
                         }
                     };
-                match fs::write(&metadata_temp_file_path, metadata_contents) {
+                match fs::write(&data_temp_file_path, data_contents) {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("error: failed to save: {}", e);
                     }
                 }
-                session
-                    .temp_files
-                    .push((metadata_temp_file, is_task_mode_step));
+                session.temp_files.push((data_temp_file, is_task_mode_step));
+                let mut msgs = vec![];
                 let msg = format!(
-                    "Metadata of '{}' copied to '{}'",
+                    "Asset '{}' copied to '{}'",
                     asset_name,
-                    metadata_temp_file_path.display()
+                    data_temp_file_path.display()
                 );
                 println!("{}", msg);
                 msgs.push(msg);
+                if let Some(metadata_contents) = metadata_contents {
+                    let metadata_name = format!("{}.metadata", asset_name);
+                    let (metadata_temp_file, metadata_temp_file_path) =
+                        match asset_editor::create_empty_temp_file(&metadata_name, None) {
+                            Ok(res) => res,
+                            Err(e) => {
+                                eprintln!("error: failed to download: {}", e);
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+                    match fs::write(&metadata_temp_file_path, metadata_contents) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("error: failed to save: {}", e);
+                        }
+                    }
+                    session
+                        .temp_files
+                        .push((metadata_temp_file, is_task_mode_step));
+                    let msg = format!(
+                        "Metadata of '{}' copied to '{}'",
+                        asset_name,
+                        metadata_temp_file_path.display()
+                    );
+                    println!("{}", msg);
+                    msgs.push(msg);
+                }
+                session_history_add_user_cmd_and_reply_entries(
+                    raw_user_input,
+                    &msgs.join("\n"),
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
             }
-            session_history_add_user_cmd_and_reply_entries(
-                raw_user_input,
-                &msgs.join("\n"),
-                session,
-                bpe_tokenizer,
-                (is_task_mode_step, LogEntryRetentionPolicy::None),
-            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetAcl(cmd::AssetAclCmd {
@@ -2652,6 +2879,8 @@ EXPERIMENTAL:
 /asset-push <name>           - Push data into an asset. See pushed data w/ `/asset-revisions`
 /asset-import <n> <p>        - Imports <path> into asset with <name>
 /asset-export <n> <p>        - Exports asset with name to <path>
+/asset-temp <name> [<count>] - Exports asset to a temporary file.
+                               If `count` set, the latest `count` revisions are exported.
 /asset-remove <name>         - Removes an asset
 /asset-md-get <name>         - Get the metadata of an asset
 /asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object.
