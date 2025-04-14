@@ -428,17 +428,16 @@ async fn repl(
             update_available_str
         );
         if let Some(version) = newer_client_version {
-            println!("  - changelog: `/asset-view /hai/changelog`");
+            println!("  - changelog: `/asset-view /hai/changelog` or `!!cat @/hai/changelog`");
             let os_arch = get_machine_os_arch();
-            let ext = if os_arch.starts_with("windows") {
-                "zip"
+            if !os_arch.starts_with("windows") {
+                println!("  - installer (from shell): `curl -LsSf https://hai.superego.ai/hai-installer.sh | sh`");
             } else {
-                "tar.gz"
-            };
-            let asset_name = format!("hai-cli-{}-{}.{}", version, get_machine_os_arch(), ext);
-            println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
-            if let Ok(exe_path) = env::current_exe() {
-                println!("  - install: unpack and copy to {:?}", exe_path);
+                let asset_name = format!("hai-cli-{}-{}.zip", version, get_machine_os_arch());
+                println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
+                if let Ok(exe_path) = env::current_exe() {
+                    println!("  - install: unpack and copy to {:?}", exe_path);
+                }
             }
         }
         println!(
