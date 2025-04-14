@@ -31,7 +31,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 ### Installer [Linux, macOS]
 
 ```
-curl -LsSf https://raw.githubusercontent.com/braincore/hai-cli/refs/heads/master/scripts/hai-installer.sh | sh
+curl -LsSf https://hai.superego.ai/hai-installer.sh | sh
 ```
 
 ### Alt: Download binary [Linux, macOS, Windows]
