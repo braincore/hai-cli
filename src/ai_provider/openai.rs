@@ -115,6 +115,10 @@ pub async fn send_to_openai(
                 .collect();
             request_obj.insert("tools".to_string(), json!(function_wrappers));
             request_obj.insert("tool_choice".to_string(), json!(tool_choice));
+            // Explicitly disable parallel tool calling. While this function
+            // supports it, callers are currently unprepared to structure the
+            // message history correctly.
+            request_obj.insert("parallel_tool_calls".to_string(), json!(false));
         }
     }
     remove_nulls(&mut request_body);
@@ -276,11 +280,16 @@ pub async fn send_to_openai(
                         ) {
                             if let Some(tool_id) = tool_response.id {
                                 if let Some(tool_name) = tool_response.function.name {
-                                    // For cases where a tool-response follows a text-response, add
-                                    // a newline to make the output clearer.
-                                    // AFAICT, both responses will have index=0 set so delineating
-                                    // between the two that way isn't doable.
-                                    if !text_accumulator.printed_text.is_empty() {
+                                    if !tool_calls.is_empty() {
+                                        println!();
+                                        println!();
+                                        println!("∥");
+                                        println!();
+                                    } else if !text_accumulator.printed_text.is_empty() {
+                                        // For cases where a tool-response follows a text-response, add
+                                        // a newline to make the output clearer.
+                                        // AFAICT, both responses will have index=0 set so delineating
+                                        // between the two that way isn't doable.
                                         println!();
                                     }
                                     // Gemini returns an empty string as the
@@ -393,12 +402,19 @@ pub async fn send_to_openai(
         });
     }
     if !tool_calls.is_empty() {
-        let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
-        responses.push(chat::ChatCompletionResponse::Tool {
-            tool_id: tool_call.tool_id,
-            tool_name: tool_call.tool_name,
-            arg: tool_call.buffer,
-        });
+        // Convert the map entries to a vector so we can sort them
+        let mut tool_call_entries: Vec<_> = tool_calls.into_iter().collect();
+        // Sort by key (assuming keys are integers)
+        tool_call_entries.sort_by_key(|(key, _)| *key);
+
+        // Add each tool call to responses in sorted order
+        for (_, tool_call) in tool_call_entries {
+            responses.push(chat::ChatCompletionResponse::Tool {
+                tool_id: tool_call.tool_id,
+                tool_name: tool_call.tool_name,
+                arg: tool_call.buffer,
+            });
+        }
     }
     Ok(responses)
 }
