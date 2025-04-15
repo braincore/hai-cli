@@ -38,6 +38,9 @@ struct AssetInfo
         "Number of bytes. Deleted assets have a size of 0."
     hash String?
         "SHA-256 hash of the content. Unset if it's a deletion."
+    url String?
+        "A url to the asset data that expires in 24 hours. Unset if it's a
+        deletion."
 
 union AssetCreatedBy
     # Only one variant. In anticipation of assets by system operations.
@@ -52,6 +55,9 @@ struct AssetMetadataInfo
         "Number of bytes. Deleted assets have a size of 0."
     hash String?
         "SHA-256 hash of the content. Unset if it's a deletion."
+    url String?
+        "A url to the asset data that expires in 24 hours. Unset if it's a
+        deletion."
     title String?
         "If the metadata specified a `title` key with string value, this is a
         reproduction of it truncated to 64-chars."

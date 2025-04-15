@@ -222,6 +222,14 @@ impl SyntaxHighlighterPrinter<'_> {
                     let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
                     let height = (line_width / terminal_width) + 1;
+                    let _ = crate::config::write_to_debug_log(format!(
+                        "FIRST line: {:?}\n",
+                        full_first_line
+                    ));
+                    let _ = crate::config::write_to_debug_log(format!(
+                        "term: ({}, {}) {} {} {}\n",
+                        _x, y, terminal_width, line_width, height
+                    ));
                     crossterm::execute!(
                         io::stdout(),
                         crossterm::cursor::MoveTo(0, y - height),
@@ -253,6 +261,7 @@ impl SyntaxHighlighterPrinter<'_> {
 
             // All lines in the middle are printed fully
             for middle_line in &lines[1..lines.len() - 1] {
+                let _ = crate::config::write_to_debug_log(format!("MID line: {:?}\n", middle_line));
                 let middle_line_with_ending = format!("{}\n", middle_line);
                 if let Some(highlighter) = self.highlighter.as_mut() {
                     let highlighted_parts: Vec<(Style, &str)> = highlighter

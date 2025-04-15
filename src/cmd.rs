@@ -109,6 +109,8 @@ pub enum Cmd {
     AssetExport(AssetExportCmd),
     /// Temporarily replicate asset onto local filesystem
     AssetTemp(AssetTempCmd),
+    /// Syncs assets onto the local filesystem
+    AssetSyncDown(AssetSyncDownCmd),
     /// Grant permission to an asset
     AssetAcl(AssetAclCmd),
     /// Get metadata for asset
@@ -440,6 +442,14 @@ pub struct AssetExportCmd {
     pub source_asset_name: String,
     /// Path to the file
     pub target_file_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetSyncDownCmd {
+    /// Prefix of assets to sync down
+    pub prefix: String,
+    /// Path to sync down to
+    pub target_path: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1399,6 +1409,21 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-temp <asset_name> [<count>]");
+                    None
+                }
+            }
+        }
+        "asset-sync-down" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((prefix, target_path)) => Some(Cmd::AssetSyncDown(AssetSyncDownCmd {
+                    prefix,
+                    target_path,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-sync-down <prefix> <target_path>");
                     None
                 }
             }

@@ -2318,6 +2318,8 @@ pub struct AssetInfo {
     pub size: u64,
     /// SHA-256 hash of the content. Unset if it's a deletion.
     pub hash: Option<String>,
+    /// A url to the asset data that expires in 24 hours. Unset if it's a deletion.
+    pub url: Option<String>,
 }
 
 impl AssetInfo {
@@ -2327,6 +2329,7 @@ impl AssetInfo {
             created_by,
             size,
             hash: None,
+            url: None,
         }
     }
 
@@ -2334,9 +2337,14 @@ impl AssetInfo {
         self.hash = Some(value);
         self
     }
+
+    pub fn with_url(mut self, value: String) -> Self {
+        self.url = Some(value);
+        self
+    }
 }
 
-const ASSET_INFO_FIELDS: &[&str] = &["rev_id", "created_by", "size", "hash"];
+const ASSET_INFO_FIELDS: &[&str] = &["rev_id", "created_by", "size", "hash", "url"];
 impl AssetInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2352,6 +2360,7 @@ impl AssetInfo {
         let mut field_created_by = None;
         let mut field_size = None;
         let mut field_hash = None;
+        let mut field_url = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2380,6 +2389,12 @@ impl AssetInfo {
                     }
                     field_hash = Some(map.next_value()?);
                 }
+                "url" => {
+                    if field_url.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("url"));
+                    }
+                    field_url = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2395,6 +2410,7 @@ impl AssetInfo {
                 .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
             size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
             hash: field_hash.and_then(Option::flatten),
+            url: field_url.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2409,6 +2425,9 @@ impl AssetInfo {
         s.serialize_field("size", &self.size)?;
         if let Some(val) = &self.hash {
             s.serialize_field("hash", val)?;
+        }
+        if let Some(val) = &self.url {
+            s.serialize_field("url", val)?;
         }
         Ok(())
     }
@@ -2436,7 +2455,7 @@ impl ::serde::ser::Serialize for AssetInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetInfo", 4)?;
+        let mut s = serializer.serialize_struct("AssetInfo", 5)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -2451,6 +2470,8 @@ pub struct AssetMetadataInfo {
     pub size: u64,
     /// SHA-256 hash of the content. Unset if it's a deletion.
     pub hash: Option<String>,
+    /// A url to the asset data that expires in 24 hours. Unset if it's a deletion.
+    pub url: Option<String>,
     /// If the metadata specified a `title` key with string value, this is a reproduction of it
     /// truncated to 64-chars.
     pub title: Option<String>,
@@ -2463,6 +2484,7 @@ impl AssetMetadataInfo {
             created_by,
             size,
             hash: None,
+            url: None,
             title: None,
         }
     }
@@ -2472,13 +2494,19 @@ impl AssetMetadataInfo {
         self
     }
 
+    pub fn with_url(mut self, value: String) -> Self {
+        self.url = Some(value);
+        self
+    }
+
     pub fn with_title(mut self, value: String) -> Self {
         self.title = Some(value);
         self
     }
 }
 
-const ASSET_METADATA_INFO_FIELDS: &[&str] = &["rev_id", "created_by", "size", "hash", "title"];
+const ASSET_METADATA_INFO_FIELDS: &[&str] =
+    &["rev_id", "created_by", "size", "hash", "url", "title"];
 impl AssetMetadataInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2494,6 +2522,7 @@ impl AssetMetadataInfo {
         let mut field_created_by = None;
         let mut field_size = None;
         let mut field_hash = None;
+        let mut field_url = None;
         let mut field_title = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
@@ -2523,6 +2552,12 @@ impl AssetMetadataInfo {
                     }
                     field_hash = Some(map.next_value()?);
                 }
+                "url" => {
+                    if field_url.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("url"));
+                    }
+                    field_url = Some(map.next_value()?);
+                }
                 "title" => {
                     if field_title.is_some() {
                         return Err(::serde::de::Error::duplicate_field("title"));
@@ -2544,6 +2579,7 @@ impl AssetMetadataInfo {
                 .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
             size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
             hash: field_hash.and_then(Option::flatten),
+            url: field_url.and_then(Option::flatten),
             title: field_title.and_then(Option::flatten),
         };
         Ok(Some(result))
@@ -2559,6 +2595,9 @@ impl AssetMetadataInfo {
         s.serialize_field("size", &self.size)?;
         if let Some(val) = &self.hash {
             s.serialize_field("hash", val)?;
+        }
+        if let Some(val) = &self.url {
+            s.serialize_field("url", val)?;
         }
         if let Some(val) = &self.title {
             s.serialize_field("title", val)?;
@@ -2593,7 +2632,7 @@ impl ::serde::ser::Serialize for AssetMetadataInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetMetadataInfo", 5)?;
+        let mut s = serializer.serialize_struct("AssetMetadataInfo", 6)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

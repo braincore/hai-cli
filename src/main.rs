@@ -16,6 +16,7 @@ use uuid::Uuid;
 mod ai_provider;
 mod api;
 mod asset_editor;
+mod asset_sync;
 mod chat;
 mod clipboard;
 mod cmd;
@@ -249,6 +250,7 @@ async fn repl(
         "/asset-import",
         "/asset-export",
         "/asset-temp",
+        "/asset-sync-down",
         "/asset-acl",
         "/asset-remove",
         "/asset-md-get",

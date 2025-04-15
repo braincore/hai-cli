@@ -1759,6 +1759,21 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetSyncDown(cmd::AssetSyncDownCmd {
+            prefix,
+            target_path,
+        }) => {
+            let target_path = match shellexpand::full(&target_path) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let api_client = mk_api_client(Some(session));
+            let _ = crate::asset_sync::sync_prefix(&api_client, prefix, &target_path, debug).await;
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
             let api_client = mk_api_client(Some(session));
 
