@@ -131,8 +131,8 @@ use tokio::sync::Mutex;
 
 use crate::api::client::HaiClient;
 use crate::api::types::asset::{
-    AssetEntry, AssetEntryOp, AssetPushArg, AssetPutArg, AssetReplaceArg, PutConflictPolicy,
-    ReplaceConflictPolicy,
+    AssetEntry, AssetEntryOp, AssetMetadataInfo, AssetPushArg, AssetPutArg, AssetReplaceArg,
+    PutConflictPolicy, ReplaceConflictPolicy,
 };
 
 #[derive(Debug)]
@@ -380,8 +380,12 @@ pub async fn get_asset(
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    let data_contents = download_asset(&asset_get_res.data_url).await?;
-    Ok((data_contents, asset_get_res.entry))
+    if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
+        let data_contents = download_asset(&data_url).await?;
+        Ok((data_contents, asset_get_res.entry))
+    } else {
+        Err(GetAssetError::BadName)
+    }
 }
 
 use crate::api::types::asset::{AssetGetArg, AssetGetResult};
@@ -446,8 +450,16 @@ pub async fn get_asset_and_metadata(
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    let data_contents = download_asset(&asset_get_res.data_url).await?;
-    let metadata_contents = if let Some(metadata_url) = asset_get_res.metadata_url {
+    let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
+        download_asset(&data_url).await?
+    } else {
+        return Err(GetAssetError::BadName);
+    };
+    let metadata_contents = if let Some(AssetMetadataInfo {
+        url: Some(metadata_url),
+        ..
+    }) = asset_get_res.entry.metadata.as_ref()
+    {
         Some(download_asset(&metadata_url).await?)
     } else {
         None
@@ -518,7 +530,11 @@ pub async fn asset_metadata_set_key(
         .await
     {
         Ok(res) => {
-            let mut md_json = if let Some(metadata_url) = res.metadata_url {
+            let mut md_json = if let Some(AssetMetadataInfo {
+                url: Some(metadata_url),
+                ..
+            }) = res.entry.metadata.as_ref()
+            {
                 if let Some(contents_bin) = get_asset_raw(&metadata_url).await {
                     let contents = String::from_utf8_lossy(&contents_bin);
                     serde_json::from_str::<serde_json::Value>(&contents)

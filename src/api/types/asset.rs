@@ -2193,26 +2193,15 @@ impl ::std::fmt::Display for AssetGetError {
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetGetResult {
     pub entry: AssetEntry,
-    pub data_url: String,
-    pub metadata_url: Option<String>,
 }
 
 impl AssetGetResult {
-    pub fn new(entry: AssetEntry, data_url: String) -> Self {
-        AssetGetResult {
-            entry,
-            data_url,
-            metadata_url: None,
-        }
-    }
-
-    pub fn with_metadata_url(mut self, value: String) -> Self {
-        self.metadata_url = Some(value);
-        self
+    pub fn new(entry: AssetEntry) -> Self {
+        AssetGetResult { entry }
     }
 }
 
-const ASSET_GET_RESULT_FIELDS: &[&str] = &["entry", "data_url", "metadata_url"];
+const ASSET_GET_RESULT_FIELDS: &[&str] = &["entry"];
 impl AssetGetResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2225,8 +2214,6 @@ impl AssetGetResult {
         optional: bool,
     ) -> Result<Option<AssetGetResult>, V::Error> {
         let mut field_entry = None;
-        let mut field_data_url = None;
-        let mut field_metadata_url = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2236,18 +2223,6 @@ impl AssetGetResult {
                         return Err(::serde::de::Error::duplicate_field("entry"));
                     }
                     field_entry = Some(map.next_value()?);
-                }
-                "data_url" => {
-                    if field_data_url.is_some() {
-                        return Err(::serde::de::Error::duplicate_field("data_url"));
-                    }
-                    field_data_url = Some(map.next_value()?);
-                }
-                "metadata_url" => {
-                    if field_metadata_url.is_some() {
-                        return Err(::serde::de::Error::duplicate_field("metadata_url"));
-                    }
-                    field_metadata_url = Some(map.next_value()?);
                 }
                 _ => {
                     // unknown field allowed and ignored
@@ -2260,9 +2235,6 @@ impl AssetGetResult {
         }
         let result = AssetGetResult {
             entry: field_entry.ok_or_else(|| ::serde::de::Error::missing_field("entry"))?,
-            data_url: field_data_url
-                .ok_or_else(|| ::serde::de::Error::missing_field("data_url"))?,
-            metadata_url: field_metadata_url.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2273,10 +2245,6 @@ impl AssetGetResult {
     ) -> Result<(), S::Error> {
         use serde::ser::SerializeStruct;
         s.serialize_field("entry", &self.entry)?;
-        s.serialize_field("data_url", &self.data_url)?;
-        if let Some(val) = &self.metadata_url {
-            s.serialize_field("metadata_url", val)?;
-        }
         Ok(())
     }
 }
@@ -2303,7 +2271,7 @@ impl ::serde::ser::Serialize for AssetGetResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetGetResult", 3)?;
+        let mut s = serializer.serialize_struct("AssetGetResult", 1)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -4700,9 +4668,7 @@ impl ::serde::ser::Serialize for AssetReplaceTextArg {
 pub struct AssetRevision {
     pub op: AssetEntryOp,
     pub asset: AssetInfo,
-    pub data_url: Option<String>,
     pub metadata: Option<AssetMetadataInfo>,
-    pub metadata_url: Option<String>,
 }
 
 impl AssetRevision {
@@ -4710,29 +4676,17 @@ impl AssetRevision {
         AssetRevision {
             op,
             asset,
-            data_url: None,
             metadata: None,
-            metadata_url: None,
         }
-    }
-
-    pub fn with_data_url(mut self, value: String) -> Self {
-        self.data_url = Some(value);
-        self
     }
 
     pub fn with_metadata(mut self, value: AssetMetadataInfo) -> Self {
         self.metadata = Some(value);
         self
     }
-
-    pub fn with_metadata_url(mut self, value: String) -> Self {
-        self.metadata_url = Some(value);
-        self
-    }
 }
 
-const ASSET_REVISION_FIELDS: &[&str] = &["op", "asset", "data_url", "metadata", "metadata_url"];
+const ASSET_REVISION_FIELDS: &[&str] = &["op", "asset", "metadata"];
 impl AssetRevision {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -4746,9 +4700,7 @@ impl AssetRevision {
     ) -> Result<Option<AssetRevision>, V::Error> {
         let mut field_op = None;
         let mut field_asset = None;
-        let mut field_data_url = None;
         let mut field_metadata = None;
-        let mut field_metadata_url = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -4765,23 +4717,11 @@ impl AssetRevision {
                     }
                     field_asset = Some(map.next_value()?);
                 }
-                "data_url" => {
-                    if field_data_url.is_some() {
-                        return Err(::serde::de::Error::duplicate_field("data_url"));
-                    }
-                    field_data_url = Some(map.next_value()?);
-                }
                 "metadata" => {
                     if field_metadata.is_some() {
                         return Err(::serde::de::Error::duplicate_field("metadata"));
                     }
                     field_metadata = Some(map.next_value()?);
-                }
-                "metadata_url" => {
-                    if field_metadata_url.is_some() {
-                        return Err(::serde::de::Error::duplicate_field("metadata_url"));
-                    }
-                    field_metadata_url = Some(map.next_value()?);
                 }
                 _ => {
                     // unknown field allowed and ignored
@@ -4795,9 +4735,7 @@ impl AssetRevision {
         let result = AssetRevision {
             op: field_op.ok_or_else(|| ::serde::de::Error::missing_field("op"))?,
             asset: field_asset.ok_or_else(|| ::serde::de::Error::missing_field("asset"))?,
-            data_url: field_data_url.and_then(Option::flatten),
             metadata: field_metadata.and_then(Option::flatten),
-            metadata_url: field_metadata_url.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -4809,14 +4747,8 @@ impl AssetRevision {
         use serde::ser::SerializeStruct;
         s.serialize_field("op", &self.op)?;
         s.serialize_field("asset", &self.asset)?;
-        if let Some(val) = &self.data_url {
-            s.serialize_field("data_url", val)?;
-        }
         if let Some(val) = &self.metadata {
             s.serialize_field("metadata", val)?;
-        }
-        if let Some(val) = &self.metadata_url {
-            s.serialize_field("metadata_url", val)?;
         }
         Ok(())
     }
@@ -4844,7 +4776,7 @@ impl ::serde::ser::Serialize for AssetRevision {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetRevision", 5)?;
+        let mut s = serializer.serialize_struct("AssetRevision", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

@@ -1473,8 +1473,8 @@ pub async fn process_cmd(
             let api_client = mk_api_client(Some(session));
 
             use crate::api::types::asset::{
-                AssetCreatedBy, AssetEntryOp, AssetRevision, AssetRevisionIterArg,
-                AssetRevisionIterNextArg, EntryRef,
+                AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
+                AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
             };
 
             async fn print_revision(
@@ -1513,7 +1513,11 @@ pub async fn process_cmd(
                         }
                     }
                 );
-                if let Some(metadata_url) = revision.metadata_url.clone() {
+                if let Some(AssetMetadataInfo {
+                    url: Some(metadata_url),
+                    ..
+                }) = revision.metadata.as_ref()
+                {
                     if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await {
                         let contents = String::from_utf8_lossy(&contents_bin);
                         println!("Metadata: {}", &contents);
@@ -1525,7 +1529,7 @@ pub async fn process_cmd(
                         );
                     }
                 }
-                if let Some(data_url) = revision.data_url.clone() {
+                if let Some(data_url) = revision.asset.url.as_ref() {
                     if let Some(contents_bin) = asset_editor::get_asset_raw(&data_url).await {
                         let contents = String::from_utf8_lossy(&contents_bin);
                         println!("{}", &contents);
@@ -1639,7 +1643,14 @@ pub async fn process_cmd(
                 })
                 .await
             {
-                Ok(res) => res.data_url,
+                Ok(res) => {
+                    if let Some(data_url) = res.entry.asset.url {
+                        data_url
+                    } else {
+                        eprintln!("error: asset does not have link");
+                        return ProcessCmdResult::Loop;
+                    }
+                }
                 Err(e) => {
                     eprintln!("error: {}", e);
                     return ProcessCmdResult::Loop;
@@ -1779,8 +1790,8 @@ pub async fn process_cmd(
 
             if let Some(count) = count {
                 use crate::api::types::asset::{
-                    AssetCreatedBy, AssetEntryOp, AssetRevision, AssetRevisionIterArg,
-                    AssetRevisionIterNextArg, EntryRef,
+                    AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
+                    AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
                 };
 
                 async fn save_revision_to_temp(
@@ -1807,7 +1818,7 @@ pub async fn process_cmd(
                         AssetEntryOp::Other => "other",
                     };
                     msgs.push(format!("Op: {}", action));
-                    if let Some(data_url) = revision.data_url.clone() {
+                    if let Some(data_url) = revision.asset.url.as_ref() {
                         if let Some(existing_data_temp_file_path) =
                             seen_revisions_map.get(&revision.asset.rev_id)
                         {
@@ -1851,7 +1862,11 @@ pub async fn process_cmd(
                             };
                         }
                     }
-                    if let Some(metadata_url) = revision.metadata_url.clone() {
+                    if let Some(AssetMetadataInfo {
+                        url: Some(metadata_url),
+                        ..
+                    }) = revision.metadata.as_ref()
+                    {
                         let metadata = revision
                             .metadata
                             .as_ref()
@@ -2111,7 +2126,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
             let api_client = mk_api_client(Some(session));
-            use crate::api::types::asset::AssetGetArg;
+            use crate::api::types::asset::{AssetGetArg, AssetMetadataInfo};
             match api_client
                 .asset_get(AssetGetArg {
                     name: asset_name.to_string(),
@@ -2119,7 +2134,11 @@ pub async fn process_cmd(
                 .await
             {
                 Ok(res) => {
-                    if let Some(metadata_url) = res.metadata_url {
+                    if let Some(AssetMetadataInfo {
+                        url: Some(metadata_url),
+                        ..
+                    }) = res.entry.metadata.as_ref()
+                    {
                         if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
                         {
                             let contents = String::from_utf8_lossy(&contents_bin);

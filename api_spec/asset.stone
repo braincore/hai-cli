@@ -160,8 +160,6 @@ struct AssetGetArg
 
 struct AssetGetResult 
     entry AssetEntry
-    data_url String(min_length=1)
-    metadata_url String(min_length=1)?
 
 union AssetGetError
     bad_name
@@ -280,9 +278,7 @@ struct AssetRevisionCursor
 struct AssetRevision
     op AssetEntryOp
     asset AssetInfo
-    data_url String(min_length=1)?
     metadata AssetMetadataInfo?
-    metadata_url String(min_length=1)?
 
 union AssetRevisionIterError
     bad_entry_ref
