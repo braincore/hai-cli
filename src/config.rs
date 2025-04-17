@@ -510,7 +510,9 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         ),
         AiModel::Google(model) => matches!(
             model,
-            GoogleModel::Gemini20Flash
+            GoogleModel::Gemini25Flash
+                | GoogleModel::Gemini25Pro
+                | GoogleModel::Gemini20Flash
                 | GoogleModel::Gemini15Flash
                 | GoogleModel::Gemini15Flash8B
                 | GoogleModel::Gemini15Pro
@@ -518,11 +520,16 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         AiModel::Ollama(_) => false,
         AiModel::OpenAi(model) => matches!(
             model,
-            OpenAiModel::Gpt4o
+            OpenAiModel::Gpt41
+                | OpenAiModel::Gpt41Mini
+                | OpenAiModel::Gpt41Nano
+                | OpenAiModel::Gpt4o
                 | OpenAiModel::Gpt4oMini
                 | OpenAiModel::O1
                 | OpenAiModel::O1Mini
+                | OpenAiModel::O3
                 | OpenAiModel::O3Mini
+                | OpenAiModel::O4Mini
         ),
     }
 }
