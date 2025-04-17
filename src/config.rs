@@ -61,6 +61,7 @@ pub struct DeepSeekConfig {
 
 pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     match ai_model.replace("-", "").replace(".", "").as_str() {
+        "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
         "flash" | "flash20" | "geminiflash" | "geminiflash20" => {
@@ -70,11 +71,16 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "flash158b" | "geminiflash158b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
         "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
+        "gpt41" | "41" => Some(AiModel::OpenAi(OpenAiModel::Gpt41)),
+        "gpt41mini" | "41mini" | "41m" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Mini)),
+        "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
         "o1" => Some(AiModel::OpenAi(OpenAiModel::O1)),
         "o1mini" | "o1m" => Some(AiModel::OpenAi(OpenAiModel::O1Mini)),
+        "o3" => Some(AiModel::OpenAi(OpenAiModel::O3)),
         "o3mini" | "o3m" => Some(AiModel::OpenAi(OpenAiModel::O3Mini)),
+        "o4mini" | "o4m" => Some(AiModel::OpenAi(OpenAiModel::O4Mini)),
         "haiku" | "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
         "llama" | "llama32" => Some(AiModel::Ollama(OllamaModel::Llama32)),
         "llamavision" | "llama32vision" => Some(AiModel::Ollama(OllamaModel::Llama32Vision)),
@@ -301,11 +307,17 @@ pub enum OllamaModel {
 }
 #[derive(Debug)]
 pub enum OpenAiModel {
+    ChatGpt4o,
+    Gpt41,
+    Gpt41Mini,
+    Gpt41Nano,
     Gpt4o,
     Gpt4oMini,
     O1,
     O1Mini,
+    O3,
     O3Mini,
+    O4Mini,
     Other(String),
 }
 
@@ -336,11 +348,17 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OllamaModel::Other(name) => name,
         },
         AiModel::OpenAi(model) => match model {
+            OpenAiModel::ChatGpt4o => "chatgpt-4o-latest",
+            OpenAiModel::Gpt41 => "gpt-4.1-2025-04-14",
+            OpenAiModel::Gpt41Mini => "gpt-4.1-mini-2025-04-14",
+            OpenAiModel::Gpt41Nano => "gpt-4.1-nano-2025-04-14",
             OpenAiModel::Gpt4o => "gpt-4o-2024-11-20",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini-2024-07-18",
             OpenAiModel::O1 => "o1-2024-12-17",
             OpenAiModel::O1Mini => "o1-mini-2024-09-12",
+            OpenAiModel::O3 => "o3-2025-04-16",
             OpenAiModel::O3Mini => "o3-mini-2025-01-31",
+            OpenAiModel::O4Mini => "o4-mini-2025-04-16",
             OpenAiModel::Other(name) => name,
         },
     }
@@ -374,11 +392,17 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             OllamaModel::Other(name) => name,
         },
         AiModel::OpenAi(model) => match model {
+            OpenAiModel::ChatGpt4o => "chatgpt-4o",
+            OpenAiModel::Gpt41 => "gpt-4.1",
+            OpenAiModel::Gpt41Mini => "gpt-4.1-mini",
+            OpenAiModel::Gpt41Nano => "gpt-4.1-nano",
             OpenAiModel::Gpt4o => "gpt-4o",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini",
             OpenAiModel::O1 => "o1",
             OpenAiModel::O1Mini => "o1-mini",
+            OpenAiModel::O3 => "o3",
             OpenAiModel::O3Mini => "o3-mini",
+            OpenAiModel::O4Mini => "o4-mini",
             OpenAiModel::Other(name) => name,
         },
     }
@@ -450,10 +474,6 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             },
         },
         AiModel::OpenAi(model) => match model {
-            OpenAiModel::Gpt4o | OpenAiModel::Gpt4oMini | OpenAiModel::O1 => AiModelCapability {
-                image: true,
-                tool: true,
-            },
             OpenAiModel::O1Mini => AiModelCapability {
                 image: false,
                 tool: false,
@@ -462,7 +482,7 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
                 image: false,
                 tool: true,
             },
-            OpenAiModel::Other(_) => AiModelCapability {
+            _ => AiModelCapability {
                 image: true,
                 tool: true,
             },
@@ -528,11 +548,17 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
         },
         AiModel::Ollama(_) => None,
         AiModel::OpenAi(model) => match model {
+            OpenAiModel::ChatGpt4o => Some((5000, 15000)),
+            OpenAiModel::Gpt41 => Some((2000, 8000)),
+            OpenAiModel::Gpt41Mini => Some((400, 1600)),
+            OpenAiModel::Gpt41Nano => Some((100, 400)),
             OpenAiModel::Gpt4o => Some((2500, 10000)),
             OpenAiModel::Gpt4oMini => Some((150, 600)),
             OpenAiModel::O1 => Some((15000, 60000)),
+            OpenAiModel::O3 => Some((10000, 40000)),
             OpenAiModel::O1Mini => Some((3000, 12000)),
             OpenAiModel::O3Mini => Some((1100, 4400)),
+            OpenAiModel::O4Mini => Some((1100, 4400)),
             OpenAiModel::Other(_) => None,
         },
     }

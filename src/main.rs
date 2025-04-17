@@ -274,10 +274,22 @@ async fn repl(
     .collect();
 
     let autocomplete_repl_ai_models: Vec<String> = [
+        "41",
+        "41m",
+        "41n",
         "4o",
         "4om",
+        "chatgpt-4o",
+        "gpt-41",
+        "gpt-41-mini",
+        "gpt-41-nano",
         "gpt-4o",
         "gpt-4o-mini",
+        "o1",
+        "o1-pro",
+        "o3",
+        "o3-mini",
+        "o4-mini",
         "haiku35",
         "sonnet",
         "sonnet35",
