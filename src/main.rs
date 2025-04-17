@@ -298,6 +298,7 @@ async fn repl(
         "llama32",
         "llama32-vision",
         "flash",
+        "flash25",
         "flash20",
         "flash15",
         "gemini25pro",
