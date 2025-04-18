@@ -1133,12 +1133,12 @@ fn choose_init_ai_model(cfg: &config::Config) -> config::AiModel {
         api_key: Some(_), ..
     }) = cfg.openai
     {
-        config::AiModel::OpenAi(config::OpenAiModel::Gpt4o)
+        config::AiModel::OpenAi(config::OpenAiModel::Gpt41)
     } else if let Some(config::AnthropicConfig {
         api_key: Some(_), ..
     }) = cfg.anthropic
     {
-        config::AiModel::Anthropic(config::AnthropicModel::Sonnet35)
+        config::AiModel::Anthropic(config::AnthropicModel::Sonnet37(false))
     } else if let Some(config::DeepSeekConfig {
         api_key: Some(_), ..
     }) = cfg.deepseek
@@ -1148,11 +1148,11 @@ fn choose_init_ai_model(cfg: &config::Config) -> config::AiModel {
         api_key: Some(_), ..
     }) = cfg.google
     {
-        config::AiModel::Google(config::GoogleModel::Gemini20Flash)
+        config::AiModel::Google(config::GoogleModel::Gemini25Flash)
     } else if let Some(config::OllamaConfig { base_url: Some(_) }) = cfg.ollama {
         config::AiModel::Ollama(config::OllamaModel::Llama32)
     } else {
-        config::AiModel::OpenAi(config::OpenAiModel::Gpt4o)
+        config::AiModel::OpenAi(config::OpenAiModel::Gpt41)
     }
 }
 
