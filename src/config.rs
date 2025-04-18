@@ -64,12 +64,12 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
-        "flash" | "flash25" | "geminiflash" | "geminiflash25" => {
+        "flash" | "flash25" | "geminiflash" | "gemini25flash" => {
             Some(AiModel::Google(GoogleModel::Gemini25Flash))
         }
-        "flash20" | "geminiflash20" => Some(AiModel::Google(GoogleModel::Gemini20Flash)),
-        "flash15" | "geminiflash15" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
-        "flash158b" | "geminiflash158b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
+        "flash20" | "gemini20flash" => Some(AiModel::Google(GoogleModel::Gemini20Flash)),
+        "flash15" | "gemini15flash" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
+        "flash158b" | "gemini15flash8b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
         "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
         "gpt41" | "41" => Some(AiModel::OpenAi(OpenAiModel::Gpt41)),
