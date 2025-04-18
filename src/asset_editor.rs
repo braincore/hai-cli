@@ -129,10 +129,10 @@ pub async fn edit_with_editor_api(
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::api::client::HaiClient;
+use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset::{
-    AssetEntry, AssetEntryOp, AssetMetadataInfo, AssetPushArg, AssetPutArg, AssetReplaceArg,
-    PutConflictPolicy, ReplaceConflictPolicy,
+    AssetEntry, AssetEntryOp, AssetGetError, AssetMetadataInfo, AssetPushArg, AssetPutArg,
+    AssetReplaceArg, PutConflictPolicy, ReplaceConflictPolicy,
 };
 
 #[derive(Debug)]
@@ -403,19 +403,22 @@ pub async fn get_asset_entry(
     {
         Ok(res) => Ok(res),
         Err(e) => {
-            if bad_name_ok
-                && matches!(
-                    e,
-                    crate::api::client::RequestError::Route(
-                        crate::api::types::asset::AssetGetError::BadName
-                    )
-                )
-            {
-                return Err(GetAssetError::BadName);
+            if matches!(e, RequestError::Route(AssetGetError::BadName)) {
+                if bad_name_ok {
+                    return Err(GetAssetError::BadName);
+                }
             } else {
                 eprintln!("error: {}", e);
             }
-            Err(GetAssetError::BadName)
+            match e {
+                RequestError::BadRequest(_)
+                | RequestError::Http(_)
+                | RequestError::Unexpected(_) => Err(GetAssetError::DataFetchFailed),
+                RequestError::Route(e) => match e {
+                    AssetGetError::BadName => Err(GetAssetError::BadName),
+                    _ => Err(GetAssetError::DataFetchFailed),
+                },
+            }
         }
     }
 }
