@@ -250,17 +250,24 @@ print(distance)
 Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
 - `/asset <name>` - Open/create asset in editor (`/a` shorthand)
-  - Specify `default_editor` in config to override `vim`
-  - `/a <name> [<editor>]` to invoke specific editor
-- `/asset-new <name>` - Create a new asset and open editor
-- `/asset-edit <name>` - Open existing asset in editor
-- Create/edit will open a text editor defined in `~/.hai/hai.toml` (default
-  `vim`).
-- `/asset-{import,export} <name> <path>` - Import / export from files
+  - Default editor is `vim` (Override with `default_editor` in `~/.hai/hai.toml`)
+  - `/a <name> [<editor>]` to override in the command
 - `/asset-view <name>` - Add an asset to the conversation for the AI to use.
-- `/asset-load <name>` - Add an asset without printing its contents (not cleared with `/reset`).
-- `/asset-list-revisions <name>` - Iterate through every revision of an asset.
+- `/asset-load <name>` - Mimics `/load`, but for assets. Unlike `/asset-view`,
+  the contents aren’t printed, and they are retained even after a `/reset`.
+- `/asset-temp <name> [<count>]` - Downloads the asset to a temporary file and
+  adds the file path to the conversation. This is a convenient way for the AI
+  to access assets by path especially when using tools. If `count` is set, that
+  number of revisions of an asset is written to files.
+- `/asset-sync-down <prefix> <path>` - Syncs all assets with the given prefix
+  to a local path.
+  - Does not re-download assets that already exist locally.
+  - Does not add info to the conversation. You will need to inform the AI of
+    relevant files in the conversation.
 - `/asset-link <name>` - Generate a link to an asset (valid for 24 hours).
+- `/asset-revisions <name> [<count>]` - Iterate through every revision of an asset.
+- `/asset-import <name> <path>` - Import asset from a local file.
+- `/asset-export <name> <path>` - Export asset to a local file.
 
 Asset names can mimic file paths with slashes.
 
