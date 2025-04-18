@@ -744,6 +744,9 @@ fn parse_two_arg_catchall(s: &str) -> Option<(String, String)> {
 
 fn parse_two_arg_one_optional_catchall(s: &str) -> Option<(String, Option<String>)> {
     let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
     let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
 
     let first = parts.next();
