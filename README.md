@@ -250,6 +250,8 @@ print(distance)
 Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
 - `/asset <name>` - Open/create asset in editor (`/a` shorthand)
+  - Specify `default_editor` in config to override `vim`
+  - `/a <name> [<editor>]` to invoke specific editor
 - `/asset-new <name>` - Create a new asset and open editor
 - `/asset-edit <name>` - Open existing asset in editor
 - Create/edit will open a text editor defined in `~/.hai/hai.toml` (default
