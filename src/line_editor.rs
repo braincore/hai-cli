@@ -877,7 +877,9 @@ impl CmdAndFileCompleter {
         match result {
             Ok(res) => {
                 let mut completions = Vec::new();
-                for entry in res.entries {
+                let mut sorted_entries = res.entries;
+                sorted_entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+                for entry in sorted_entries {
                     completions.push(Suggestion {
                         value: entry.name,
                         description: None,
