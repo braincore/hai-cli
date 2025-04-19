@@ -438,7 +438,7 @@ pub async fn process_cmd(
                     // If we're initializing a task, it's critical that we ask the
                     // user for confirmation. Otherwise, a destructive command could
                     // be hidden in a task.
-                    if !force_yes {
+                    if !force_yes && task_fqn != tool::HAI_TOOL_PSEUDO_TASK_NAME {
                         println!();
                         let answer = term::ask_question_default_empty(
                             "Execute above command? y/[n]:",

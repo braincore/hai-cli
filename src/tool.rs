@@ -64,6 +64,8 @@ struct ToolHaiReplArg {
     cmds: Vec<String>,
 }
 
+pub const HAI_TOOL_PSEUDO_TASK_NAME: &str = "_hai_tool";
+
 pub fn execute_hai_repl_tool(
     tool: &Tool,
     arg: &str,
@@ -73,7 +75,10 @@ pub fn execute_hai_repl_tool(
     Ok(match tool {
         Tool::HaiRepl => {
             for (index, cmd) in cmds.iter().enumerate().rev() {
-                cmd_queue.push_front((("hai-tool".to_string(), index as u32), cmd.clone()));
+                cmd_queue.push_front((
+                    (HAI_TOOL_PSEUDO_TASK_NAME.to_string(), index as u32),
+                    cmd.clone(),
+                ));
             }
             let output = format!("Pushed {} command(s) into queue", cmds.len());
             println!("{}", output);

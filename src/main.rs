@@ -566,6 +566,7 @@ async fn repl(
         let task_step_requires_user_confirmation =
             if let Some(task_step_signature) = task_step_signature.as_ref() {
                 task_step_signature.0 != HAI_BYE_TASK_NAME
+                    && task_step_signature.0 != tool::HAI_TOOL_PSEUDO_TASK_NAME
             } else {
                 false
             };
