@@ -63,30 +63,20 @@ cargo install hai-cli
 
 ![](doc/hai-multi-ai.gif)
 
-- `/ai [model]` - Switch with one command (tab-completion and abbreviations
+- `/ai <model>` - Switch with one command (tab-completion and abbreviations
   supported)
 - Switch between OpenAI, Anthropic, DeepSeek, Google, and local Ollama models
 
-```
-[0]: /ai 4om
-Using AI Model: gpt-4o-mini
-```
-```
-[0]: /ai sonnet
-Using AI Model: sonnet-3.7
-```
-```
-[0]: /ai r1
-Using AI Model: deepseek-reasoner
-```
-```
-[0]: /ai flash
-Using AI Model: flash-2.0
-```
-```
-[0]: /ai ollama/gemma3:27b
-Using AI Model: gemma3:27b
-```
+
+| Provider   | Notable Models (Not Comprehensive)      |
+|------------|-----------------------------------------|
+| OpenAI     | gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`), chatgpt-4o, gpt-4o (`4o`), gpt-4o-mini (`4om`) |
+|            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
+| Anthropic  | sonnet-3.7 (`sonnet`), sonnet-3.7-thinking, haiku-3.5 (`haiku`) |
+| Google     | gemini-2.5-flash (`flash25`), gemini-2.5-pro (`gemini25pro`), gemini-2.0-flash (`flash20`) |
+| DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
+| Ollama     | gemma3, llama3.2, llama3.3                     |
+
 
 - Switch mid conversation
 
@@ -98,11 +88,15 @@ Using AI Model: gemma3:27b
 There are two 'r's in the word "strawberry."
 ```
 ```
-[2]: /ai o3-mini
-Using AI Model: o3-mini
+[2]: /ai o4-mini
+Using AI Model: o4-mini
 ```
 ```
-[2]: Uhh, your thoughts?
+[2]: you're smarter than that
+```
+```
+↓↓↓
+You’re right—my mistake. “Strawberry” has three “r”s: s t r a w b e r r y.
 ```
 
 #### Authenticating with AI Providers
