@@ -32,10 +32,7 @@ mod term;
 mod term_color;
 mod tool;
 
-use session::{
-    get_api_base_url, mk_api_client, HaiRouterState, ReplMode, SessionState, HAI_BYE_TASK_NAME,
-    INIT_TASK_NAME, INTERNAL_TASK_NAME,
-};
+use session::{get_api_base_url, mk_api_client, HaiRouterState, ReplMode, SessionState};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
 #[derive(Parser)]
@@ -411,15 +408,15 @@ async fn repl(
         check_api_key(&session.ai, &cfg);
     }
 
-    for (step_index, init_cmd) in init_cmds.into_iter().enumerate() {
-        let task_name = if exit_when_done {
-            HAI_BYE_TASK_NAME.to_string()
-        } else {
-            INIT_TASK_NAME.to_string()
-        };
-        session
-            .cmd_queue
-            .push_back(((task_name, step_index as u32), init_cmd));
+    for (index, init_cmd) in init_cmds.into_iter().enumerate() {
+        session.cmd_queue.push_back(session::CmdInput {
+            input: init_cmd,
+            source: if exit_when_done {
+                session::CmdSource::HaiBye(index as u32)
+            } else {
+                session::CmdSource::User
+            },
+        });
     }
 
     //
@@ -512,24 +509,24 @@ async fn repl(
 
         //
         // REPL Read
-        // - Either reads from a queue of waiting cmds, from user input, or
-        //   one-shot commandline.
+        // - Either reads from a queue of waiting cmds or from user input.
         //
-        let (user_input, task_step_signature) = if let Some((task_step_signature, cmd)) =
-            session.cmd_queue.pop_front()
-        {
-            if task_step_signature.1 > 0 {
-                println!();
+        let cmd_input = if let Some(cmd_info) = session.cmd_queue.pop_front() {
+            if let session::CmdSource::TaskStep(task_fqn, step_id) = &cmd_info.source {
+                if *step_id > 0 {
+                    println!();
+                }
+                let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
+                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+            } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
+                let step_badge = format!("!hai-tool[{}]:", index);
+                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+            } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
+                let step_badge = format!("bye[{}]:", index);
+                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
             }
-            if task_step_signature.0 != INTERNAL_TASK_NAME {
-                // If it's an "internal" command, do not print to screen.
-                let step_badge = format!("{}[{}]:", task_step_signature.0, session.history.len());
-                println!("{} {}", step_badge.black().on_white(), cmd);
-            }
-            (cmd, Some(task_step_signature))
-        } else if matches!(session.repl_mode, ReplMode::Normal)
-            || matches!(session.repl_mode, ReplMode::Task(_))
-        {
+            cmd_info
+        } else {
             line_editor.pre_readline();
             let sig = line_editor.reedline.read_line(&editor_prompt);
             line_editor.post_readline();
@@ -538,7 +535,10 @@ async fn repl(
                 // easily make an input guarantee to not match a command.
                 // Maintain suffix whitespace as that's how a user can switch
                 // a /prompt into a /prep.
-                Ok(Signal::Success(buffer)) => (buffer, None),
+                Ok(Signal::Success(buffer)) => session::CmdInput {
+                    input: buffer,
+                    source: session::CmdSource::User,
+                },
                 Ok(Signal::CtrlC) => {
                     continue;
                 }
@@ -551,32 +551,19 @@ async fn repl(
                     continue;
                 }
             }
-        } else if exit_when_done && session.cmd_queue.is_empty() {
-            // All commands executed
-            process::exit(0);
-        } else {
-            eprintln!("error: unexpected repl-mode, please report");
-            process::exit(1);
         };
 
-        // Task steps only have a non-standard retention policy when they are
-        // actioned as part of a process-wide task-mode.
+        let task_step_signature = cmd_input.source.get_task_step_signature();
         let is_task_mode_step =
-            matches!(session.repl_mode, ReplMode::Task(_)) && task_step_signature.is_some();
-        let task_step_requires_user_confirmation =
-            if let Some(task_step_signature) = task_step_signature.as_ref() {
-                task_step_signature.0 != HAI_BYE_TASK_NAME
-                    && task_step_signature.0 != tool::HAI_TOOL_PSEUDO_TASK_NAME
-            } else {
-                false
-            };
+            task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(_));
+        let task_step_requires_user_confirmation = is_task_mode_step;
 
         let last_tool_cmd = session.last_tool_cmd.clone();
         let tool_mode = session.tool_mode.clone();
         // Expectation is that if `parse_user_input` returns None, it will have
         // also printed an error msg to the user so it's okay to ignore the
         // input here.
-        let maybe_cmd = cmd::parse_user_input(&user_input, last_tool_cmd, tool_mode);
+        let maybe_cmd = cmd::parse_user_input(&cmd_input.input, last_tool_cmd, tool_mode);
         let mut cmd = if let Some(cmd) = maybe_cmd {
             cmd
         } else {
@@ -617,8 +604,7 @@ async fn repl(
             ctrlc_handler,
             bpe_tokenizer,
             &cmd,
-            &user_input,
-            &task_step_signature,
+            &cmd_input,
             force_yes,
             debug,
         )
@@ -802,10 +788,10 @@ async fn repl(
                 };
             }
         } else if cache {
-            if let Some((task_name, step_index)) = &task_step_signature {
+            if let Some((task_fqn, step_index)) = &task_step_signature {
                 db::set_task_step_cache(
                     &*db.lock().await,
-                    task_name,
+                    task_fqn,
                     *step_index,
                     &prompt,
                     &serde_json::to_string(&ai_responses).unwrap(),

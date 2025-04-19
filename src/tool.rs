@@ -5,7 +5,7 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use crate::clipboard;
+use crate::{clipboard, session};
 
 #[derive(Clone, Debug)]
 pub enum Tool {
@@ -64,23 +64,22 @@ struct ToolHaiReplArg {
     cmds: Vec<String>,
 }
 
-pub const HAI_TOOL_PSEUDO_TASK_NAME: &str = "_hai_tool";
-
 pub fn execute_hai_repl_tool(
     tool: &Tool,
     arg: &str,
-    cmd_queue: &mut VecDeque<((String, u32), String)>,
+    cmd_queue: &mut VecDeque<session::CmdInput>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let cmds = serde_json::from_str::<ToolHaiReplArg>(arg)?.cmds;
+    let cmd_count = cmds.len();
     Ok(match tool {
         Tool::HaiRepl => {
-            for (index, cmd) in cmds.iter().enumerate().rev() {
-                cmd_queue.push_front((
-                    (HAI_TOOL_PSEUDO_TASK_NAME.to_string(), index as u32),
-                    cmd.clone(),
-                ));
+            for (index, cmd) in cmds.into_iter().enumerate().rev() {
+                cmd_queue.push_front(session::CmdInput {
+                    input: cmd.clone(),
+                    source: session::CmdSource::HaiTool(index as u32),
+                });
             }
-            let output = format!("Pushed {} command(s) into queue", cmds.len());
+            let output = format!("Pushed {} command(s) into queue", cmd_count);
             println!("{}", output);
             output
         }

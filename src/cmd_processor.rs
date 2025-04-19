@@ -16,7 +16,6 @@ use crate::session::{
     self, hai_router_set, hai_router_try_activate, mk_api_client, recalculate_input_tokens,
     session_history_add_user_cmd_and_reply_entries, session_history_add_user_image_entry,
     session_history_add_user_text_entry, HaiRouterState, ReplMode, SessionState,
-    INTERNAL_TASK_NAME,
 };
 use crate::{
     api::{self, client::HaiClient},
@@ -42,15 +41,19 @@ pub async fn process_cmd(
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     cmd: &cmd::Cmd,
-    raw_user_input: &str, // Avoid using this except for caching
-    task_step_signature: &Option<(String, u32)>,
+    cmd_input: &session::CmdInput,
     force_yes: bool,
     debug: bool,
 ) -> ProcessCmdResult {
+    // Avoid using this except for caching
+    let raw_user_input = cmd_input.input.as_str();
+
+    let task_step_signature = cmd_input.source.get_task_step_signature();
     // Task steps only have a non-standard retention policy when they are
     // actioned as part of a process-wide task-mode.
     let is_task_mode_step =
-        matches!(session.repl_mode, ReplMode::Task(_)) && task_step_signature.is_some();
+        task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(_));
+
     const ASSET_ACCOUNT_REQ_MSG: &str =
         "You must be logged-in to use assets. Try /account-login or /account-new";
 
@@ -423,12 +426,7 @@ pub async fn process_cmd(
                 task_step_signature
             {
                 let cached_output = if *cache {
-                    db::get_task_step_cache(
-                        &*db.lock().await,
-                        task_fqn,
-                        *step_index,
-                        raw_user_input,
-                    )
+                    db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, raw_user_input)
                 } else {
                     None
                 };
@@ -438,7 +436,7 @@ pub async fn process_cmd(
                     // If we're initializing a task, it's critical that we ask the
                     // user for confirmation. Otherwise, a destructive command could
                     // be hidden in a task.
-                    if !force_yes && task_fqn != tool::HAI_TOOL_PSEUDO_TASK_NAME {
+                    if !force_yes {
                         println!();
                         let answer = term::ask_question_default_empty(
                             "Execute above command? y/[n]:",
@@ -476,11 +474,11 @@ pub async fn process_cmd(
                 // Because it's from the cache, the value is not yet on the screen.
                 println!("{}", shell_exec_output);
             } else if *cache {
-                if let Some((ref task_name, step_index)) = task_step_signature {
+                if let Some((ref task_fqn, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
-                        task_name,
-                        *step_index,
+                        task_fqn,
+                        step_index,
                         raw_user_input,
                         &shell_exec_output,
                     )
@@ -502,17 +500,12 @@ pub async fn process_cmd(
         }) => {
             let (answer, from_cache) = if *cache {
                 if let Some((ref task_fqn, step_index)) = task_step_signature {
-                    db::get_task_step_cache(
-                        &*db.lock().await,
-                        task_fqn,
-                        *step_index,
-                        raw_user_input,
-                    )
-                    .map(|a| (a, true))
-                    .unwrap_or_else(|| {
-                        println!();
-                        (term::ask_question_default_empty(question, *secret), false)
-                    })
+                    db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, raw_user_input)
+                        .map(|a| (a, true))
+                        .unwrap_or_else(|| {
+                            println!();
+                            (term::ask_question_default_empty(question, *secret), false)
+                        })
                 } else {
                     println!();
                     (term::ask_question_default_empty(question, *secret), false)
@@ -535,11 +528,11 @@ pub async fn process_cmd(
                     println!("{}", answer);
                 }
             } else if *cache {
-                if let Some((ref task_name, step_index)) = task_step_signature {
+                if let Some((ref task_fqn, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
-                        task_name,
-                        *step_index,
+                        task_fqn,
+                        step_index,
                         raw_user_input,
                         &answer,
                     )
@@ -870,15 +863,20 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Task(cmd::TaskCmd { task_ref }) => {
+            if is_task_mode_step {
+                eprintln!("error: cannot use /task within task steps: try /task-include");
+                return ProcessCmdResult::Loop;
+            }
             if matches!(session.repl_mode, ReplMode::Task(_)) {
                 // If already in task mode, clear the existing session state and start fresh.
-                session.cmd_queue.push_front((
-                    (INTERNAL_TASK_NAME.to_string(), 1),
-                    format!("/task {}", task_ref),
-                ));
-                session
-                    .cmd_queue
-                    .push_front(((INTERNAL_TASK_NAME.to_string(), 0), "/task-end".to_string()));
+                session.cmd_queue.push_front(session::CmdInput {
+                    input: format!("/task {}", task_ref),
+                    source: session::CmdSource::Internal,
+                });
+                session.cmd_queue.push_front(session::CmdInput {
+                    input: "/task-end".to_string(),
+                    source: session::CmdSource::Internal,
+                });
             } else if let Some((_, haitask)) =
                 get_haitask_from_task_ref(task_ref, session, "task", task_step_signature.is_some())
             {
@@ -896,9 +894,10 @@ pub async fn process_cmd(
                 );
                 println!();
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
-                    session
-                        .cmd_queue
-                        .push_front(((haitask.name.clone(), index as u32), step.clone()));
+                    session.cmd_queue.push_front(session::CmdInput {
+                        input: step.clone(),
+                        source: session::CmdSource::TaskStep(haitask.name.clone(), index as u32),
+                    });
                 }
                 session.repl_mode = ReplMode::Task(haitask.name.clone());
             }
@@ -912,9 +911,10 @@ pub async fn process_cmd(
                 task_step_signature.is_some(),
             ) {
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
-                    session
-                        .cmd_queue
-                        .push_front(((haitask.name.clone(), index as u32), step.clone()));
+                    session.cmd_queue.push_front(session::CmdInput {
+                        input: step.clone(),
+                        source: session::CmdSource::TaskStep(haitask.name.clone(), index as u32),
+                    });
                 }
             }
             ProcessCmdResult::Loop
@@ -3020,14 +3020,14 @@ fn get_haitask_from_task_ref(
             eprintln!("error: failed to fetch task");
         } else {
             // Queue up a fetch task and then try again.
-            session.cmd_queue.push_front((
-                (INTERNAL_TASK_NAME.to_string(), 1),
-                format!("/{} {}", task_cmd, task_ref),
-            ));
-            session.cmd_queue.push_front((
-                (INTERNAL_TASK_NAME.to_string(), 0),
-                format!("/task-fetch {}", task_ref),
-            ));
+            session.cmd_queue.push_front(session::CmdInput {
+                input: format!("/{} {}", task_cmd, task_ref),
+                source: session::CmdSource::Internal,
+            });
+            session.cmd_queue.push_front(session::CmdInput {
+                input: format!("/task-fetch {}", task_ref),
+                source: session::CmdSource::Internal,
+            });
         }
         None
     } else if task_ref.starts_with(".") || task_ref.starts_with("/") || task_ref.starts_with("~") {
