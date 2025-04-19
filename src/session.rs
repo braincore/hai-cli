@@ -27,6 +27,22 @@ pub enum HaiRouterState {
     Off,
 }
 
+#[derive(Debug)]
+pub enum CmdSource {
+    Init,
+    HaiBye,
+    Internal,
+    HaiTool,
+    // task_signature: (task_name, task_step_id)
+    TaskStep(String, u32),
+}
+
+#[derive(Debug)]
+pub struct CmdInfo {
+    pub cmd: String,
+    pub source: CmdSource,
+}
+
 pub struct SessionState {
     pub repl_mode: ReplMode,
     /// AI model in active use
@@ -36,8 +52,8 @@ pub struct SessionState {
     pub input_tokens: u32,
     /// Running counter of tokens loaded from files (this is retained on /reset)
     pub input_loaded_tokens: u32,
-    /// Queue of ((task_name, task_step), cmd) - the first item is a "task_step_signature"
-    pub cmd_queue: VecDeque<((String, u32), String)>,
+    /// Queue of cmds to run
+    pub cmd_queue: VecDeque<CmdInfo>,
     /// History stores previous messages
     pub history: Vec<db::LogEntry>,
     /// The program to use to edit assets

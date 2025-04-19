@@ -411,15 +411,16 @@ async fn repl(
         check_api_key(&session.ai, &cfg);
     }
 
-    for (step_index, init_cmd) in init_cmds.into_iter().enumerate() {
+    for init_cmd in init_cmds {
         let task_name = if exit_when_done {
             HAI_BYE_TASK_NAME.to_string()
         } else {
             INIT_TASK_NAME.to_string()
         };
-        session
-            .cmd_queue
-            .push_back(((task_name, step_index as u32), init_cmd));
+        session.cmd_queue.push_back(session::CmdInfo {
+            cmd: init_cmd,
+            source: session::CmdSource::Init,
+        });
     }
 
     //
