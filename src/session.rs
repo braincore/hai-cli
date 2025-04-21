@@ -12,8 +12,9 @@ use crate::{
 
 pub enum ReplMode {
     Normal,
-    /// Enter task-mode for task with given fqn
-    Task(String),
+    /// Enter task-mode for task with given fqn.
+    /// bool is whether task is trusted (if so, confirmations skipped)
+    Task(String, bool),
 }
 
 #[derive(Clone)]

@@ -10,6 +10,7 @@ use reedline::{
     PromptHistorySearchStatus, PromptViMode, Reedline, ReedlineEvent, ReedlineMenu, Span,
     Suggestion, Vi,
 };
+use regex::Regex;
 use std::borrow::Cow;
 use std::cmp;
 use std::env;
@@ -365,10 +366,13 @@ struct CmdAndFileCompleter {
 }
 
 fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
-    let patterns = [" .", " /", " ~"];
-    patterns
-        .iter()
-        .any(|pattern| line.starts_with(&(task_cmd.to_string() + pattern)))
+    // This pattern ignores command args
+    let pattern = format!(
+        r"^{cmd}(?:\([^\)]*\))?\s+[./~]",
+        cmd = regex::escape(task_cmd)
+    );
+    let re = Regex::new(&pattern).unwrap();
+    re.is_match(line)
 }
 
 impl Completer for CmdAndFileCompleter {

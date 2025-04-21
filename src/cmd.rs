@@ -304,6 +304,8 @@ pub struct AskHumanCmd {
 pub struct TaskCmd {
     /// Task fqn or local path (prefix with ./ or /)
     pub task_ref: String,
+    /// If trusted, skip user confirmations on task initialization
+    pub trust: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1096,11 +1098,17 @@ fn parse_command(
             }
         }
         "task" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["trust"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("trust".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let trust = options.get("trust").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::Task(TaskCmd { task_ref })),
+                Some(task_ref) => Some(Cmd::Task(TaskCmd { task_ref, trust })),
                 None => {
                     eprintln!("Usage: /task <task_ref>");
                     None

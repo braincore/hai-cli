@@ -171,6 +171,12 @@ steps = [
 
 ![](doc/hai-pelican.gif)
 
+#### Trusting a task
+
+Some task steps require user confirmation because of the danger they pose (see
+[Security Warning](#security-warning)). To skip these confirmations, you can
+set the `trust` option to true: `/task(trust=true)`
+
 ### !Tools
 
 > I got tired of being the people-person between the AI and my terminal.

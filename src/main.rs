@@ -82,6 +82,10 @@ enum CliSubcommand {
     Task {
         /// The fully-qualified name of the task (username/task-name) or file path
         task_ref: String,
+
+        /// Automatically confirm any prompts
+        #[arg(long = "trust")]
+        trust: bool,
     },
     /// Run a set of commands/prompts and quit (alias: "bai").
     /// WARNING: Quote each command with single-quotes to avoid shell expansion.
@@ -130,7 +134,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (repl_mode, init_cmds, exit_when_done, force_yes) =
             if let Some(CliSubcommand::Bye { prompts, yes }) = args.subcommand {
                 (ReplMode::Normal, prompts, true, yes)
-            } else if let Some(CliSubcommand::Task { task_ref }) = args.subcommand {
+            } else if let Some(CliSubcommand::Task { task_ref, trust }) = args.subcommand {
                 // When specified via the command-line, a relative file path may
                 // not be prefixed with "./" which will then be incorrectly treated
                 // as a task-fqn. To catch this, prefix "./" if the name has a dot
@@ -146,7 +150,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 };
                 (
                     ReplMode::Normal,
-                    vec![format!("/task {}", fixed_task_ref)],
+                    if trust {
+                        vec![format!("/task(trust=true) {}", fixed_task_ref)]
+                    } else {
+                        vec![format!("/task {}", fixed_task_ref)]
+                    },
                     false,
                     false,
                 )
@@ -482,7 +490,7 @@ async fn repl(
         editor_prompt.set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
         editor_prompt.set_hai_router(session.use_hai_router.clone());
         editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
-        if let ReplMode::Task(task_fqn) = &session.repl_mode {
+        if let ReplMode::Task(task_fqn, _) = &session.repl_mode {
             editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
         } else {
             editor_prompt.set_task_mode(None);
@@ -555,8 +563,13 @@ async fn repl(
 
         let task_step_signature = cmd_input.source.get_task_step_signature();
         let is_task_mode_step =
-            task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(_));
-        let task_step_requires_user_confirmation = is_task_mode_step;
+            task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(..));
+        let trusted = if let ReplMode::Task(_, trusted) = session.repl_mode {
+            trusted && is_task_mode_step
+        } else {
+            false
+        };
+        let task_step_requires_user_confirmation = is_task_mode_step && !trusted;
 
         let last_tool_cmd = session.last_tool_cmd.clone();
         let tool_mode = session.tool_mode.clone();

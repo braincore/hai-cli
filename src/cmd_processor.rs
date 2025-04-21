@@ -52,7 +52,12 @@ pub async fn process_cmd(
     // Task steps only have a non-standard retention policy when they are
     // actioned as part of a process-wide task-mode.
     let is_task_mode_step =
-        task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(_));
+        task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(..));
+    let trusted = if let ReplMode::Task(_, trusted) = session.repl_mode {
+        trusted && is_task_mode_step
+    } else {
+        false
+    };
 
     const ASSET_ACCOUNT_REQ_MSG: &str =
         "You must be logged-in to use assets. Try /account-login or /account-new";
@@ -321,7 +326,7 @@ pub async fn process_cmd(
                 .retain(|log_entry| log_entry.retention_policy.0);
             recalculate_input_tokens(session);
             session.temp_files.retain(|(_, is_task_step)| *is_task_step);
-            if let ReplMode::Task(ref task_fqn) = session.repl_mode {
+            if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
             } else {
@@ -338,7 +343,7 @@ pub async fn process_cmd(
             recalculate_input_tokens(session);
             session.temp_files.retain(|(_, is_task_step)| *is_task_step);
             if !session.history.is_empty() {
-                if matches!(session.repl_mode, ReplMode::Task(_)) {
+                if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
                 } else {
                     println!(
@@ -436,7 +441,7 @@ pub async fn process_cmd(
                     // If we're initializing a task, it's critical that we ask the
                     // user for confirmation. Otherwise, a destructive command could
                     // be hidden in a task.
-                    if !force_yes {
+                    if !force_yes && !trusted {
                         println!();
                         let answer = term::ask_question_default_empty(
                             "Execute above command? y/[n]:",
@@ -862,15 +867,16 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Task(cmd::TaskCmd { task_ref }) => {
+        cmd::Cmd::Task(cmd::TaskCmd { task_ref, trust }) => {
             if is_task_mode_step {
                 eprintln!("error: cannot use /task within task steps: try /task-include");
                 return ProcessCmdResult::Loop;
             }
-            if matches!(session.repl_mode, ReplMode::Task(_)) {
+            if matches!(session.repl_mode, ReplMode::Task(..)) {
                 // If already in task mode, clear the existing session state and start fresh.
                 session.cmd_queue.push_front(session::CmdInput {
-                    input: format!("/task {}", task_ref),
+                    // Use the original input in case args are used (e.g. trust=true)
+                    input: cmd_input.input.clone(),
                     source: session::CmdSource::Internal,
                 });
                 session.cmd_queue.push_front(session::CmdInput {
@@ -899,7 +905,7 @@ pub async fn process_cmd(
                         source: session::CmdSource::TaskStep(haitask.name.clone(), index as u32),
                     });
                 }
-                session.repl_mode = ReplMode::Task(haitask.name.clone());
+                session.repl_mode = ReplMode::Task(haitask.name.clone(), *trust);
             }
             ProcessCmdResult::Loop
         }
@@ -952,7 +958,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskEnd => {
-            if matches!(session.repl_mode, ReplMode::Task(_)) {
+            if matches!(session.repl_mode, ReplMode::Task(..)) {
                 session.repl_mode = ReplMode::Normal;
                 session.history.clear();
                 recalculate_input_tokens(session);
