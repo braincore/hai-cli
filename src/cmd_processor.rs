@@ -92,9 +92,19 @@ pub async fn process_cmd(
         }
         cmd::Cmd::Ai(cmd::AiCmd { model }) => {
             if let Some(model_name) = model {
-                if let Some(ai_model) = config::ai_model_from_string(model_name) {
-                    let selected_ai_model = ai_model;
+                if let Some(selected_ai_model) = config::ai_model_from_string(model_name) {
                     let ai_model_capability = config::get_ai_model_capability(&selected_ai_model);
+                    if is_task_mode_step
+                        && (matches!(session.use_hai_router, HaiRouterState::Off)
+                            || !config::is_ai_model_supported_by_hai_router(&selected_ai_model))
+                        && !config::check_api_key(&selected_ai_model, &cfg)
+                    {
+                        eprintln!(
+                            "{} task may behave unexpectedly or fail without requested model",
+                            "warn:".black().on_yellow()
+                        );
+                        return ProcessCmdResult::Loop;
+                    }
                     let mut ai_model_viable = true;
                     for msg in &session.history {
                         if !ai_model_capability.tool && msg.message.tool_call_id.is_some() {

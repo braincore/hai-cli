@@ -751,3 +751,110 @@ pub fn get_history_path() -> PathBuf {
     path.push("history");
     path
 }
+
+// --
+
+/// Prints error to terminal if key not set.
+pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
+    match ai {
+        AiModel::OpenAi(_) => {
+            if cfg
+                .openai
+                .as_ref()
+                .and_then(|c| c.api_key.as_ref())
+                .is_none()
+            {
+                eprintln!(
+                    "error: model '{}' requires an OpenAI API Key: `/set-key openai <key>` OR `/hai-router on`",
+                    get_ai_model_display_name(ai)
+                );
+                return false;
+            }
+        }
+        AiModel::Anthropic(_) => {
+            if cfg
+                .anthropic
+                .as_ref()
+                .and_then(|c| c.api_key.as_ref())
+                .is_none()
+            {
+                eprintln!(
+                    "error: model '{}' requires an Anthropic API Key: `/set-key anthropic <key>` OR `/hai-router on`",
+                    get_ai_model_display_name(ai)
+                );
+                return false;
+            }
+        }
+        AiModel::DeepSeek(_) => {
+            if cfg
+                .deepseek
+                .as_ref()
+                .and_then(|c| c.api_key.as_ref())
+                .is_none()
+            {
+                eprintln!(
+                    "error: model '{}' requires a DeepSeek API Key: `/set-key deepseek <key>` OR `/hai-router on`",
+                    get_ai_model_display_name(ai)
+                );
+                return false;
+            }
+        }
+        AiModel::Google(_) => {
+            if cfg
+                .google
+                .as_ref()
+                .and_then(|c| c.api_key.as_ref())
+                .is_none()
+            {
+                eprintln!(
+                    "error: model '{}' requires a Google API Key: `/set-key google <key>` OR `/hai-router on`",
+                    get_ai_model_display_name(ai)
+                );
+                return false;
+            }
+        }
+        AiModel::Ollama(_) => {
+            // No auth needed
+        }
+    };
+    true
+}
+
+/// Choose AI to initialize REPL with.
+pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
+    let default_ai_model = if let Some(ref ai_model_unmatched_str) = cfg.default_ai_model {
+        ai_model_from_string(ai_model_unmatched_str).or_else(|| {
+            eprintln!("error: unknown model {}", ai_model_unmatched_str);
+            None
+        })
+    } else {
+        None
+    };
+    if let Some(ai_model) = default_ai_model {
+        ai_model
+    } else if let Some(OpenAiConfig {
+        api_key: Some(_), ..
+    }) = cfg.openai
+    {
+        AiModel::OpenAi(OpenAiModel::Gpt41)
+    } else if let Some(AnthropicConfig {
+        api_key: Some(_), ..
+    }) = cfg.anthropic
+    {
+        AiModel::Anthropic(AnthropicModel::Sonnet37(false))
+    } else if let Some(DeepSeekConfig {
+        api_key: Some(_), ..
+    }) = cfg.deepseek
+    {
+        AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
+    } else if let Some(GoogleConfig {
+        api_key: Some(_), ..
+    }) = cfg.google
+    {
+        AiModel::Google(GoogleModel::Gemini25Flash)
+    } else if let Some(OllamaConfig { base_url: Some(_) }) = cfg.ollama {
+        AiModel::Ollama(OllamaModel::Llama32)
+    } else {
+        AiModel::OpenAi(OpenAiModel::Gpt41)
+    }
+}

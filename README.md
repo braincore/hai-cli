@@ -572,35 +572,33 @@ published, and view them via `/task-view <username>/<task_name>`.
 In task mode, `/new` (`/n`) resets the task to the beginning rather than
 clearing the entire conversation. To clear, use `/task-end`.
 
-There are some `hai`-repl command that are specifically made for tasks:
+There are some `hai`-repl commands that are specifically made for tasks:
 
 - `/ask-human <prompt>` - Ask the question.
 - `/ask-human(secret=true) <prompt>` - User's answer is treated as a secret and
   hidden.
 - `/ask-human(cache=true) <prompt>` - When a user runs the task again, their
   previous answer is used. `/task-forget` to reset.
+
 - `/set-mask-secrets on` - AI output that includes the secret is masked in the
   terminal.
-
-An example use case is asking the user for their API token to a service. This
-way the AI can formulate API requests with it and the token itself is hidden
-when tool-invocations are printed to the terminal.
+  - An example use case is asking the user for their API token to a service.
+    With masking, the AI can use the token in its tool-invocations and it'll
+    show as masked `*******` in the terminal.
 
 - `/exec <cmd>` - Execute a command on the local machine. The user is always
   prompted yes/no.
 - `/exec(cache=true) <cmd>` - When a user runs the task again, the output from
   the previous invocation is used.
-
-An example use of `/exec` is to make the first task command
-`/exec(cache=true) ffmpeg -version` so that the AI knows to tweak its `fmpeg`
-command-line with the exact version in mind.
+  - An example use of `/exec` is to make the first task command
+    `/exec(cache=true) ffmpeg -version` so that the AI knows to tweak its
+    `fmpeg` command-line with the exact version in mind.
 
 - `/prompt <message>` - Makes it explicit that the line is prompting the AI.
 - `/prompt(cache=true) <message>` - When a user runs the task again, the AI
   output from the previous invocation is used instead of re-prompting.
-
-The cache is useful for avoiding the delay of an AI response and reducing costs
-for expensive prompts.
+  - The cache is useful for avoiding the delay of an AI response and reducing
+    costs for expensive prompts.
 
 - `/task-include <name|path>` - Rather than clearing the conversation and
   entering a new task-mode, this command injects tasks commands into the current
@@ -608,6 +606,12 @@ for expensive prompts.
   over-and-over again, just make a (pseudo-)task with your instructions and
   include it any time even if you're in another task-mode. For example, I have a
   `ken/be-terse` task and `ken/code-preference` task that I inject as necessary.
+
+- `/ai <model>` - While this isn't a task-only command, its behavior is subtly
+  different. In a task step, if the user doesn't have hai-router or an API key
+  set for the requested model, the current model isn't changed. This means a
+  task author can use `/ai <model>` without fearing that a task will try to use
+  a model without a key set.
 
 ### Command-line options
 

@@ -338,7 +338,7 @@ async fn repl(
         *tokenizer_locked = Some(loaded_tokenizer);
     });
 
-    let mut default_ai_model = choose_init_ai_model(&cfg);
+    let mut default_ai_model = config::choose_init_ai_model(&cfg);
     if incognito {
         if let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
             if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
@@ -413,7 +413,7 @@ async fn repl(
 
     if matches!(session.use_hai_router, HaiRouterState::Off) {
         // Prints error if API key not available
-        check_api_key(&session.ai, &cfg);
+        config::check_api_key(&session.ai, &cfg);
     }
 
     for (index, init_cmd) in init_cmds.into_iter().enumerate() {
@@ -647,7 +647,7 @@ async fn repl(
 
         // Check api-key for ai provider is set (prints error msg to stderr)
         if !matches!(session.use_hai_router, HaiRouterState::On)
-            && !check_api_key(&session.ai, &cfg)
+            && !config::check_api_key(&session.ai, &cfg)
         {
             continue;
         }
@@ -1050,111 +1050,6 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
 }
 
 // --
-
-/// Prints error to terminal if key not set.
-fn check_api_key(ai: &config::AiModel, cfg: &config::Config) -> bool {
-    match ai {
-        config::AiModel::OpenAi(_) => {
-            if cfg
-                .openai
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
-                eprintln!(
-                    "error: model '{}' requires an OpenAI API Key: `/set-key openai <key>` OR `/hai-router on`",
-                    config::get_ai_model_display_name(ai)
-                );
-                return false;
-            }
-        }
-        config::AiModel::Anthropic(_) => {
-            if cfg
-                .anthropic
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
-                eprintln!(
-                    "error: model '{}' requires an Anthropic API Key: `/set-key anthropic <key>` OR `/hai-router on`",
-                    config::get_ai_model_display_name(ai)
-                );
-                return false;
-            }
-        }
-        config::AiModel::DeepSeek(_) => {
-            if cfg
-                .deepseek
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
-                eprintln!(
-                    "error: model '{}' requires a DeepSeek API Key: `/set-key deepseek <key>` OR `/hai-router on`",
-                    config::get_ai_model_display_name(ai)
-                );
-                return false;
-            }
-        }
-        config::AiModel::Google(_) => {
-            if cfg
-                .google
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
-                eprintln!(
-                    "error: model '{}' requires a Google API Key: `/set-key google <key>` OR `/hai-router on`",
-                    config::get_ai_model_display_name(ai)
-                );
-                return false;
-            }
-        }
-        config::AiModel::Ollama(_) => {
-            // No auth needed
-        }
-    };
-    true
-}
-
-/// Choose AI to initialize REPL with.
-fn choose_init_ai_model(cfg: &config::Config) -> config::AiModel {
-    let default_ai_model = if let Some(ref ai_model_unmatched_str) = cfg.default_ai_model {
-        config::ai_model_from_string(ai_model_unmatched_str).or_else(|| {
-            eprintln!("error: unknown model {}", ai_model_unmatched_str);
-            None
-        })
-    } else {
-        None
-    };
-    if let Some(ai_model) = default_ai_model {
-        ai_model
-    } else if let Some(config::OpenAiConfig {
-        api_key: Some(_), ..
-    }) = cfg.openai
-    {
-        config::AiModel::OpenAi(config::OpenAiModel::Gpt41)
-    } else if let Some(config::AnthropicConfig {
-        api_key: Some(_), ..
-    }) = cfg.anthropic
-    {
-        config::AiModel::Anthropic(config::AnthropicModel::Sonnet37(false))
-    } else if let Some(config::DeepSeekConfig {
-        api_key: Some(_), ..
-    }) = cfg.deepseek
-    {
-        config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat)
-    } else if let Some(config::GoogleConfig {
-        api_key: Some(_), ..
-    }) = cfg.google
-    {
-        config::AiModel::Google(config::GoogleModel::Gemini25Flash)
-    } else if let Some(config::OllamaConfig { base_url: Some(_) }) = cfg.ollama {
-        config::AiModel::Ollama(config::OllamaModel::Llama32)
-    } else {
-        config::AiModel::OpenAi(config::OpenAiModel::Gpt41)
-    }
-}
 
 pub async fn prompt_ai(
     msg_history: &[chat::Message],
