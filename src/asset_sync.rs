@@ -14,16 +14,14 @@ use crate::api::{
 };
 use crate::config;
 
-// Structure to hold download task information
 struct DownloadTask {
     entry_name: String,
     data_url: String,
 }
 
-// FIXME: Support metadata (Sync it down as .metadata?)
-// FIXME: Support arbitrary cursor
-// FIXME: Add xattr (start with seq_id & rev_id & asset_name?)
-
+/// Current limitations:
+/// - No cursor resumption
+/// - Does not sync asset metadata
 pub async fn sync_prefix(
     api_client: &HaiClient,
     prefix: &str,
@@ -290,28 +288,28 @@ async fn sync_entries(
                 }
                 let result = download_file(&data_url, &target_path_clone).await;
                 if result.is_ok() {
-                    if xattr::set(
-                        target_path_clone.clone(),
+                    if xattr_set(
+                        &target_path_clone,
                         "user.hai.entry_id",
-                        entry_clone.entry_id.as_bytes(),
+                        &entry_clone.entry_id,
                     )
                     .is_err()
                     {
                         eprintln!("failed to set entry_id xattr");
                     }
-                    if xattr::set(
-                        target_path_clone.clone(),
+                    if xattr_set(
+                        &target_path_clone,
                         "user.hai.rev_id",
-                        entry_clone.asset.rev_id.as_bytes(),
+                        &entry_clone.asset.rev_id,
                     )
                     .is_err()
                     {
                         eprintln!("failed to set rev_id xattr");
                     }
-                    if xattr::set(
-                        target_path_clone.clone(),
+                    if xattr_set(
+                        &target_path_clone,
                         "user.hai.seq_id",
-                        entry_clone.seq_id.to_string().as_bytes(),
+                        &entry_clone.seq_id.to_string(),
                     )
                     .is_err()
                     {
@@ -322,17 +320,17 @@ async fn sync_entries(
                         // Write the file hash and the mtime of the file into
                         // xattrs to make change detection easier.
                         //
-                        let metadata = std::fs::metadata(target_path_clone.clone())
+                        let metadata = std::fs::metadata(&target_path_clone)
                             .expect("failed to read file metadata");
                         if let Ok(modified_time) = metadata.modified() {
                             let mtime_ts = modified_time
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .expect("Time went backwards")
                                 .as_secs();
-                            if xattr::set(
-                                target_path_clone.clone(),
+                            if xattr_set(
+                                &target_path_clone,
                                 "user.hai.hash_mtime",
-                                mtime_ts.to_string().as_bytes(),
+                                &mtime_ts.to_string(),
                             )
                             .is_err()
                             {
@@ -340,9 +338,7 @@ async fn sync_entries(
                             }
                         }
 
-                        if xattr::set(target_path_clone.clone(), "user.hai.hash", hash.as_bytes())
-                            .is_err()
-                        {
+                        if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
                             eprintln!("failed to set hash xattr");
                         }
                     }
@@ -457,7 +453,7 @@ async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
             .expect("Time went backwards")
             .as_secs();
         let xattr_mtime_ts =
-            if let Ok(Some(xattr_mtime_bytes)) = xattr::get(file_path, "user.hai.hash_mtime") {
+            if let Some(xattr_mtime_bytes) = xattr_get(file_path, "user.hai.hash_mtime") {
                 if let Ok(xattr_mtime_str) = std::str::from_utf8(&xattr_mtime_bytes) {
                     xattr_mtime_str.parse::<u64>().ok()
                 } else {
@@ -469,7 +465,7 @@ async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
         if Some(mtime_ts) == xattr_mtime_ts {
             // If the filesystem doesn't show any modifications since the file
             // was tagged, use the hash set in xattrs.
-            if let Ok(Some(xattr_hash_bytes)) = xattr::get(file_path, "user.hai.hash") {
+            if let Some(xattr_hash_bytes) = xattr_get(file_path, "user.hai.hash") {
                 if let Ok(xattr_hash_hex_str) = std::str::from_utf8(&xattr_hash_bytes) {
                     match hex::decode(xattr_hash_hex_str) {
                         Ok(binary_data) => {
@@ -538,4 +534,85 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
     }
 
     Ok(bytes)
+}
+
+// --
+
+#[cfg(not(target_os = "windows"))]
+fn xattr_get(file_path: &str, key: &str) -> Option<Vec<u8>> {
+    if let Ok(value_bytes) = xattr::get(file_path, format!("user.hai.{}", key)) {
+        value_bytes
+    } else {
+        None
+    }
+}
+
+/// On windows, we mimic xattrs using NTFS's ADS feature. The handling differs
+/// because we can't read a key-at-a-time so instead we read the entire blob.
+#[cfg(target_os = "windows")]
+fn xattr_get(file_path: &str, key: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let ads_path = format!("{}:hai", file_path);
+
+    // Try to open the ADS
+    let mut file = std::fs::File::open(&ads_path).ok()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+
+    let json: serde_json::Value = serde_json::from_str(&contents).ok()?;
+
+    match json.get(key) {
+        Some(val) => {
+            // Only support string values
+            if let Some(s) = val.as_str() {
+                Some(s.as_bytes().to_vec())
+            } else {
+                None
+            }
+        }
+        None => None,
+    }
+}
+
+// --
+
+#[cfg(not(target_os = "windows"))]
+fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
+    xattr::set(file_path, format!("user.hai.{}", key), value.as_bytes()).map_err(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
+    //use std::fs::{File, OpenOptions};
+    use serde_json::{Map, Value};
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let ads_path = format!("{}:hai", file_path);
+
+    // Try to open the ADS for reading and writing, create if it doesn't exist
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&ads_path)
+        .map_err(|_| ())?;
+
+    // Read the existing JSON, or start with an empty object
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok();
+    let mut json: Map<String, Value> = if contents.trim().is_empty() {
+        Map::new()
+    } else {
+        serde_json::from_str(&contents).unwrap_or_else(|_| Map::new())
+    };
+
+    json.insert(key.to_string(), Value::String(value.to_string()));
+    let new_contents = serde_json::to_string(&json).map_err(|_| ())?;
+
+    // Truncate and write the new JSON
+    file.set_len(0).map_err(|_| ())?;
+    file.seek(SeekFrom::Start(0)).map_err(|_| ())?;
+    file.write_all(new_contents.as_bytes()).map_err(|_| ())?;
+
+    Ok(())
 }
