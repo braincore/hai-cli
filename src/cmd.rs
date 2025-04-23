@@ -233,6 +233,8 @@ pub struct LoadCmd {
 pub struct LoadUrlCmd {
     /// URL to load from
     pub url: String,
+    /// Do not extract article and convert HTML to markdown
+    pub raw: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -991,13 +993,19 @@ fn parse_command(
             }
         }
         "load-url" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["raw"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("raw".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url })),
+                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url, raw })),
                 None => {
-                    eprintln!("Usage: /load-url <url>");
+                    eprintln!("Usage: /load-url(raw=false) <url>");
                     None
                 }
             }

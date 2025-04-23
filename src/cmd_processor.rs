@@ -811,7 +811,7 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::LoadUrl(cmd::LoadUrlCmd { url }) => {
+        cmd::Cmd::LoadUrl(cmd::LoadUrlCmd { url, raw }) => {
             let http_response = match reqwest::Client::new()
                 .get(url)
                 .header("User-Agent", &format!("hai/{}", env!("CARGO_PKG_VERSION")))
@@ -824,11 +824,20 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
-            match http_response
+            let content_type = http_response
                 .headers()
                 .get("Content-Type")
                 .and_then(|value| value.to_str().ok())
-            {
+                .map(|s| s.to_string());
+            let is_html_content_type = content_type
+                .as_ref()
+                .map(|ct| {
+                    ct.trim_start()
+                        .to_ascii_lowercase()
+                        .starts_with("text/html")
+                })
+                .unwrap_or(false);
+            match content_type.as_deref() {
                 Some("image/jpeg") | Some("image/png") => {
                     if !config::get_ai_model_capability(&session.ai).image {
                         eprintln!("error: model does not support images");
@@ -863,15 +872,63 @@ pub async fn process_cmd(
                             return ProcessCmdResult::Loop;
                         }
                     };
+
+                    let (contents, format, title) = if !*raw && is_html_content_type {
+                        let cfg = dom_smoothie::Config {
+                            max_elements_to_parse: 9000,
+                            ..Default::default()
+                        };
+                        let mut readability = dom_smoothie::Readability::new(
+                            url_body.clone(),
+                            Some(url.as_str()),
+                            Some(cfg),
+                        )
+                        .expect("failed to create readability obj");
+
+                        match readability.parse() {
+                            Ok(extracted_article) => {
+                                let title = if extracted_article.title.len() > 0 {
+                                    Some(
+                                        htmd::convert(&extracted_article.title)
+                                            .unwrap_or(extracted_article.title),
+                                    )
+                                } else {
+                                    None
+                                };
+                                match htmd::convert(&extracted_article.content) {
+                                    Ok(md) => (md, "markdown".to_string(), title),
+                                    Err(_e) => (
+                                        extracted_article.content.to_string(),
+                                        "html-extracted".to_string(),
+                                        title,
+                                    ),
+                                }
+                            }
+                            Err(_e) => (
+                                url_body,
+                                content_type.unwrap_or("html-failed-extract".to_string()),
+                                None,
+                            ),
+                        }
+                    } else {
+                        (url_body, content_type.unwrap_or("raw".to_string()), None)
+                    };
+
                     let url_contents_with_delimiters = format!(
                         "<<<<<< BEGIN_URL: {} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
-                        url, url_body, url,
+                        url, contents, url,
                     );
-                    session_history_add_user_text_entry(
+                    let token_count = session_history_add_user_text_entry(
                         &url_contents_with_delimiters,
                         session,
                         bpe_tokenizer,
                         (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                    );
+                    println!(
+                        "Loaded ({}): {} ({} tokens)",
+                        format,
+                        title.unwrap_or(url.clone()),
+                        token_count.to_formatted_string(&Locale::en)
                     );
                 }
             }

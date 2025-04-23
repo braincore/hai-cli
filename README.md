@@ -480,8 +480,11 @@ SELECT version();
 Use `/load <path>` (`/l <path>`) to load files (e.g. code) as context for the
 AI. You can use globs, e.g. `/load src/**/*.rs`.
 
-Instead of `/new`, you can use `/reset` (`/r`) to keep context from `/load`
-while clearing the rest of the conversation.
+Use `/load-url <url>` to load a URL resource. For HTML resources, the command
+will try to extract the main content and convert it to markdown.
+
+Instead of `/new`, you can use `/reset` (`/r`) to keep context from `/load`,
+`/load-url`, and `/asset-load` while clearing the rest of the conversation.
 
 In a similar vein, any `/pin <message>` is kept around on `/reset`.
 
