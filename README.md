@@ -652,38 +652,37 @@ See `~/.hai/hai.toml` for all options. Some options to highlight:
   runs. When disabled, `hai` makes no network requests that aren't initiated by
   you.
 
-### Asking the AI to use the REPL
+### Going meta: the AI knows how to use `hai`
 
-If I'm feeling lazy, I'll ask the AI to write the hai-repl commands:
+If I'm feeling lazy, I'll ask the AI to write the hai-repl commands using the
+`!hai` tool.
 
 ```
-[7]: !hai use /load-url to get hacker news frontpage and use /prompt to ask the AI to write a numbered-list of headlines
+[7]: !hai load silk road wiki. who was the founder?
 ```
 ```
 ↓↓↓
 
-- /load-url https://news.ycombinator.com/
-- /prompt Please write a numbered list of the headlines extracted from the Hacker News frontpage HTML code.
+- /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+- /prompt Who was the founder of the Silk Road marketplace?
 
 ⚙ ⚙ ⚙
 
-[QUESTION] Execute? y/[n]: y
 Pushed 2 command(s) into queue
 
 ---
 
-hai-tool[10]: /load-url https://news.ycombinator.com/
-
-hai-tool[11]: /prompt Please write a numbered list of the headlines extracted from the Hacker News frontpage HTML code.
+!hai-tool[0]: /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+Loaded (markdown): Silk Road (marketplace) (32,696 tokens)
+!hai-tool[1]: /prompt Who was the founder of the Silk Road marketplace?
 
 ↓↓↓
 
-1. **Kerning, the Hard Way**
-2. **Samsung Q990D unresponsive after 1020 firmware update**
-3. **Decrypting encrypted files from Akira ransomware using a bunch of GPUs**
-4. **Athena landed in a dark crater where the temperature was minus 280° F**
-...
+The founder of the Silk Road marketplace was **Ross Ulbricht**, who operated under the pseudonym "Dread Pirate Roberts."
 ```
+
+The AI is capable enough to know what URL to load and then ask itself a
+question about the contents.
 
 #### !hai recursion
 
