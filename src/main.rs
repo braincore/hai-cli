@@ -909,18 +909,10 @@ async fn repl(
                     .clone()
                     .map(|tp| !tp.require)
                     .unwrap_or(false);
-                // We have the user confirm all the commands in the hai-repl
-                // tool at once rather than prompt for every command.
-                let tool_type_needs_user_confirmation = if let Some(ref tp) = tool_policy_combined {
-                    matches!(tp.tool, tool::Tool::HaiRepl)
-                } else {
-                    false
-                };
 
                 let user_confirmed_tool_execute = if !force_yes
                     && (cfg.tool_confirm
                         || tool_policy_needs_user_confirmation
-                        || tool_type_needs_user_confirmation
                         || task_step_requires_user_confirmation)
                 {
                     let answer = term::ask_question_default_empty("Execute? y/[n]:", false);
