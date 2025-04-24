@@ -357,7 +357,11 @@ async fn repl(
         }
     }
     let default_editor = cfg.default_editor.clone().unwrap_or("vim".into());
-    let default_shell = cfg.default_shell.clone().unwrap_or("bash".into());
+    let default_shell = if cfg!(target_os = "windows") {
+        cfg.default_shell.clone().unwrap_or("powershell".into())
+    } else {
+        cfg.default_shell.clone().unwrap_or("bash".into())
+    };
 
     let account = if let Some(force_account) = force_account {
         match db::get_account_by_username(&*db.lock().await, &force_account)? {

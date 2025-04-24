@@ -14,7 +14,7 @@ pub struct Config {
     pub default_ai_temperature_to_absolute_zero: bool,
     /// The editor (e.g. vim, emacs, nano) to edit assets with
     pub default_editor: Option<String>,
-    /// The shell (e.g. bash, zsh, fish, nu) to use for !sh tool
+    /// The shell (e.g. bash, zsh, fish, nu, powershell) to use for !sh tool
     pub default_shell: Option<String>,
     #[serde(default)]
     pub tool_confirm: bool,
@@ -173,7 +173,7 @@ pub fn read_config_as_string(
 # The default editor to use for modifying assets (default: vim)
 #default_editor = "vim"
 
-# The default shell to use for the !sh tool (default: bash)
+# The default shell to use for the !sh tool (default: bash, powershell)
 #default_shell = "bash"
 
 # Temperature ranges differ by model, but 0 is generally best for math/coding (default: true)
