@@ -12,7 +12,8 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 ## Highlights
 
 - ⚡️ Starts in 30ms (on my machine).
-- 🪶 Lightweight for your machine, SBCs, and servers.
+- 📦 Single, standalone binary—no installation or dependencies required.
+- 🪶 Lightweight (< 9MB compressed) for your machine, SBCs, and servers.
 - 🗯 Run many instances for simultaneous conversations.
 - 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, and Ollama (local)
   all in a single conversation.
