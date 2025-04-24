@@ -1,9 +1,13 @@
-use crate::tool::Tool;
+use crate::{config, tool::Tool};
 use serde_json::{json, Value};
 
-/// schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic
-pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
+/// # Arguments
+/// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.
+/// - shell: Allows AI to tailor the command especially since bash and
+///   powershell are rather different.
+pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value {
     let tool_name = get_tool_name(tool);
+    let system = config::get_machine_os_arch();
     match tool {
         Tool::CopyToClipboard => json!({
             "name": tool_name,
@@ -22,13 +26,13 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
         }),
         Tool::ExecPythonScript => json!({
             "name": tool_name,
-            "description": "Execute a Python script. Everything the user wants should be printed to stdout.",
+            "description": format!("Execute a Python script. Everything the user wants should be printed to stdout.\nSystem = {}", system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "Python3-compatible script. The script should print important values to stdout."
+                        "description": "Python3-compatible script. The script should print important values to stdout.",
                     },
                 },
                 "required": ["input"],
@@ -37,7 +41,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
         }),
         Tool::ExecShellScript => json!({
             "name": tool_name,
-            "description": "Execute a Shell script. Everything the user wants should be printed to stdout.",
+            "description": format!("Execute a Shell script. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
@@ -52,7 +56,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
         }),
         Tool::ShellExec => json!({
             "name": tool_name,
-            "description": "Execute a shell command or shell pipeline. Everything the user wants should be printed to stdout.",
+            "description": format!("Execute a shell command or shell pipeline. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
@@ -67,7 +71,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str) -> Value {
         }),
         Tool::ShellExecWithScript(cmd) => json!({
             "name": tool_name,
-            "description": format!("Executes program: {}", cmd),
+            "description": format!("Executes program: {}\nShell = {}\nSystem = {}", cmd, shell, system),
             schema_key_name: {
                 "type": "object",
                 "properties": {

@@ -103,6 +103,7 @@ pub async fn send_to_anthropic(
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
+    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &HashSet<String>,
@@ -164,7 +165,7 @@ pub async fn send_to_anthropic(
                 tools_added.insert(tool_call.function.name.clone());
                 // WARN: There's a serious issue if the name isn't present
                 if let Some(tool) = get_tool_from_name(&tool_call.function.name) {
-                    tool_schemas.push(get_tool_schema(&tool, "input_schema"))
+                    tool_schemas.push(get_tool_schema(&tool, "input_schema", shell))
                 }
             }
         }
@@ -172,7 +173,7 @@ pub async fn send_to_anthropic(
     let tool_choice = if let Some(tp) = tool_policy {
         let tool_name = get_tool_name(&tp.tool);
         if !tools_added.contains(tool_name) {
-            tool_schemas.push(get_tool_schema(&tp.tool, "input_schema"))
+            tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell))
         }
         if tp.require {
             Some(json!({"type": "tool", "name": tool_name}))

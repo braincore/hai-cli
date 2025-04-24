@@ -39,6 +39,7 @@ pub async fn send_to_ollama(
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
+    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &HashSet<String>,
@@ -64,7 +65,7 @@ pub async fn send_to_ollama(
     // Create JSON payload
     let mut tool_schemas = vec![];
     if let Some(tp) = tool_policy {
-        tool_schemas.push(get_tool_schema(&tp.tool, "parameters"))
+        tool_schemas.push(get_tool_schema(&tp.tool, "parameters", shell))
     }
     let mut request_body = if tool_schemas.is_empty() {
         json!({

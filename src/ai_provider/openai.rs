@@ -57,6 +57,7 @@ pub async fn send_to_openai(
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
+    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &HashSet<String>,
@@ -101,7 +102,7 @@ pub async fn send_to_openai(
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
         if let Some(tp) = tool_policy {
-            let tool_schemas = vec![get_tool_schema(&tp.tool, "parameters")];
+            let tool_schemas = vec![get_tool_schema(&tp.tool, "parameters", shell)];
             let tool_choice = if tp.require { "required" } else { "auto" };
             // OpenAI has a wrapping over each tool schema.
             let function_wrappers: Vec<serde_json::Value> = tool_schemas

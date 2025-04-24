@@ -858,3 +858,31 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
         AiModel::OpenAi(OpenAiModel::Gpt41)
     }
 }
+
+// --
+
+pub fn get_machine_os_arch() -> String {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(all(target_arch = "arm", target_feature = "v7")) {
+        "armv7"
+    } else if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "arm") {
+        "arm"
+    } else if cfg!(target_arch = "x86") {
+        "x86"
+    } else {
+        "unknown"
+    };
+    format!("{}-{}", os, arch)
+}

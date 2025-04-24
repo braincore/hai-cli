@@ -453,11 +453,12 @@ async fn repl(
         );
         if let Some(version) = newer_client_version {
             println!("  - changelog: `/asset-view /hai/changelog` or `!!cat @/hai/changelog`");
-            let os_arch = get_machine_os_arch();
+            let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {
                 println!("  - installer (from shell): `curl -LsSf https://hai.superego.ai/hai-installer.sh | sh`");
             } else {
-                let asset_name = format!("hai-cli-{}-{}.zip", version, get_machine_os_arch());
+                let asset_name =
+                    format!("hai-cli-{}-{}.zip", version, config::get_machine_os_arch());
                 println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
                 if let Ok(exe_path) = env::current_exe() {
                     println!("  - install: unpack and copy to {:?}", exe_path);
@@ -1132,6 +1133,7 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 msg_history,
                 tool_policy.as_ref(),
+                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -1180,6 +1182,7 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 msg_history,
                 tool_policy.as_ref(),
+                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -1195,6 +1198,7 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 msg_history,
                 tool_policy.as_ref(),
+                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -1254,30 +1258,4 @@ async fn is_client_update_available(db: Arc<Mutex<rusqlite::Connection>>) -> Opt
             None
         }
     }
-}
-
-fn get_machine_os_arch() -> String {
-    let os = if cfg!(target_os = "windows") {
-        "windows"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else {
-        "unknown"
-    };
-    let arch = if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else if cfg!(all(target_arch = "arm", target_feature = "v7")) {
-        "armv7"
-    } else if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else if cfg!(target_arch = "arm") {
-        "arm"
-    } else if cfg!(target_arch = "x86") {
-        "x86"
-    } else {
-        "unknown"
-    };
-    format!("{}-{}", os, arch)
 }
