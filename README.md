@@ -21,6 +21,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - ⚙ Give AI the power to run programs on your computer.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
 - 📂 Load images, code, or text into the conversation.
+- 🔗 Load URLs with automatic article extraction and markdown conversion.
 - 🎨 Highlights syntax for code snippets.
 - 💾 Auto-saves last conversation for easy resumption.
 - ☁ Store and share data on the cloud for easy access by AIs.
