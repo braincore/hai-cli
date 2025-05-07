@@ -141,7 +141,7 @@ async fn sync_entries(
 
     for entry in ff_entries {
         // Trim the folder prefix from the entry name
-        let relative_path = match entry.name.strip_prefix(&folder_prefix) {
+        let relative_path = match entry.name.strip_prefix(folder_prefix) {
             Some(path) => path,
             None => &entry.name, // If for some reason it doesn't have the prefix
         };
@@ -172,13 +172,11 @@ async fn sync_entries(
                                     ));
                                 }
                                 continue; // Skip download
-                            } else {
-                                if debug {
-                                    let _ = config::write_to_debug_log(format!(
-                                        "Hash mismatch, re-downloading: {}\n",
-                                        target_file_path
-                                    ));
-                                }
+                            } else if debug {
+                                let _ = config::write_to_debug_log(format!(
+                                    "Hash mismatch, re-downloading: {}\n",
+                                    target_file_path
+                                ));
                             }
                         }
                         Err(e) => {
@@ -338,7 +336,7 @@ async fn sync_entries(
                             }
                         }
 
-                        if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
+                        if xattr_set(&target_path_clone, "user.hai.hash", hash).is_err() {
                             eprintln!("failed to set hash xattr");
                         }
                     }
@@ -367,6 +365,7 @@ async fn sync_entries(
         }
     }
 
+    #[allow(clippy::type_complexity)]
     // (entry name, target path, result)
     let mut results: Vec<(
         String,
@@ -540,11 +539,7 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(not(target_os = "windows"))]
 fn xattr_get(file_path: &str, key: &str) -> Option<Vec<u8>> {
-    if let Ok(value_bytes) = xattr::get(file_path, format!("user.hai.{}", key)) {
-        value_bytes
-    } else {
-        None
-    }
+    xattr::get(file_path, format!("user.hai.{}", key)).unwrap_or_default()
 }
 
 /// On windows, we mimic xattrs using NTFS's ADS feature. The handling differs

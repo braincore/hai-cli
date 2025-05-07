@@ -97,7 +97,7 @@ pub async fn process_cmd(
                     if is_task_mode_step
                         && (matches!(session.use_hai_router, HaiRouterState::Off)
                             || !config::is_ai_model_supported_by_hai_router(&selected_ai_model))
-                        && !config::check_api_key(&selected_ai_model, &cfg)
+                        && !config::check_api_key(&selected_ai_model, cfg)
                     {
                         eprintln!(
                             "{} task may behave unexpectedly or fail without requested model",
@@ -887,7 +887,7 @@ pub async fn process_cmd(
 
                         match readability.parse() {
                             Ok(extracted_article) => {
-                                let title = if extracted_article.title.len() > 0 {
+                                let title = if !extracted_article.title.is_empty() {
                                     Some(
                                         htmd::convert(&extracted_article.title)
                                             .unwrap_or(extracted_article.title),
@@ -2131,7 +2131,7 @@ pub async fn process_cmd(
                                 existing_data_temp_file_path.display()
                             ));
                         } else if let Some(data_contents) =
-                            asset_editor::get_asset_raw(&data_url).await
+                            asset_editor::get_asset_raw(data_url).await
                         {
                             match asset_editor::create_empty_temp_file(
                                 asset_name,
@@ -2183,7 +2183,7 @@ pub async fn process_cmd(
                                 existing_metadata_temp_file_path.display()
                             ));
                         } else if let Some(metadata_contents) =
-                            asset_editor::get_asset_raw(&metadata_url).await
+                            asset_editor::get_asset_raw(metadata_url).await
                         {
                             match asset_editor::create_empty_temp_file(
                                 &format!("{}.metadata", asset_name),
@@ -2443,7 +2443,7 @@ pub async fn process_cmd(
                         ..
                     }) = res.entry.metadata.as_ref()
                     {
-                        if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await
+                        if let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await
                         {
                             let contents = String::from_utf8_lossy(&contents_bin);
                             let md_json = serde_json::from_str::<serde_json::Value>(&contents)

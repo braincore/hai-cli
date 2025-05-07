@@ -381,7 +381,7 @@ pub async fn get_asset(
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
     if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        let data_contents = download_asset(&data_url).await?;
+        let data_contents = download_asset(data_url).await?;
         Ok((data_contents, asset_get_res.entry))
     } else {
         Err(GetAssetError::BadName)
@@ -454,7 +454,7 @@ pub async fn get_asset_and_metadata(
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
     let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        download_asset(&data_url).await?
+        download_asset(data_url).await?
     } else {
         return Err(GetAssetError::BadName);
     };
@@ -463,7 +463,7 @@ pub async fn get_asset_and_metadata(
         ..
     }) = asset_get_res.entry.metadata.as_ref()
     {
-        Some(download_asset(&metadata_url).await?)
+        Some(download_asset(metadata_url).await?)
     } else {
         None
     };
@@ -538,7 +538,7 @@ pub async fn asset_metadata_set_key(
                 ..
             }) = res.entry.metadata.as_ref()
             {
-                if let Some(contents_bin) = get_asset_raw(&metadata_url).await {
+                if let Some(contents_bin) = get_asset_raw(metadata_url).await {
                     let contents = String::from_utf8_lossy(&contents_bin);
                     serde_json::from_str::<serde_json::Value>(&contents)
                         .expect("failed to parse metadata")
