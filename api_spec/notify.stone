@@ -1,0 +1,14 @@
+namespace notify
+
+# For the unlisted route `notify/listen`. Unlisted because it's a websocket
+# route. It requires no authentication, but the cursors come from authenticated
+# routes.
+union NotifyListenArg
+    asset_pool ListenAssetPool
+        struct
+            cursor String
+                "Cursor from asset/entry/iter."
+    asset ListenAsset
+        struct
+            cursor String
+                "Cursor from asset/revision/iter with direction set to `newer`."

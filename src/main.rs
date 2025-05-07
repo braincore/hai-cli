@@ -256,6 +256,7 @@ async fn repl(
         "/asset-export",
         "/asset-temp",
         "/asset-sync-down",
+        "/asset-listen",
         "/asset-acl",
         "/asset-remove",
         "/asset-md-get",

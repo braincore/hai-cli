@@ -1547,7 +1547,7 @@ pub async fn process_cmd(
 
             use crate::api::types::asset::{
                 AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
-                AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
+                AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
             };
 
             async fn print_revision(
@@ -1591,7 +1591,7 @@ pub async fn process_cmd(
                     ..
                 }) = revision.metadata.as_ref()
                 {
-                    if let Some(contents_bin) = asset_editor::get_asset_raw(&metadata_url).await {
+                    if let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await {
                         let contents = String::from_utf8_lossy(&contents_bin);
                         println!("Metadata: {}", &contents);
                         session_history_add_user_text_entry(
@@ -1603,7 +1603,7 @@ pub async fn process_cmd(
                     }
                 }
                 if let Some(data_url) = revision.asset.url.as_ref() {
-                    if let Some(contents_bin) = asset_editor::get_asset_raw(&data_url).await {
+                    if let Some(contents_bin) = asset_editor::get_asset_raw(data_url).await {
                         let contents = String::from_utf8_lossy(&contents_bin);
                         println!("{}", &contents);
                         session_history_add_user_text_entry(
@@ -1621,6 +1621,7 @@ pub async fn process_cmd(
                 .asset_revision_iter(AssetRevisionIterArg {
                     entry_ref: EntryRef::Name(asset_name.to_owned()),
                     limit: 1,
+                    direction: RevisionIterDirection::Older,
                 })
                 .await
             {
@@ -1703,6 +1704,234 @@ pub async fn process_cmd(
                     };
                 } else {
                     break;
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetFollow(cmd::AssetFollowCmd { asset_name }) => {
+            println!("WARN: /asset-follow is for debugging.");
+            use crate::api::types::asset::{
+                AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
+            };
+            let api_client = mk_api_client(Some(session));
+            let mut cursor = match api_client
+                .asset_revision_iter(AssetRevisionIterArg {
+                    entry_ref: EntryRef::Name(asset_name.to_owned()),
+                    limit: 1,
+                    direction: RevisionIterDirection::Newer,
+                })
+                .await
+            {
+                Ok(iter_res) => iter_res.next.expect("missing cursor").cursor,
+                Err(e) => {
+                    eprintln!("error: failed to get revisions: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::connect_async;
+            use tokio_tungstenite::tungstenite::Message;
+
+            let listen_url = format!(
+                "{}/notify/listen",
+                session::get_api_base_url().replace("http", "ws")
+            );
+            let (mut ws_stream, _) = match connect_async(listen_url).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to connect: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::api::types::notify::{ListenAsset, NotifyListenArg};
+            let arg = NotifyListenArg::Asset(ListenAsset {
+                cursor: cursor.clone(),
+            });
+            ws_stream
+                .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
+                .await
+                .unwrap();
+
+            while let Some(msg) = {
+                tokio::select! {
+                    msg = ws_stream.next() => msg,
+                    _ = tokio::signal::ctrl_c() => {
+                        return ProcessCmdResult::Loop;
+                    }
+                }
+            } {
+                println!("Received: {:?}", msg);
+                match msg {
+                    Ok(_msg) => {
+                        // NOTE: `msg` isn't finalized so do not use contents.
+                        cursor = match api_client
+                            .asset_revision_iter_next(AssetRevisionIterNextArg {
+                                cursor,
+                                limit: 10,
+                            })
+                            .await
+                        {
+                            Ok(iter_res) => {
+                                for revision in iter_res.revisions {
+                                    if let Some(data_url) = revision.asset.url.as_ref() {
+                                        if let Some(contents_bin) =
+                                            asset_editor::get_asset_raw(data_url).await
+                                        {
+                                            let contents = String::from_utf8_lossy(&contents_bin);
+                                            println!("{}", &contents);
+                                            session_history_add_user_text_entry(
+                                                &contents,
+                                                session,
+                                                bpe_tokenizer,
+                                                (is_task_mode_step, LogEntryRetentionPolicy::None),
+                                            );
+                                        }
+                                    }
+                                }
+                                iter_res.next.expect("missing cursor").cursor
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to get revisions: {}", e);
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+                    }
+                    Err(e) => {
+                        eprintln!("error: websocket: {}", e);
+                        break;
+                    }
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetListen(cmd::AssetListenCmd { asset_name, cursor }) => {
+            use crate::api::types::asset::{
+                AssetCreatedBy, AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
+                RevisionIterDirection,
+            };
+            let api_client = mk_api_client(Some(session));
+            let revision_start_cursor = if let Some(cursor) = cursor {
+                cursor.clone()
+            } else {
+                match api_client
+                    .asset_revision_iter(AssetRevisionIterArg {
+                        entry_ref: EntryRef::Name(asset_name.to_owned()),
+                        limit: 1,
+                        direction: RevisionIterDirection::Newer,
+                    })
+                    .await
+                {
+                    Ok(iter_res) => iter_res.next.expect("missing cursor").cursor,
+                    Err(e) => {
+                        eprintln!("error: failed to get revisions: {}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                }
+            };
+
+            use futures_util::{SinkExt, StreamExt};
+            use tokio_tungstenite::connect_async;
+            use tokio_tungstenite::tungstenite::Message;
+
+            let listen_url = format!(
+                "{}/notify/listen",
+                session::get_api_base_url().replace("http", "ws")
+            );
+            let (mut ws_stream, _) = match connect_async(listen_url).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to connect: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::api::types::notify::{ListenAsset, NotifyListenArg};
+            let arg = NotifyListenArg::Asset(ListenAsset {
+                cursor: revision_start_cursor.clone(),
+            });
+            ws_stream
+                .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
+                .await
+                .unwrap();
+
+            if let Some(msg) = {
+                tokio::select! {
+                    msg = ws_stream.next() => msg,
+                    _ = tokio::signal::ctrl_c() => {
+                        return ProcessCmdResult::Loop;
+                    }
+                }
+            } {
+                match msg {
+                    Ok(_msg) => {
+                        // NOTE: `msg` isn't finalized so do not use contents.
+                        match api_client
+                            .asset_revision_iter_next(AssetRevisionIterNextArg {
+                                cursor: revision_start_cursor.clone(),
+                                limit: 1,
+                            })
+                            .await
+                        {
+                            Ok(iter_res) => {
+                                if let Some(revision) = iter_res.revisions.first() {
+                                    let mut output_lines = vec![];
+                                    output_lines.push(format!(
+                                        "data url: {}\n",
+                                        revision.asset.url.as_ref().unwrap_or(&"none".to_string())
+                                    ));
+                                    output_lines
+                                        .push(format!("data size: {}\n", revision.asset.size));
+                                    output_lines.push(format!(
+                                        "data hash: {}\n",
+                                        revision.asset.hash.as_ref().unwrap_or(&"none".to_string())
+                                    ));
+                                    output_lines.push(format!("data op: {:?}\n", revision.op));
+                                    if let AssetCreatedBy::User(ref created_by_user) =
+                                        revision.asset.created_by
+                                    {
+                                        output_lines.push(format!(
+                                            "by (user): {}\n",
+                                            created_by_user.username
+                                        ));
+                                    }
+                                    output_lines.push(format!(
+                                        "data by: {:?}\n",
+                                        revision.asset.created_by
+                                    ));
+                                    if let Some(md) = revision.metadata.as_ref() {
+                                        output_lines.push(format!(
+                                            "metadata url: {}\n",
+                                            md.url.as_ref().unwrap_or(&"none".to_string())
+                                        ));
+                                        output_lines.push(format!("metadata size: {}\n", md.size));
+                                        output_lines
+                                            .push(format!("metadata hash: {:?}\n", md.hash));
+                                    }
+                                    output_lines.push(format!(
+                                        "next cursor: {}\n",
+                                        iter_res.next.expect("missing cursor").cursor
+                                    ));
+                                    let output = output_lines.join("");
+                                    println!("{}", output);
+                                    session_history_add_user_text_entry(
+                                        &output,
+                                        session,
+                                        bpe_tokenizer,
+                                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to get revisions: {}", e);
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+                    }
+                    Err(e) => {
+                        eprintln!("error: websocket: {}", e);
+                    }
                 }
             }
             ProcessCmdResult::Loop
@@ -1865,6 +2094,7 @@ pub async fn process_cmd(
                 use crate::api::types::asset::{
                     AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
                     AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
+                    RevisionIterDirection,
                 };
 
                 async fn save_revision_to_temp(
@@ -2002,6 +2232,7 @@ pub async fn process_cmd(
                     .asset_revision_iter(AssetRevisionIterArg {
                         entry_ref: EntryRef::Name(asset_name.to_owned()),
                         limit: std::cmp::min(3, remaining),
+                        direction: RevisionIterDirection::Older,
                     })
                     .await
                 {
@@ -2979,6 +3210,9 @@ EXPERIMENTAL:
 /asset-link <name>           - Prints link to asset (valid for 24hr) and loads it into the conversation
 /asset-revisions <name> [<n>]- Lists revisions of an asset one at a time, waiting for user input
                                If `n` is set, displays `n` revisions without needing user input
+/asset-listen <name> [<cursor>]  - Blocks until a change to an asset. On a change, prints out
+                                   information about the asset. If cursor is set, begins listening
+                                   at that specific revision to ensure no changes are missed.
 /asset-acl <name> <ace>      - Changes ACL on an asset
                                `ace` is formatted as `type:permission`
                                type: allow, deny, default

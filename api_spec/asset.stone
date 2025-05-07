@@ -168,7 +168,8 @@ union AssetGetError
 # --
 
 route entry/list(AssetEntryListArg, AssetEntryListResult, AssetEntryListError)
-    "List assets. Non-iterative because it's a beta version."
+    "List up to 100 entries. Not recommended for general usage but handy for
+    auto-completion where completeness isn't crticial."
 
     attrs
         auth = "user_optional"
@@ -181,9 +182,6 @@ struct AssetEntryListResult
 
 union AssetEntryListError
     no_permission
-    too_many_assets
-        "This beta endpoint isn't intended to be used for users with large
-        numbers of assets."
 
 # --
 
@@ -258,10 +256,15 @@ route revision/iter(AssetRevisionIterArg, AssetRevisionIterResult, AssetRevision
 struct AssetRevisionIterArg
     entry_ref EntryRef
     limit UInt32 = 10
+    direction RevisionIterDirection = older
 
 union EntryRef
     name String(min_length=1)
     entry_id String(min_length=1)
+
+union RevisionIterDirection
+    older
+    newer
 
 struct AssetRevisionIterResult
     revisions List(AssetRevision)

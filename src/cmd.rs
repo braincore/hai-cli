@@ -103,6 +103,11 @@ pub enum Cmd {
     AssetRemove(AssetRemoveCmd),
     /// Show revisions of an asset
     AssetRevisions(AssetRevisionsCmd),
+    /// Listen to changes to an asset
+    AssetListen(AssetListenCmd),
+    /// Follow changes to an asset
+    /// NOTE: For debugging. Subject to removal.
+    AssetFollow(AssetFollowCmd),
     /// Import an asset from the filesystem
     AssetImport(AssetImportCmd),
     /// Export an asset to the filesystem
@@ -418,6 +423,20 @@ pub struct AssetRevisionsCmd {
     pub asset_name: String,
     /// Number of revisions to show
     pub count: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetFollowCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetListenCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// The cursor to listen on
+    pub cursor: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1349,6 +1368,32 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-revisions <name> [<count>]");
+                    None
+                }
+            }
+        }
+        "asset-follow" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetFollow(AssetFollowCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-follow <name>");
+                    None
+                }
+            }
+        }
+        "asset-listen" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((asset_name, cursor)) => {
+                    Some(Cmd::AssetListen(AssetListenCmd { asset_name, cursor }))
+                }
+                None => {
+                    eprintln!("Usage: /asset-listen <name> [<cursor>]");
                     None
                 }
             }

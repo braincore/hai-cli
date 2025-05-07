@@ -1493,8 +1493,6 @@ impl ::serde::ser::Serialize for AssetEntryListArg {
 #[non_exhaustive] // variants may be added in the future
 pub enum AssetEntryListError {
     NoPermission,
-    /// This beta endpoint isn't intended to be used for users with large numbers of assets.
-    TooManyAssets,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -1517,14 +1515,13 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryListError {
                 };
                 let value = match tag {
                     "no_permission" => AssetEntryListError::NoPermission,
-                    "too_many_assets" => AssetEntryListError::TooManyAssets,
                     _ => AssetEntryListError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["no_permission", "too_many_assets", "other"];
+        const VARIANTS: &[&str] = &["no_permission", "other"];
         deserializer.deserialize_struct("AssetEntryListError", VARIANTS, EnumVisitor)
     }
 }
@@ -1540,12 +1537,6 @@ impl ::serde::ser::Serialize for AssetEntryListError {
                 s.serialize_field(".tag", "no_permission")?;
                 s.end()
             }
-            AssetEntryListError::TooManyAssets => {
-                // unit
-                let mut s = serializer.serialize_struct("AssetEntryListError", 1)?;
-                s.serialize_field(".tag", "too_many_assets")?;
-                s.end()
-            }
             AssetEntryListError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -1557,10 +1548,7 @@ impl ::std::error::Error for AssetEntryListError {}
 
 impl ::std::fmt::Display for AssetEntryListError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        match self {
-            AssetEntryListError::TooManyAssets => f.write_str("This beta endpoint isn't intended to be used for users with large numbers of assets."),
-            _ => write!(f, "{:?}", *self),
-        }
+        write!(f, "{:?}", *self)
     }
 }
 
@@ -4891,6 +4879,7 @@ impl ::serde::ser::Serialize for AssetRevisionCursor {
 pub struct AssetRevisionIterArg {
     pub entry_ref: EntryRef,
     pub limit: u32,
+    pub direction: RevisionIterDirection,
 }
 
 impl AssetRevisionIterArg {
@@ -4898,6 +4887,7 @@ impl AssetRevisionIterArg {
         AssetRevisionIterArg {
             entry_ref,
             limit: 10,
+            direction: RevisionIterDirection::Older,
         }
     }
 
@@ -4905,9 +4895,14 @@ impl AssetRevisionIterArg {
         self.limit = value;
         self
     }
+
+    pub fn with_direction(mut self, value: RevisionIterDirection) -> Self {
+        self.direction = value;
+        self
+    }
 }
 
-const ASSET_REVISION_ITER_ARG_FIELDS: &[&str] = &["entry_ref", "limit"];
+const ASSET_REVISION_ITER_ARG_FIELDS: &[&str] = &["entry_ref", "limit", "direction"];
 impl AssetRevisionIterArg {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -4921,6 +4916,7 @@ impl AssetRevisionIterArg {
     ) -> Result<Option<AssetRevisionIterArg>, V::Error> {
         let mut field_entry_ref = None;
         let mut field_limit = None;
+        let mut field_direction = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -4937,6 +4933,12 @@ impl AssetRevisionIterArg {
                     }
                     field_limit = Some(map.next_value()?);
                 }
+                "direction" => {
+                    if field_direction.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("direction"));
+                    }
+                    field_direction = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -4950,6 +4952,7 @@ impl AssetRevisionIterArg {
             entry_ref: field_entry_ref
                 .ok_or_else(|| ::serde::de::Error::missing_field("entry_ref"))?,
             limit: field_limit.unwrap_or(10),
+            direction: field_direction.unwrap_or(RevisionIterDirection::Older),
         };
         Ok(Some(result))
     }
@@ -4962,6 +4965,9 @@ impl AssetRevisionIterArg {
         s.serialize_field("entry_ref", &self.entry_ref)?;
         if self.limit != 10 {
             s.serialize_field("limit", &self.limit)?;
+        }
+        if self.direction != RevisionIterDirection::Older {
+            s.serialize_field("direction", &self.direction)?;
         }
         Ok(())
     }
@@ -4993,7 +4999,7 @@ impl ::serde::ser::Serialize for AssetRevisionIterArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetRevisionIterArg", 2)?;
+        let mut s = serializer.serialize_struct("AssetRevisionIterArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -5573,6 +5579,69 @@ impl ::serde::ser::Serialize for ReplaceConflictPolicy {
                 s.end()
             }
             ReplaceConflictPolicy::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum RevisionIterDirection {
+    Older,
+    Newer,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for RevisionIterDirection {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = RevisionIterDirection;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a RevisionIterDirection structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "older" => RevisionIterDirection::Older,
+                    "newer" => RevisionIterDirection::Newer,
+                    _ => RevisionIterDirection::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["older", "newer", "other"];
+        deserializer.deserialize_struct("RevisionIterDirection", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for RevisionIterDirection {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            RevisionIterDirection::Older => {
+                // unit
+                let mut s = serializer.serialize_struct("RevisionIterDirection", 1)?;
+                s.serialize_field(".tag", "older")?;
+                s.end()
+            }
+            RevisionIterDirection::Newer => {
+                // unit
+                let mut s = serializer.serialize_struct("RevisionIterDirection", 1)?;
+                s.serialize_field(".tag", "newer")?;
+                s.end()
+            }
+            RevisionIterDirection::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
         }
