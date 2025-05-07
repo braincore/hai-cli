@@ -200,13 +200,15 @@ impl SyntaxHighlighterPrinter<'_> {
                 return;
             };
 
+        let mut stdout = io::stdout().lock();
+
         let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
         if lines.len() > 1 {
             let ps = term_color::get_syntax_set();
 
             // Finish the current line
-            println!("{}", &lines[0]);
-            io::stdout().flush().unwrap();
+            let _ = writeln!(stdout, "{}", &lines[0]);
+            stdout.flush().unwrap();
 
             let full_first_line = format!("{}{}", self.buffer, &lines[0]);
             self.buffer.clear();
@@ -230,8 +232,8 @@ impl SyntaxHighlighterPrinter<'_> {
                         "term: ({}, {}) {} {} {}\n",
                         _x, y, terminal_width, line_width, height
                     ));
-                    crossterm::execute!(
-                        io::stdout(),
+                    crossterm::queue!(
+                        stdout,
                         crossterm::cursor::MoveTo(0, y - height),
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown),
                     )
@@ -248,9 +250,9 @@ impl SyntaxHighlighterPrinter<'_> {
                             false,
                             None,
                         );
-                        print!("{}", escaped);
+                        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
                     }
-                    io::stdout().flush().unwrap();
+                    stdout.flush().unwrap();
                 }
             }
 
@@ -276,12 +278,12 @@ impl SyntaxHighlighterPrinter<'_> {
                             false,
                             None,
                         );
-                        print!("{}", escaped);
+                        let _ = write!(stdout, "{}", escaped);
                     }
-                    io::stdout().flush().unwrap();
+                    stdout.flush().unwrap();
                 } else {
-                    print!("{}", middle_line_with_ending);
-                    io::stdout().flush().unwrap();
+                    let _ = write!(stdout, "{}", middle_line_with_ending);
+                    stdout.flush().unwrap();
                 }
                 self.highlighter_check(middle_line);
             }
@@ -289,16 +291,16 @@ impl SyntaxHighlighterPrinter<'_> {
             // The last line is only partial (unless this is the last acc() call)
             let last_line_partial = &lines[lines.len() - 1].to_owned();
             self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
-            print!("{}", last_line_partial);
-            io::stdout().flush().unwrap();
+            let _ = write!(stdout, "{}", last_line_partial);
+            stdout.flush().unwrap();
             self.buffer.push_str(last_line_partial)
         } else {
             if self.line_start_cursor_position.is_none() {
                 self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
             }
             self.buffer.push_str(next);
-            print!("{}", next);
-            io::stdout().flush().unwrap(); // Flush to skip line-buffer
+            let _ = write!(stdout, "{}", next);
+            stdout.flush().unwrap(); // Flush to skip line-buffer
         }
     }
 
@@ -306,6 +308,7 @@ impl SyntaxHighlighterPrinter<'_> {
         if self.buffer.is_empty() {
             return;
         }
+        let mut stdout = io::stdout().lock();
         // If there are characters left in the buffer, and highlighting is
         // activated, the current line should be cleared and reprinted with
         // highlighting. This is only an issue when the output ends with ``````
@@ -317,8 +320,8 @@ impl SyntaxHighlighterPrinter<'_> {
                     let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
                     let height = line_width / terminal_width;
-                    crossterm::execute!(
-                        io::stdout(),
+                    crossterm::queue!(
+                        stdout,
                         crossterm::cursor::MoveTo(x, y - height),
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
                     )
@@ -333,9 +336,9 @@ impl SyntaxHighlighterPrinter<'_> {
                             false,
                             None,
                         );
-                        print!("{}", escaped);
+                        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
                     }
-                    io::stdout().flush().unwrap();
+                    stdout.flush().unwrap();
                 }
             }
         }
