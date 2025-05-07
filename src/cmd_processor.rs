@@ -3085,11 +3085,15 @@ lesson (e.g. "understanding").\n\n{}"#,
                     "Model", "Per 1M input tokens"
                 );
                 for ai in [
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt41),
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt41Mini),
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt4o),
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt4oMini),
-                    config::AiModel::OpenAi(config::OpenAiModel::O1),
-                    config::AiModel::OpenAi(config::OpenAiModel::O1Mini),
-                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet35),
+                    config::AiModel::OpenAi(config::OpenAiModel::O3),
+                    config::AiModel::OpenAi(config::OpenAiModel::O4Mini),
+                    config::AiModel::Google(config::GoogleModel::Gemini25Flash),
+                    config::AiModel::Google(config::GoogleModel::Gemini25Pro),
+                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet37(false)),
                     config::AiModel::Anthropic(config::AnthropicModel::Haiku35),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekReasoner),
