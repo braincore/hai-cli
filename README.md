@@ -252,8 +252,10 @@ print(distance)
 Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
 - `/asset <name>` - Open/create asset in editor (`/a` shorthand)
-  - Default editor is `vim` (Override with `default_editor` in `~/.hai/hai.toml`)
-  - `/a <name> [<editor>]` to override in the command
+  - Default editor is `vim`.
+  - Override with `default_editor` in `~/.hai/hai.toml`
+    - e.g. VS Code `code --new-window --disable-workspace-trust --wait`
+  - `/a <name> [<editor>]` to override in the command 
 - `/asset-view <name>` - Add an asset to the conversation for the AI to use.
 - `/asset-load <name>` - Mimics `/load`, but for assets. Unlike `/asset-view`,
   the contents aren’t printed, and they are retained even after a `/reset`.
