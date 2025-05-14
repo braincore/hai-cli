@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt;
 
-use super::types::{account, asset, task};
+use super::types::{account, asset, messaging, task};
 
 #[derive(Debug, Clone)]
 pub struct HaiClient {
@@ -353,6 +353,14 @@ impl HaiClient {
     ) -> Result<asset::AssetRevisionIterResult, RequestError<asset::AssetRevisionIterNextError>>
     {
         self.mk_api_request::<_, _, _>("/asset/revision/iter/next", &arg)
+            .await
+    }
+
+    pub async fn messaging_email_recipient_send(
+        &self,
+        arg: messaging::EmailRecipientSendArg,
+    ) -> Result<(), RequestError<messaging::EmailRecipientSendError>> {
+        self.mk_api_request::<_, _, _>("/messaging/email_recipient/send", &arg)
             .await
     }
 }

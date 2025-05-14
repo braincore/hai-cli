@@ -185,6 +185,11 @@ Assets:
 
 --
 
+/email <subject> ⏎<body> - Send an email to user.
+                          - Use a newline after `subject` to specify a multi-line email body.
+
+--
+
 Tasks
 /task <name/path>       - Enter task mode by loading task from repo (username/task-name) or file path
 /task-search <query>    - Search for tasks in the repository

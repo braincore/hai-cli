@@ -1,0 +1,96 @@
+namespace messaging
+
+# --
+
+route email_recipient/add(EmailRecipientAddArg, Void, EmailRecipientAddError)
+    "If succesful, an email is sent containing a verification code that must be
+    submitted to :route:`email_recipient/verify` before messages can be sent.
+
+    If it's the first email added, it's automatically set as the account's
+    default."
+
+    attrs
+        auth = "user"
+
+struct EmailRecipientAddArg
+    email String(min_length=1, max_length=64)
+
+union EmailRecipientAddError
+    bad_email
+        ":field:`EmailRecipientAddArg.email` is not a valid email."
+    already_verified
+        ":field:`EmailRecipientAddArg.email` is already verified"
+    too_many_recipients
+        "The active account has too many email recipients."
+
+# --
+
+route email_recipient/verify(EmailRecipientVerifyArg, Void, EmailRecipientVerifyError)
+    "Using a code sent by :route:`email_recipient/add`, verifies that the
+    active account has consent to send to the email address."
+
+    attrs
+        auth = "user"
+
+struct EmailRecipientVerifyArg
+    email String(min_length=1, max_length=64)
+    code String(min_length=1)
+
+union EmailRecipientVerifyError
+    bad_email
+    expired_code
+    bad_code
+
+# --
+
+route email_recipient/set_default(EmailRecipientSetDefaultArg, Void, EmailRecipientSetDefaultError)
+    "Set the default email for the active account."
+
+    attrs
+        auth = "user"
+
+struct EmailRecipientSetDefaultArg
+    email String(min_length=1, max_length=64)
+
+union EmailRecipientSetDefaultError
+    bad_email
+    unverified
+
+# --
+
+route email_recipient/get_default(Void, EmailRecipientGetDefaultResult, Void)
+    "Get the default email for the active account."
+
+    attrs
+        auth = "user"
+
+struct EmailRecipientGetDefaultResult
+    email String?
+        "Unset if no default"
+
+# --
+
+route email_recipient/send(EmailRecipientSendArg, Void, EmailRecipientSendError)
+    "Send an email to an already-verified address."
+
+    attrs
+        auth = "user"
+
+struct EmailRecipientSendArg
+    email String(min_length=1, max_length=64)?
+        "If unset, uses default email."
+    subject String(min_length=1, max_length=256)
+        "The subject of the email."
+    body String(max_length=8192)?
+        "The optional body of the email."
+
+union EmailRecipientSendError
+    bad_email
+    no_default_recipient
+        ":field:`EmailRecipientSendArg.email` is unset and the active account
+        does not have a default email recipient."
+    unverified
+        "The email address has not been verified with
+        :route:`email_recipient/verify`."
+    limit_exceeded
+        "The active account has sent too many emails to this recipient."

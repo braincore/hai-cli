@@ -12,6 +12,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::api::client::RequestError;
 use crate::session::{
     self, hai_router_set, hai_router_try_activate, mk_api_client, recalculate_input_tokens,
     session_history_add_user_cmd_and_reply_entries, session_history_add_user_image_entry,
@@ -2699,6 +2700,41 @@ lesson (e.g. "understanding").\n\n{}"#,
                 }
                 Err(e) => {
                     eprintln!("error: failed to save chat log: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::Email(cmd::EmailCmd { subject, body }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            use api::types::messaging::{EmailRecipientSendArg, EmailRecipientSendError};
+            match api_client
+                .messaging_email_recipient_send(EmailRecipientSendArg {
+                    subject: subject.clone(),
+                    email: None,
+                    body: body.clone(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: failed to send email: {}", e);
+                    match e {
+                        RequestError::Route(EmailRecipientSendError::NoDefaultRecipient) => {
+                            eprintln!("Use `/task hai/add-email` to add an email recipient");
+                        }
+                        _ => {}
+                    }
                 }
             }
             ProcessCmdResult::Loop

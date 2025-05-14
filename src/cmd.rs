@@ -130,6 +130,8 @@ pub enum Cmd {
     ChatResume(ChatResumeCmd),
     /// Save a chat
     ChatSave(ChatSaveCmd),
+    /// Send an email
+    Email(EmailCmd),
     /// Get current account (or if specified, switch to logged-in account)
     Account(AccountCmd),
     /// Make a new account
@@ -554,6 +556,14 @@ pub struct ChatResumeCmd {
 pub struct ChatSaveCmd {
     /// Name of the asset to save the chat log to
     pub chat_log_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct EmailCmd {
+    /// Subject of the email
+    pub subject: String,
+    /// Body of the email
+    pub body: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1605,6 +1615,19 @@ fn parse_command(
             Some(Cmd::ChatSave(ChatSaveCmd {
                 chat_log_name: parse_one_arg(remaining),
             }))
+        }
+        "email" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let (cmd_arg, body) = split_arg_and_optional_body(remaining);
+            match parse_one_arg_catchall(&cmd_arg) {
+                Some(subject) => Some(Cmd::Email(EmailCmd { subject, body })),
+                None => {
+                    eprintln!("Usage: /email <subject> [⏎ <body>]");
+                    None
+                }
+            }
         }
         "account" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

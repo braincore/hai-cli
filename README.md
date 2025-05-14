@@ -25,6 +25,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 🎨 Highlights syntax for code snippets.
 - 💾 Auto-saves last conversation for easy resumption.
 - ☁ Store and share data on the cloud for easy access by AIs.
+- 📧 Get emails from AI—send notifications or share data.
 - 🛠 Open source: Apache License 2.0
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
@@ -818,6 +819,31 @@ resume it:
 
 ```
 /chat-resume <name>
+```
+
+### Sending Emails
+
+You (or the AI) can send emails using `/email` with a multi-line input:
+
+```
+/email <subject> ⏎
+<body>
+```
+
+`/email` sends an email to a default address you've verified. Use the
+`hai/add-email` task to configure it:
+
+```
+[0] /task hai/add-email
+...
+[1] add x@y.com as an email recipient
+[2] verify it with code 'xyzabc'  # from email
+```
+
+To have the AI send you an email, you'll need to use the `!hai` tool:
+
+```
+!hai send me an email with an uplifting quote of the day
 ```
 
 ### Open Source

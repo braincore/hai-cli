@@ -16,6 +16,7 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64, Engine as _};
 pub mod account;
 pub mod asset;
 pub mod common;
+pub mod messaging;
 pub mod notify;
 pub mod task;
 pub(crate) fn eat_json_fields<'de, V>(map: &mut V) -> Result<(), V::Error>

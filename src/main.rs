@@ -263,6 +263,7 @@ async fn repl(
         "/asset-md-set",
         "/asset-md-set-key",
         "/asset-md-del-key",
+        "/email",
         "/account",
         "/account-new",
         "/account-login",
