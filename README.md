@@ -74,7 +74,7 @@ cargo install hai-cli
 |------------|-----------------------------------------|
 | OpenAI     | gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`), chatgpt-4o, gpt-4o (`4o`), gpt-4o-mini (`4om`) |
 |            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
-| Anthropic  | sonnet-3.7 (`sonnet`), sonnet-3.7-thinking, haiku-3.5 (`haiku`) |
+| Anthropic  | sonnet-3.7 (`sonnet`), sonnet-3.7-thinking (`sonnet-thinking`), haiku-3.5 (`haiku`) |
 | Google     | gemini-2.5-flash (`flash25`), gemini-2.5-pro (`gemini25pro`), gemini-2.0-flash (`flash20`) |
 | DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
 | Ollama     | gemma3, llama3.2, llama3.3                     |

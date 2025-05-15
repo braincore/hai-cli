@@ -298,6 +298,7 @@ async fn repl(
         "o4-mini",
         "haiku35",
         "sonnet",
+        "sonnet-thinking",
         "sonnet35",
         "sonnet37",
         "sonnet37-thinking",
