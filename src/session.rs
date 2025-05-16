@@ -326,8 +326,9 @@ pub fn get_abridged_history(history: &[db::LogEntry]) -> String {
             .join(" ");
 
         // Take the first 100 chars (or less if the message is shorter)
-        let truncated_content = if content_str.len() > 100 {
-            format!("{}...", &content_str[..100])
+        let truncated_content = if content_str.chars().count() > 100 {
+            let truncated: String = content_str.chars().take(100).collect();
+            format!("{}...", truncated)
         } else {
             content_str
         };
