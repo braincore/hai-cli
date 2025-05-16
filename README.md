@@ -797,6 +797,29 @@ The owner (user `ken` in this example) can read the contents of
 `/ken/hai-feedback` using `/asset-list-revisions` and can access revisions with
 `/asset-get-revision`.
 
+#### Listening for changes
+
+`/asset-listen <name>` can be used to block the REPL until a change to the
+asset. You can test this by:
+
+```
+# Console 1 (create asset)
+/asset test-listen
+
+# Console 2 (listen for changes -- blocking)
+/asset-listen test-listen
+
+# Console 1 (modify, unblocking console 2)
+/asset test-listen
+```
+
+For an example of sending emails based on asset changes, see the
+[hai/email-asset-updates](https://hai.superego.ai/task/hai/email-asset-updates@1.0.0)
+task: `/task hai/email-asset-updates`
+
+Note that the API exposes a websockets interface that pushes notifications when
+changes occur.
+
 ### Saving and resuming chats
 
 You can resume your last chat using:
