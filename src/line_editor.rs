@@ -403,6 +403,7 @@ impl Completer for CmdAndFileCompleter {
                 realign_suggestions(&mut completions, arg1_index, self.debug);
                 completions
             } else if line.starts_with("/task ")
+                || line.starts_with("/task-view ")
                 || line.starts_with("/task-purge ")
                 || line.starts_with("/task-forget ")
                 || line.starts_with("/task-fetch ")
