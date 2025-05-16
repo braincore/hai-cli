@@ -951,9 +951,12 @@ pub async fn process_cmd(
                     input: "/task-end".to_string(),
                     source: session::CmdSource::Internal,
                 });
-            } else if let Some((_, haitask)) =
-                get_haitask_from_task_ref(task_ref, session, "task", task_step_signature.is_some())
-            {
+            } else if let Some((_, haitask)) = get_haitask_from_task_ref(
+                task_ref,
+                session,
+                "task",
+                matches!(cmd_input.source, session::CmdSource::Internal),
+            ) {
                 println!();
                 println!(
                     "{} {}",
@@ -982,7 +985,7 @@ pub async fn process_cmd(
                 task_ref,
                 session,
                 "task-include",
-                task_step_signature.is_some(),
+                matches!(cmd_input.source, session::CmdSource::Internal),
             ) {
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
                     session.cmd_queue.push_front(session::CmdInput {
@@ -1216,7 +1219,7 @@ pub async fn process_cmd(
                 task_ref,
                 session,
                 "task-view",
-                task_step_signature.is_some(),
+                matches!(cmd_input.source, session::CmdSource::Internal),
             ) {
                 println!(
                     "Web link: {}/task/{}@{}",
