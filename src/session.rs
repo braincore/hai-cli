@@ -285,6 +285,10 @@ pub fn get_api_base_url() -> String {
     }
 }
 
+pub fn get_web_base_url() -> String {
+    get_api_base_url()[..get_api_base_url().len() - 2].to_string()
+}
+
 // --
 
 /// Abridges history in three ways:

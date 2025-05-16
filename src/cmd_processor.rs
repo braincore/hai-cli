@@ -1212,12 +1212,18 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskView(cmd::TaskViewCmd { task_ref }) => {
-            if let Some((config, _)) = get_haitask_from_task_ref(
+            if let Some((config, haitask)) = get_haitask_from_task_ref(
                 task_ref,
                 session,
                 "task-view",
                 task_step_signature.is_some(),
             ) {
+                println!(
+                    "Web link: {}/task/{}@{}",
+                    session::get_web_base_url(),
+                    haitask.name,
+                    haitask.version
+                );
                 // FUTURE: Consider pretty printing config. For now, print the
                 // raw config so that it's easier for people to copy + paste
                 // for their own purposes.
