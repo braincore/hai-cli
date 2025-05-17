@@ -1031,6 +1031,7 @@ pub async fn process_cmd(
         cmd::Cmd::TaskEnd => {
             if matches!(session.repl_mode, ReplMode::Task(..)) {
                 session.repl_mode = ReplMode::Normal;
+                session.tool_mode = None;
                 session.history.clear();
                 recalculate_input_tokens(session);
                 session.temp_files.clear();
