@@ -559,7 +559,12 @@ async fn repl(
                     continue;
                 }
                 Ok(Signal::CtrlD) => {
-                    if matches!(session.repl_mode, ReplMode::Task(..)) {
+                    if session.tool_mode.is_some() {
+                        session::CmdInput {
+                            input: "!exit".to_string(),
+                            source: session::CmdSource::Internal,
+                        }
+                    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
                         session::CmdInput {
                             input: "/task-end".to_string(),
                             source: session::CmdSource::Internal,
