@@ -478,7 +478,7 @@ async fn repl(
             }
             _ => {}
         }
-        println!("/help for more commands.");
+        println!("/help for more commands | `/task hai/feedback` for ideas & suggestions");
     };
 
     //
