@@ -559,8 +559,15 @@ async fn repl(
                     continue;
                 }
                 Ok(Signal::CtrlD) => {
-                    println!("バイバイ！");
-                    break;
+                    if matches!(session.repl_mode, ReplMode::Task(..)) {
+                        session::CmdInput {
+                            input: "/task-end".to_string(),
+                            source: session::CmdSource::Internal,
+                        }
+                    } else {
+                        println!("バイバイ！");
+                        break;
+                    }
                 }
                 unk => {
                     println!("Event: {:?}", unk);
