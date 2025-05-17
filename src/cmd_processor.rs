@@ -442,7 +442,17 @@ pub async fn process_cmd(
                 task_step_signature
             {
                 let cached_output = if *cache {
-                    db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, raw_user_input)
+                    db::get_task_step_cache(
+                        &*db.lock().await,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| a.username.as_str())
+                            .unwrap_or(""),
+                        task_fqn,
+                        step_index,
+                        raw_user_input,
+                    )
                 } else {
                     None
                 };
@@ -493,6 +503,11 @@ pub async fn process_cmd(
                 if let Some((ref task_fqn, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| a.username.as_str())
+                            .unwrap_or(""),
                         task_fqn,
                         step_index,
                         raw_user_input,
@@ -516,12 +531,22 @@ pub async fn process_cmd(
         }) => {
             let (answer, from_cache) = if *cache {
                 if let Some((ref task_fqn, step_index)) = task_step_signature {
-                    db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, raw_user_input)
-                        .map(|a| (a, true))
-                        .unwrap_or_else(|| {
-                            println!();
-                            (term::ask_question_default_empty(question, *secret), false)
-                        })
+                    db::get_task_step_cache(
+                        &*db.lock().await,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| a.username.as_str())
+                            .unwrap_or(""),
+                        task_fqn,
+                        step_index,
+                        raw_user_input,
+                    )
+                    .map(|a| (a, true))
+                    .unwrap_or_else(|| {
+                        println!();
+                        (term::ask_question_default_empty(question, *secret), false)
+                    })
                 } else {
                     println!();
                     (term::ask_question_default_empty(question, *secret), false)
@@ -547,6 +572,11 @@ pub async fn process_cmd(
                 if let Some((ref task_fqn, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| a.username.as_str())
+                            .unwrap_or(""),
                         task_fqn,
                         step_index,
                         raw_user_input,

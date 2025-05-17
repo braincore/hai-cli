@@ -27,17 +27,8 @@ pub fn open_db() -> rusqlite::Result<rusqlite::Connection> {
     conn.execute("PRAGMA foreign_keys = ON", [])?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
 
-    // Create ask cache table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS task_step_cache (
-            task_name TEXT,
-            step_index INTEGER NOT NULL,
-            step_cmd TEXT NOT NULL,
-            response TEXT NOT NULL,
-            PRIMARY KEY (task_name, step_index, step_cmd)
-        )",
-        rusqlite::params![],
-    )?;
+    // Create task step cache table
+    migrate_task_step_cache_table(&conn)?;
 
     // Create account table
     conn.execute(
@@ -64,6 +55,41 @@ pub fn open_db() -> rusqlite::Result<rusqlite::Connection> {
         rusqlite::params![],
     )?;
     Ok(conn)
+}
+
+/// Migrates the task_step_cache table to include a username column.
+/// If the table exists with the old schema, it will be dropped and recreated.
+pub fn migrate_task_step_cache_table(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    // Check if the table exists
+    let mut stmt = conn.prepare("PRAGMA table_info(task_step_cache)")?;
+    let mut col_names = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let col_name: String = row.get(1)?; // 1 = name
+        col_names.push(col_name);
+    }
+
+    // If the first column is not "username", or username is missing, we need to migrate
+    let needs_migration = col_names.is_empty() || col_names[0] != "username";
+
+    if needs_migration {
+        // Drop the old table if it exists
+        conn.execute("DROP TABLE IF EXISTS task_step_cache", [])?;
+
+        // Create the new table with username as the first column and part of the PRIMARY KEY
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS task_step_cache (
+                username TEXT NOT NULL,
+                task_name TEXT,
+                step_index INTEGER NOT NULL,
+                step_cmd TEXT NOT NULL,
+                response TEXT NOT NULL,
+                PRIMARY KEY (username, task_name, step_index, step_cmd)
+            )",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 //
@@ -306,6 +332,7 @@ pub fn delete_misc_entry(conn: &rusqlite::Connection, key: &str) -> rusqlite::Re
 
 pub fn get_task_step_cache(
     conn: &rusqlite::Connection,
+    username: &str,
     task_name: &str,
     step_index: u32,
     step_cmd: &str,
@@ -313,8 +340,8 @@ pub fn get_task_step_cache(
     let result: Option<String> = conn
         .query_row(
             "SELECT response FROM task_step_cache 
-         WHERE task_name = ?1 AND step_index = ?2 AND step_cmd = ?3",
-            rusqlite::params![task_name, step_index, step_cmd],
+         WHERE username = ?1 AND task_name = ?2 AND step_index = ?3 AND step_cmd = ?4",
+            rusqlite::params![username, task_name, step_index, step_cmd],
             |row| row.get(0),
         )
         .ok();
@@ -323,18 +350,19 @@ pub fn get_task_step_cache(
 
 pub fn set_task_step_cache(
     conn: &rusqlite::Connection,
+    username: &str,
     task_name: &str,
     step_index: u32,
     step_cmd: &str,
     response: &str,
 ) {
     conn.execute(
-        "INSERT INTO task_step_cache (task_name, step_index, step_cmd, response) 
-        VALUES (?1, ?2, ?3, ?4)
-        ON CONFLICT(task_name, step_index, step_cmd) DO UPDATE SET
+        "INSERT INTO task_step_cache (username, task_name, step_index, step_cmd, response) 
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(username, task_name, step_index, step_cmd) DO UPDATE SET
         response = excluded.response
         ",
-        rusqlite::params![task_name, step_index, step_cmd, response],
+        rusqlite::params![username, task_name, step_index, step_cmd, response],
     )
     .expect("Failed to insert");
 }

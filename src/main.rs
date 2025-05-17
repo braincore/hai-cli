@@ -749,13 +749,23 @@ async fn repl(
                     // in format due to a version update. Assume that
                     // the cache value will be updated to a compatible
                     // schema once the user enters a new value.
-                    db::get_task_step_cache(&*db.lock().await, task_fqn, step_index, &prompt)
-                        .and_then(|cached_serialized_output| {
-                            serde_json::from_str::<Vec<chat::ChatCompletionResponse>>(
-                                &cached_serialized_output,
-                            )
-                            .ok()
-                        })
+                    db::get_task_step_cache(
+                        &*db.lock().await,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| a.username.as_str())
+                            .unwrap_or(""),
+                        task_fqn,
+                        step_index,
+                        &prompt,
+                    )
+                    .and_then(|cached_serialized_output| {
+                        serde_json::from_str::<Vec<chat::ChatCompletionResponse>>(
+                            &cached_serialized_output,
+                        )
+                        .ok()
+                    })
                 } else {
                     None
                 };
@@ -824,6 +834,11 @@ async fn repl(
             if let Some((task_fqn, step_index)) = &task_step_signature {
                 db::set_task_step_cache(
                     &*db.lock().await,
+                    session
+                        .account
+                        .as_ref()
+                        .map(|a| a.username.as_str())
+                        .unwrap_or(""),
                     task_fqn,
                     *step_index,
                     &prompt,
