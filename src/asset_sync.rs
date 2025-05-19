@@ -227,15 +227,6 @@ async fn sync_entries(
             }
         }
 
-        // Download the file directly to disk
-        println!("Downloading: {} -> {}", entry.name, target_file_path);
-        if debug {
-            let _ = config::write_to_debug_log(format!(
-                "Downloading: {} -> {}\n",
-                entry.name, target_file_path
-            ));
-        }
-
         if let Some(data_url) = entry.asset.url.as_ref() {
             let download_task = Some(DownloadTask {
                 entry_name: entry.name.clone(),
