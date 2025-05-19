@@ -2307,9 +2307,6 @@ pub async fn process_cmd(
                         return ProcessCmdResult::Loop;
                     }
                 };
-                if revision_cursor.is_none() {
-                    return ProcessCmdResult::Loop;
-                }
                 loop {
                     if remaining == 0 {
                         break;
