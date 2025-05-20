@@ -351,7 +351,7 @@ See all client commands with `/help` (`/h`).
 - `/account-subscribe` - Subscribe to support the project
 - `/account-balance` - See AI credits remaining
 
-### Tools
+### More on tools
 
 Nothing makes me more secure as a human than the neverending mistakes AI makes
 when using tools. Use a lone `!` to repeat the previous tool command & prompt.
