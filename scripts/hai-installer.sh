@@ -341,7 +341,7 @@ install() {
     ensure chmod +x "$_install_dir/$_bin_name"
     say "  $_bin_name"
 
-    say "everything's installed!"
+    say "hai installed! just run hai"
 
     # Avoid modifying the users PATH if they are managing their PATH manually
     case :$PATH:
