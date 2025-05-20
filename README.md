@@ -828,20 +828,34 @@ You can resume your last chat using:
 /chat-resume
 ```
 
-Your last chat is saved locally when exiting `hai` or starting a new
-conversation via `/new` or `/reset`.
+Your last chat is saved locally whenever you exit `hai` or start a new
+conversation with `/new` or `/reset`.
 
 To save a chat for the long term as an asset, use:
 
 ```
-/chat-save [<name>]
+/chat-save
 ```
 
-If `name` is omitted, a default name `chat/...` is used. Specify the name to
-resume it:
+By default, chats are saved as assets named `chat/<timestamp>`. A descriptive
+title is automatically generated and stored in the [asset metadata](#metadata)
+for easier discovery. For example:
+
+```
+[0] /ls
+chat/2025-04-08-203003 [Public/Private Key Management for Encryption and Signing]
+```
+
+Resume a named chat:
 
 ```
 /chat-resume <name>
+```
+
+Save with a custom name:
+
+```
+/chat-save [<name>]
 ```
 
 ### Sending Emails
