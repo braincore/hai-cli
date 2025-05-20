@@ -149,8 +149,7 @@ same as the ones you use. A step can:
 Tasks make sharing workflows easy and improve their reproducibility given the
 non-deterministic nature of LLMs.
 
-The [hai-tasks repo](https://github.com/braincore/hai-tasks) has examples.
-Here's `ken/pelican-bicycle`:
+Here's [`ken/pelican-bicycle`](https://hai.superego.ai/task/ken/pelican-bicycle):
 
 ```toml
 name = "ken/pelican-bicycle"
@@ -570,10 +569,40 @@ Anyone can run your task by using its `name`:
 
 #### Examples
 
-See the [hai tasks](https://github.com/braincore/hai-tasks) repo.
+All published tasks are viewable. You can whois a user (e.g. `/whois ken`), see
+what tasks they've published, and view them via
+`/task-view <username>/<task_name>`. Or, you can use `/task-search` to find
+tasks you're interested in.
 
-Alternatively, you can whois a user (e.g. `/whois ken`), see what tasks they've
-published, and view them via `/task-view <username>/<task_name>`.
+Here are some interesting ones:
+
+- [`hai/help`](https://hai.superego.ai/task/hai/help) - Get help using hai. Ask
+  what's possible and how to do things.
+- [`hai/api`](https://hai.superego.ai/task/hai/api) - Use or learn about hai's
+  API.
+  - [`hai/get-api-token`](https://hai.superego.ai/task/hai/get-api-token) -
+    Get an API token.
+- [`hai/code`](https://hai.superego.ai/task/ken/weather) - Ask the AI about
+  hai's source code.
+- [`hai/email-asset-updates`](https://hai.superego.ai/task/hai/email-asset-updates) -
+  Get emails every time an asset is updated.
+  - [`hai/add-email`](https://hai.superego.ai/task/hai/add-email) - Verify your
+    email address.
+- [`ken/weather`](https://hai.superego.ai/task/ken/weather) - Get the weekly
+  weather forecast.
+- [`ken/absolute-mode`](https://hai.superego.ai/task/ken/absolute-mode) - Chat
+  with an AI lacking all bedside manner.
+- [`ken/baby-play`](https://hai.superego.ai/task/ken/baby-play) - Based on your
+  baby's age, gives age-appropriate ideas for activities.
+- [`ken/flashcard-add`](https://hai.superego.ai/task/ken/flashcard-add) - Helps
+  you generate and save flashcards based on the current conversation. Use
+  `/task-include ken/flashcard-add` so that the conversation isn't reset into
+  task mode.
+  - Saves your flashcards as an asset: `flaschard/deck`
+  - [`ken/flashcard-review`](https://hai.superego.ai/task/ken/flashcard-review) -
+    Review random flashcards
+
+More available in the [hai tasks](https://github.com/braincore/hai-tasks) repo.
 
 #### Task-specific commands
 
