@@ -275,6 +275,11 @@ Assets are objects stored in the cloud for your direct and indirect use via AIs.
 
 Asset names can mimic file paths with slashes.
 
+| 🙋 **Help Wanted** |
+|-------------------|
+| Interested in writing a query language (ala LINQ or SQL) for assets? |
+| All ideas welcome. Please reach out or open an issue. |
+
 #### Public
 
 Public assets start with a frontslash followed by your username (`/<username>`):
