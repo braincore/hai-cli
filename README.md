@@ -133,8 +133,8 @@ You have two options:
 A *task* in hai is a prompt-on-steroids that can be:
 
 1. Published publicly: `/task-publish <path>`
-2. Executed by anyone easily: `/task <username>/<task_name>`
-3. Or, executed from a local file: `/task <path>`
+2. Executed by anyone using the task repo: `/task <username>/<task_name>`
+3. Or, executed from a file: `/task <path>` (must start with `./`, `/`, or `~`)
 
 A *task* is made up of steps: a sequence of repl-commands. The commands are the
 same as the ones you use. A step can:

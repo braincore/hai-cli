@@ -1134,7 +1134,7 @@ fn parse_command(
                 }
             }
         }
-        "task" => {
+        "task" | "t" => {
             if !validate_options_and_print_err(cmd_name, &options, &["trust"]) {
                 return None;
             }

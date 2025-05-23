@@ -3232,7 +3232,8 @@ const HELP_MSG: &str = r##"Available Commands:
 
 --
 
-/task <name|path>            - Enter task mode by loading task from repo (username/task-name) or file path
+/t /task <name|path>         - Enter task mode by loading task from repo (username/task-name) or file path
+                               File path must start with `./`, `/`, or `~`
 /task-search <query>         - Search for tasks in the repository
 /task-view <name|path>       - View a task without loading it from repo or file path
 /task-versions <name>        - List all versions of a task in the repository

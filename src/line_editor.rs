@@ -385,6 +385,7 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/l ")
                 || line.starts_with("/cd ")
                 || line.starts_with("/task-publish ")
+                || is_task_file_path_arg(line, "/t")
                 || is_task_file_path_arg(line, "/task")
                 || is_task_file_path_arg(line, "/task-include")
                 || is_task_file_path_arg(line, "/task-forget")
@@ -403,6 +404,7 @@ impl Completer for CmdAndFileCompleter {
                 realign_suggestions(&mut completions, arg1_index, self.debug);
                 completions
             } else if line.starts_with("/task ")
+                || line.starts_with("/t ")
                 || line.starts_with("/task-view ")
                 || line.starts_with("/task-purge ")
                 || line.starts_with("/task-forget ")
