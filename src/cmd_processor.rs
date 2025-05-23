@@ -999,6 +999,7 @@ pub async fn process_cmd(
                     "  - /task-forget {} -- forgets cached/memorized answers",
                     task_ref
                 );
+                println!("  - /task-end -- Exit task mode (CTRL+D shortcut)");
                 println!();
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
                     session.cmd_queue.push_front(session::CmdInput {
@@ -1059,12 +1060,14 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskEnd => {
+            // Does not clear the conversation history because the user may
+            // have accidentally entered task mode and we don't want to lose
+            // their history when they exit. This makes accidentally using
+            // /task instead of /task-include an inconvenience rather than
+            // fatal.
             if matches!(session.repl_mode, ReplMode::Task(..)) {
                 session.repl_mode = ReplMode::Normal;
                 session.tool_mode = None;
-                session.history.clear();
-                recalculate_input_tokens(session);
-                session.temp_files.clear();
                 println!("info: task ended");
             } else {
                 eprintln!("error: not in task mode");
