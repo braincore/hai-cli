@@ -232,12 +232,7 @@ impl SyntaxHighlighterPrinter<'_> {
                         "term: ({}, {}) {} {} {}\n",
                         _x, y, terminal_width, line_width, height
                     ));
-                    crossterm::queue!(
-                        stdout,
-                        crossterm::cursor::MoveTo(0, y - height),
-                        crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown),
-                    )
-                    .unwrap();
+                    crossterm::queue!(stdout, crossterm::cursor::MoveTo(0, y - height),).unwrap();
 
                     let line_with_ending = format!("{}\n", full_first_line);
                     let highlighted_parts: Vec<(Style, &str)> =
@@ -320,12 +315,7 @@ impl SyntaxHighlighterPrinter<'_> {
                     let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
                     let height = line_width / terminal_width;
-                    crossterm::queue!(
-                        stdout,
-                        crossterm::cursor::MoveTo(x, y - height),
-                        crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
-                    )
-                    .unwrap();
+                    crossterm::queue!(stdout, crossterm::cursor::MoveTo(x, y - height),).unwrap();
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&self.buffer, ps).unwrap();
                     for (style, text) in highlighted_parts {
