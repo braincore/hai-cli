@@ -721,7 +721,7 @@ async fn repl(
         });
 
         println!();
-        println!("{}", "↓↓↓".white().on_black());
+        println!("{}", "↓↓↓".truecolor(128, 128, 128));
         println!();
 
         let masked_strings = if session.mask_secrets {
@@ -1034,7 +1034,7 @@ async fn repl(
         };
 
         println!();
-        println!("{}", "---".white().on_black());
+        println!("{}", "---".truecolor(128, 128, 128));
         println!();
     }
 
