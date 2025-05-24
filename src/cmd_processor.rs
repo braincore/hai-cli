@@ -763,6 +763,7 @@ pub async fn process_cmd(
             }
             let paths = paths_res.unwrap();
             let files: Result<Vec<_>, _> = paths.collect();
+            let mut first_file = true;
             match files {
                 Ok(files) => {
                     let mut newly_loaded_tokens = 0;
@@ -783,12 +784,22 @@ pub async fn process_cmd(
                             eprintln!("error: could not read file: {:?}: {:?}", file_path, e)
                         }
                         if let Ok(file_contents) = std::str::from_utf8(&buffer) {
-                            let file_contents_with_delimeters = format!(
+                            let mut file_contents_with_delimeters = format!(
                                 "<<<<<< BEGIN_FILE: {} >>>>>>\n{}\n<<<<<< END_FILE: {} >>>>>>",
                                 file_path.to_string_lossy(),
                                 file_contents,
                                 file_path.to_string_lossy()
                             );
+                            if first_file {
+                                // If this is the first file, inject the /load
+                                // command. This way the AI knows how the loads
+                                // were generated (glob or otherwise).
+                                file_contents_with_delimeters = format!(
+                                    "{}\n{}",
+                                    raw_user_input, file_contents_with_delimeters
+                                );
+                                first_file = false;
+                            }
                             let token_count = session_history_add_user_text_entry(
                                 &file_contents_with_delimeters,
                                 session,
@@ -946,8 +957,8 @@ pub async fn process_cmd(
                     };
 
                     let url_contents_with_delimiters = format!(
-                        "<<<<<< BEGIN_URL: {} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
-                        url, contents, url,
+                        "{}\n<<<<<< BEGIN_URL: {} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
+                        raw_user_input, url, contents, url,
                     );
                     let token_count = session_history_add_user_text_entry(
                         &url_contents_with_delimiters,
@@ -1569,8 +1580,8 @@ pub async fn process_cmd(
                     Err(_) => return ProcessCmdResult::Loop,
                 };
             let asset_contents_with_delimeters = format!(
-                "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
-                asset_name, asset_contents, asset_name,
+                "{}\n<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
+                raw_user_input, asset_name, asset_contents, asset_name,
             );
 
             let asset_token_count = session_history_add_user_text_entry(
