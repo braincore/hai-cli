@@ -572,6 +572,22 @@ Anyone can run your task by using its `name`:
 /task ken/strava-api
 ```
 
+#### Using a task to make a task
+
+To have the AI help you write a task, use:
+
+```
+/task hai/quick-task
+```
+
+You can discuss with the AI what you want the task to accomplish. When you're
+done, save the task definition to a toml file and `/task-publish` it.
+
+If you already have an active conversation with loaded resources (files, URLs,
+or assets), you can ask the AI to use the current context as the basis for your
+new task. This is especially useful for creating reusable tasks that
+automatically load your commonly-used resources.
+
 #### Examples
 
 All published tasks are viewable. You can whois a user (e.g. `/whois ken`), see
