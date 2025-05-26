@@ -209,7 +209,7 @@ async fn repl(
         debug,
     ));
 
-    let autocomplete_repl_cmds: Vec<String> = [
+    let default_autocomplete_repl_cmds: Vec<String> = [
         "/about",
         "/help",
         "/quit",
@@ -264,6 +264,7 @@ async fn repl(
         "/asset-md-set-key",
         "/asset-md-del-key",
         "/email",
+        "/fns",
         "/account",
         "/account-new",
         "/account-login",
@@ -405,6 +406,7 @@ async fn repl(
         tool_mode: None,
         use_hai_router: HaiRouterState::Off,
         temp_files: vec![],
+        ai_defined_fns: HashMap::new(),
     };
 
     if let Some(account) = &account {
@@ -485,9 +487,16 @@ async fn repl(
     // REPL Loop
     //
     loop {
+        let mut autocomplete_repl_cmds = default_autocomplete_repl_cmds.clone();
+        autocomplete_repl_cmds.extend(
+            session
+                .ai_defined_fns
+                .keys()
+                .map(|fn_name| format!("/{}", fn_name)),
+        );
         line_editor.set_line_completer(
             debug,
-            autocomplete_repl_cmds.clone(),
+            autocomplete_repl_cmds,
             autocomplete_repl_ai_models.clone(),
             mk_api_client(Some(&session)),
         );
@@ -988,6 +997,37 @@ async fn repl(
                                 Ok(output_text) => output_text,
                                 Err(e) => {
                                     let err_text = format!("error executing hai-repl tool: {}", e);
+                                    println!("{}", err_text);
+                                    err_text
+                                }
+                            }
+                        } else if matches!(tp.tool, tool::Tool::Fn) {
+                            // Get first free name
+                            let mut i = session.ai_defined_fns.len();
+                            let ai_defined_tool_name = loop {
+                                let test_name = format!("f{}", i);
+                                if !session.ai_defined_fns.contains_key(&test_name) {
+                                    break test_name;
+                                }
+                                i += 1;
+                            };
+                            match tool::extract_ai_defined_fn_def(&arg) {
+                                Ok(fn_def) => {
+                                    let ai_defined_fn = session::AiDefinedFn {
+                                        fn_def,
+                                        language: session::AiDefinedFnLang::Python,
+                                    };
+                                    session.ai_defined_fns.insert(
+                                        ai_defined_tool_name.clone(),
+                                        (ai_defined_fn, is_task_mode_step),
+                                    );
+                                    let output_text =
+                                        format!("Stored as command: /{}", ai_defined_tool_name);
+                                    println!("{}", output_text);
+                                    output_text
+                                }
+                                Err(e) => {
+                                    let err_text = format!("error extracting function: {}", e);
                                     println!("{}", err_text);
                                     err_text
                                 }

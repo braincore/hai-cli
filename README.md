@@ -814,6 +814,58 @@ The Sun is enormously large compared to Earth. Here are the key measurements:
 - Sun's mass: approximately 1.989 × 10^30 kilograms
 ```
 
+### AI-Defined Reusable Functions
+
+A drawback of `!py` is that the AI writes the Python code every time the tool
+is used. This potentially consumes a lot of output tokens and the time it takes
+to generate them. The waste is apparent when prompting `!py` repeatedly with
+different inputs (string, file, ...).
+
+The solution is to use `!fn-py <prompt>` which instructs the AI to generate a
+Python function that takes an argument and returns a JSON-compatible result
+that is added to the conversation.
+
+```
+[0]: !fn-py find the sqrt
+
+↓↓↓
+
+def f(arg):
+    import math
+    return math.sqrt(arg)
+
+⚙ ⚙ ⚙
+
+Stored as command: /f0
+```
+
+The new function can be invoked like a command: `/f0 <arg>`. For example:
+
+```
+[3]: /f0 64
+8.0
+```
+
+If you want the AI to generate the call to `/f0`, use the `!hai` tool:
+
+```
+[5]: !hai what's the sqrt of pi
+
+↓↓↓
+
+- /f0 3.141592653589793
+
+
+⚙ ⚙ ⚙
+
+Pushed 1 command(s) into queue
+
+---
+
+!hai-tool[0]: /f0 3.141592653589793
+1.7724538509055159
+```
+
 ### More on Assets
 
 #### Metadata

@@ -15,6 +15,7 @@ pub enum Tool {
     ShellExec,
     ShellExecWithScript(String),
     HaiRepl,
+    Fn,
 }
 
 /// Convert tool to repl command w/o prompt.
@@ -24,6 +25,7 @@ pub fn tool_to_cmd(tool: &Tool, require: bool) -> String {
         Tool::CopyToClipboard => "clip",
         Tool::ExecPythonScript => "py",
         Tool::ExecShellScript => "shscript",
+        Tool::Fn => "fn",
         Tool::HaiRepl => "hai",
         Tool::ShellExec => "sh",
         Tool::ShellExecWithScript(cmd) => &format!("'{}'", cmd),
@@ -59,6 +61,24 @@ pub async fn execute_shell_based_tool(
     })
 }
 
+pub async fn execute_ai_defined_tool(
+    fn_def: &str,
+    arg: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let script = format!(
+        r#"{}
+
+if __name__ == "__main__":
+    import json
+    arg = {}
+    res = f(arg)
+    print(json.dumps(res))
+"#,
+        fn_def, arg
+    );
+    Ok(exec_python_script(&script).await?)
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct ToolHaiReplArg {
     cmds: Vec<String>,
@@ -85,6 +105,15 @@ pub fn execute_hai_repl_tool(
         }
         _ => "fatal: not a hai-repl tool".to_string(),
     })
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+struct ToolAiDefineFnArg {
+    input: String,
+}
+
+pub fn extract_ai_defined_fn_def(arg: &str) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_str::<ToolAiDefineFnArg>(arg)?.input)
 }
 
 // -- Shell-based tools

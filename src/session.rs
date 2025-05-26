@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -54,6 +54,17 @@ pub struct CmdInput {
     pub source: CmdSource,
 }
 
+#[derive(Debug)]
+pub struct AiDefinedFn {
+    pub fn_def: String,
+    pub language: AiDefinedFnLang,
+}
+
+#[derive(Debug)]
+pub enum AiDefinedFnLang {
+    Python,
+}
+
 pub struct SessionState {
     pub repl_mode: ReplMode,
     /// AI model in active use
@@ -88,6 +99,8 @@ pub struct SessionState {
     pub use_hai_router: HaiRouterState,
     /// (Temporary asset file, is task step?)
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
+    /// Tools defined by the AI: name -> (Fn def, is task step?).
+    pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
 }
 
 /// Recalculates token count based on history.

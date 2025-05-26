@@ -132,6 +132,10 @@ pub enum Cmd {
     ChatSave(ChatSaveCmd),
     /// Send an email
     Email(EmailCmd),
+    /// Execute AI-defined function
+    FnExec(FnExecCmd),
+    /// List all AI-defined functions
+    Fns,
     /// Get current account (or if specified, switch to logged-in account)
     Account(AccountCmd),
     /// Make a new account
@@ -567,6 +571,15 @@ pub struct EmailCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct FnExecCmd {
+    /// Name of the function
+    pub fn_name: String,
+    /// Argument to fn
+    /// Syntax should be native to language of function definition
+    pub arg: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct AccountCmd {
     pub username: Option<String>,
 }
@@ -583,12 +596,17 @@ pub struct WhoisCmd {
 
 fn get_cmd_re() -> &'static Regex {
     static CMD_RE: OnceLock<Regex> = OnceLock::new();
-    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z-]*)( |\(|$)").unwrap())
+    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z0-9-]*)( |\(|$)").unwrap())
 }
 
 fn get_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+|'(?:\\'|[^'])*')?( |$)").unwrap())
+    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?( |\(|$)").unwrap())
+}
+
+fn get_ai_def_tool_re() -> &'static Regex {
+    static TOOL_RE: OnceLock<Regex> = OnceLock::new();
+    TOOL_RE.get_or_init(|| Regex::new(r"^f([0-9]*|'(?:\\'|[^'])*')?( |$)").unwrap())
 }
 
 /// Parses user/task input.
@@ -669,7 +687,7 @@ pub fn parse_user_input(
         };
         // If the next char is blank, then we assume the user intends to use a
         // previous tool so we leave the tool_name empty.
-        let (remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
+        let (mut remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
             (remaining, "".to_string())
         } else {
             let tool_re = get_tool_re();
@@ -695,7 +713,26 @@ pub fn parse_user_input(
                 }
             }
         };
-        parse_tool_command(tool_name.as_str(), require, last_tool_cmd, remaining, input)
+        let options_re = Regex::new(r"(\([^\)]*\))?( |$)").unwrap();
+        let (remaining, options) = match options_re.captures(remaining) {
+            Some(captures) => {
+                if let Some(m) = captures.get(1) {
+                    remaining = &remaining[m.end()..];
+                    (remaining, parse_options(m.as_str()))
+                } else {
+                    (remaining, HashMap::new())
+                }
+            }
+            None => (remaining, HashMap::new()),
+        };
+        parse_tool_command(
+            tool_name.as_str(),
+            require,
+            last_tool_cmd,
+            options.clone(),
+            remaining,
+            input,
+        )
     } else if input.ends_with("\n\n") {
         let input = input.trim_end();
         println!("Info: Message is queued up and will be sent with your next message.");
@@ -814,6 +851,16 @@ fn parse_command(
     remaining: &str,
     full_input: &str, // Only for the fallback case
 ) -> Option<Cmd> {
+    let ai_def_tool_re = get_ai_def_tool_re();
+    if let Some(captures) = ai_def_tool_re.captures(cmd_name) {
+        if let Some(m) = captures.get(1) {
+            let fn_name = format!("f{}", m.as_str());
+            return Some(Cmd::FnExec(FnExecCmd {
+                fn_name,
+                arg: remaining.trim().to_string(),
+            }));
+        }
+    }
     match cmd_name {
         "quit" | "q" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
@@ -1629,6 +1676,16 @@ fn parse_command(
                 }
             }
         }
+        "fns" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if parse_one_arg_catchall(remaining).is_some() {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Fns)
+        }
         "account" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
@@ -1743,6 +1800,7 @@ fn parse_tool_command(
     tool_name: &str,
     require: bool,
     last_tool_cmd: Option<ToolCmd>,
+    options: HashMap<String, String>,
     remaining: &str,
     full_input: &str, // Only for the fallback case
 ) -> Option<Cmd> {
@@ -1830,6 +1888,29 @@ fn parse_tool_command(
                 require,
             })),
         },
+        "fn-py" => {
+            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                    tool: tool::Tool::Fn,
+                    prompt,
+                    require,
+                    cache,
+                })),
+                None => {
+                    eprintln!("Usage: !fn-py(cache=false) <prompt: function to implement>");
+                    None
+                }
+            }
+        }
         "exit" => Some(Cmd::ToolModeExit),
         "" => {
             // Tool (and possibly prompt) re-use
@@ -1957,6 +2038,23 @@ fn validate_options_and_print_err(
         eprintln!(
             "Error: Invalid option(s) for /{}: {}",
             cmd, invalid_keys_pretty
+        );
+        false
+    } else {
+        true
+    }
+}
+
+fn validate_options_and_print_err_for_tool(
+    tool_name: &str,
+    options: &HashMap<String, String>,
+    valid_keys: &[&str],
+) -> bool {
+    if let Err(invalid_keys) = validate_options(options, valid_keys) {
+        let invalid_keys_pretty = invalid_keys.join(", ");
+        eprintln!(
+            "Error: Invalid option(s) for !{}: {}",
+            tool_name, invalid_keys_pretty
         );
         false
     } else {
@@ -2456,6 +2554,25 @@ mod tests {
                 assert!(require);
             }
             _ => panic!("Failed to re-use tool"),
+        }
+    }
+
+    #[test]
+    fn test_tool_command_with_option() {
+        let input = "!fn-py(cache=true) double a number";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::Fn,
+                prompt,
+                require,
+                cache,
+            })) => {
+                assert_eq!(prompt, "double a number");
+                assert!(require);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse !fn-py command properly"),
         }
     }
 }

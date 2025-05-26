@@ -54,6 +54,21 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
                 "additionalProperties": false,
             },
         }),
+        Tool::Fn => json!({
+            "name": tool_name,
+            "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "A Python function definition. IT MUST BE NAMED `f`. All dependencies including imports and other functions should be defined in this function. The signature must be `f(arg: JsonCompatible) -> JsonCompatible` where JsonCompatible is a native type that's serializable with the `json` package (e.g. int, float, str, dict, list). Add Python type annotations for the function signature!"
+                    },
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
         Tool::ShellExec => json!({
             "name": tool_name,
             "description": format!("Execute a shell command or shell pipeline. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
@@ -162,6 +177,19 @@ Available Tools:
 
 --
 
+AI-Defined Tools:
+
+!fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>` or `!f<index>`.
+                        The function will be defined as `f(arg: JsonCompatible) -> JsonCompatible` where JsonCompatible
+                        is a native type that's serializable with the `json` package (e.g. int, float, str, dict, list).
+                        The function will be given a name `f<index>` where `index>` is a unique number which can be
+                        used to invoke it as a /command or !tool.
+/f<index> <arg>       - Invoke a Python function defined by AI with the given index.
+                        `arg` must be a serialized JSON string: 1 or "abc"
+                        The output will be serialized JSON.
+
+--
+
 Assets:
 /asset-new <name> ⏎<body> - Create/replace a `doc` asset. This is a MULTI-line command.
                            - Use a newline after `name` to write arbitrary multi-line content to the asset.
@@ -213,6 +241,7 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::CopyToClipboard => "copy_to_clipboard",
         Tool::ExecPythonScript => "exec_python_script",
         Tool::ExecShellScript => "exec_shell_script",
+        Tool::Fn => "fn",
         Tool::ShellExec => "shell_exec",
         Tool::ShellExecWithScript(_) => "shell_exec_with_script",
     }
@@ -224,6 +253,7 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "copy_to_clipboard" => Some(Tool::CopyToClipboard),
         "exec_python_script" => Some(Tool::ExecPythonScript),
         "exec_shell_script" => Some(Tool::ExecShellScript),
+        "fn" => Some(Tool::Fn),
         "shell_exec" => Some(Tool::ShellExec),
         "shell_exec_with_script" => Some(Tool::ShellExecWithScript(
             "shell_exec_with_script".to_string(),

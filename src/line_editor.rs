@@ -615,6 +615,7 @@ impl CmdAndFileCompleter {
             "!shscript",
             "!?shscript",
             "!clip",
+            "!fn-py",
             "!exit",
         ]
         .iter()

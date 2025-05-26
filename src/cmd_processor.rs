@@ -337,6 +337,9 @@ pub async fn process_cmd(
                 .retain(|log_entry| log_entry.retention_policy.0);
             recalculate_input_tokens(session);
             session.temp_files.retain(|(_, is_task_step)| *is_task_step);
+            session
+                .ai_defined_fns
+                .retain(|_, (_, is_task_step)| *is_task_step);
             if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -353,6 +356,9 @@ pub async fn process_cmd(
             });
             recalculate_input_tokens(session);
             session.temp_files.retain(|(_, is_task_step)| *is_task_step);
+            session
+                .ai_defined_fns
+                .retain(|_, (_, is_task_step)| *is_task_step);
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
@@ -2790,6 +2796,57 @@ lesson (e.g. "understanding").\n\n{}"#,
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Fns => {
+            if session.ai_defined_fns.is_empty() {
+                println!("No AI-defined functions available.");
+            } else {
+                println!("Available AI-defined functions:");
+                println!();
+                for (fn_name, ai_defined_fn) in &session.ai_defined_fns {
+                    println!("- /{}", fn_name);
+                    println!("{}", ai_defined_fn.0.fn_def);
+                    println!()
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::FnExec(cmd::FnExecCmd { fn_name, arg }) => {
+            let ai_defined_fn =
+                if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(fn_name) {
+                    ai_defined_fn
+                } else {
+                    eprintln!("error: function '{}' is undefined", fn_name);
+                    return ProcessCmdResult::Loop;
+                };
+
+            // Verify `arg` is valid JSON
+            match serde_json::from_str::<serde_json::Value>(&arg) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: invalid JSON argument: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            }
+
+            // Execute AI-defined tool/function
+            let output = match tool::execute_ai_defined_tool(&ai_defined_fn.fn_def, &arg).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to execute tool: {}", e);
+                    e.to_string()
+                }
+            };
+
+            // Save output to conversation history
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &output,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Account(cmd::AccountCmd { username }) => {
             if let Some(username) = username {
                 if username == "_" {
@@ -3291,7 +3348,17 @@ Available Tools:
 
 --
 
-EXPERIMENTAL:
+AI-Defined Functions (Experimental):
+!fn-py <prompt>              - Ask AI to write a Python function to implement your prompt.
+                               Function is given a name (`f<index>`) to invoke with: `/f<index> <arg>`
+/f<index> <arg>              - <arg> must be a valid Python value (e.g. 1 or "abc")
+                               Output will be added to the conversation
+                               Use the !hai tool to prompt the AI invoke the function
+/fns                         - List all available functions.
+
+--
+
+Assets (Experimental):
 /a /asset <name> [<editor>]  - Open asset in editor (create if does not exist)
 /asset-new <name>            - Create a new asset and open editor
 /asset-edit <name>           - Open existing asset in editor
