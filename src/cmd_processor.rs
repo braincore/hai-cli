@@ -332,14 +332,17 @@ pub async fn process_cmd(
             save_chat::save_chat_to_db(session, db).await;
             // In task-mode, we keep all task-mode initialization steps regardless
             // of standard retention policy.
+            let task_mode = matches!(session.repl_mode, ReplMode::Task(..));
             session
                 .history
-                .retain(|log_entry| log_entry.retention_policy.0);
+                .retain(|log_entry| task_mode && log_entry.retention_policy.0);
             recalculate_input_tokens(session);
-            session.temp_files.retain(|(_, is_task_step)| *is_task_step);
+            session
+                .temp_files
+                .retain(|(_, is_task_step)| task_mode && *is_task_step);
             session
                 .ai_defined_fns
-                .retain(|_, (_, is_task_step)| *is_task_step);
+                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -350,15 +353,18 @@ pub async fn process_cmd(
         }
         cmd::Cmd::Reset => {
             save_chat::save_chat_to_db(session, db).await;
+            let task_mode = matches!(session.repl_mode, ReplMode::Task(..));
             session.history.retain(|log_entry| {
-                log_entry.retention_policy.0
+                (task_mode && log_entry.retention_policy.0)
                     || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
             });
             recalculate_input_tokens(session);
-            session.temp_files.retain(|(_, is_task_step)| *is_task_step);
+            session
+                .temp_files
+                .retain(|(_, is_task_step)| task_mode && *is_task_step);
             session
                 .ai_defined_fns
-                .retain(|_, (_, is_task_step)| *is_task_step);
+                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");

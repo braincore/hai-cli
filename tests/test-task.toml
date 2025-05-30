@@ -1,0 +1,9 @@
+name = "hai/test-task"
+
+version = "1.0.0"
+
+description = "For testing only. Do not publish"
+
+steps = [
+    "/pin This is a test",
+]

@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use predicates::str::contains;
+use predicates::str::{contains, ends_with};
 
 fn default_cmd() -> Command {
     let mut cmd = Command::cargo_bin("hai").unwrap();
@@ -53,4 +53,35 @@ fn test_new() {
         .arg("/n")
         .assert()
         .stdout(contains("New conversation begun"));
+}
+
+#[test]
+fn test_task() {
+    default_cmd()
+        .arg("/task ./tests/test-task.toml")
+        .assert()
+        .stdout(contains("TASK MODE ENABLED"));
+
+    default_cmd()
+        .arg("/task ./tests/test-task.toml")
+        .arg("/task-end")
+        .assert()
+        .stdout(contains("task ended"));
+
+    // Check that /new does not clear out task step messages
+    default_cmd()
+        .arg("/task ./tests/test-task.toml")
+        .arg("/new")
+        .arg("/dump")
+        .assert()
+        .stdout(ends_with("}\n")); // Verifies convo history is empty
+
+    // Check that /new cleared out /ping because task ended
+    default_cmd()
+        .arg("/task ./tests/test-task.toml")
+        .arg("/task-end")
+        .arg("/new")
+        .arg("/dump")
+        .assert()
+        .stdout(ends_with("/dump\n")); // Verifies convo history is empty
 }
