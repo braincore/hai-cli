@@ -368,14 +368,18 @@ async fn repl(
     };
 
     let account = if let Some(force_account) = force_account {
-        match db::get_account_by_username(&*db.lock().await, &force_account)? {
-            Some(account) => Some(account),
-            None => {
-                eprintln!(
-                    "error: `{}` is unavailable (try /account-login)",
-                    force_account
-                );
-                process::exit(1);
+        if force_account == "_" {
+            None
+        } else {
+            match db::get_account_by_username(&*db.lock().await, &force_account)? {
+                Some(account) => Some(account),
+                None => {
+                    eprintln!(
+                        "error: `{}` is unavailable (try /account-login)",
+                        force_account
+                    );
+                    process::exit(1);
+                }
             }
         }
     } else {
