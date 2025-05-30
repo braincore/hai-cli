@@ -223,7 +223,12 @@ impl SyntaxHighlighterPrinter<'_> {
                 if let Some((_x, y)) = self.line_start_cursor_position.take() {
                     let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
-                    let height = (line_width / terminal_width) + 1;
+                    // This is a bit tricky.
+                    // Let W be the terminal_width. If W characters are
+                    // printed, the cursor will report its position as W-1.
+                    // Therefore, if W characters are printed, we want the
+                    // division to be 0: (W-1)/W.
+                    let height = ((line_width - 1) / terminal_width) + 1;
                     let _ = crate::config::write_to_debug_log(format!(
                         "FIRST line: {:?}\n",
                         full_first_line
@@ -314,7 +319,7 @@ impl SyntaxHighlighterPrinter<'_> {
                     let ps = term_color::get_syntax_set();
                     let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
-                    let height = line_width / terminal_width;
+                    let height = (line_width - 1) / terminal_width;
                     crossterm::queue!(stdout, crossterm::cursor::MoveTo(x, y - height),).unwrap();
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&self.buffer, ps).unwrap();

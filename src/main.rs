@@ -1,4 +1,4 @@
-use ai_provider::{anthropic, ollama, openai};
+use ai_provider::{anthropic, ollama, openai, void};
 use chat::ChatCompletionResponse;
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -1276,6 +1276,13 @@ pub async fn prompt_ai(
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
+            )
+            .await
+        }
+        config::AiModel::Void(_) => {
+            void::send_to_void(
+                config::get_ai_model_provider_name(&session.ai),
+                masked_strings,
             )
             .await
         }

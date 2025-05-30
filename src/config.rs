@@ -131,6 +131,14 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
                     )));
                 }
             }
+            let void_regex = Regex::new(r"^void/(\S+)$").unwrap();
+            if let Some(captures) = void_regex.captures(ai_model) {
+                if let Some(submodel) = captures.get(1) {
+                    return Some(AiModel::Void(VoidModel::Other(
+                        submodel.as_str().to_string(),
+                    )));
+                }
+            }
             None
         }
     }
@@ -273,6 +281,8 @@ pub enum AiModel {
     Google(GoogleModel),
     Ollama(OllamaModel),
     OpenAi(OpenAiModel),
+    /// For testing only
+    Void(VoidModel),
 }
 
 #[derive(Debug)]
@@ -323,6 +333,11 @@ pub enum OpenAiModel {
     Other(String),
 }
 
+#[derive(Debug)]
+pub enum VoidModel {
+    Other(String),
+}
+
 pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
     match ai_model {
         AiModel::Anthropic(model) => match model {
@@ -363,6 +378,9 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OpenAiModel::O3Mini => "o3-mini-2025-01-31",
             OpenAiModel::O4Mini => "o4-mini-2025-04-16",
             OpenAiModel::Other(name) => name,
+        },
+        AiModel::Void(model) => match model {
+            VoidModel::Other(name) => name,
         },
     }
 }
@@ -408,6 +426,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             OpenAiModel::O3Mini => "o3-mini",
             OpenAiModel::O4Mini => "o4-mini",
             OpenAiModel::Other(name) => name,
+        },
+        AiModel::Void(model) => match model {
+            VoidModel::Other(name) => name,
         },
     }
 }
@@ -492,6 +513,10 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
                 tool: true,
             },
         },
+        AiModel::Void(_) => AiModelCapability {
+            image: true,
+            tool: true,
+        },
     }
 }
 
@@ -531,6 +556,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | OpenAiModel::O3Mini
                 | OpenAiModel::O4Mini
         ),
+        AiModel::Void(_) => false,
     }
 }
 
@@ -574,6 +600,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::O4Mini => Some((1100, 4400)),
             OpenAiModel::Other(_) => None,
         },
+        AiModel::Void(_) => None,
     }
 }
 
@@ -813,7 +840,7 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
                 return false;
             }
         }
-        AiModel::Ollama(_) => {
+        AiModel::Ollama(_) | AiModel::Void(_) => {
             // No auth needed
         }
     };

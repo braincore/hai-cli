@@ -8,6 +8,17 @@ fn default_cmd() -> Command {
     cmd
 }
 
+fn default_cmd_void_model(model: &str) -> Command {
+    let mut cmd = Command::cargo_bin("hai").unwrap();
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR")); // Set to crate root
+    cmd.arg("-u")
+        .arg("_")
+        .arg("-m")
+        .arg(format!("void/{}", model))
+        .arg("bye");
+    cmd
+}
+
 #[test]
 fn test_account() {
     default_cmd()
@@ -84,4 +95,12 @@ fn test_task() {
         .arg("/dump")
         .assert()
         .stdout(ends_with("/dump\n")); // Verifies convo history is empty
+}
+
+#[test]
+fn test_ai_prompt_basic() {
+    default_cmd_void_model("hello-world")
+        .arg("hi")
+        .assert()
+        .stdout(ends_with("hello, world\n"));
 }

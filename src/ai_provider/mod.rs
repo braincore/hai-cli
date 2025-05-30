@@ -3,3 +3,4 @@ pub mod ollama;
 pub mod openai;
 pub mod tool_schema;
 mod util;
+pub mod void;
