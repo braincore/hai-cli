@@ -2829,23 +2829,24 @@ lesson (e.g. "understanding").\n\n{}"#,
                     return ProcessCmdResult::Loop;
                 };
 
-            // Verify `arg` is valid JSON
-            match serde_json::from_str::<serde_json::Value>(&arg) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("error: invalid JSON argument: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            }
+            let arg_with_default = if arg.is_empty()
+                && matches!(ai_defined_fn.language, session::AiDefinedFnLang::Python)
+            {
+                "None".to_string()
+            } else {
+                arg.clone()
+            };
 
             // Execute AI-defined tool/function
-            let output = match tool::execute_ai_defined_tool(&ai_defined_fn.fn_def, &arg).await {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("error: failed to execute tool: {}", e);
-                    e.to_string()
-                }
-            };
+            let output =
+                match tool::execute_ai_defined_tool(&ai_defined_fn.fn_def, &arg_with_default).await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: failed to execute tool: {}", e);
+                        e.to_string()
+                    }
+                };
 
             // Save output to conversation history
             session_history_add_user_cmd_and_reply_entries(
