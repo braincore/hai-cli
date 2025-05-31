@@ -838,8 +838,23 @@ async fn repl(
                     chat::ChatCompletionResponse::Message { ref text } => {
                         println!("{}", text);
                     }
-                    chat::ChatCompletionResponse::Tool { ref arg, .. } => {
-                        println!("{}", arg);
+                    chat::ChatCompletionResponse::Tool {
+                        ref tool_id,
+                        ref tool_name,
+                        ref arg,
+                        ..
+                    } => {
+                        // Since the tool response is saved raw in the history,
+                        // use the JsonObjectAccumulator to process and print
+                        // the response in the same user-friendly way as done
+                        // in the AI providers.
+                        let mut json_obj_acc = ai_provider::util::JsonObjectAccumulator::new(
+                            tool_id.clone(),
+                            tool_name.clone(),
+                            masked_strings.clone(),
+                        );
+                        json_obj_acc.acc(arg);
+                        json_obj_acc.end();
                     }
                 };
             }
