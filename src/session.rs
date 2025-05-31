@@ -10,6 +10,7 @@ use crate::{
     db::{self, LogEntryRetentionPolicy},
 };
 
+#[derive(Debug)]
 pub enum ReplMode {
     Normal,
     /// Enter task-mode for task with given fqn.
@@ -17,7 +18,7 @@ pub enum ReplMode {
     Task(String, bool),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum HaiRouterState {
     On,
     OffForModel,
@@ -65,6 +66,7 @@ pub enum AiDefinedFnLang {
     Python,
 }
 
+#[derive(Debug)]
 pub struct SessionState {
     pub repl_mode: ReplMode,
     /// AI model in active use

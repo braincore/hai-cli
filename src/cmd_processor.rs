@@ -412,6 +412,10 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::DumpSession => {
+            println!("{:#?}", session);
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::About => {
             println!(
                 r##"  _          ___

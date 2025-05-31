@@ -154,6 +154,8 @@ pub enum Cmd {
     Cost,
     /// Dumps raw chat history (undocumented)
     Dump,
+    /// Dumps session info (undocumented)
+    DumpSession,
     /// Program info
     About,
 }
@@ -937,6 +939,16 @@ fn parse_command(
                 return None;
             }
             Some(Cmd::Dump)
+        }
+        "dump-session" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if parse_one_arg_catchall(remaining).is_some() {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::DumpSession)
         }
         "about" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
