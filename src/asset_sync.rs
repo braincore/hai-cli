@@ -10,13 +10,20 @@ use crate::api::{
     client::HaiClient,
     types::asset::{
         AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg, AssetEntryOp,
+        AssetMetadataInfo,
     },
 };
 use crate::config;
 
 struct DownloadTask {
     entry_name: String,
-    data_url: String,
+    url: String,
+    task_type: DownloadTaskType,
+}
+
+enum DownloadTaskType {
+    Data,
+    Metadata,
 }
 
 /// Current limitations:
@@ -146,37 +153,40 @@ async fn sync_entries(
             None => &entry.name, // If for some reason it doesn't have the prefix
         };
 
-        // Construct the full target path
-        let target_file_path = format!("{}/{}", target_path, relative_path);
+        // Construct the full target path for the data asset
+        let target_data_file_path = format!("{}/{}", target_path, relative_path);
 
         if matches!(entry.op, AssetEntryOp::Delete) {
-            entry_with_tasks.push((entry, target_file_path, None));
+            entry_with_tasks.push((entry, target_data_file_path, None));
             continue;
         }
 
-        let expected_hash = entry.asset.hash.clone().unwrap_or("".to_string());
+        let expected_data_hash = entry.asset.hash.clone().unwrap_or("".to_string());
 
         // Check if file already exists and has the correct hash
-        let target_file = std::path::Path::new(&target_file_path);
-        if target_file.exists() && !expected_hash.is_empty() {
-            match get_file_hash(&target_file_path).await {
-                Ok(file_hash) => {
+        let target_data_file = std::path::Path::new(&target_data_file_path);
+        let download_data = if target_data_file.exists() && !expected_data_hash.is_empty() {
+            match get_file_hash(&target_data_file_path).await {
+                Ok(data_file_hash) => {
                     // Convert the expected hash from hex to bytes
-                    match hex_to_bytes(&expected_hash) {
-                        Ok(decoded_hash) => {
-                            if file_hash == decoded_hash {
+                    match hex_to_bytes(&expected_data_hash) {
+                        Ok(decoded_data_hash) => {
+                            if data_file_hash == decoded_data_hash {
                                 if debug {
                                     let _ = config::write_to_debug_log(format!(
                                         "Skipping (hash match): {}\n",
-                                        target_file_path
+                                        target_data_file_path
                                     ));
                                 }
-                                continue; // Skip download
-                            } else if debug {
-                                let _ = config::write_to_debug_log(format!(
-                                    "Hash mismatch, re-downloading: {}\n",
-                                    target_file_path
-                                ));
+                                false
+                            } else {
+                                if debug {
+                                    let _ = config::write_to_debug_log(format!(
+                                        "Hash mismatch, re-downloading: {}\n",
+                                        target_data_file_path
+                                    ));
+                                }
+                                true
                             }
                         }
                         Err(e) => {
@@ -186,7 +196,7 @@ async fn sync_entries(
                                     entry.name, e
                                 ));
                             }
-                            // Continue with download
+                            true
                         }
                     }
                 }
@@ -197,14 +207,87 @@ async fn sync_entries(
                             entry.name, e
                         ));
                     }
-                    // Continue with download
+                    true
                 }
             }
+        } else {
+            true
+        };
+
+        let target_metadata_file_path = format!("{}/{}.metadata", target_path, relative_path);
+        let target_metadata_file = std::path::Path::new(&target_metadata_file_path);
+
+        let expected_metadata_hash = entry
+            .metadata
+            .as_ref()
+            .map(|md| md.hash.clone())
+            .flatten()
+            .unwrap_or("".to_string());
+
+        let download_metadata =
+            if target_metadata_file.exists() && !expected_metadata_hash.is_empty() {
+                match get_file_hash(&target_metadata_file_path).await {
+                    Ok(metadata_file_hash) => {
+                        // Convert the expected hash from hex to bytes
+                        match hex_to_bytes(&expected_metadata_hash) {
+                            Ok(decoded_metadata_hash) => {
+                                if metadata_file_hash == decoded_metadata_hash {
+                                    if debug {
+                                        let _ = config::write_to_debug_log(format!(
+                                            "Skipping (hash match): {}\n",
+                                            target_metadata_file_path
+                                        ));
+                                    }
+                                    false
+                                } else {
+                                    if debug {
+                                        let _ = config::write_to_debug_log(format!(
+                                            "Hash mismatch, re-downloading: {}\n",
+                                            target_metadata_file_path
+                                        ));
+                                    }
+                                    true
+                                }
+                            }
+                            Err(e) => {
+                                if debug {
+                                    let _ = config::write_to_debug_log(format!(
+                                        "warning: failed to decode hash for '{}' metadata: {}\n",
+                                        entry.name, e
+                                    ));
+                                }
+                                true
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if debug {
+                            let _ = config::write_to_debug_log(format!(
+                                "warning: failed to calculate hash for existing file '{}': {}\n",
+                                entry.name, e
+                            ));
+                        }
+                        true
+                    }
+                }
+            } else {
+                true
+            };
+
+        if !download_data && !download_metadata {
+            // Skip this entry if no download is needed
+            if debug {
+                let _ = config::write_to_debug_log(format!(
+                    "Skipping (no download needed): {}\n",
+                    target_data_file_path
+                ));
+            }
+            continue;
         }
 
         // Ensure the parent directory exists
-        let target_file = std::path::Path::new(&target_file_path);
-        if let Some(parent) = target_file.parent() {
+        let target_data_file = std::path::Path::new(&target_data_file_path);
+        if let Some(parent) = target_data_file.parent() {
             if !parent.exists() {
                 match std::fs::create_dir_all(parent) {
                     Ok(_) => {
@@ -227,16 +310,35 @@ async fn sync_entries(
             }
         }
 
-        if let Some(data_url) = entry.asset.url.as_ref() {
-            let download_task = Some(DownloadTask {
-                entry_name: entry.name.clone(),
-                data_url: data_url.clone(),
-            });
-            entry_with_tasks.push((entry, target_file_path, download_task));
+        if download_data {
+            if let Some(data_url) = entry.asset.url.as_ref() {
+                let data_download_task = Some(DownloadTask {
+                    entry_name: entry.name.clone(),
+                    url: data_url.clone(),
+                    task_type: DownloadTaskType::Data,
+                });
+                entry_with_tasks.push((entry.clone(), target_data_file_path, data_download_task));
+            }
+        }
+        if download_metadata {
+            if let Some(metadata_info) = entry.metadata.as_ref() {
+                if let Some(metadata_url) = metadata_info.url.as_ref() {
+                    let metadata_download_task = Some(DownloadTask {
+                        entry_name: entry.name.clone(),
+                        url: metadata_url.clone(),
+                        task_type: DownloadTaskType::Metadata,
+                    });
+                    entry_with_tasks.push((
+                        entry,
+                        target_metadata_file_path,
+                        metadata_download_task,
+                    ));
+                }
+            }
         }
     }
 
-    let max_concurrent_downloads = 5;
+    let max_concurrent_downloads = 10;
 
     println!(
         "Starting {} downloads with max {} concurrent...",
@@ -259,23 +361,30 @@ async fn sync_entries(
         if let Some(task) = task {
             let entry_clone = entry.clone();
             let entry_name = task.entry_name.clone();
-            let data_url = task.data_url.clone();
+            let url = task.url.clone();
             let target_path_clone = target_path.clone();
             let sem_clone = Arc::clone(&semaphore);
+            let type_str = match task.task_type {
+                DownloadTaskType::Data => "data",
+                DownloadTaskType::Metadata => "metadata",
+            };
 
             // Create a future that acquires a semaphore before downloading to
             // cap the number of simultaneous downloads.
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
 
-                println!("Downloading: {} -> {}", entry_name, target_path_clone);
+                println!(
+                    "Downloading: {} ({}) -> {}",
+                    entry_name, type_str, target_path_clone
+                );
                 if debug {
                     let _ = config::write_to_debug_log(format!(
-                        "Downloading: {} -> {}\n",
-                        entry_name, target_path_clone
+                        "Downloading: {} ({}) -> {}\n",
+                        entry_name, type_str, target_path_clone
                     ));
                 }
-                let result = download_file(&data_url, &target_path_clone).await;
+                let result = download_file(&url, &target_path_clone).await;
                 if result.is_ok() {
                     if xattr_set(
                         &target_path_clone,
@@ -288,15 +397,6 @@ async fn sync_entries(
                     }
                     if xattr_set(
                         &target_path_clone,
-                        "user.hai.rev_id",
-                        &entry_clone.asset.rev_id,
-                    )
-                    .is_err()
-                    {
-                        eprintln!("failed to set rev_id xattr");
-                    }
-                    if xattr_set(
-                        &target_path_clone,
                         "user.hai.seq_id",
                         &entry_clone.seq_id.to_string(),
                     )
@@ -304,35 +404,86 @@ async fn sync_entries(
                     {
                         eprintln!("failed to set seq_id xattr");
                     }
-                    if let Some(hash) = entry_clone.asset.hash.as_ref() {
-                        //
-                        // Write the file hash and the mtime of the file into
-                        // xattrs to make change detection easier.
-                        //
-                        let metadata = std::fs::metadata(&target_path_clone)
-                            .expect("failed to read file metadata");
-                        if let Ok(modified_time) = metadata.modified() {
-                            let mtime_ts = modified_time
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .expect("Time went backwards")
-                                .as_secs();
-                            if xattr_set(
-                                &target_path_clone,
-                                "user.hai.hash_mtime",
-                                &mtime_ts.to_string(),
-                            )
-                            .is_err()
-                            {
-                                eprintln!("failed to set hash_mtime xattr");
+                    if matches!(task.task_type, DownloadTaskType::Data) {
+                        if xattr_set(
+                            &target_path_clone,
+                            "user.hai.rev_id",
+                            &entry_clone.asset.rev_id,
+                        )
+                        .is_err()
+                        {
+                            eprintln!("failed to set rev_id xattr");
+                        }
+                        if let Some(hash) = entry_clone.asset.hash.as_ref() {
+                            //
+                            // Write the file hash and the mtime of the file into
+                            // xattrs to make change detection easier.
+                            //
+                            let metadata = std::fs::metadata(&target_path_clone)
+                                .expect("failed to read file metadata");
+                            if let Ok(modified_time) = metadata.modified() {
+                                let mtime_ts = modified_time
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .expect("Time went backwards")
+                                    .as_secs();
+                                if xattr_set(
+                                    &target_path_clone,
+                                    "user.hai.hash_mtime",
+                                    &mtime_ts.to_string(),
+                                )
+                                .is_err()
+                                {
+                                    eprintln!("failed to set hash_mtime xattr");
+                                }
+                            }
+
+                            if xattr_set(&target_path_clone, "user.hai.hash", hash).is_err() {
+                                eprintln!("failed to set hash xattr");
                             }
                         }
+                    } else if matches!(task.task_type, DownloadTaskType::Metadata) {
+                        if let Some(AssetMetadataInfo {
+                            hash: Some(hash),
+                            rev_id,
+                            ..
+                        }) = entry_clone.metadata
+                        {
+                            if xattr_set(&target_path_clone, "user.hai.is_metadata", "true")
+                                .is_err()
+                            {
+                                eprintln!("failed to set is_metadata xattr");
+                            }
+                            if xattr_set(&target_path_clone, "user.hai.rev_id", &rev_id).is_err() {
+                                eprintln!("failed to set rev_id xattr");
+                            }
+                            //
+                            // Write the file hash and the mtime of the file into
+                            // xattrs to make change detection easier.
+                            //
+                            let metadata = std::fs::metadata(&target_path_clone)
+                                .expect("failed to read file metadata");
+                            if let Ok(modified_time) = metadata.modified() {
+                                let mtime_ts = modified_time
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .expect("Time went backwards")
+                                    .as_secs();
+                                if xattr_set(
+                                    &target_path_clone,
+                                    "user.hai.hash_mtime",
+                                    &mtime_ts.to_string(),
+                                )
+                                .is_err()
+                                {
+                                    eprintln!("failed to set hash_mtime xattr");
+                                }
+                            }
 
-                        if xattr_set(&target_path_clone, "user.hai.hash", hash).is_err() {
-                            eprintln!("failed to set hash xattr");
+                            if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
+                                eprintln!("failed to set hash xattr");
+                            }
                         }
                     }
                 }
-                // The permit is automatically released when _permit goes out of scope
                 (entry_name, target_path_clone, result)
             });
 
