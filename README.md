@@ -881,6 +881,11 @@ Each asset can have a JSON object associated with it to store metadata:
 If a `title` metadata key is set, it's shown in `/asset-list` and
 `/asset-search` in `[]` brackets.
 
+| 🙋 **Help Wanted** |
+|-------------------|
+| Interested in using metadata to make asset encryption the default way of life? |
+| All ideas welcome. Please reach out or open an issue. |
+
 #### Asset Push & ACL
 
 Your public assets (prefixed by your username `/username/...`) can have ACLs
