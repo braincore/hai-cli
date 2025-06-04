@@ -9,7 +9,7 @@ use std::io::Read;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use uuid::Uuid;
 
 use crate::api::client::RequestError;
@@ -2163,219 +2163,132 @@ pub async fn process_cmd(
 
             if let Some(count) = count {
                 use crate::api::types::asset::{
-                    AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
-                    AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
-                    RevisionIterDirection,
+                    AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
                 };
 
-                async fn save_revision_to_temp(
-                    asset_name: &str,
-                    revision: &AssetRevision,
-                    seen_revisions_map: &mut HashMap<String, std::path::PathBuf>,
-                ) -> (
-                    Vec<String>,
-                    Vec<(tempfile::NamedTempFile, std::path::PathBuf)>,
-                ) {
-                    let mut temp_files = vec![];
-                    let mut msgs = vec![];
-                    msgs.push(format!("Revision ID: {}", revision.asset.rev_id));
-                    if let AssetCreatedBy::User(user) = &revision.asset.created_by {
-                        msgs.push(format!("By: {}", user.username));
-                    }
-                    let action = match revision.op {
-                        AssetEntryOp::Add => "add",
-                        AssetEntryOp::Push => "push",
-                        AssetEntryOp::Delete => "delete",
-                        AssetEntryOp::Edit => "edit",
-                        AssetEntryOp::Fork => "fork",
-                        AssetEntryOp::Metadata => "metadata",
-                        AssetEntryOp::Other => "other",
-                    };
-                    msgs.push(format!("Op: {}", action));
-                    if let Some(data_url) = revision.asset.url.as_ref() {
-                        if let Some(existing_data_temp_file_path) =
-                            seen_revisions_map.get(&revision.asset.rev_id)
-                        {
-                            msgs.push(format!(
-                                "Data of '{}' copied to '{}'",
-                                asset_name,
-                                existing_data_temp_file_path.display()
-                            ));
-                        } else if let Some(data_contents) =
-                            asset_editor::get_asset_raw(data_url).await
-                        {
-                            match asset_editor::create_empty_temp_file(
-                                asset_name,
-                                Some(&revision.asset.rev_id),
-                            ) {
-                                Ok((data_temp_file, data_temp_file_path)) => {
-                                    match fs::write(&data_temp_file_path, data_contents) {
-                                        Ok(_) => {
-                                            msgs.push(format!(
-                                                "Data of '{}' copied to '{}'",
-                                                asset_name,
-                                                data_temp_file_path.display()
-                                            ));
-                                            temp_files.push((
-                                                data_temp_file,
-                                                data_temp_file_path.clone(),
-                                            ));
-                                            seen_revisions_map.insert(
-                                                revision.asset.rev_id.clone(),
-                                                data_temp_file_path,
-                                            );
-                                        }
-                                        Err(e) => {
-                                            eprintln!("error: failed to save: {}", e);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("error: failed to download: {}", e);
-                                }
-                            };
-                        }
-                    }
-                    if let Some(AssetMetadataInfo {
-                        url: Some(metadata_url),
-                        ..
-                    }) = revision.metadata.as_ref()
-                    {
-                        let metadata = revision
-                            .metadata
-                            .as_ref()
-                            .expect("missing metadata, but metadata_url set");
-                        if let Some(existing_metadata_temp_file_path) =
-                            seen_revisions_map.get(&metadata.rev_id)
-                        {
-                            msgs.push(format!(
-                                "Metadata of '{}' copied to '{}'",
-                                asset_name,
-                                existing_metadata_temp_file_path.display()
-                            ));
-                        } else if let Some(metadata_contents) =
-                            asset_editor::get_asset_raw(metadata_url).await
-                        {
-                            match asset_editor::create_empty_temp_file(
-                                &format!("{}.metadata", asset_name),
-                                Some(
-                                    &revision
-                                        .metadata
-                                        .as_ref()
-                                        .expect("missing metadata, but metadata_url set")
-                                        .rev_id,
-                                ),
-                            ) {
-                                Ok((metadata_temp_file, metadata_temp_file_path)) => {
-                                    match fs::write(&metadata_temp_file_path, metadata_contents) {
-                                        Ok(_) => {
-                                            msgs.push(format!(
-                                                "Metadata of '{}' copied to '{}'",
-                                                asset_name,
-                                                metadata_temp_file_path.display()
-                                            ));
-                                            temp_files.push((
-                                                metadata_temp_file,
-                                                metadata_temp_file_path.clone(),
-                                            ));
-                                            seen_revisions_map.insert(
-                                                metadata.rev_id.clone(),
-                                                metadata_temp_file_path,
-                                            );
-                                        }
-                                        Err(e) => {
-                                            eprintln!("error: failed to save: {}", e);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("error: failed to download: {}", e);
-                                }
-                            };
-                        }
-                    }
-                    (msgs, temp_files)
-                }
-                let mut seen_revisions_map: HashMap<String, std::path::PathBuf> = HashMap::new();
-                let mut all_msgs = vec![];
+                let max_concurrent_downloads = 10;
+
                 let mut remaining = *count;
-                let mut revision_cursor = match api_client
+                let iter_res = match api_client
                     .asset_revision_iter(AssetRevisionIterArg {
                         entry_ref: EntryRef::Name(asset_name.to_owned()),
-                        limit: std::cmp::min(3, remaining),
+                        limit: std::cmp::min(10, remaining),
                         direction: RevisionIterDirection::Older,
                     })
                     .await
                 {
-                    Ok(iter_res) => {
-                        for revision in iter_res.revisions {
-                            if remaining == 0 {
-                                break;
-                            }
-                            remaining -= 1;
-                            let (msgs, temp_files) = save_revision_to_temp(
-                                asset_name,
-                                &revision,
-                                &mut seen_revisions_map,
-                            )
-                            .await;
-                            session.temp_files.extend(
-                                temp_files
-                                    .into_iter()
-                                    .map(|(temp_file, _)| (temp_file, is_task_mode_step)),
-                            );
-                            for msg in &msgs {
-                                println!("{}", msg);
-                            }
-                            println!();
-                            all_msgs.extend(msgs);
-                        }
-                        iter_res.next
-                    }
+                    Ok(iter_res) => iter_res,
                     Err(e) => {
                         eprintln!("error: failed to get revisions: {}", e);
                         return ProcessCmdResult::Loop;
                     }
                 };
-                loop {
+
+                let mut revision_cursor = iter_res.next.clone();
+
+                let seen_revisions_map: Arc<Mutex<HashMap<String, std::path::PathBuf>>> =
+                    Arc::new(Mutex::new(HashMap::new()));
+                let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
+                let mut handles = Vec::new();
+
+                for revision in iter_res.revisions {
                     if remaining == 0 {
                         break;
                     }
                     remaining -= 1;
+
+                    let asset_name_clone = asset_name.clone();
+                    let sem_clone = Arc::clone(&semaphore);
+                    let seen_revisions_map_clone = seen_revisions_map.clone();
+
+                    let handle = tokio::spawn(async move {
+                        let _permit = sem_clone.acquire().await.unwrap();
+                        crate::asset_sync::download_revision_to_temp(
+                            &asset_name_clone,
+                            &revision,
+                            seen_revisions_map_clone,
+                        )
+                        .await
+                    });
+                    handles.push(handle);
+                }
+
+                println!("(newest revisions first)");
+                let mut all_msgs = vec!["(newest revisions first)".to_string()];
+
+                for handle in futures::future::join_all(handles).await {
+                    // Unwrap the JoinHandle result to get the inner result
+                    if let Ok(result) = handle {
+                        if let Some(msg) = &result.0 {
+                            println!("{}", msg);
+                            all_msgs.push(msg.clone());
+                        }
+                        if let Some((temp_file, _temp_file_path)) = result.1 {
+                            session.temp_files.push((temp_file, is_task_mode_step));
+                        }
+                    } else {
+                        // Handle the case where the task panicked
+                        eprintln!("A download task panicked");
+                    }
+                }
+
+                loop {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let mut handles = Vec::new();
                     if let Some(next) = revision_cursor {
-                        revision_cursor = match api_client
+                        let iter_next_res = match api_client
                             .asset_revision_iter_next(AssetRevisionIterNextArg {
                                 cursor: next.cursor,
                                 limit: std::cmp::min(10, remaining),
                             })
                             .await
                         {
-                            Ok(iter_next_res) => {
-                                for revision in iter_next_res.revisions {
-                                    let (msgs, temp_files) = save_revision_to_temp(
-                                        asset_name,
-                                        &revision,
-                                        &mut seen_revisions_map,
-                                    )
-                                    .await;
-                                    session.temp_files.extend(
-                                        temp_files
-                                            .into_iter()
-                                            .map(|(temp_file, _)| (temp_file, is_task_mode_step)),
-                                    );
-                                    for msg in &msgs {
-                                        println!("{}", msg);
-                                    }
-                                    println!();
-                                    all_msgs.extend(msgs);
-                                }
-                                iter_next_res.next
-                            }
+                            Ok(iter_next_res) => iter_next_res,
                             Err(e) => {
                                 eprintln!("error: failed to get revisions: {}", e);
                                 return ProcessCmdResult::Loop;
                             }
                         };
+                        revision_cursor = iter_next_res.next;
+
+                        for revision in iter_next_res.revisions {
+                            if remaining == 0 {
+                                break;
+                            }
+                            remaining -= 1;
+                            let asset_name_clone = asset_name.clone();
+                            let sem_clone = Arc::clone(&semaphore);
+                            let seen_revisions_map_clone = seen_revisions_map.clone();
+
+                            let handle = tokio::spawn(async move {
+                                let _permit = sem_clone.acquire().await.unwrap();
+                                crate::asset_sync::download_revision_to_temp(
+                                    &asset_name_clone,
+                                    &revision,
+                                    seen_revisions_map_clone,
+                                )
+                                .await
+                            });
+                            handles.push(handle);
+                        }
+
+                        for handle in futures::future::join_all(handles).await {
+                            // Unwrap the JoinHandle result to get the inner result
+                            if let Ok(result) = handle {
+                                if let Some(msg) = &result.0 {
+                                    println!("{}", msg);
+                                    all_msgs.push(msg.clone());
+                                }
+                                if let Some((temp_file, _temp_file_path)) = result.1 {
+                                    session.temp_files.push((temp_file, is_task_mode_step));
+                                }
+                            } else {
+                                // Handle the case where the task panicked
+                                eprintln!("A download task panicked");
+                            }
+                        }
                     } else {
                         break;
                     }

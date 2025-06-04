@@ -1,16 +1,17 @@
 use futures::future::join_all;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs::{create_dir_all, File};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::{
     self,
     client::HaiClient,
     types::asset::{
-        AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg, AssetEntryOp,
-        AssetMetadataInfo,
+        AssetCreatedBy, AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg,
+        AssetEntryOp, AssetMetadataInfo, AssetRevision,
     },
 };
 use crate::config;
@@ -569,7 +570,7 @@ fn get_folder_prefix(prefix: &str) -> String {
 }
 
 /// Helper function to download a file directly to disk to minimize mem usage.
-async fn download_file(
+pub async fn download_file(
     url: &str,
     path: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -752,4 +753,85 @@ fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
     file.write_all(new_contents.as_bytes()).map_err(|_| ())?;
 
     Ok(())
+}
+
+// --
+
+pub async fn download_revision_to_temp(
+    asset_name: &str,
+    revision: &AssetRevision,
+    seen_revisions_map_mutex: Arc<Mutex<HashMap<String, std::path::PathBuf>>>,
+) -> (
+    Option<String>,
+    Option<(tempfile::NamedTempFile, std::path::PathBuf)>,
+) {
+    let mut msgs: Vec<String> = vec![];
+    let mut temp_file = None;
+    if let Some(data_url) = revision.asset.url.as_ref() {
+        let seen_revisions_map = seen_revisions_map_mutex.lock().await;
+        if let Some(existing_data_temp_file_path) = seen_revisions_map.get(&revision.asset.rev_id) {
+            msgs.push(format!(
+                "Data of '{}' copied to '{}'",
+                asset_name,
+                existing_data_temp_file_path.display()
+            ));
+        } else {
+            // Drop lock before longer download operation
+            drop(seen_revisions_map);
+            match crate::asset_editor::create_empty_temp_file(
+                asset_name,
+                Some(&revision.asset.rev_id),
+            ) {
+                Ok((data_temp_file, data_temp_file_path)) => {
+                    match crate::asset_sync::download_file(
+                        data_url,
+                        &data_temp_file_path.to_string_lossy(),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            msgs.push(format!(
+                                "Revision '{}' copied to '{}'",
+                                revision.asset.rev_id,
+                                data_temp_file_path.display()
+                            ));
+                            if let AssetCreatedBy::User(user) = &revision.asset.created_by {
+                                msgs.push(format!("    By: {}", user.username));
+                            }
+                            let action = match revision.op {
+                                AssetEntryOp::Add => "add",
+                                AssetEntryOp::Push => "push",
+                                AssetEntryOp::Delete => "delete",
+                                AssetEntryOp::Edit => "edit",
+                                AssetEntryOp::Fork => "fork",
+                                AssetEntryOp::Metadata => "metadata",
+                                AssetEntryOp::Other => "other",
+                            };
+                            msgs.push(format!("    Op: {}", action));
+
+                            temp_file = Some((data_temp_file, data_temp_file_path.clone()));
+                            let mut seen_revisions_map = seen_revisions_map_mutex.lock().await;
+                            seen_revisions_map
+                                .insert(revision.asset.rev_id.clone(), data_temp_file_path);
+                            drop(seen_revisions_map);
+                        }
+                        Err(_e) => {
+                            eprintln!("error: failed to download: {}", _e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to download: {}", e);
+                }
+            }
+        }
+    }
+    (
+        if !msgs.is_empty() {
+            Some(msgs.join("\n"))
+        } else {
+            None
+        },
+        temp_file,
+    )
 }
