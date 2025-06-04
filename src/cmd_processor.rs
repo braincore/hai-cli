@@ -2709,11 +2709,8 @@ lesson (e.g. "understanding").\n\n{}"#,
                 }
                 Err(e) => {
                     eprintln!("error: failed to send email: {}", e);
-                    match e {
-                        RequestError::Route(EmailRecipientSendError::NoDefaultRecipient) => {
-                            eprintln!("Use `/task hai/add-email` to add an email recipient");
-                        }
-                        _ => {}
+                    if let RequestError::Route(EmailRecipientSendError::NoDefaultRecipient) = e {
+                        eprintln!("Use `/task hai/add-email` to add an email recipient");
                     }
                 }
             }

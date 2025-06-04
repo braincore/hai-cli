@@ -1030,7 +1030,7 @@ async fn repl(
                                 }
                                 i += 1;
                             };
-                            match tool::extract_ai_defined_fn_def(&arg) {
+                            match tool::extract_ai_defined_fn_def(arg) {
                                 Ok(fn_def) => {
                                     let ai_defined_fn = session::AiDefinedFn {
                                         fn_def,

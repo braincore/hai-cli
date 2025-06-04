@@ -221,8 +221,7 @@ async fn sync_entries(
         let expected_metadata_hash = entry
             .metadata
             .as_ref()
-            .map(|md| md.hash.clone())
-            .flatten()
+            .and_then(|md| md.hash.clone())
             .unwrap_or("".to_string());
 
         let download_metadata =

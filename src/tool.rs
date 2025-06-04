@@ -76,7 +76,7 @@ if __name__ == "__main__":
 "#,
         fn_def, arg
     );
-    Ok(exec_python_script(&script).await?)
+    exec_python_script(&script).await
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
