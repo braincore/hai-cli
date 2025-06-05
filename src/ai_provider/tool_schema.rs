@@ -261,3 +261,16 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         _ => None,
     }
 }
+
+pub fn get_tool_syntax_highlighter_token_from_name(name: &str) -> Option<String> {
+    match name {
+        "hai_repl" => None,
+        "copy_to_clipboard" => None,
+        "exec_python_script" => Some("py".to_string()),
+        "exec_shell_script" => Some("bash".to_string()),
+        "fn" => Some("py".to_string()),
+        "shell_exec" => Some("bash".to_string()),
+        "shell_exec_with_script" => Some("bash".to_string()),
+        _ => None,
+    }
+}

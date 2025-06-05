@@ -8,6 +8,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::term_color;
 
+use super::tool_schema;
+
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
     if let Value::Object(ref mut map) = json {
@@ -228,7 +230,11 @@ impl SyntaxHighlighterPrinter<'_> {
                     // printed, the cursor will report its position as W-1.
                     // Therefore, if W characters are printed, we want the
                     // division to be 0: (W-1)/W.
-                    let height = ((line_width - 1) / terminal_width) + 1;
+                    let height = if line_width == 0 {
+                        1
+                    } else {
+                        ((line_width - 1) / terminal_width) + 1
+                    };
                     let _ = crate::config::write_to_debug_log(format!(
                         "FIRST line: {:?}\n",
                         full_first_line
@@ -319,7 +325,11 @@ impl SyntaxHighlighterPrinter<'_> {
                     let ps = term_color::get_syntax_set();
                     let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
                     let (terminal_width, _) = crossterm::terminal::size().unwrap();
-                    let height = (line_width - 1) / terminal_width;
+                    let height = if line_width == 0 {
+                        1
+                    } else {
+                        (line_width - 1) / terminal_width
+                    };
                     crossterm::queue!(stdout, crossterm::cursor::MoveTo(x, y - height),).unwrap();
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&self.buffer, ps).unwrap();
@@ -352,7 +362,7 @@ pub struct PrinterAccResult {
 
 /// Responsible for printing output while masking specified strings which may
 /// necessitate it buffer while checking for incoming string matches.
-pub struct MaskedJsonStringPrinter {
+pub struct MaskedJsonStringPrinter<'a> {
     buffer: String,
     masked_strings_ordered: Vec<String>,
     /// The offset into buffer that has been printed to screen
@@ -362,10 +372,12 @@ pub struct MaskedJsonStringPrinter {
     pub printed_text: String,
     // An unmasked version of the printed text
     pub unmasked_printed_text: String,
+
+    sh_printer: SyntaxHighlighterPrinter<'a>,
 }
 
-impl MaskedJsonStringPrinter {
-    pub fn new(masked_strings: HashSet<String>) -> MaskedJsonStringPrinter {
+impl<'a> MaskedJsonStringPrinter<'a> {
+    pub fn new(masked_strings: HashSet<String>) -> MaskedJsonStringPrinter<'a> {
         // Sort by length descending in case a mask is a left-aligned subset of another.
         let mut masked_strings_ordered: Vec<String> = masked_strings.clone().into_iter().collect();
         masked_strings_ordered.sort_by_key(|b| std::cmp::Reverse(b.len()));
@@ -375,7 +387,12 @@ impl MaskedJsonStringPrinter {
             buffer_print_cursor: 0,
             printed_text: String::new(),
             unmasked_printed_text: String::new(),
+            sh_printer: SyntaxHighlighterPrinter::new(),
         }
+    }
+
+    pub fn set_highlighter(&mut self, token: &str) {
+        self.sh_printer.set_highlighter(token);
     }
 
     /// Accumulates next chunk of text into its buffer and prints as much of
@@ -480,8 +497,8 @@ impl MaskedJsonStringPrinter {
             }
         }
 
-        print!("{}", masked_decoded_next_chunk);
-        io::stdout().flush().unwrap(); // Flush to skip line-buffer
+        self.sh_printer.acc(&masked_decoded_next_chunk);
+
         self.printed_text.push_str(&masked_decoded_next_chunk);
         self.unmasked_printed_text.push_str(&decoded_next_chunk);
         self.buffer_print_cursor = buffer_printable_length;
@@ -494,7 +511,7 @@ impl MaskedJsonStringPrinter {
     }
 
     pub fn end(&mut self) {
-        // No-op since the end of the string is evident from the contents.
+        self.sh_printer.end();
     }
 }
 
@@ -525,13 +542,13 @@ fn remove_first_n_chars(buffer: &mut String, n: usize) {
 
 // --
 
-enum Printer {
-    String(MaskedJsonStringPrinter),
-    Array(JsonArrayAccumulator),
+enum Printer<'a> {
+    String(MaskedJsonStringPrinter<'a>),
+    Array(JsonArrayAccumulator<'a>),
 }
 
-// FIXME: Remove tool_id & tool_name
-pub struct JsonObjectAccumulator {
+// FIXME: Remove tool_id
+pub struct JsonObjectAccumulator<'a> {
     pub tool_id: String,
     #[allow(dead_code)]
     pub tool_name: String,
@@ -544,11 +561,15 @@ pub struct JsonObjectAccumulator {
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
     masked_strings: HashSet<String>,
-    cur_printer: Option<Printer>,
+    cur_printer: Option<Printer<'a>>,
 }
 
-impl JsonObjectAccumulator {
-    pub fn new(id: String, name: String, masked_strings: HashSet<String>) -> JsonObjectAccumulator {
+impl<'a> JsonObjectAccumulator<'a> {
+    pub fn new(
+        id: String,
+        name: String,
+        masked_strings: HashSet<String>,
+    ) -> JsonObjectAccumulator<'a> {
         JsonObjectAccumulator {
             tool_id: id,
             tool_name: name,
@@ -594,15 +615,17 @@ impl JsonObjectAccumulator {
                     .nth(0)
                     .map(|(index, _)| index + second_quote_index + 1);
 
+                let sh_token =
+                    tool_schema::get_tool_syntax_highlighter_token_from_name(&self.tool_name);
                 let (printer, index) = match (third_quote_index, array_open_index) {
                     (Some(third_quote_index), Some(array_open_index)) => {
                         if third_quote_index < array_open_index {
-                            (
-                                Printer::String(MaskedJsonStringPrinter::new(
-                                    self.masked_strings.clone(),
-                                )),
-                                third_quote_index,
-                            )
+                            let mut printer =
+                                MaskedJsonStringPrinter::new(self.masked_strings.clone());
+                            if let Some(sh_token) = sh_token {
+                                printer.set_highlighter(&sh_token);
+                            }
+                            (Printer::String(printer), third_quote_index)
                         } else {
                             (
                                 Printer::Array(JsonArrayAccumulator::new(
@@ -612,10 +635,13 @@ impl JsonObjectAccumulator {
                             )
                         }
                     }
-                    (Some(third_quote_index), None) => (
-                        Printer::String(MaskedJsonStringPrinter::new(self.masked_strings.clone())),
-                        third_quote_index,
-                    ),
+                    (Some(third_quote_index), None) => {
+                        let mut printer = MaskedJsonStringPrinter::new(self.masked_strings.clone());
+                        if let Some(sh_token) = sh_token {
+                            printer.set_highlighter(&sh_token);
+                        }
+                        (Printer::String(printer), third_quote_index)
+                    }
                     (None, Some(array_open_index)) => (
                         Printer::Array(JsonArrayAccumulator::new(self.masked_strings.clone())),
                         array_open_index,
@@ -667,7 +693,7 @@ impl JsonObjectAccumulator {
 
 // --
 
-pub struct JsonArrayAccumulator {
+pub struct JsonArrayAccumulator<'a> {
     /// Unprocessed parts of the array (prefix, suffix, and in-between strings)
     pub buffer: String,
     /// The printed text is the buffer without JSON markup and masked.
@@ -675,11 +701,11 @@ pub struct JsonArrayAccumulator {
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
     masked_strings: HashSet<String>,
-    cur_printer: Option<MaskedJsonStringPrinter>,
+    cur_printer: Option<MaskedJsonStringPrinter<'a>>,
 }
 
-impl JsonArrayAccumulator {
-    pub fn new(masked_strings: HashSet<String>) -> JsonArrayAccumulator {
+impl<'a> JsonArrayAccumulator<'a> {
+    pub fn new(masked_strings: HashSet<String>) -> JsonArrayAccumulator<'a> {
         JsonArrayAccumulator {
             buffer: String::new(),
             printed_text: String::new(),
