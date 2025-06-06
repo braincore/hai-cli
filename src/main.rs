@@ -299,11 +299,16 @@ async fn repl(
         "o3-mini",
         "o4-mini",
         "haiku35",
+        "opus",
+        "opus4",
+        "opus4-thinking",
         "sonnet",
         "sonnet-thinking",
         "sonnet35",
         "sonnet37",
         "sonnet37-thinking",
+        "sonnet4",
+        "sonnet4-thinking",
         "llama32",
         "llama32-vision",
         "flash",
@@ -1259,7 +1264,9 @@ pub async fn prompt_ai(
                     )
                 };
             let use_thinking = match anthropic_model {
-                config::AnthropicModel::Sonnet37(use_thinking) => *use_thinking,
+                config::AnthropicModel::Opus4(use_thinking)
+                | config::AnthropicModel::Sonnet37(use_thinking)
+                | config::AnthropicModel::Sonnet4(use_thinking) => *use_thinking,
                 _ => false,
             };
             anthropic::send_to_anthropic(

@@ -85,10 +85,14 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "haiku" | "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
         "llama" | "llama32" => Some(AiModel::Ollama(OllamaModel::Llama32)),
         "llamavision" | "llama32vision" => Some(AiModel::Ollama(OllamaModel::Llama32Vision)),
-        "sonnet" | "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(false))),
-        "sonnetthinking" | "sonnet37thinking" => {
-            Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true)))
+        "opus" | "opus4" => Some(AiModel::Anthropic(AnthropicModel::Opus4(false))),
+        "opus4thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus4(true))),
+        "sonnet" | "sonnet4" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(false))),
+        "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(false))),
+        "sonnetthinking" | "sonnet4thinking" => {
+            Some(AiModel::Anthropic(AnthropicModel::Sonnet4(true)))
         }
+        "sonnet37thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
         _ => {
             let openai_regex = Regex::new(r"^openai/(\S+)$").unwrap();
@@ -288,8 +292,10 @@ pub enum AiModel {
 #[derive(Debug)]
 pub enum AnthropicModel {
     Haiku35,
+    Opus4(bool), // If true, enables thinking
     Sonnet35,
     Sonnet37(bool), // If true, enables thinking
+    Sonnet4(bool),  // If true, enables thinking
     Other(String),
 }
 
@@ -342,8 +348,10 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
     match ai_model {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Haiku35 => "claude-3-5-haiku-20241022",
+            AnthropicModel::Opus4(_) => "claude-opus-4-20250514",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
+            AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
@@ -389,9 +397,13 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
     match ai_model {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Haiku35 => "haiku-3.5",
+            AnthropicModel::Opus4(false) => "opus-4",
+            AnthropicModel::Opus4(true) => "opus-4-thinking",
             AnthropicModel::Sonnet35 => "sonnet-3.5",
             AnthropicModel::Sonnet37(false) => "sonnet-3.7",
             AnthropicModel::Sonnet37(true) => "sonnet-3.7-thinking",
+            AnthropicModel::Sonnet4(false) => "sonnet-4",
+            AnthropicModel::Sonnet4(true) => "sonnet-4-thinking",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
@@ -441,19 +453,9 @@ pub struct AiModelCapability {
 
 pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
     match ai_model {
-        AiModel::Anthropic(model) => match model {
-            AnthropicModel::Haiku35 => AiModelCapability {
-                image: true,
-                tool: true,
-            },
-            AnthropicModel::Sonnet35 | AnthropicModel::Sonnet37(_) => AiModelCapability {
-                image: true,
-                tool: true,
-            },
-            AnthropicModel::Other(_) => AiModelCapability {
-                image: true,
-                tool: true,
-            },
+        AiModel::Anthropic(_) => AiModelCapability {
+            image: true,
+            tool: true,
         },
         AiModel::DeepSeek(model) => match model {
             DeepSeekModel::DeepSeekChat => AiModelCapability {
@@ -526,7 +528,10 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         AiModel::Anthropic(model) => {
             matches!(
                 model,
-                AnthropicModel::Haiku35 | AnthropicModel::Sonnet35 | AnthropicModel::Sonnet37(_)
+                AnthropicModel::Haiku35
+                    | AnthropicModel::Opus4(_)
+                    | AnthropicModel::Sonnet35
+                    | AnthropicModel::Sonnet37(_)
             )
         }
         AiModel::DeepSeek(model) => matches!(
@@ -566,7 +571,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
     match ai_model {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Haiku35 => Some((800, 4000)),
-            AnthropicModel::Sonnet35 | AnthropicModel::Sonnet37(_) => Some((3000, 15000)),
+            AnthropicModel::Opus4(_) => Some((15000, 75000)),
+            AnthropicModel::Sonnet35 | AnthropicModel::Sonnet37(_) | AnthropicModel::Sonnet4(_) => {
+                Some((3000, 15000))
+            }
             AnthropicModel::Other(_) => None,
         },
         AiModel::DeepSeek(model) => match model {
@@ -868,7 +876,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
         api_key: Some(_), ..
     }) = cfg.anthropic
     {
-        AiModel::Anthropic(AnthropicModel::Sonnet37(false))
+        AiModel::Anthropic(AnthropicModel::Sonnet4(false))
     } else if let Some(DeepSeekConfig {
         api_key: Some(_), ..
     }) = cfg.deepseek
