@@ -115,10 +115,7 @@ pub async fn edit_with_editor_api(
 
     if !status.success() {
         eprintln!("error: editor did not exit successfully");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Editor failed",
-        ));
+        return Err(std::io::Error::other("Editor failed"));
     }
 
     Ok(final_contents)

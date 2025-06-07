@@ -653,7 +653,7 @@ async fn calculate_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error>
         Ok(result.to_vec())
     })
     .await
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))??;
+    .map_err(|e| std::io::Error::other(e.to_string()))??;
 
     Ok(hash)
 }

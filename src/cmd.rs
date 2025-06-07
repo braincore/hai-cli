@@ -2000,7 +2000,7 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, require: bool, prompt: &String) -
 /// Parse command options: /cmd(key=value, ...)
 ///
 /// - `options_input`: The portion of the input between the parentheses. Do not
-///     include the `/cmd` nor what follows the command.
+///   include the `/cmd` nor what follows the command.
 fn parse_options(options_input: &str) -> HashMap<String, String> {
     let mut options = HashMap::new();
     let content = options_input.trim();

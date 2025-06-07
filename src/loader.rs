@@ -15,10 +15,7 @@ pub async fn resolve_image_b64(text: &String) -> Result<String, Box<dyn std::err
                 "Failed to fetch the image. HTTP Status: {}",
                 response.status()
             );
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to fetch the image",
-            )));
+            return Err(Box::new(std::io::Error::other("Failed to fetch the image")));
         }
 
         // Collect the image bytes.
