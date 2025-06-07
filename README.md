@@ -622,6 +622,9 @@ Here are some interesting ones:
   - Saves your flashcards as an asset: `flaschard/deck`
   - [`ken/flashcard-review`](https://hai.superego.ai/task/ken/flashcard-review) -
     Review random flashcards
+- [`ken/music-player`](https://hai.superego.ai/task/ken/music-player) - Plays
+  random MP3s from your `music/*.mp3` assets. If lyrics are available in the
+  file’s `lrc` metadata, it can display them line-by-line as the song plays.
 
 More available in the [hai tasks](https://github.com/braincore/hai-tasks) repo.
 
