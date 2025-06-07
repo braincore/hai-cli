@@ -532,6 +532,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Opus4(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
+                    | AnthropicModel::Sonnet4(_)
             )
         }
         AiModel::DeepSeek(model) => matches!(
