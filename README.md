@@ -267,7 +267,9 @@ Assets are objects stored in the cloud for your direct and indirect use via AIs.
   to a local path.
   - Does not re-download assets that already exist locally.
   - Does not add info to the conversation. You will need to inform the AI of
-    relevant files in the conversation.
+    relevant files in the conversation typically by calling `!!ls <path>`.
+  - Syncs asset metadata (if available) as the asset name with `.metadata`
+    appended.
 - `/asset-link <name>` - Generate a link to an asset (valid for 24 hours).
 - `/asset-revisions <name> [<count>]` - Iterate through every revision of an asset.
 - `/asset-import <name> <path>` - Import asset from a local file.
