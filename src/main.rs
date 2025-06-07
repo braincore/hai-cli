@@ -954,6 +954,16 @@ async fn repl(
                 println!("{}", "⚙ ⚙ ⚙".white().on_black());
                 println!();
 
+                let tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
+
+                // The tools that don't need user-confirmation are those that
+                // don't have destructive potential. !fn-py only assigns a
+                // function but does not execute it. !clip can be abused but
+                // it's more of a nuisance. Also, the prompting of the AI may
+                // still require user confirmation.
+                let tool_needs_user_confirmation =
+                    !matches!(tool, Some(tool::Tool::Fn | tool::Tool::CopyToClipboard));
+
                 // The combined policy is a byproduct of pecularities in
                 // Anthropic's API. Once a tool is used once in a conversation,
                 // it can be used again by the AI and there's no way to disable
@@ -963,11 +973,9 @@ async fn repl(
                 // with tool use. The "combined" policy accommodates the logic
                 // for these over-zealous recommendations.
                 let tool_policy_combined = tool_policy.clone().or_else(|| {
-                    ai_provider::tool_schema::get_tool_from_name(tool_name).map(|tool| {
-                        tool::ToolPolicy {
-                            tool,
-                            require: false,
-                        }
+                    tool.map(|tool| tool::ToolPolicy {
+                        tool,
+                        require: false,
                     })
                 });
 
@@ -979,6 +987,7 @@ async fn repl(
                     .unwrap_or(false);
 
                 let user_confirmed_tool_execute = if !force_yes
+                    && tool_needs_user_confirmation
                     && (cfg.tool_confirm
                         || tool_policy_needs_user_confirmation
                         || task_step_requires_user_confirmation)
