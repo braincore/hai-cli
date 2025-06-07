@@ -558,18 +558,31 @@ pub async fn process_cmd(
                         step_index,
                         raw_user_input,
                     )
-                    .map(|a| (a, true))
+                    .map(|a| (Some(a), true))
                     .unwrap_or_else(|| {
                         println!();
-                        (term::ask_question_default_empty(question, *secret), false)
+                        (term::ask_question(question, *secret), false)
                     })
                 } else {
                     println!();
-                    (term::ask_question_default_empty(question, *secret), false)
+                    (term::ask_question(question, *secret), false)
                 }
             } else {
                 println!();
-                (term::ask_question_default_empty(question, *secret), false)
+                (term::ask_question(question, *secret), false)
+            };
+            let answer = if let Some(answer) = answer {
+                answer
+            } else {
+                if is_task_mode_step {
+                    // If the user is initializing a task, but they ctrl+c the
+                    // question, then abort the entire initialization. Assume
+                    // they're uncomfortable with the task and don't want to
+                    // proceed.
+                    println!("user cancelled input: task initialization aborted");
+                    session.cmd_queue.clear();
+                }
+                return ProcessCmdResult::Loop;
             };
             if from_cache {
                 if let Some((ref task_fqn, _)) = task_step_signature {
