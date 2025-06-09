@@ -1923,98 +1923,129 @@ pub async fn process_cmd(
                 "{}/notify/listen",
                 session::get_api_base_url().replace("http", "ws")
             );
-            let (mut ws_stream, _) = match connect_async(listen_url).await {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("error: failed to connect: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            };
-
             use crate::api::types::notify::{ListenAsset, NotifyListenArg};
             let arg = NotifyListenArg::Asset(ListenAsset {
                 cursor: revision_start_cursor.clone(),
             });
-            ws_stream
-                .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
-                .await
-                .unwrap();
 
-            if let Some(msg) = {
-                tokio::select! {
-                    msg = ws_stream.next() => msg,
-                    _ = tokio::signal::ctrl_c() => {
-                        return ProcessCmdResult::Loop;
-                    }
-                }
-            } {
-                match msg {
-                    Ok(_msg) => {
-                        // NOTE: `msg` isn't finalized so do not use contents.
-                        match api_client
-                            .asset_revision_iter_next(AssetRevisionIterNextArg {
-                                cursor: revision_start_cursor.clone(),
-                                limit: 1,
-                            })
-                            .await
-                        {
-                            Ok(iter_res) => {
-                                if let Some(revision) = iter_res.revisions.first() {
-                                    let mut output_lines = vec![];
-                                    output_lines.push(format!(
-                                        "data url: {}\n",
-                                        revision.asset.url.as_ref().unwrap_or(&"none".to_string())
-                                    ));
-                                    output_lines
-                                        .push(format!("data size: {}\n", revision.asset.size));
-                                    output_lines.push(format!(
-                                        "data hash: {}\n",
-                                        revision.asset.hash.as_ref().unwrap_or(&"none".to_string())
-                                    ));
-                                    output_lines.push(format!("data op: {:?}\n", revision.op));
-                                    if let AssetCreatedBy::User(ref created_by_user) =
-                                        revision.asset.created_by
-                                    {
-                                        output_lines.push(format!(
-                                            "by (user): {}\n",
-                                            created_by_user.username
-                                        ));
-                                    }
-                                    output_lines.push(format!(
-                                        "data by: {:?}\n",
-                                        revision.asset.created_by
-                                    ));
-                                    if let Some(md) = revision.metadata.as_ref() {
-                                        output_lines.push(format!(
-                                            "metadata url: {}\n",
-                                            md.url.as_ref().unwrap_or(&"none".to_string())
-                                        ));
-                                        output_lines.push(format!("metadata size: {}\n", md.size));
-                                        output_lines
-                                            .push(format!("metadata hash: {:?}\n", md.hash));
-                                    }
-                                    output_lines.push(format!(
-                                        "next cursor: {}\n",
-                                        iter_res.next.expect("missing cursor").cursor
-                                    ));
-                                    let output = output_lines.join("");
-                                    println!("{}", output);
-                                    session_history_add_user_text_entry(
-                                        &output,
-                                        session,
-                                        bpe_tokenizer,
-                                        (is_task_mode_step, LogEntryRetentionPolicy::None),
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("error: failed to get revisions: {}", e);
+            let mut attempt = 0;
+
+            loop {
+                let (mut ws_stream, _) = match connect_async(&listen_url).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: failed to connect: {}", e);
+                        attempt += 1;
+                        let backoff_duration =
+                            std::time::Duration::from_secs(2_u64.pow(attempt).min(60)); // Cap backoff
+                        eprintln!("retrying in {} seconds...", backoff_duration.as_secs());
+                        // For ergonomics, support ctrl+c to stop reconnecting
+                        tokio::select! {
+                            _ = tokio::signal::ctrl_c() => {
                                 return ProcessCmdResult::Loop;
                             }
-                        };
+                            _ = tokio::time::sleep(backoff_duration) => {
+                            }
+                        }
+                        continue;
                     }
-                    Err(e) => {
-                        eprintln!("error: websocket: {}", e);
+                };
+                if attempt > 0 {
+                    println!("connected");
+                    attempt = 0;
+                }
+                ws_stream
+                    .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
+                    .await
+                    .unwrap();
+
+                if let Some(msg) = {
+                    // For ergonomics, support ctrl+c to stop listening
+                    tokio::select! {
+                        msg = ws_stream.next() => msg,
+                        _ = tokio::signal::ctrl_c() => {
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
+                } {
+                    match msg {
+                        Ok(_msg) => {
+                            // NOTE: `msg` isn't finalized so do not use contents.
+                            match api_client
+                                .asset_revision_iter_next(AssetRevisionIterNextArg {
+                                    cursor: revision_start_cursor.clone(),
+                                    limit: 1,
+                                })
+                                .await
+                            {
+                                Ok(iter_res) => {
+                                    if let Some(revision) = iter_res.revisions.first() {
+                                        let mut output_lines = vec![];
+                                        output_lines.push(format!(
+                                            "data url: {}\n",
+                                            revision
+                                                .asset
+                                                .url
+                                                .as_ref()
+                                                .unwrap_or(&"none".to_string())
+                                        ));
+                                        output_lines
+                                            .push(format!("data size: {}\n", revision.asset.size));
+                                        output_lines.push(format!(
+                                            "data hash: {}\n",
+                                            revision
+                                                .asset
+                                                .hash
+                                                .as_ref()
+                                                .unwrap_or(&"none".to_string())
+                                        ));
+                                        output_lines.push(format!("data op: {:?}\n", revision.op));
+                                        if let AssetCreatedBy::User(ref created_by_user) =
+                                            revision.asset.created_by
+                                        {
+                                            output_lines.push(format!(
+                                                "by (user): {}\n",
+                                                created_by_user.username
+                                            ));
+                                        }
+                                        output_lines.push(format!(
+                                            "data by: {:?}\n",
+                                            revision.asset.created_by
+                                        ));
+                                        if let Some(md) = revision.metadata.as_ref() {
+                                            output_lines.push(format!(
+                                                "metadata url: {}\n",
+                                                md.url.as_ref().unwrap_or(&"none".to_string())
+                                            ));
+                                            output_lines
+                                                .push(format!("metadata size: {}\n", md.size));
+                                            output_lines
+                                                .push(format!("metadata hash: {:?}\n", md.hash));
+                                        }
+                                        output_lines.push(format!(
+                                            "next cursor: {}\n",
+                                            iter_res.next.expect("missing cursor").cursor
+                                        ));
+                                        let output = output_lines.join("");
+                                        println!("{}", output);
+                                        session_history_add_user_text_entry(
+                                            &output,
+                                            session,
+                                            bpe_tokenizer,
+                                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                                        );
+                                    }
+                                    break;
+                                }
+                                Err(e) => {
+                                    eprintln!("error: failed to get revisions: {}", e);
+                                    return ProcessCmdResult::Loop;
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            eprintln!("error: websocket: {}", e);
+                        }
                     }
                 }
             }
