@@ -136,7 +136,6 @@ impl MaskedPrinter<'_> {
 
 pub struct SyntaxHighlighterPrinter<'a> {
     buffer: String,
-    line_start_cursor_position: Option<(u16, u16)>,
     highlighter: Option<HighlightLines<'a>>,
     terminal_color_capability: Option<term_color::ColorCapability>,
 }
@@ -145,7 +144,6 @@ impl SyntaxHighlighterPrinter<'_> {
     pub fn new() -> Self {
         SyntaxHighlighterPrinter {
             buffer: String::new(),
-            line_start_cursor_position: None,
             highlighter: None,
             terminal_color_capability: term_color::terminal_color_capability(),
         }
@@ -208,6 +206,9 @@ impl SyntaxHighlighterPrinter<'_> {
         if lines.len() > 1 {
             let ps = term_color::get_syntax_set();
 
+            // Record the position in case we need to reprint it.
+            let cursor_pos_preprint = crossterm::cursor::position().ok();
+
             // Finish the current line
             let _ = writeln!(stdout, "{}", &lines[0]);
             stdout.flush().unwrap();
@@ -222,9 +223,10 @@ impl SyntaxHighlighterPrinter<'_> {
             // If highlighter is set, clear the previous line and reprint with
             // colors.
             if let Some(highlighter) = self.highlighter.as_mut() {
-                if let Some((_x, y)) = self.line_start_cursor_position.take() {
+                if let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
+                {
                     let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
-                    let (terminal_width, _) = crossterm::terminal::size().unwrap();
+                    let (terminal_width, terminal_height) = crossterm::terminal::size().unwrap();
                     // This is a bit tricky.
                     // Let W be the terminal_width. If W characters are
                     // printed, the cursor will report its position as W-1.
@@ -240,22 +242,23 @@ impl SyntaxHighlighterPrinter<'_> {
                         full_first_line
                     ));
                     let _ = crate::config::write_to_debug_log(format!(
-                        "term: ({}, {}) {} {} {}\n",
-                        _x, y, terminal_width, line_width, height
+                        "term: cursor=({}, {}) term-size=({}, {}) line-width={} height={}\n",
+                        _cursor_x_preprint,
+                        cursor_y_preprint,
+                        terminal_width,
+                        terminal_height,
+                        line_width,
+                        height
                     ));
-                    crossterm::queue!(stdout, crossterm::cursor::MoveTo(0, y - height),).unwrap();
+
+                    crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
 
                     let line_with_ending = format!("{}\n", full_first_line);
                     let highlighted_parts: Vec<(Style, &str)> =
                         highlighter.highlight_line(&line_with_ending, ps).unwrap();
                     for (style, text) in highlighted_parts {
-                        let escaped = term_color::as_terminal_escaped(
-                            style,
-                            text,
-                            &color_capability,
-                            false,
-                            None,
-                        );
+                        let escaped =
+                            term_color::as_terminal_escaped(style, text, &color_capability, None);
                         crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
                     }
                     stdout.flush().unwrap();
@@ -277,13 +280,8 @@ impl SyntaxHighlighterPrinter<'_> {
                         .unwrap();
 
                     for (style, text) in highlighted_parts {
-                        let escaped = term_color::as_terminal_escaped(
-                            style,
-                            text,
-                            &color_capability,
-                            false,
-                            None,
-                        );
+                        let escaped =
+                            term_color::as_terminal_escaped(style, text, &color_capability, None);
                         let _ = write!(stdout, "{}", escaped);
                     }
                     stdout.flush().unwrap();
@@ -296,14 +294,10 @@ impl SyntaxHighlighterPrinter<'_> {
 
             // The last line is only partial (unless this is the last acc() call)
             let last_line_partial = &lines[lines.len() - 1].to_owned();
-            self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
             let _ = write!(stdout, "{}", last_line_partial);
             stdout.flush().unwrap();
             self.buffer.push_str(last_line_partial)
         } else {
-            if self.line_start_cursor_position.is_none() {
-                self.line_start_cursor_position = Some(crossterm::cursor::position().unwrap());
-            }
             self.buffer.push_str(next);
             let _ = write!(stdout, "{}", next);
             stdout.flush().unwrap(); // Flush to skip line-buffer
@@ -321,30 +315,38 @@ impl SyntaxHighlighterPrinter<'_> {
         // w/o a trailing newline.
         if let Some(color_capability) = self.terminal_color_capability.clone() {
             if let Some(highlighter) = self.highlighter.as_mut() {
-                if let Some((x, y)) = self.line_start_cursor_position.take() {
-                    let ps = term_color::get_syntax_set();
-                    let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
-                    let (terminal_width, _) = crossterm::terminal::size().unwrap();
-                    let height = if line_width == 0 {
-                        1
-                    } else {
-                        (line_width - 1) / terminal_width
-                    };
-                    crossterm::queue!(stdout, crossterm::cursor::MoveTo(x, y - height),).unwrap();
-                    let highlighted_parts: Vec<(Style, &str)> =
-                        highlighter.highlight_line(&self.buffer, ps).unwrap();
-                    for (style, text) in highlighted_parts {
-                        let escaped = term_color::as_terminal_escaped(
-                            style,
-                            text,
-                            &color_capability,
-                            false,
-                            None,
-                        );
-                        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
-                    }
-                    stdout.flush().unwrap();
+                let ps = term_color::get_syntax_set();
+                let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
+                let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
+                let height = if line_width == 0 {
+                    0
+                } else {
+                    (line_width - 1) / terminal_width
+                };
+
+                let _ = crate::config::write_to_debug_log(format!(
+                    "UNCLOSED END: {} {} {:?}\n",
+                    line_width, height, &self.buffer,
+                ));
+
+                // WARN: In some terminals, MoveToPreviousLine(0) will
+                // default to 1 which is undesirable so it's handled
+                // separately.
+                if height > 0 {
+                    crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height))
+                        .unwrap();
+                } else {
+                    crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
                 }
+
+                let highlighted_parts: Vec<(Style, &str)> =
+                    highlighter.highlight_line(&self.buffer, ps).unwrap();
+                for (style, text) in highlighted_parts {
+                    let escaped =
+                        term_color::as_terminal_escaped(style, text, &color_capability, None);
+                    crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
+                }
+                stdout.flush().unwrap();
             }
         }
     }
