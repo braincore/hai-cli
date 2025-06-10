@@ -1510,6 +1510,7 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
+            let mut asset_list_output = vec![];
             if asset_iter_res.has_more {
                 println!("[Listing assets unsorted due to size]");
                 let mut seen = HashSet::new();
@@ -1525,7 +1526,8 @@ pub async fn process_cmd(
                             continue;
                         }
                         seen.insert(entry.name.clone());
-                        print_asset_entry(entry);
+                        let line = print_asset_entry(entry);
+                        asset_list_output.push(line);
                     }
                     if !asset_iter_res.has_more {
                         break;
@@ -1549,14 +1551,11 @@ pub async fn process_cmd(
                 entries.extend_from_slice(&asset_iter_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
                 for entry in &entries {
-                    print_asset_entry(entry);
+                    let line = print_asset_entry(entry);
+                    asset_list_output.push(line);
                 }
             }
-            let asset_list_output = entries
-                .iter()
-                .map(|entry| entry.name.clone())
-                .collect::<Vec<String>>()
-                .join("\n");
+            let asset_list_output = asset_list_output.join("\n");
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
                 &asset_list_output,
@@ -1582,15 +1581,12 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
+            let mut asset_search_output = vec![];
             for entry in &asset_search_res.semantic_matches {
-                print_asset_entry(entry);
+                let line = print_asset_entry(entry);
+                asset_search_output.push(line);
             }
-            let asset_search_output = asset_search_res
-                .semantic_matches
-                .iter()
-                .map(|entry| entry.name.clone())
-                .collect::<Vec<String>>()
-                .join("\n");
+            let asset_search_output = asset_search_output.join("\n");
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
                 &asset_search_output,
@@ -3508,7 +3504,7 @@ fn abbreviate_number(num: u64) -> String {
 
 use crate::api::types::asset::{AssetEntry, AssetEntryOp};
 
-fn print_asset_entry(entry: &AssetEntry) {
+fn print_asset_entry(entry: &AssetEntry) -> String {
     let symbol = if matches!(entry.op, AssetEntryOp::Push) {
         "📥"
     } else {
@@ -3520,7 +3516,9 @@ fn print_asset_entry(entry: &AssetEntry) {
         .and_then(|md| md.title.clone())
         .map(|md_title| format!(" [{}]", md_title))
         .unwrap_or("".to_string());
-    println!("{}{}{}", entry.name, symbol, title);
+    let line = format!("{}{}{}", entry.name, symbol, title);
+    println!("{}", line);
+    line
 }
 
 // --
