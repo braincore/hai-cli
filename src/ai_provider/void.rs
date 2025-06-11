@@ -342,6 +342,8 @@ pub async fn send_to_void(
         text_accumulator.acc("ing");
         text_accumulator.acc(")\n\n");
         text_accumulator.acc("---\n\n");
+    } else if model == "middle-lines" {
+        text_accumulator.acc("# boo\n\n```python\nprint('hi')\n```\n\n# test\n\n- a\n- b\n- c");
     } else {
         text_accumulator.acc("unknown model");
     }

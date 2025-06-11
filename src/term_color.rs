@@ -62,7 +62,6 @@ pub fn as_terminal_escaped(
     style: highlighting::Style,
     text: &str,
     color_capability: &ColorCapability,
-    italics: bool,
     background_color: Option<highlighting::Color>,
 ) -> String {
     if text.is_empty() {
@@ -81,7 +80,7 @@ pub fn as_terminal_escaped(
     if style.font_style.contains(FontStyle::UNDERLINE) {
         combined_style = combined_style.underline();
     }
-    if italics && style.font_style.contains(FontStyle::ITALIC) {
+    if style.font_style.contains(FontStyle::ITALIC) {
         combined_style = combined_style.italic();
     }
     combined_style.background = background_color
@@ -200,7 +199,7 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
             highlighter.highlight_line(&line_with_ending, ps).unwrap();
 
         for (style, text) in highlighted_parts {
-            let escaped = as_terminal_escaped(style, text, &color_capability, false, None);
+            let escaped = as_terminal_escaped(style, text, &color_capability, None);
             print!("{}", escaped);
         }
         std::io::stdout().flush().unwrap();

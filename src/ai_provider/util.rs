@@ -137,22 +137,45 @@ impl MaskedPrinter<'_> {
 pub struct SyntaxHighlighterPrinter<'a> {
     buffer: String,
     highlighter: Option<HighlightLines<'a>>,
+    // There's a persistent markdown highlighter that's unused during code
+    // fences but resumes afterwards to maximize syntax context.
+    default_highlighter: Option<HighlightLines<'a>>,
     terminal_color_capability: Option<term_color::ColorCapability>,
 }
 
 impl SyntaxHighlighterPrinter<'_> {
     pub fn new() -> Self {
-        SyntaxHighlighterPrinter {
+        let printer = SyntaxHighlighterPrinter {
             buffer: String::new(),
-            highlighter: None,
+            highlighter: Some(HighlightLines::new(
+                term_color::get_syntax_set()
+                    .find_syntax_by_token("markdown")
+                    .unwrap(),
+                // The markdown theme was chosen for these properties:
+                // - Headers are bolded and highlighted (light blue)
+                // - Bolded text is bolded but still white
+                // - Ordered and unordered lists are highlighted (pink)
+                term_color::get_theme_set().get(two_face::theme::EmbeddedThemeName::ColdarkDark),
+            )),
+            // The default_highlighter starts out as the "active" highlighter.
+            default_highlighter: None,
             terminal_color_capability: term_color::terminal_color_capability(),
-        }
+        };
+        printer
     }
 
     pub fn set_highlighter(&mut self, token: &str) {
+        if self.default_highlighter.is_none() {
+            self.default_highlighter = Some(
+                self.highlighter
+                    .take()
+                    .expect("Default highlighter is missing"),
+            );
+        }
         let ps = term_color::get_syntax_set();
         let ts = term_color::get_theme_set();
         if let Some(syntax) = ps.find_syntax_by_token(token) {
+            let _ = crate::config::write_to_debug_log(format!("HIGHLIGHT -> {}\n", token));
             self.highlighter = Some(HighlightLines::new(
                 syntax,
                 ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
@@ -160,17 +183,10 @@ impl SyntaxHighlighterPrinter<'_> {
         }
     }
 
-    /// Assumes line has no trailing newline
-    pub fn highlighter_check(&mut self, line: &str) {
-        if line == "```" {
-            self.highlighter = None;
-        } else {
-            let markdown_code_block_re = term_color::get_markdown_code_block_re();
-            if let Some(captures) = markdown_code_block_re.captures(line) {
-                if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
-                    self.set_highlighter(&lang);
-                }
-            }
+    pub fn set_highlighter_default(&mut self) {
+        if let Some(highlighter) = self.default_highlighter.take() {
+            let _ = crate::config::write_to_debug_log(format!("HIGHLIGHT -> DEFAULT\n"));
+            self.highlighter = Some(highlighter);
         }
     }
 
@@ -184,8 +200,11 @@ impl SyntaxHighlighterPrinter<'_> {
     }
 
     pub fn highlighter_check_end(&mut self, line: &str) {
-        if self.highlighter.is_some() && line.trim_ascii() == "```" {
-            self.highlighter = None;
+        if self.default_highlighter.is_some()
+            && self.highlighter.is_some()
+            && line.trim_ascii() == "```"
+        {
+            self.set_highlighter_default();
         }
     }
 
@@ -273,6 +292,7 @@ impl SyntaxHighlighterPrinter<'_> {
             // All lines in the middle are printed fully
             for middle_line in &lines[1..lines.len() - 1] {
                 let _ = crate::config::write_to_debug_log(format!("MID line: {:?}\n", middle_line));
+                self.highlighter_check_end(middle_line);
                 let middle_line_with_ending = format!("{}\n", middle_line);
                 if let Some(highlighter) = self.highlighter.as_mut() {
                     let highlighted_parts: Vec<(Style, &str)> = highlighter
@@ -289,11 +309,15 @@ impl SyntaxHighlighterPrinter<'_> {
                     let _ = write!(stdout, "{}", middle_line_with_ending);
                     stdout.flush().unwrap();
                 }
-                self.highlighter_check(middle_line);
+                self.highlighter_check_start(middle_line);
             }
 
             // The last line is only partial (unless this is the last acc() call)
             let last_line_partial = &lines[lines.len() - 1].to_owned();
+            let _ = crate::config::write_to_debug_log(format!(
+                "LAST line partial: {:?}\n",
+                last_line_partial
+            ));
             let _ = write!(stdout, "{}", last_line_partial);
             stdout.flush().unwrap();
             self.buffer.push_str(last_line_partial)
@@ -311,7 +335,7 @@ impl SyntaxHighlighterPrinter<'_> {
         let mut stdout = io::stdout().lock();
         // If there are characters left in the buffer, and highlighting is
         // activated, the current line should be cleared and reprinted with
-        // highlighting. This is only an issue when the output ends with ``````
+        // highlighting. This is only an issue when the output ends with ```
         // w/o a trailing newline.
         if let Some(color_capability) = self.terminal_color_capability.clone() {
             if let Some(highlighter) = self.highlighter.as_mut() {
