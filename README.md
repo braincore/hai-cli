@@ -632,7 +632,7 @@ Here are some interesting ones:
   random MP3s from your `music/*.mp3` assets. If lyrics are available in the
   file’s `lrc` metadata, it can display them line-by-line as the song plays.
 - [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add search results in markdown to your conversation. Needs API token (free tier available) from [pure.md](https://pure.md).
+- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add search results in markdown to your conversation. Needs API token (free tier available) from [pure.md](https://pure.md). [[Video](https://www.youtube.com/watch?v=YfSnY-MFrNw)]
 
 #### Task-specific commands
 
