@@ -29,6 +29,10 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 🛠 Open source: Apache License 2.0
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
+### Video Walkthrough ([YouTube](https://www.youtube.com/watch?v=F6qAy8PF2WU))
+
+[![Watch Walkthrough on YouTube](https://img.youtube.com/vi/F6qAy8PF2WU/maxresdefault.jpg)](https://www.youtube.com/watch?v=F6qAy8PF2WU)
+
 ## Installation
 
 ### Installer [Linux, macOS]
