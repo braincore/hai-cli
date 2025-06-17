@@ -631,8 +631,8 @@ Here are some interesting ones:
 - [`ken/music-player`](https://hai.superego.ai/task/ken/music-player) - Plays
   random MP3s from your `music/*.mp3` assets. If lyrics are available in the
   file’s `lrc` metadata, it can display them line-by-line as the song plays.
-
-More available in the [hai tasks](https://github.com/braincore/hai-tasks) repo.
+- [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
+- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add search results in markdown to your conversation. Needs API token (free tier available) from [pure.md](https://pure.md).
 
 #### Task-specific commands
 
