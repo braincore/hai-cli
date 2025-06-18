@@ -3219,7 +3219,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         }
         cmd::Cmd::ToolMode(tool_mode_cmd) => {
             println!("Entering tool mode; All messages are treated as prompts for {}. Use `!exit` when done",
-            tool::tool_to_cmd(&tool_mode_cmd.tool, tool_mode_cmd.require));
+            tool::tool_to_cmd(&tool_mode_cmd.tool, tool_mode_cmd.user_confirmation, tool_mode_cmd.force_tool));
             session.tool_mode = Some(tool_mode_cmd.clone());
             ProcessCmdResult::Loop
         }

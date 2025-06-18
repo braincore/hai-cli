@@ -223,15 +223,25 @@ rm evidence.txt
 [QUESTION] Execute? y/[n]:
 ```
 
-- `!?` - Also gives the AI freedom to respond to you without executing the tool.
+To empower the AI to ignore your suggestive inclusion of a tool, add `?` after the tool name as a suffix:
+
+```
+[0]: !sh? how old is the earth?
+```
+
+```
+The Earth is approximately 4.54 billion years old.
+```
+
 - Other tools: `!py` (Python), `!shscript` (shell script), and `!clip` (copy to
   clipboard).
 - `!'<cmd>' <prompt>` - Support for any program that AI can pass stdin to.
   Example below:
 
 ```
-[0]: !'uv run --python python3 --with geopy -' distance from sf to nyc
+[0]: !'uv run --with geopy -' distance from sf to nyc
 ```
+
 ```python
 ↓↓↓
 

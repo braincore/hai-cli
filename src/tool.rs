@@ -19,8 +19,8 @@ pub enum Tool {
 }
 
 /// Convert tool to repl command w/o prompt.
-pub fn tool_to_cmd(tool: &Tool, require: bool) -> String {
-    let tool_symbol = if require { "!" } else { "!?" };
+pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> String {
+    let tool_symbol = if user_confirmation { "!?" } else { "!" };
     let tool_cmd = match tool {
         Tool::CopyToClipboard => "clip",
         Tool::ExecPythonScript => "py",
@@ -30,14 +30,17 @@ pub fn tool_to_cmd(tool: &Tool, require: bool) -> String {
         Tool::ShellExec => "sh",
         Tool::ShellExecWithScript(cmd) => &format!("'{}'", cmd),
     };
-    format!("{}{}", tool_symbol, tool_cmd)
+    let force_tool_symbol = if force_tool { "" } else { "?" };
+    format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
 }
 
 #[derive(Clone, Debug)]
 pub struct ToolPolicy {
     pub tool: Tool,
+    /// Whether user confirmation is required to execute the tool
+    pub user_confirmation: bool,
     /// Whether the AI is required to use this tool
-    pub require: bool,
+    pub force_tool: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

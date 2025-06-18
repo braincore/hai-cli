@@ -521,12 +521,13 @@ async fn repl(
         } else {
             editor_prompt.set_task_mode(None);
         }
-        editor_prompt.set_tool_mode(
-            session
-                .tool_mode
-                .clone()
-                .map(|tool_mode_cmd| tool::tool_to_cmd(&tool_mode_cmd.tool, tool_mode_cmd.require)),
-        );
+        editor_prompt.set_tool_mode(session.tool_mode.clone().map(|tool_mode_cmd| {
+            tool::tool_to_cmd(
+                &tool_mode_cmd.tool,
+                tool_mode_cmd.user_confirmation,
+                tool_mode_cmd.force_tool,
+            )
+        }));
 
         editor_prompt.set_incognito(incognito);
         editor_prompt.set_is_dev(env::var("HAI_BASE_URL").is_ok());
@@ -698,7 +699,8 @@ async fn repl(
             session.last_tool_cmd = Some(tool_cmd.clone());
             Some(tool::ToolPolicy {
                 tool: tool_cmd.tool.clone(),
-                require: tool_cmd.require,
+                user_confirmation: tool_cmd.user_confirmation,
+                force_tool: tool_cmd.force_tool,
             })
         } else {
             None
@@ -975,7 +977,8 @@ async fn repl(
                 let tool_policy_combined = tool_policy.clone().or_else(|| {
                     tool.map(|tool| tool::ToolPolicy {
                         tool,
-                        require: false,
+                        user_confirmation: false,
+                        force_tool: false,
                     })
                 });
 
@@ -983,7 +986,7 @@ async fn repl(
                 // doubles as a way to require user confirmation.
                 let tool_policy_needs_user_confirmation = tool_policy_combined
                     .clone()
-                    .map(|tp| !tp.require)
+                    .map(|tp| tp.user_confirmation)
                     .unwrap_or(false);
 
                 let user_confirmed_tool_execute = if !force_yes
@@ -1128,7 +1131,8 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
     if let cmd::Cmd::Tool(cmd::ToolCmd {
         tool: tool::Tool::ShellExecWithScript(shell_cmd),
         prompt,
-        require,
+        user_confirmation,
+        force_tool,
         cache,
     }) = &cmd
     {
@@ -1141,7 +1145,8 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
             // Replace vars in the recorded input because the unexpanded
             // vars are sometimes too opaque for the AI to understand.
             prompt: feature::haivar::replace_haivars(prompt, haivars),
-            require: *require,
+            user_confirmation: *user_confirmation,
+            force_tool: *force_tool,
             cache: *cache,
         })
     } else {

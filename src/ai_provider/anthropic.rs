@@ -175,7 +175,7 @@ pub async fn send_to_anthropic(
         if !tools_added.contains(tool_name) {
             tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell))
         }
-        if tp.require {
+        if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))
         } else {
             Some(json!({"type": "auto"}))

@@ -280,8 +280,10 @@ pub struct ToolCmd {
     pub tool: tool::Tool,
     /// Prompt to apply to tool
     pub prompt: String,
+    /// Whether to require user confirmation
+    pub user_confirmation: bool,
     /// Whether to require the use of the tool
-    pub require: bool,
+    pub force_tool: bool,
     /// Whether to cache the AI response to re-use next time
     pub cache: bool,
 }
@@ -290,8 +292,10 @@ pub struct ToolCmd {
 pub struct ToolModeCmd {
     /// The tool to use
     pub tool: tool::Tool,
+    /// Whether to require user confirmation
+    pub user_confirmation: bool,
     /// Whether to require the use of the tool
-    pub require: bool,
+    pub force_tool: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -603,7 +607,7 @@ fn get_cmd_re() -> &'static Regex {
 
 fn get_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?( |\(|$)").unwrap())
+    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?( |\?|\(|$)").unwrap())
 }
 
 fn get_ai_def_tool_re() -> &'static Regex {
@@ -681,11 +685,11 @@ pub fn parse_user_input(
     } else if let Some(mut remaining) = input.strip_prefix('!') {
         // Try parsing as a tool-command
         let input = input.trim_end();
-        let require = if remaining.starts_with("?") {
+        let user_confirmation = if remaining.starts_with("?") {
             remaining = &remaining[1..];
-            false
-        } else {
             true
+        } else {
+            false
         };
         // If the next char is blank, then we assume the user intends to use a
         // previous tool so we leave the tool_name empty.
@@ -715,6 +719,12 @@ pub fn parse_user_input(
                 }
             }
         };
+        let force_tool = if remaining.starts_with("?") {
+            remaining = &remaining[1..];
+            false
+        } else {
+            true
+        };
         let options_re = Regex::new(r"(\([^\)]*\))?( |$)").unwrap();
         let (remaining, options) = match options_re.captures(remaining) {
             Some(captures) => {
@@ -729,7 +739,8 @@ pub fn parse_user_input(
         };
         parse_tool_command(
             tool_name.as_str(),
-            require,
+            user_confirmation,
+            force_tool,
             last_tool_cmd,
             options.clone(),
             remaining,
@@ -748,7 +759,8 @@ pub fn parse_user_input(
             Some(Cmd::Tool(ToolCmd {
                 tool: tool_mode.tool,
                 prompt: input.into(),
-                require: tool_mode.require,
+                user_confirmation: tool_mode.user_confirmation,
+                force_tool: tool_mode.force_tool,
                 cache: false,
             }))
         } else {
@@ -1810,7 +1822,8 @@ fn parse_command(
 /// If None is returned, it prints an error usage string.
 fn parse_tool_command(
     tool_name: &str,
-    require: bool,
+    user_confirmation: bool,
+    force_tool: bool,
     last_tool_cmd: Option<ToolCmd>,
     options: HashMap<String, String>,
     remaining: &str,
@@ -1825,10 +1838,11 @@ fn parse_tool_command(
                         // Include !clip as it nudges AI to use the tool
                         prompt: get_tool_prefixed_prompt(
                             &tool::Tool::CopyToClipboard,
-                            require,
+                            user_confirmation,
                             &prompt,
                         ),
-                        require,
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     }))
                 }
@@ -1846,16 +1860,18 @@ fn parse_tool_command(
                         // Include !py as it nudges AI to use the tool
                         prompt: get_tool_prefixed_prompt(
                             &tool::Tool::ExecPythonScript,
-                            require,
+                            user_confirmation,
                             &prompt,
                         ),
-                        require,
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     }))
                 }
                 None => Some(Cmd::ToolMode(ToolModeCmd {
                     tool: tool::Tool::ExecPythonScript,
-                    require,
+                    user_confirmation,
+                    force_tool,
                 })),
             }
         }
@@ -1865,39 +1881,53 @@ fn parse_tool_command(
                     Some(Cmd::Tool(ToolCmd {
                         tool: tool::Tool::ShellExec,
                         // Exclude !sh as it tends to make its way into the command itself
-                        prompt: get_tool_prefixed_prompt(&tool::Tool::ShellExec, require, &prompt),
-                        require,
+                        prompt: get_tool_prefixed_prompt(
+                            &tool::Tool::ShellExec,
+                            user_confirmation,
+                            &prompt,
+                        ),
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     }))
                 }
                 None => Some(Cmd::ToolMode(ToolModeCmd {
                     tool: tool::Tool::ShellExec,
-                    require,
+                    user_confirmation,
+                    force_tool,
                 })),
             }
         }
         "shscript" => match parse_one_arg_catchall(remaining) {
             Some(prompt) => Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecShellScript,
-                prompt: get_tool_prefixed_prompt(&tool::Tool::ExecShellScript, require, &prompt),
-                require,
+                prompt: get_tool_prefixed_prompt(
+                    &tool::Tool::ExecShellScript,
+                    user_confirmation,
+                    &prompt,
+                ),
+                user_confirmation,
+                force_tool,
                 cache: false,
             })),
             None => Some(Cmd::ToolMode(ToolModeCmd {
                 tool: tool::Tool::ExecShellScript,
-                require,
+                user_confirmation,
+                force_tool,
             })),
         },
         "hai" => match parse_one_arg_catchall(remaining) {
             Some(prompt) => Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::HaiRepl,
-                prompt: get_tool_prefixed_prompt(&tool::Tool::HaiRepl, require, &prompt),
-                require,
+                prompt: get_tool_prefixed_prompt(&tool::Tool::HaiRepl, user_confirmation, &prompt),
+                user_confirmation,
+                force_tool,
                 cache: false,
             })),
             None => Some(Cmd::ToolMode(ToolModeCmd {
                 tool: tool::Tool::HaiRepl,
-                require,
+                user_confirmation,
+                force_tool,
             })),
         },
         "fn-py" => {
@@ -1914,7 +1944,8 @@ fn parse_tool_command(
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
                     tool: tool::Tool::Fn,
                     prompt,
-                    require,
+                    user_confirmation,
+                    force_tool,
                     cache,
                 })),
                 None => {
@@ -1931,15 +1962,21 @@ fn parse_tool_command(
                     // Repeat tool with new prompt
                     Some(prompt) => Some(Cmd::Tool(ToolCmd {
                         tool: last_tool_cmd.tool.clone(),
-                        prompt: get_tool_prefixed_prompt(&last_tool_cmd.tool, require, &prompt),
-                        require,
+                        prompt: get_tool_prefixed_prompt(
+                            &last_tool_cmd.tool,
+                            user_confirmation,
+                            &prompt,
+                        ),
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     })),
                     // Repeat tool and prompt
                     None => Some(Cmd::Tool(ToolCmd {
                         tool: last_tool_cmd.tool,
                         prompt: last_tool_cmd.prompt,
-                        require,
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     })),
                 }
@@ -1957,15 +1994,17 @@ fn parse_tool_command(
                         tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
                         prompt: get_tool_prefixed_prompt(
                             &tool::Tool::ShellExecWithScript(shell_cmd),
-                            require,
+                            user_confirmation,
                             &prompt,
                         ),
-                        require,
+                        user_confirmation,
+                        force_tool,
                         cache: false,
                     })),
                     None => Some(Cmd::ToolMode(ToolModeCmd {
                         tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
-                        require,
+                        user_confirmation,
+                        force_tool,
                     })),
                 }
             } else {
@@ -1985,8 +2024,8 @@ fn parse_tool_command(
 /// Some tool calls are better handled by the AI when the tool-cmd is prefixed
 /// to the prompt. For other tool calls (e.g. !sh), the tool-cmd confuses the
 /// AI and causes mistakes (e.g. prefixing shell command with !).
-fn get_tool_prefixed_prompt(tool: &tool::Tool, require: bool, prompt: &String) -> String {
-    let tool_call_type = if require { "!" } else { "!?" };
+fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: &String) -> String {
+    let tool_call_type = if user_confirmation { "!?" } else { "!" };
     let tool_call = match tool {
         tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),
         tool::Tool::ExecPythonScript => format!("{}py ", tool_call_type),
@@ -2212,11 +2251,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::CopyToClipboard,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, input);
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to parse !clip command properly"),
         }
@@ -2230,11 +2269,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, input);
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to parse !py command properly"),
         }
@@ -2248,12 +2287,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExec,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 // Does not include !sh b/c it confuses the AI
                 assert_eq!(prompt, "ls -lah");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to parse !sh command properly"),
         }
@@ -2267,11 +2306,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecShellScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "echo 'Hello'");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to parse !shscript command properly"),
         }
@@ -2297,11 +2336,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, input);
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to parse !?py command properly"),
         }
@@ -2315,12 +2354,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql");
                 assert_eq!(prompt, input);
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to parse ![psql] custom command properly"),
         }
@@ -2332,12 +2371,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql -hlocalhost");
                 assert_eq!(prompt, input);
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to parse ![psql] custom command properly"),
         }
@@ -2349,12 +2388,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql -h \"localhost\"");
                 assert_eq!(prompt, input);
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to parse ![psql] custom command properly"),
         }
@@ -2366,12 +2405,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql -h loc'alhost");
                 assert_eq!(prompt, "!?'psql -h loc'alhost' describe the user table");
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to parse ![psql] custom command properly"),
         }
@@ -2382,7 +2421,8 @@ mod tests {
         let last_tool_cmd = ToolCmd {
             tool: tool::Tool::ExecPythonScript,
             prompt: "!py 1 + 2".to_string(),
-            require: true,
+            user_confirmation: true,
+            force_tool: true,
             cache: false,
         };
 
@@ -2393,11 +2433,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "!py 3 + 4");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2409,11 +2449,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "!?py 3 + 4");
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2425,11 +2465,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "!py 1 + 2");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2441,13 +2481,13 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 // The prompt is taken from the previous one so isn't changed to !?
                 assert_eq!(prompt, "!py 1 + 2");
                 // The actual require bit is changed correctly
-                assert!(!require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2459,7 +2499,8 @@ mod tests {
         let last_tool_cmd = ToolCmd {
             tool: tool::Tool::ShellExecWithScript("psql -hlocalhost".to_string()),
             prompt: "!'psql -hlocalhost' dump user table".to_string(),
-            require: true,
+            user_confirmation: true,
+            force_tool: true,
             cache: false,
         };
 
@@ -2470,12 +2511,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql -hlocalhost");
                 assert_eq!(prompt, "!'psql -hlocalhost' dump task table");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2487,12 +2528,12 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithScript(cmd),
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(cmd, "psql -hlocalhost");
                 assert_eq!(prompt, "!'psql -hlocalhost' dump user table");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2503,7 +2544,8 @@ mod tests {
         let last_tool_cmd = ToolCmd {
             tool: tool::Tool::ShellExec,
             prompt: "list home dir".to_string(),
-            require: true,
+            user_confirmation: true,
+            force_tool: true,
             cache: false,
         };
 
@@ -2515,10 +2557,10 @@ mod tests {
         match cmd {
             Some(Cmd::ToolMode(ToolModeCmd {
                 tool: tool::Tool::ExecPythonScript,
-                require,
+                user_confirmation,
                 ..
             })) => {
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to enter tool mode"),
         }
@@ -2529,7 +2571,8 @@ mod tests {
 
         let tool_mode = ToolModeCmd {
             tool: tool::Tool::ExecPythonScript,
-            require: true,
+            user_confirmation: true,
+            force_tool: true,
         };
         let input = "3 + 4";
         let cmd = parse_user_input(input, None, Some(tool_mode.clone()));
@@ -2537,11 +2580,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "3 + 4");
-                assert!(require);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to use tool mode"),
         }
@@ -2559,11 +2602,11 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExec,
                 prompt,
-                require,
+                user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "get system time");
-                assert!(require);
+                assert!(!user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -2577,14 +2620,53 @@ mod tests {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::Fn,
                 prompt,
-                require,
+                user_confirmation,
+                force_tool,
                 cache,
             })) => {
                 assert_eq!(prompt, "double a number");
-                assert!(require);
+                assert!(!user_confirmation);
+                assert!(force_tool);
                 assert!(cache);
             }
             _ => panic!("Failed to parse !fn-py command properly"),
+        }
+    }
+
+    #[test]
+    fn test_tool_require() {
+        let input = "!py area of circle w/ radius 3";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                user_confirmation,
+                force_tool,
+                ..
+            })) => {
+                assert_eq!(prompt, "!py area of circle w/ radius 3");
+                assert!(!user_confirmation);
+                assert!(force_tool);
+            }
+            _ => panic!("Failed to parse !py command properly"),
+        }
+
+        let input = "!py? area of circle w/ radius 3";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ExecPythonScript,
+                prompt,
+                user_confirmation,
+                force_tool,
+                ..
+            })) => {
+                assert_eq!(prompt, "!py area of circle w/ radius 3");
+                assert!(!user_confirmation);
+                assert!(!force_tool);
+            }
+            _ => panic!("Failed to parse !py command properly"),
         }
     }
 }
