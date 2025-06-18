@@ -2040,7 +2040,16 @@ pub async fn process_cmd(
                             };
                         }
                         Err(e) => {
-                            eprintln!("error: websocket: {}", e);
+                            // If the connection is reset, it's likely due to a timeout.
+                            // In that case, ignore the error. If the server is not
+                            // responding, we expect the reconnection attempt to fail
+                            // and notify the user.
+                            if !e
+                                .to_string()
+                                .contains("Connection reset without closing handshake")
+                            {
+                                eprintln!("error: websocket: {}", e);
+                            }
                         }
                     }
                 }
