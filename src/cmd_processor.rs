@@ -2847,11 +2847,20 @@ lesson (e.g. "understanding").\n\n{}"#,
                     .await;
                 }
             } else {
-                if let Some(account) = &session.account {
+                let output = if let Some(account) = &session.account {
                     println!("ハイ {}!", account.username);
+                    account.username.clone()
                 } else {
                     println!("You have not logged into an account. Try /account-login");
-                }
+                    "You're not logged in".to_string()
+                };
+                session_history_add_user_cmd_and_reply_entries(
+                    raw_user_input,
+                    &output,
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
                 match db::list_accounts(&*db.lock().await) {
                     Ok(usernames) => {
                         if !usernames.is_empty() {
