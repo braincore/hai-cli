@@ -228,6 +228,12 @@ Tasks
 /task-view <name/path>  - View a task without loading it from repo or file path
 /task-versions <name>   - List all versions of a task in the repo
 /task-publish <path>    - Publish task to repo (requires /account-login)
+
+--
+
+Usage Guidelines:
+
+- ⏎ indicates a multi-line command. It must be replaced with an actual newline.
 "#,
                         }
                     },
