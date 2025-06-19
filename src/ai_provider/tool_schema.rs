@@ -191,6 +191,10 @@ AI-Defined Tools:
 --
 
 Assets:
+
+- Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
+- Asset names that begin with `//` are expanded to `/<username>/` automatically.
+
 /asset-new <name> ⏎<body> - Create/replace a `doc` asset. This is a MULTI-line command.
                            - Use a newline after `name` to write arbitrary multi-line content to the asset.
 

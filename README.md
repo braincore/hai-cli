@@ -304,6 +304,12 @@ Public assets start with a frontslash followed by your username (`/<username>`):
 - Anyone can see it with: `/asset-view /ken/public.txt`
 - Here's how user `ken` creates a private file: `/asset private.txt`
 
+You can also use `//` as a shortcut to refer to your own public asset path.
+For example, if you are user `ken`, the command `/asset //public.txt` is
+equivalent to `/asset /ken/public.txt`. This makes it easier to access your
+public assets and lets you write task steps that are generic to the logged-in
+account.
+
 #### Search
 
 Assets can be listed by prefix:

@@ -508,6 +508,7 @@ async fn repl(
             autocomplete_repl_cmds,
             autocomplete_repl_ai_models.clone(),
             mk_api_client(Some(&session)),
+            session.account.clone(),
         );
         //
         // Set editor prompt info for display purposes

@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::api::client::HaiClient;
+use crate::db::Account;
 use crate::{config, HaiRouterState};
 
 pub struct LineEditor {
@@ -122,6 +123,7 @@ impl LineEditor {
         autocomplete_repl_cmds: Vec<String>,
         autocomplete_repl_ai_models: Vec<String>,
         api_client: HaiClient,
+        account: Option<Account>,
     ) {
         use std::mem;
         let temp = Reedline::create();
@@ -131,6 +133,7 @@ impl LineEditor {
                 autocomplete_repl_cmds,
                 autocomplete_repl_ai_models,
                 api_client,
+                account,
             }));
     }
 }
@@ -363,6 +366,7 @@ struct CmdAndFileCompleter {
     autocomplete_repl_cmds: Vec<String>,
     autocomplete_repl_ai_models: Vec<String>,
     api_client: HaiClient,
+    account: Option<Account>,
 }
 
 fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
@@ -874,11 +878,13 @@ impl CmdAndFileCompleter {
     }
 
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
+        let expanded_asset_prefix =
+            crate::cmd_processor::expand_pub_asset_name(asset_prefix, &self.account);
         use crate::api::types::asset::AssetEntryListArg;
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
                 AssetEntryListArg {
-                    prefix: Some(asset_prefix.to_string()),
+                    prefix: Some(expanded_asset_prefix),
                 },
             ))
         });
