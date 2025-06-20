@@ -966,6 +966,18 @@ async fn repl(
                 // still require user confirmation.
                 let tool_needs_user_confirmation =
                     !matches!(tool, Some(tool::Tool::Fn | tool::Tool::CopyToClipboard));
+                // If the tool is a no-op, then it doesn't need user confirmation.
+                let tool_noops = match tool {
+                    Some(tool::Tool::HaiRepl) => {
+                        if let Ok(hai_repl_arg) = serde_json::from_str::<tool::ToolHaiReplArg>(arg)
+                        {
+                            hai_repl_arg.cmds.len() == 0
+                        } else {
+                            false
+                        }
+                    }
+                    Some(_) | None => false,
+                };
 
                 // The combined policy is a byproduct of pecularities in
                 // Anthropic's API. Once a tool is used once in a conversation,
@@ -991,6 +1003,7 @@ async fn repl(
                     .unwrap_or(false);
 
                 let user_confirmed_tool_execute = if !force_yes
+                    && !tool_noops
                     && tool_needs_user_confirmation
                     && (cfg.tool_confirm
                         || tool_policy_needs_user_confirmation

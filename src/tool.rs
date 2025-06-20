@@ -83,8 +83,8 @@ if __name__ == "__main__":
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-struct ToolHaiReplArg {
-    cmds: Vec<String>,
+pub struct ToolHaiReplArg {
+    pub cmds: Vec<String>,
 }
 
 pub fn execute_hai_repl_tool(

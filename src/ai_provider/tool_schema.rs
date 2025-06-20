@@ -108,7 +108,11 @@ Do not call this tool twice in one go, just use multiple elements in `cmds`.
 
 Each hai-command can start with "/" or "!" (ask AI to use a tool). The behavior
 without either prefix is for the message to be prompted to the AI. Some commands
-can span multiple lines (e.g. /asset-new)
+can span multiple lines (e.g. /asset-new).
+
+You can return 0 cmds or as many as you like. The AI will execute them in the
+order they are given. Each successive command has access to the outputs of the
+previous commands.
 
 After every hai-command, the output whether it's a local program execution,
 tool use, or AI response is available in the REPL-history that the next
