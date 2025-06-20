@@ -10,7 +10,7 @@ use crate::{
     db::{self, LogEntryRetentionPolicy},
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ReplMode {
     Normal,
     /// Enter task-mode for task with given fqn.

@@ -1105,12 +1105,26 @@ pub async fn process_cmd(
             // their history when they exit. This makes accidentally using
             // /task instead of /task-include an inconvenience rather than
             // fatal.
-            if matches!(session.repl_mode, ReplMode::Task(..)) {
-                session.repl_mode = ReplMode::Normal;
-                session.tool_mode = None;
-                println!("info: task ended");
-            } else {
-                eprintln!("error: not in task mode");
+            match session.repl_mode.clone() {
+                ReplMode::Task(task_fqn, _) => {
+                    session.repl_mode = ReplMode::Normal;
+                    session.tool_mode = None;
+                    // Support ending task prematurely while task steps are
+                    // being executed by purging any remaining task steps from
+                    // the queue.
+                    session
+                        .cmd_queue
+                        .retain(|cmd_input| match &cmd_input.source {
+                            session::CmdSource::TaskStep(step_task_fqn, _) => {
+                                step_task_fqn != &task_fqn
+                            }
+                            _ => true,
+                        });
+                    println!("info: task ended");
+                }
+                _ => {
+                    eprintln!("error: not in task mode");
+                }
             }
             ProcessCmdResult::Loop
         }
