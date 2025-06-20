@@ -1622,6 +1622,18 @@ pub async fn process_cmd(
             let asset_contents =
                 match asset_editor::get_asset_as_text(&api_client, &asset_name, false).await {
                     Ok(contents) => contents,
+                    Err(asset_editor::GetAssetError::BadName) => {
+                        let err_msg = format!("error: asset not found: {}", asset_name);
+                        eprintln!("{}", err_msg);
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &err_msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                        return ProcessCmdResult::Loop;
+                    }
                     Err(_) => return ProcessCmdResult::Loop,
                 };
             let asset_contents_with_delimeters = format!(
