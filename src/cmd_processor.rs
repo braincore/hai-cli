@@ -766,7 +766,9 @@ pub async fn process_cmd(
                     "Forgot {role_name} message: {}",
                     prepare_preview(preview, 80)
                 );
-                n -= 1;
+                if matches!(log_entry.message.role, chat::MessageRole::User) {
+                    n -= 1;
+                }
             }
             ProcessCmdResult::Loop
         }
