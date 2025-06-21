@@ -185,7 +185,7 @@ impl SyntaxHighlighterPrinter<'_> {
 
     pub fn set_highlighter_default(&mut self) {
         if let Some(highlighter) = self.default_highlighter.take() {
-            let _ = crate::config::write_to_debug_log(format!("HIGHLIGHT -> DEFAULT\n"));
+            let _ = crate::config::write_to_debug_log("HIGHLIGHT -> DEFAULT\n".to_string());
             self.highlighter = Some(highlighter);
         }
     }

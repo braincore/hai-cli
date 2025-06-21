@@ -971,7 +971,7 @@ async fn repl(
                     Some(tool::Tool::HaiRepl) => {
                         if let Ok(hai_repl_arg) = serde_json::from_str::<tool::ToolHaiReplArg>(arg)
                         {
-                            hai_repl_arg.cmds.len() == 0
+                            hai_repl_arg.cmds.is_empty()
                         } else {
                             false
                         }
