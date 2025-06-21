@@ -12,6 +12,30 @@ pub struct LogEntry {
     pub retention_policy: (bool, LogEntryRetentionPolicy),
 }
 
+impl LogEntry {
+    pub fn mk_preview_string(&self) -> String {
+        let mut preview = String::new();
+        if self.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
+            if let chat::MessageContent::Text { text } = &self.message.content[0] {
+                preview.push_str(text.split_once("\n").unwrap().0);
+            } else if let chat::MessageContent::ImageUrl { image_url } = &self.message.content[0] {
+                preview.push_str(&image_url.url[..10]);
+            }
+        } else {
+            for part in &self.message.content {
+                match part {
+                    chat::MessageContent::Text { text } => {
+                        preview.push_str(text);
+                    }
+                    chat::MessageContent::ImageUrl { .. } => preview.push_str("[image]"),
+                }
+                preview.push('\n');
+            }
+        }
+        preview
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug)]
 pub enum LogEntryRetentionPolicy {
     None,

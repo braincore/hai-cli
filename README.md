@@ -696,6 +696,10 @@ There are some `hai`-repl commands that are specifically made for tasks:
   task author can use `/ai <model>` without fearing that a task will try to use
   a model without a key set.
 
+- `/keep <bottom> [<top>]` - Not only for tasks, but this is useful for tasks
+  running in a loop that want to forget messages to bound the size of the
+  conversation.
+
 ### Command-line options
 
 - `hai task <task_name>` - Immediately drops user into task-mode.

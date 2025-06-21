@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::api::client::RequestError;
 use crate::session::{
-    self, hai_router_set, hai_router_try_activate, mk_api_client, recalculate_input_tokens,
+    self, hai_router_set, hai_router_try_activate, mk_api_client,
     session_history_add_user_cmd_and_reply_entries, session_history_add_user_image_entry,
     session_history_add_user_text_entry, HaiRouterState, ReplMode, SessionState,
 };
@@ -336,7 +336,7 @@ pub async fn process_cmd(
             session
                 .history
                 .retain(|log_entry| task_mode && log_entry.retention_policy.0);
-            recalculate_input_tokens(session);
+            session.recalculate_input_tokens();
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
@@ -358,7 +358,7 @@ pub async fn process_cmd(
                 (task_mode && log_entry.retention_policy.0)
                     || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
             });
-            recalculate_input_tokens(session);
+            session.recalculate_input_tokens();
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
@@ -725,43 +725,15 @@ pub async fn process_cmd(
                 }
             }
             while n > 0 && !session.history.is_empty() {
-                let log_entry = match session.history.last() {
-                    Some(log_entry) => log_entry,
-                    None => break,
-                };
-                let role_name = match log_entry.message.role {
-                    chat::MessageRole::Assistant => "assistant",
-                    chat::MessageRole::User => "user",
-                    chat::MessageRole::Tool => "tool",
-                    chat::MessageRole::System => break,
-                };
+                if session.history.last().is_none() {
+                    break;
+                }
                 let log_entry = match session.history.pop() {
                     Some(log_entry) => log_entry,
                     None => break,
                 };
-                let mut preview = String::new();
-                if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-                    session.input_loaded_tokens -= log_entry.tokens;
-                    if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                        preview.push_str(text.split_once("\n").unwrap().0);
-                    } else if let chat::MessageContent::ImageUrl { image_url } =
-                        &log_entry.message.content[0]
-                    {
-                        preview.push_str(&image_url.url[..10]);
-                    }
-                } else {
-                    session.input_tokens -= log_entry.tokens;
-                    for part in log_entry.message.content {
-                        match part {
-                            chat::MessageContent::Text { text } => {
-                                preview.push_str(&text);
-                            }
-                            chat::MessageContent::ImageUrl { .. } => preview.push_str("[image]"),
-                        }
-                        preview.push('\n');
-                    }
-                }
-
+                let role_name = log_entry.message.role.to_str();
+                let preview = log_entry.mk_preview_string();
                 println!(
                     "Forgot {role_name} message: {}",
                     prepare_preview(preview, 80)
@@ -770,6 +742,66 @@ pub async fn process_cmd(
                     n -= 1;
                 }
             }
+            session.recalculate_input_tokens();
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::Keep(cmd::KeepCmd { mut bottom, top }) => {
+            fn prepare_preview(preview: String, max_length: usize) -> String {
+                let s = preview.replace("\n", " ");
+                if s.chars().count() > max_length {
+                    let truncated: String = s.trim().chars().take(max_length - 3).collect();
+                    format!("{}...", truncated)
+                } else {
+                    s.to_string()
+                }
+            }
+
+            let mut kept_history = vec![];
+
+            let mut top = top.unwrap_or(0) as i32;
+            while !session.history.is_empty() {
+                let log_entry = match session.history.first() {
+                    Some(log_entry) => log_entry,
+                    None => break,
+                };
+                if matches!(log_entry.message.role, chat::MessageRole::User) {
+                    // Because the decrement happens only after user messages,
+                    // it allows the system message and all assistance/tool
+                    // messages that follow a user-message to be included.
+                    top -= 1;
+                    if top < 0 {
+                        break;
+                    }
+                }
+                let log_entry = session.history.remove(0);
+                kept_history.push(log_entry.clone());
+            }
+
+            let mut kept_bottom_history = vec![];
+
+            while bottom > 0 && !session.history.is_empty() {
+                if session.history.last().is_none() {
+                    break;
+                }
+                let log_entry = match session.history.pop() {
+                    Some(log_entry) => log_entry,
+                    None => break,
+                };
+                kept_bottom_history.push(log_entry.clone());
+                if matches!(log_entry.message.role, chat::MessageRole::User) {
+                    bottom -= 1;
+                }
+            }
+            kept_bottom_history.reverse();
+            kept_history.extend(kept_bottom_history);
+            for log_entry in &kept_history {
+                let role_name = log_entry.message.role.to_str();
+                let preview = log_entry.mk_preview_string();
+                println!("Keep {role_name} message: {}", prepare_preview(preview, 80));
+            }
+            session.history = kept_history;
+            session.recalculate_input_tokens();
+
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Load(cmd::LoadCmd { path }) => {
@@ -3343,6 +3375,9 @@ const HELP_MSG: &str = r##"Available Commands:
 /pin                         - Like /prep but the message is retained on /reset
 /system-prompt               - Set a system prompt for the conversation
 /clip                        - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
+/forget [<n>]                - Forget the last <n> messages in the conversation. Defaults to 1.
+/keep <bottom> [<top>]       - Keep the last <bottom> messages in the conversation and forgets the rest.
+                               If top is specified, keeps the first <top> messages as well.
 
 --
 

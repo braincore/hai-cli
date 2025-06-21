@@ -51,6 +51,8 @@ pub enum Cmd {
     SystemPrompt(SystemPromptCmd),
     /// Forgot messages in the conversation
     Forget(ForgetCmd),
+    /// Keep messages in the conversation and forget the rest
+    Keep(KeepCmd),
     /// Copy last message to clipboard
     Clip,
     /// Ask AI to use a tool
@@ -272,6 +274,14 @@ pub struct SystemPromptCmd {
 pub struct ForgetCmd {
     /// Number of messages to forget
     pub n: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct KeepCmd {
+    /// Number of messages to keep from the bottom
+    pub bottom: u32,
+    /// Number of messages to keep from the top
+    pub top: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -1159,6 +1169,39 @@ fn parse_command(
                 1
             };
             Some(Cmd::Forget(ForgetCmd { n }))
+        }
+        "keep" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let (top, bottom) = match parse_two_arg_one_optional_catchall(remaining) {
+                Some((bottom_str, top_str)) => {
+                    let bottom = match bottom_str.parse::<u32>() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            eprintln!("Usage: /keep <bottom> [<top>]");
+                            return None;
+                        }
+                    };
+                    let top = if let Some(top_str) = top_str {
+                        match top_str.parse::<u32>() {
+                            Ok(n) => Some(n),
+                            Err(_) => {
+                                eprintln!("Usage: /keep <bottom> [<top>]");
+                                return None;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    (top, bottom)
+                }
+                None => {
+                    eprintln!("Usage: /keep <bottom> [<top>]");
+                    return None;
+                }
+            };
+            Some(Cmd::Keep(KeepCmd { bottom, top }))
         }
         "exec" | "e" => {
             if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {

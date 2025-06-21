@@ -105,21 +105,23 @@ pub struct SessionState {
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
 }
 
-/// Recalculates token count based on history.
-///
-/// Useful when history has been pruned.
-pub fn recalculate_input_tokens(session: &mut SessionState) {
-    let mut input_tokens = 0;
-    let mut input_loaded_tokens = 0;
-    for log_entry in &session.history {
-        if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-            input_loaded_tokens += log_entry.tokens;
-        } else {
-            input_tokens += log_entry.tokens;
+impl SessionState {
+    /// Recalculates token count based on history.
+    ///
+    /// Useful when history has been pruned.
+    pub fn recalculate_input_tokens(&mut self) {
+        let mut input_tokens = 0;
+        let mut input_loaded_tokens = 0;
+        for log_entry in &self.history {
+            if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
+                input_loaded_tokens += log_entry.tokens;
+            } else {
+                input_tokens += log_entry.tokens;
+            }
         }
+        self.input_tokens = input_tokens;
+        self.input_loaded_tokens = input_loaded_tokens;
     }
-    session.input_tokens = input_tokens;
-    session.input_loaded_tokens = input_loaded_tokens;
 }
 
 /// Convenience function to add "user text" into conversation history while

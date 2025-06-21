@@ -40,6 +40,17 @@ pub enum MessageRole {
     Tool,
 }
 
+impl MessageRole {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            MessageRole::System => "system",
+            MessageRole::User => "user",
+            MessageRole::Assistant => "assistant",
+            MessageRole::Tool => "tool",
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum MessageContent {
