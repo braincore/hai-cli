@@ -163,6 +163,9 @@ pub async fn send_to_anthropic(
                     continue;
                 }
                 tools_added.insert(tool_call.function.name.clone());
+                // WARN: If a shell-exec-with-{file,stdin} was used previously,
+                // this recreation of the tool-schema will be highly inaccurate
+                // since shell-cmd is not populated by get_tool_from_name()!
                 // WARN: There's a serious issue if the name isn't present
                 if let Some(tool) = get_tool_from_name(&tool_call.function.name) {
                     tool_schemas.push(get_tool_schema(&tool, "input_schema", shell))
@@ -456,6 +459,11 @@ pub async fn send_to_anthropic(
                                             JsonObjectAccumulator::new(
                                                 id,
                                                 name,
+                                                tool_policy.and_then(|tp| {
+                                                    tool::get_tool_syntax_highlighter_lang_token(
+                                                        &tp.tool,
+                                                    )
+                                                }),
                                                 masked_strings.clone(),
                                             ),
                                         );

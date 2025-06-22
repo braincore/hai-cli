@@ -2032,20 +2032,23 @@ fn parse_tool_command(
             // Custom tool
             if tool_name.starts_with("'") {
                 let shell_cmd = tool_name.trim_matches('\'').to_string();
+                let file_placeholder_re = tool::get_file_placeholder_re();
+                let tool = if let Some(caps) = file_placeholder_re.captures(&shell_cmd) {
+                    let ext = caps.get(1).map(|m| m.as_str().to_string());
+                    tool::Tool::ShellExecWithFile(shell_cmd.clone(), ext)
+                } else {
+                    tool::Tool::ShellExecWithStdin(shell_cmd.clone())
+                };
                 match parse_one_arg_catchall(remaining) {
                     Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
-                        prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::ShellExecWithScript(shell_cmd),
-                            user_confirmation,
-                            &prompt,
-                        ),
+                        tool: tool.clone(),
+                        prompt: get_tool_prefixed_prompt(&tool, user_confirmation, &prompt),
                         user_confirmation,
                         force_tool,
                         cache: false,
                     })),
                     None => Some(Cmd::ToolMode(ToolModeCmd {
-                        tool: tool::Tool::ShellExecWithScript(shell_cmd.clone()),
+                        tool,
                         user_confirmation,
                         force_tool,
                     })),
@@ -2073,7 +2076,9 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
         tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),
         tool::Tool::ExecPythonScript => format!("{}py ", tool_call_type),
         tool::Tool::HaiRepl => format!("{}hai ", tool_call_type),
-        tool::Tool::ShellExecWithScript(shell_cmd) => format!("{}'{}' ", tool_call_type, shell_cmd),
+        tool::Tool::ShellExecWithFile(shell_cmd, _) | tool::Tool::ShellExecWithStdin(shell_cmd) => {
+            format!("{}'{}' ", tool_call_type, shell_cmd)
+        }
         _ => "".to_string(),
     };
     format!("{}{}", tool_call, prompt)
@@ -2395,7 +2400,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..
@@ -2404,7 +2409,7 @@ mod tests {
                 assert_eq!(prompt, input);
                 assert!(user_confirmation);
             }
-            _ => panic!("Failed to parse ![psql] custom command properly"),
+            _ => panic!("Failed to parse !'psql' custom command properly"),
         }
 
         // custom tool with space
@@ -2412,7 +2417,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..
@@ -2421,7 +2426,7 @@ mod tests {
                 assert_eq!(prompt, input);
                 assert!(user_confirmation);
             }
-            _ => panic!("Failed to parse ![psql] custom command properly"),
+            _ => panic!("Failed to parse !'psql' custom command properly"),
         }
 
         // custom tool with double-quotes
@@ -2429,7 +2434,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..
@@ -2438,7 +2443,7 @@ mod tests {
                 assert_eq!(prompt, input);
                 assert!(user_confirmation);
             }
-            _ => panic!("Failed to parse ![psql] custom command properly"),
+            _ => panic!("Failed to parse !'psql' custom command properly"),
         }
 
         // custom tool with escaped single-quote
@@ -2446,7 +2451,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..
@@ -2455,7 +2460,43 @@ mod tests {
                 assert_eq!(prompt, "!?'psql -h loc'alhost' describe the user table");
                 assert!(user_confirmation);
             }
-            _ => panic!("Failed to parse ![psql] custom command properly"),
+            _ => panic!("Failed to parse !'psql' custom command properly"),
+        }
+
+        // custom tool with file+ext placeholder
+        let input = "!?'uv run {file.py}' distance sf to nyc";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithFile(cmd, ext),
+                prompt,
+                user_confirmation,
+                ..
+            })) => {
+                assert_eq!(cmd, "uv run {file.py}");
+                assert_eq!(ext, Some("py".to_string()));
+                assert_eq!(prompt, "!?'uv run {file.py}' distance sf to nyc");
+                assert!(user_confirmation);
+            }
+            _ => panic!("Failed to parse !'uv' custom command properly"),
+        }
+
+        // custom tool with file sans ext placeholder
+        let input = "!?'uv run {file}' distance sf to nyc";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::ShellExecWithFile(cmd, ext),
+                prompt,
+                user_confirmation,
+                ..
+            })) => {
+                assert_eq!(cmd, "uv run {file}");
+                assert_eq!(ext, None);
+                assert_eq!(prompt, "!?'uv run {file}' distance sf to nyc");
+                assert!(user_confirmation);
+            }
+            _ => panic!("Failed to parse !'uv' custom command properly"),
         }
     }
 
@@ -2540,7 +2581,7 @@ mod tests {
         //
 
         let last_tool_cmd = ToolCmd {
-            tool: tool::Tool::ShellExecWithScript("psql -hlocalhost".to_string()),
+            tool: tool::Tool::ShellExecWithStdin("psql -hlocalhost".to_string()),
             prompt: "!'psql -hlocalhost' dump user table".to_string(),
             user_confirmation: true,
             force_tool: true,
@@ -2552,7 +2593,7 @@ mod tests {
         let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..
@@ -2569,7 +2610,7 @@ mod tests {
         let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithScript(cmd),
+                tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
                 ..

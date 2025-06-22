@@ -306,6 +306,11 @@ pub async fn send_to_openai(
                                         JsonObjectAccumulator::new(
                                             tool_id.clone(),
                                             tool_name,
+                                            tool_policy.and_then(|tp| {
+                                                tool::get_tool_syntax_highlighter_lang_token(
+                                                    &tp.tool,
+                                                )
+                                            }),
                                             masked_strings.clone(),
                                         ),
                                     );
@@ -362,6 +367,9 @@ pub async fn send_to_openai(
                                 let mut json_accumulator = JsonObjectAccumulator::new(
                                     tool_response.id,
                                     tool_name,
+                                    tool_policy.and_then(|tp| {
+                                        tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
+                                    }),
                                     masked_strings.clone(),
                                 );
                                 json_accumulator.acc(&tool_response.function.arguments);

@@ -1,4 +1,4 @@
-use ai_provider::{anthropic, ollama, openai, void};
+use ai_provider::{anthropic, ollama, openai, tool_schema, void};
 use chat::ChatCompletionResponse;
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -859,6 +859,7 @@ async fn repl(
                         let mut json_obj_acc = ai_provider::util::JsonObjectAccumulator::new(
                             tool_id.clone(),
                             tool_name.clone(),
+                            tool_schema::get_syntax_highlighter_token_from_tool_name(tool_name),
                             masked_strings.clone(),
                         );
                         json_obj_acc.acc(arg);
@@ -957,18 +958,44 @@ async fn repl(
                 println!("{}", "⚙ ⚙ ⚙".white().on_black());
                 println!();
 
-                let tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
+                // The combined policy is a byproduct of pecularities in
+                // Anthropic's API. Once a tool is used once in a conversation,
+                // it can be used again by the AI and there's no way to disable
+                // it. The tool cannot be removed from tool-schemas either once
+                // it has appeared in the message history. This means that
+                // tool_policy could be None, but the AI will still respond
+                // with tool use. The "combined" policy accommodates the logic
+                // for these over-zealous recommendations. Unfortunately, this
+                // logic is still inadequate as the use of a tool that doesn't
+                // match the tool policy may be a poor approximation of the
+                // original one used (FIXME).
+                let inexact_tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
+                let tool_policy_combined = tool_policy.clone().or_else(|| {
+                    inexact_tool.map(|tool| tool::ToolPolicy {
+                        tool,
+                        user_confirmation: false,
+                        force_tool: false,
+                    })
+                });
 
                 // The tools that don't need user-confirmation are those that
                 // don't have destructive potential. !fn-py only assigns a
                 // function but does not execute it. !clip can be abused but
                 // it's more of a nuisance. Also, the prompting of the AI may
                 // still require user confirmation.
-                let tool_needs_user_confirmation =
-                    !matches!(tool, Some(tool::Tool::Fn | tool::Tool::CopyToClipboard));
+                let tool_needs_user_confirmation = !matches!(
+                    tool_policy_combined,
+                    Some(tool::ToolPolicy {
+                        tool: tool::Tool::Fn | tool::Tool::CopyToClipboard,
+                        ..
+                    })
+                );
                 // If the tool is a no-op, then it doesn't need user confirmation.
-                let tool_noops = match tool {
-                    Some(tool::Tool::HaiRepl) => {
+                let tool_noops = match tool_policy_combined {
+                    Some(tool::ToolPolicy {
+                        tool: tool::Tool::HaiRepl,
+                        ..
+                    }) => {
                         if let Ok(hai_repl_arg) = serde_json::from_str::<tool::ToolHaiReplArg>(arg)
                         {
                             hai_repl_arg.cmds.is_empty()
@@ -978,22 +1005,6 @@ async fn repl(
                     }
                     Some(_) | None => false,
                 };
-
-                // The combined policy is a byproduct of pecularities in
-                // Anthropic's API. Once a tool is used once in a conversation,
-                // it can be used again by the AI and there's no way to disable
-                // it. The tool cannot be removed from tool-schemas either once
-                // it has appeared in the message history. This means that
-                // tool_policy could be None, but the AI will still respond
-                // with tool use. The "combined" policy accommodates the logic
-                // for these over-zealous recommendations.
-                let tool_policy_combined = tool_policy.clone().or_else(|| {
-                    tool.map(|tool| tool::ToolPolicy {
-                        tool,
-                        user_confirmation: false,
-                        force_tool: false,
-                    })
-                });
 
                 // The negation of the policy to require the AI to use a tool
                 // doubles as a way to require user confirmation.
@@ -1139,32 +1150,43 @@ async fn repl(
 
 /// Replace haivars in specific parts of specific commands.
 ///
-/// For now, this only replaces haivars in shell-exec-with-script tool in both
-/// the shell-cmd and prompt, which includes the shell-cmd redundantly.
+/// For now, this only replaces haivars in shell-exec-with-{file,stdin} tool in
+/// both the shell-cmd and prompt, which includes the shell-cmd redundantly.
 fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd {
+    // Replace variables in the custom command itself for tool execution.
+    let tool = match cmd.clone() {
+        cmd::Cmd::Tool(cmd::ToolCmd {
+            tool: tool::Tool::ShellExecWithFile(shell_cmd, ext),
+            ..
+        }) => tool::Tool::ShellExecWithFile(
+            feature::haivar::replace_haivars(&shell_cmd, haivars),
+            ext,
+        ),
+        cmd::Cmd::Tool(cmd::ToolCmd {
+            tool: tool::Tool::ShellExecWithStdin(shell_cmd),
+            ..
+        }) => tool::Tool::ShellExecWithStdin(feature::haivar::replace_haivars(&shell_cmd, haivars)),
+        _ => return cmd,
+    };
     if let cmd::Cmd::Tool(cmd::ToolCmd {
-        tool: tool::Tool::ShellExecWithScript(shell_cmd),
+        tool: tool::Tool::ShellExecWithFile(_, _) | tool::Tool::ShellExecWithStdin(_),
         prompt,
         user_confirmation,
         force_tool,
         cache,
-    }) = &cmd
+    }) = cmd
     {
         cmd::Cmd::Tool(cmd::ToolCmd {
-            // Replace variables in the custom command itself for tool
-            // execution.
-            tool: tool::Tool::ShellExecWithScript(feature::haivar::replace_haivars(
-                shell_cmd, haivars,
-            )),
+            tool,
             // Replace vars in the recorded input because the unexpanded
             // vars are sometimes too opaque for the AI to understand.
-            prompt: feature::haivar::replace_haivars(prompt, haivars),
-            user_confirmation: *user_confirmation,
-            force_tool: *force_tool,
-            cache: *cache,
+            prompt: feature::haivar::replace_haivars(&prompt, haivars),
+            user_confirmation,
+            force_tool,
+            cache,
         })
     } else {
-        cmd.clone()
+        cmd
     }
 }
 

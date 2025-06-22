@@ -84,7 +84,22 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
                 "additionalProperties": false,
             },
         }),
-        Tool::ShellExecWithScript(cmd) => json!({
+        Tool::ShellExecWithFile(cmd, ext) => json!({
+            "name": tool_name,
+            "description": format!("Executes program: {}\n{{file}} is replaced with a temporary file\nShell = {}\nSystem = {}", cmd, shell, system),
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": format!("Executes program with this input passed as a temporary file {{file}} with ext={}. If it's a script, be aware that important values should be printed to stdout.", ext.as_ref().unwrap_or(&"none".to_string()))
+                    },
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
+        Tool::ShellExecWithStdin(cmd) => json!({
             "name": tool_name,
             "description": format!("Executes program: {}\nShell = {}\nSystem = {}", cmd, shell, system),
             schema_key_name: {
@@ -261,10 +276,14 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::ExecShellScript => "exec_shell_script",
         Tool::Fn => "fn",
         Tool::ShellExec => "shell_exec",
-        Tool::ShellExecWithScript(_) => "shell_exec_with_script",
+        Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
+        Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
     }
 }
 
+/// WARN: Returns a best-effort Tool object from just the name of the tool as
+/// specified in function-calling APIs. For certain tools, this returns a tool
+/// of the correct type but with dummy internal data.
 pub fn get_tool_from_name(name: &str) -> Option<Tool> {
     match name {
         "hai_repl" => Some(Tool::HaiRepl),
@@ -273,14 +292,20 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "exec_shell_script" => Some(Tool::ExecShellScript),
         "fn" => Some(Tool::Fn),
         "shell_exec" => Some(Tool::ShellExec),
-        "shell_exec_with_script" => Some(Tool::ShellExecWithScript(
-            "shell_exec_with_script".to_string(),
-        )), // FIXME
+        "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),
+        // This is deprecated, but included for compatibility with old saved
+        // chats.
+        "shell_exec_with_script" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
+        "shell_exec_with_stdin" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
+
         _ => None,
     }
 }
 
-pub fn get_tool_syntax_highlighter_token_from_name(name: &str) -> Option<String> {
+/// Must be kept in sync with tool:get_tool_sytax_highlighter_lang_token.
+/// Useful when interpretting old AI chat history where the tool::Tool object
+/// is no longer available but a string representation of the tool name is.
+pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String> {
     match name {
         "hai_repl" => None,
         "copy_to_clipboard" => None,
@@ -288,7 +313,11 @@ pub fn get_tool_syntax_highlighter_token_from_name(name: &str) -> Option<String>
         "exec_shell_script" => Some("bash".to_string()),
         "fn" => Some("py".to_string()),
         "shell_exec" => Some("bash".to_string()),
+        "shell_exec_with_file" => None,
+        // This is deprecated, but included for compatibility with old saved
+        // chats.
         "shell_exec_with_script" => Some("bash".to_string()),
+        "shell_exec_with_stdin" => Some("bash".to_string()),
         _ => None,
     }
 }

@@ -233,13 +233,29 @@ To empower the AI to ignore your suggestive inclusion of a tool, add `?` after t
 The Earth is approximately 4.54 billion years old.
 ```
 
-- Other tools: `!py` (Python), `!shscript` (shell script), and `!clip` (copy to
-  clipboard).
-- `!'<cmd>' <prompt>` - Support for any program that AI can pass stdin to.
-  Example below:
+#### Other tools
+
+- `!py` — Run Python code.
+- `!shscript` — Execute a shell script (multi-line version of `!sh`).
+- `!clip` - Copy something to your system clipboard.
+- `!'<cmd>' <prompt>` - Run any program that accepts input via stdin.
+  - If `<cmd>` contains a `{file}` placeholder, it will be replaced with a
+    temporary file containing the AI-generated response.
+    - This is useful for programs that do not accept `stdin` or when `stdin` is
+      reserved for user input.
+  - You can specify a file extension using `{file.<ext>}` to force the
+    temporary file to have a particular extension, which also enables syntax
+    highlighting. This is especially helpful for programs like `uv` that
+    require a `.py` extension for Python scripts.
 
 ```
+# Uses stdin (-)
 [0]: !'uv run --with geopy -' distance from sf to nyc
+
+OR
+
+# Uses temporary file
+[0]: !'uv run --with geopy {file.py}' distance from sf to nyc
 ```
 
 ```python

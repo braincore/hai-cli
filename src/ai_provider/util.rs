@@ -8,8 +8,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::term_color;
 
-use super::tool_schema;
-
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
     if let Value::Object(ref mut map) = json {
@@ -576,8 +574,9 @@ enum Printer<'a> {
 // FIXME: Remove tool_id
 pub struct JsonObjectAccumulator<'a> {
     pub tool_id: String,
-    #[allow(dead_code)]
     pub tool_name: String,
+    /// When set, enables syntax highlighting.
+    pub sh_lang_token: Option<String>,
     /// All partial jsons concatenated
     pub buffer: String,
     /// The offset into buffer that has been printed to screen
@@ -594,11 +593,13 @@ impl<'a> JsonObjectAccumulator<'a> {
     pub fn new(
         id: String,
         name: String,
+        sh_lang_token: Option<String>,
         masked_strings: HashSet<String>,
     ) -> JsonObjectAccumulator<'a> {
         JsonObjectAccumulator {
             tool_id: id,
             tool_name: name,
+            sh_lang_token,
             buffer: String::new(),
             buffer_print_cursor: 0,
             printed_text: String::new(),
@@ -641,15 +642,13 @@ impl<'a> JsonObjectAccumulator<'a> {
                     .nth(0)
                     .map(|(index, _)| index + second_quote_index + 1);
 
-                let sh_token =
-                    tool_schema::get_tool_syntax_highlighter_token_from_name(&self.tool_name);
                 let (printer, index) = match (third_quote_index, array_open_index) {
                     (Some(third_quote_index), Some(array_open_index)) => {
                         if third_quote_index < array_open_index {
                             let mut printer =
                                 MaskedJsonStringPrinter::new(self.masked_strings.clone());
-                            if let Some(sh_token) = sh_token {
-                                printer.set_highlighter(&sh_token);
+                            if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
+                                printer.set_highlighter(sh_lang_token);
                             }
                             (Printer::String(printer), third_quote_index)
                         } else {
@@ -663,8 +662,8 @@ impl<'a> JsonObjectAccumulator<'a> {
                     }
                     (Some(third_quote_index), None) => {
                         let mut printer = MaskedJsonStringPrinter::new(self.masked_strings.clone());
-                        if let Some(sh_token) = sh_token {
-                            printer.set_highlighter(&sh_token);
+                        if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
+                            printer.set_highlighter(sh_lang_token);
                         }
                         (Printer::String(printer), third_quote_index)
                     }
@@ -881,7 +880,7 @@ mod tests {
     fn test_json_obj_acc_basic() {
         let masked_strings = HashSet::new();
         let mut accumulator =
-            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), masked_strings);
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"{"input": "Hello "#;
         let input2 = r#"World!"}"#;
@@ -897,7 +896,7 @@ mod tests {
     fn test_json_obj_acc_many_pieces() {
         let masked_strings = HashSet::new();
         let mut accumulator =
-            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), masked_strings);
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         accumulator.acc(r#"{""#);
         accumulator.acc(r#"in"#);
@@ -920,7 +919,7 @@ mod tests {
     fn test_json_obj_acc_odd_spacing() {
         let masked_strings = HashSet::from_iter(vec!["secret".to_string()]);
         let mut accumulator =
-            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), masked_strings);
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"        {       "input"     :        "Hello "#;
         let input2 = r#"World!"     }      "#;
@@ -936,7 +935,7 @@ mod tests {
     fn test_json_obj_acc_with_array() {
         let masked_strings = HashSet::from_iter(vec!["secret".to_string()]);
         let mut accumulator =
-            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), masked_strings);
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"        {  "cmds"     :        ["Hello "#;
         let input2 = r#"World!"  ]   }      "#;

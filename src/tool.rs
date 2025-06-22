@@ -1,7 +1,11 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::OnceLock;
+use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -12,10 +16,16 @@ pub enum Tool {
     CopyToClipboard,
     ExecPythonScript,
     ExecShellScript,
-    ShellExec,
-    ShellExecWithScript(String),
-    HaiRepl,
     Fn,
+    HaiRepl,
+    ShellExec,
+    /// (file_contents, extension)
+    /// Extension is important because some programs make decisions based on
+    /// the file's extension. For example, `uv run {file}` does not execute the
+    /// `file`` unless it has a .py extension. It also lets us add syntax
+    /// highlighting.
+    ShellExecWithFile(String, Option<String>),
+    ShellExecWithStdin(String),
 }
 
 /// Convert tool to repl command w/o prompt.
@@ -28,10 +38,40 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::Fn => "fn",
         Tool::HaiRepl => "hai",
         Tool::ShellExec => "sh",
-        Tool::ShellExecWithScript(cmd) => &format!("'{}'", cmd),
+        Tool::ShellExecWithFile(cmd, ext) => {
+            if let Some(ext) = ext {
+                &format!("{}.{}", cmd, ext)
+            } else {
+                &format!("{}", cmd)
+            }
+        }
+        Tool::ShellExecWithStdin(cmd) => &format!("'{}'", cmd),
     };
     let force_tool_symbol = if force_tool { "" } else { "?" };
     format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
+}
+
+/// The cmd-string for shell-exec-with-file supports {file.EXT} placeholders
+/// where the extension is optional. This regex identifies this placeholder and
+/// extract the optional extension.
+pub fn get_file_placeholder_re() -> &'static Regex {
+    static FILE_PLACEHOLDER_RE: OnceLock<Regex> = OnceLock::new();
+    FILE_PLACEHOLDER_RE.get_or_init(|| Regex::new(r"\{file(?:\.([a-zA-Z0-9_.-]+))?\}").unwrap())
+}
+
+pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
+    match tool {
+        Tool::CopyToClipboard => None,
+        Tool::ExecPythonScript => Some("py".to_string()),
+        Tool::ExecShellScript => Some("bash".to_string()),
+        Tool::Fn => Some("py".to_string()),
+        Tool::HaiRepl => None,
+        Tool::ShellExec => Some("bash".to_string()),
+        // WARN: The work hasn't been done to ensure that syntax-highlighter
+        // tokens match all file extensions correctly.
+        Tool::ShellExecWithFile(_, ext) => ext.to_owned(),
+        Tool::ShellExecWithStdin(_) => Some("bash".to_string()),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -59,7 +99,10 @@ pub async fn execute_shell_based_tool(
         Tool::ExecPythonScript => exec_python_script(&input).await?,
         Tool::ExecShellScript => exec_shell_script(shell, &input).await?,
         Tool::ShellExec => shell_exec(shell, &input).await?,
-        Tool::ShellExecWithScript(cmd) => shell_exec_with_script(shell, cmd, &input).await?,
+        Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
+        Tool::ShellExecWithFile(cmd, ext) => {
+            shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
+        }
         _ => "fatal: not a shell-based tool".to_string(),
     })
 }
@@ -192,12 +235,42 @@ pub async fn exec_shell_script(
     collect_and_print_command_output(&mut child).await
 }
 
-/// `shell_exec_with_script` executes a specified program on the "command line"
-/// and feeds a script via stdin.
-pub async fn shell_exec_with_script(
+/// `shell_exec_with_file` executes a specified program on the "command line"
+/// and replaces `{file}` in the command with a temporary file containing
+/// the provided file contents.
+pub async fn shell_exec_with_file(
     shell: &str,
     cmd: &str,
-    script: &str,
+    file_contents: &str,
+    ext: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut temp_file = if let Some(ext) = ext {
+        NamedTempFile::with_suffix(format!(".{}", ext))?
+    } else {
+        NamedTempFile::new()?
+    };
+    temp_file.write_all(file_contents.as_bytes())?;
+    temp_file.flush()?;
+    let prepared_cmd = get_file_placeholder_re()
+        .replace(&cmd, &temp_file.path().to_string_lossy())
+        .into_owned();
+    let mut child = Command::new(shell)
+        .arg("-c")
+        .arg(prepared_cmd)
+        // Allow the script to read from the terminal's stdin
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    collect_and_print_command_output(&mut child).await
+}
+
+/// `shell_exec_with_stdin` executes a specified program on the "command line"
+/// and feeds a script via stdin.
+pub async fn shell_exec_with_stdin(
+    shell: &str,
+    cmd: &str,
+    stdin: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut child = Command::new(shell)
         .arg("-c")
@@ -206,8 +279,8 @@ pub async fn shell_exec_with_script(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(script.as_bytes()).await?;
+    if let Some(mut child_stdin) = child.stdin.take() {
+        child_stdin.write_all(stdin.as_bytes()).await?;
     } else {
         return Err("Failed to open stdin".into());
     }

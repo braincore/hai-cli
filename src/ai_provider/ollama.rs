@@ -250,6 +250,9 @@ pub async fn send_to_ollama(
                                     JsonObjectAccumulator::new(
                                         "STUB".to_string(),
                                         tool_name,
+                                        tool_policy.and_then(|tp| {
+                                            tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
+                                        }),
                                         masked_strings.clone(),
                                     ),
                                 );
