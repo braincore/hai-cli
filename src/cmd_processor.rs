@@ -1276,6 +1276,13 @@ pub async fn process_cmd(
 
             match client.task_search(TaskSearchArg { q: q.to_owned() }).await {
                 Ok(res) => {
+                    let terminal_width = crossterm::terminal::size()
+                        // If the terminal width is less than 80, just treat it as
+                        // 80 so that we don't try too hard to shrink the contents.
+                        .map(|size| size.0.max(80) as usize)
+                        // If this isn't being run in a terminal, be more generous
+                        // with the width.
+                        .unwrap_or(120);
                     let mut semantic_lines = vec![];
                     for semantic_match in res.semantic_matches {
                         semantic_lines.push((
@@ -1308,7 +1315,8 @@ pub async fn process_cmd(
                         .max()
                         .unwrap_or(0);
 
-                    let width_for_description = 80 - max_name_width;
+                    // -6 is for the padding and "# "
+                    let width_for_description = terminal_width - max_name_width - 6;
 
                     println!("=== Semantic Matches ===");
                     for (semantic_line, semantic_match) in semantic_lines {
