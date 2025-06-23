@@ -666,9 +666,7 @@ Here are some interesting ones:
 - [`ken/baby-play`](https://hai.superego.ai/task/ken/baby-play) - Based on your
   baby's age, gives age-appropriate ideas for activities.
 - [`ken/flashcard-add`](https://hai.superego.ai/task/ken/flashcard-add) - Helps
-  you generate and save flashcards based on the current conversation. Use
-  `/task-include ken/flashcard-add` so that the conversation isn't reset into
-  task mode.
+  you generate and save flashcards based on the current conversation.
   - Saves your flashcards as an asset: `flaschard/deck`
   - [`ken/flashcard-review`](https://hai.superego.ai/task/ken/flashcard-review) -
     Review random flashcards
@@ -711,12 +709,10 @@ There are some `hai`-repl commands that are specifically made for tasks:
   - The cache is useful for avoiding the delay of an AI response and reducing
     costs for expensive prompts.
 
-- `/task-include <name|path>` - Rather than clearing the conversation and
-  entering a new task-mode, this command injects tasks commands into the current
-  conversation. If you find yourself giving the same instructions to the AI
-  over-and-over again, just make a (pseudo-)task with your instructions and
-  include it any time even if you're in another task-mode. For example, I have a
-  `ken/be-terse` task and `ken/code-preference` task that I inject as necessary.
+- `/task-include <name|path>` - Runs the task steps without entering task-mode
+  or exiting another task-mode. Useful when you want to use a task even if
+  you're in another task-mode. For example, I'll `/task-include
+  ken/absolute-mode` while in other tasks.
 
 - `/ai <model>` - While this isn't a task-only command, its behavior is subtly
   different. In a task step, if the user doesn't have hai-router or an API key
