@@ -116,7 +116,11 @@ You have two options:
     - via config: `~/.hai/hai.toml`
     - via CLI: `$ hai set-key <provider> <key>`
     - via REPL: `/set-key <provider> <key>`
-2. Subscribe to `hai router` and your account will automatically work with OpenAI, Anthropic, DeepSeek, and Google. Learn more with `/account-subscribe`
+2. Activate `hai router`: `/hai-router on`
+    - Requires a subscription: `/account-subscribe`
+    - Access models from OpenAI, Anthropic, DeepSeek, and Google—no API keys or
+      extra setup needed—just log in.
+    - An easy way to support the hai project and its ongoing experimentation.
 
 #### Incognito
 

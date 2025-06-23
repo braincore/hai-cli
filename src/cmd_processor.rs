@@ -3105,13 +3105,13 @@ lesson (e.g. "understanding").\n\n{}"#,
                     return ProcessCmdResult::Loop;
                 }
             };
-            println!("Thanks for supporting the development of hai!");
-            println!();
             println!("Subscribe to the hai basic plan ($6 USD / month):");
             println!("- $3 USD in AI credits that can be used across OpenAI, Anthropic, Google, Deepseek");
             println!("  - Use `/ai <model>` without having to provide your own API keys");
             println!("  - Unused credits expire after two months");
             println!("- 10 GB of asset storage and public link sharing");
+            println!("- Send 1,000 emails per day with /email");
+            println!("- An easy way to support the hai project and its ongoing experimentation");
             println!();
             println!("Subscribe with the Stripe link below:");
             println!();
