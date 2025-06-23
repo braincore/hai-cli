@@ -84,8 +84,10 @@ cargo install hai-cli
 | DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
 | Ollama     | gemma3, llama3.2, llama3.3                     |
 
+If a model doesn’t have a built-in shortcut, or if you want to use a specific
+version, you can specify it as `<ai_provider>/<official_model_name>`.
 
-- Switch mid conversation
+#### Switch mid conversation
 
 ```
 [0] How many "r"s in strawberry?
