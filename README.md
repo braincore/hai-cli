@@ -649,6 +649,16 @@ Here are some interesting ones:
   Get emails every time an asset is updated.
   - [`hai/add-email`](https://hai.superego.ai/task/hai/add-email) - Verify your
     email address.
+- [`hai/keypair-setup`](https://hai.superego.ai/task/hai/keypair-setup) -
+  Setup an RSA public & private key pair in your assets. The public key is made
+  available to other users via your public asset pool
+  (`/<username>/pubkey/public_rsa.pem`) which they can use to encrypt messages
+  to you.
+- [`ken/asset-crypt`](https://hai.superego.ai/task/ken/asset-crypt) -
+  Encrypt and upload files from your machine to your assets. Or, download and
+  decrypt assets you've encrypted with this task. Requires that the user has
+  setup an RSA keypair with the
+  [`hai/keypair-setup`](https://hai.superego.ai/task/hai/keypair-setup) task.
 - [`ken/weather`](https://hai.superego.ai/task/ken/weather) - Get the weekly
   weather forecast.
 - [`ken/absolute-mode`](https://hai.superego.ai/task/ken/absolute-mode) - Chat
