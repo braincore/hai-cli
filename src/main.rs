@@ -236,6 +236,7 @@ async fn repl(
         "/pin",
         "/system-prompt",
         "/forget",
+        "/keep",
         "/clip",
         "/printvars",
         "/setvar",
