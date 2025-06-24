@@ -61,6 +61,9 @@ struct AssetMetadataInfo
     title String?
         "If the metadata specified a `title` key with string value, this is a
         reproduction of it truncated to 64-chars."
+    content_type String?
+        "If the metadata specified a `content_type` key with value having fewer
+        than 64-chars, this is a reproduction of it."
 
 union AssetPutError
     bad_name

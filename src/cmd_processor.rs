@@ -1412,8 +1412,9 @@ pub async fn process_cmd(
                     Err(asset_editor::GetAssetError::BadName) => (vec![], None),
                     Err(_) => return ProcessCmdResult::Loop,
                 };
-            let asset_entry_ref =
-                asset_entry.map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
+            let asset_entry_ref = asset_entry
+                .as_ref()
+                .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
             let _ = asset_editor::edit_with_editor_api(
                 &api_client,
                 &session.shell,
@@ -1421,6 +1422,9 @@ pub async fn process_cmd(
                 &asset_contents,
                 &asset_name,
                 asset_entry_ref,
+                asset_entry
+                    .and_then(|entry| entry.metadata)
+                    .and_then(|md| md.content_type),
                 false,
                 update_asset_tx,
                 debug,
@@ -1466,6 +1470,7 @@ pub async fn process_cmd(
                     &[],
                     &asset_name,
                     None,
+                    None,
                     false,
                     update_asset_tx,
                     debug,
@@ -1489,8 +1494,9 @@ pub async fn process_cmd(
                     Ok(asset_get_res) => asset_get_res,
                     Err(_) => return ProcessCmdResult::Loop,
                 };
-            let asset_entry_ref =
-                asset_entry.map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
+            let asset_entry_ref = asset_entry
+                .as_ref()
+                .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
             let _ = asset_editor::edit_with_editor_api(
                 &api_client,
                 &session.shell,
@@ -1498,6 +1504,9 @@ pub async fn process_cmd(
                 &asset_contents,
                 &asset_name,
                 asset_entry_ref,
+                asset_entry
+                    .and_then(|entry| entry.metadata)
+                    .and_then(|md| md.content_type),
                 false,
                 update_asset_tx,
                 debug,
@@ -1535,6 +1544,7 @@ pub async fn process_cmd(
                     &session.editor,
                     &[],
                     &asset_name,
+                    None,
                     None,
                     true,
                     update_asset_tx,

@@ -2431,6 +2431,9 @@ pub struct AssetMetadataInfo {
     /// If the metadata specified a `title` key with string value, this is a reproduction of it
     /// truncated to 64-chars.
     pub title: Option<String>,
+    /// If the metadata specified a `content_type` key with value having fewer than 64-chars, this
+    /// is a reproduction of it.
+    pub content_type: Option<String>,
 }
 
 impl AssetMetadataInfo {
@@ -2442,6 +2445,7 @@ impl AssetMetadataInfo {
             hash: None,
             url: None,
             title: None,
+            content_type: None,
         }
     }
 
@@ -2459,10 +2463,22 @@ impl AssetMetadataInfo {
         self.title = Some(value);
         self
     }
+
+    pub fn with_content_type(mut self, value: String) -> Self {
+        self.content_type = Some(value);
+        self
+    }
 }
 
-const ASSET_METADATA_INFO_FIELDS: &[&str] =
-    &["rev_id", "created_by", "size", "hash", "url", "title"];
+const ASSET_METADATA_INFO_FIELDS: &[&str] = &[
+    "rev_id",
+    "created_by",
+    "size",
+    "hash",
+    "url",
+    "title",
+    "content_type",
+];
 impl AssetMetadataInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2480,6 +2496,7 @@ impl AssetMetadataInfo {
         let mut field_hash = None;
         let mut field_url = None;
         let mut field_title = None;
+        let mut field_content_type = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2520,6 +2537,12 @@ impl AssetMetadataInfo {
                     }
                     field_title = Some(map.next_value()?);
                 }
+                "content_type" => {
+                    if field_content_type.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("content_type"));
+                    }
+                    field_content_type = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2537,6 +2560,7 @@ impl AssetMetadataInfo {
             hash: field_hash.and_then(Option::flatten),
             url: field_url.and_then(Option::flatten),
             title: field_title.and_then(Option::flatten),
+            content_type: field_content_type.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2557,6 +2581,9 @@ impl AssetMetadataInfo {
         }
         if let Some(val) = &self.title {
             s.serialize_field("title", val)?;
+        }
+        if let Some(val) = &self.content_type {
+            s.serialize_field("content_type", val)?;
         }
         Ok(())
     }
@@ -2588,7 +2615,7 @@ impl ::serde::ser::Serialize for AssetMetadataInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetMetadataInfo", 6)?;
+        let mut s = serializer.serialize_struct("AssetMetadataInfo", 7)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

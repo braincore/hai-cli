@@ -39,6 +39,7 @@ jaq-parse = "1.0.2"
 jaq-std = "1.2.1"
 markdown = "1.0.0-alpha.23"
 mdast_util_to_markdown = "0.0.1"
+mime_guess = "2.0.5"
 notify = { version = "8.0.0", features = ["macos_fsevent"] }
 nu-ansi-term = "0.50.1"
 num-format = "0.4.4"
