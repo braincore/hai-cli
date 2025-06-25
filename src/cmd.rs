@@ -128,6 +128,12 @@ pub enum Cmd {
     AssetMdSetKey(AssetMdSetKeyCmd),
     /// Delete key in asset metadata
     AssetMdDelKey(AssetMdDelKeyCmd),
+    /// Collapse asset folder
+    AssetFolderCollapse(AssetFolderCollapseCmd),
+    /// Expand asset folder
+    AssetFolderExpand(AssetFolderExpandCmd),
+    /// List asset folder
+    AssetFolderList(AssetFolderListCmd),
     /// Resume a chat
     ChatResume(ChatResumeCmd),
     /// Save a chat
@@ -563,6 +569,24 @@ pub struct AssetMdDelKeyCmd {
 
     /// Top-level key of metadata to delete
     pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetFolderCollapseCmd {
+    /// Folder prefix to collapse
+    pub prefix: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetFolderExpandCmd {
+    /// Folder prefix to expand
+    pub prefix: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetFolderListCmd {
+    /// Prefix of folders to list
+    pub prefix: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1713,6 +1737,38 @@ fn parse_command(
                     None
                 }
             }
+        }
+        "asset-folder-collapse" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(prefix) => Some(Cmd::AssetFolderCollapse(AssetFolderCollapseCmd { prefix })),
+                None => {
+                    eprintln!("Usage: /asset-folder-collapse <prefix>");
+                    None
+                }
+            }
+        }
+        "asset-folder-expand" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(prefix) => Some(Cmd::AssetFolderExpand(AssetFolderExpandCmd { prefix })),
+                None => {
+                    eprintln!("Usage: /asset-folder-expand <prefix>");
+                    None
+                }
+            }
+        }
+        "asset-folder-list" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AssetFolderList(AssetFolderListCmd {
+                prefix: parse_one_arg_catchall(remaining),
+            }))
         }
         "chat-resume" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

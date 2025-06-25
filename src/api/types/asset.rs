@@ -1294,19 +1294,27 @@ pub struct AssetEntryIterResult {
     pub entries: Vec<AssetEntry>,
     pub cursor: String,
     pub has_more: bool,
+    pub collapsed_prefixes: Vec<String>,
 }
 
 impl AssetEntryIterResult {
-    pub fn new(entries: Vec<AssetEntry>, cursor: String, has_more: bool) -> Self {
+    pub fn new(
+        entries: Vec<AssetEntry>,
+        cursor: String,
+        has_more: bool,
+        collapsed_prefixes: Vec<String>,
+    ) -> Self {
         AssetEntryIterResult {
             entries,
             cursor,
             has_more,
+            collapsed_prefixes,
         }
     }
 }
 
-const ASSET_ENTRY_ITER_RESULT_FIELDS: &[&str] = &["entries", "cursor", "has_more"];
+const ASSET_ENTRY_ITER_RESULT_FIELDS: &[&str] =
+    &["entries", "cursor", "has_more", "collapsed_prefixes"];
 impl AssetEntryIterResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -1321,6 +1329,7 @@ impl AssetEntryIterResult {
         let mut field_entries = None;
         let mut field_cursor = None;
         let mut field_has_more = None;
+        let mut field_collapsed_prefixes = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -1343,6 +1352,12 @@ impl AssetEntryIterResult {
                     }
                     field_has_more = Some(map.next_value()?);
                 }
+                "collapsed_prefixes" => {
+                    if field_collapsed_prefixes.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("collapsed_prefixes"));
+                    }
+                    field_collapsed_prefixes = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1357,6 +1372,8 @@ impl AssetEntryIterResult {
             cursor: field_cursor.ok_or_else(|| ::serde::de::Error::missing_field("cursor"))?,
             has_more: field_has_more
                 .ok_or_else(|| ::serde::de::Error::missing_field("has_more"))?,
+            collapsed_prefixes: field_collapsed_prefixes
+                .ok_or_else(|| ::serde::de::Error::missing_field("collapsed_prefixes"))?,
         };
         Ok(Some(result))
     }
@@ -1369,6 +1386,7 @@ impl AssetEntryIterResult {
         s.serialize_field("entries", &self.entries)?;
         s.serialize_field("cursor", &self.cursor)?;
         s.serialize_field("has_more", &self.has_more)?;
+        s.serialize_field("collapsed_prefixes", &self.collapsed_prefixes)?;
         Ok(())
     }
 }
@@ -1399,7 +1417,7 @@ impl ::serde::ser::Serialize for AssetEntryIterResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryIterResult", 3)?;
+        let mut s = serializer.serialize_struct("AssetEntryIterResult", 4)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -2852,6 +2870,592 @@ impl ::std::fmt::Display for AssetMetadataPutError {
             AssetMetadataPutError::BadMetadata => f.write_str("Metadata must be valid JSON."),
             _ => write!(f, "{:?}", *self),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolFolderCollapseArg {
+    pub prefix: String,
+}
+
+impl AssetPoolFolderCollapseArg {
+    pub fn new(prefix: String) -> Self {
+        AssetPoolFolderCollapseArg { prefix }
+    }
+}
+
+const ASSET_POOL_FOLDER_COLLAPSE_ARG_FIELDS: &[&str] = &["prefix"];
+impl AssetPoolFolderCollapseArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolFolderCollapseArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolFolderCollapseArg>, V::Error> {
+        let mut field_prefix = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "prefix" => {
+                    if field_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("prefix"));
+                    }
+                    field_prefix = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolFolderCollapseArg {
+            prefix: field_prefix.ok_or_else(|| ::serde::de::Error::missing_field("prefix"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("prefix", &self.prefix)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderCollapseArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolFolderCollapseArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderCollapseArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolFolderCollapseArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolFolderCollapseArg",
+            ASSET_POOL_FOLDER_COLLAPSE_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderCollapseArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolFolderCollapseArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetPoolFolderCollapseError {
+    NoPermission,
+    BadFolder,
+    CollapseLimitReached,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderCollapseError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetPoolFolderCollapseError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderCollapseError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "no_permission" => AssetPoolFolderCollapseError::NoPermission,
+                    "bad_folder" => AssetPoolFolderCollapseError::BadFolder,
+                    "collapse_limit_reached" => AssetPoolFolderCollapseError::CollapseLimitReached,
+                    _ => AssetPoolFolderCollapseError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "no_permission",
+            "bad_folder",
+            "collapse_limit_reached",
+            "other",
+        ];
+        deserializer.deserialize_struct("AssetPoolFolderCollapseError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderCollapseError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetPoolFolderCollapseError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderCollapseError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetPoolFolderCollapseError::BadFolder => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderCollapseError", 1)?;
+                s.serialize_field(".tag", "bad_folder")?;
+                s.end()
+            }
+            AssetPoolFolderCollapseError::CollapseLimitReached => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderCollapseError", 1)?;
+                s.serialize_field(".tag", "collapse_limit_reached")?;
+                s.end()
+            }
+            AssetPoolFolderCollapseError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetPoolFolderCollapseError {}
+
+impl ::std::fmt::Display for AssetPoolFolderCollapseError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolFolderExpandArg {
+    pub prefix: String,
+}
+
+impl AssetPoolFolderExpandArg {
+    pub fn new(prefix: String) -> Self {
+        AssetPoolFolderExpandArg { prefix }
+    }
+}
+
+const ASSET_POOL_FOLDER_EXPAND_ARG_FIELDS: &[&str] = &["prefix"];
+impl AssetPoolFolderExpandArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolFolderExpandArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolFolderExpandArg>, V::Error> {
+        let mut field_prefix = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "prefix" => {
+                    if field_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("prefix"));
+                    }
+                    field_prefix = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolFolderExpandArg {
+            prefix: field_prefix.ok_or_else(|| ::serde::de::Error::missing_field("prefix"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("prefix", &self.prefix)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderExpandArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolFolderExpandArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderExpandArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolFolderExpandArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolFolderExpandArg",
+            ASSET_POOL_FOLDER_EXPAND_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderExpandArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolFolderExpandArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetPoolFolderExpandError {
+    NoPermission,
+    BadFolder,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderExpandError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetPoolFolderExpandError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderExpandError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "no_permission" => AssetPoolFolderExpandError::NoPermission,
+                    "bad_folder" => AssetPoolFolderExpandError::BadFolder,
+                    _ => AssetPoolFolderExpandError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["no_permission", "bad_folder", "other"];
+        deserializer.deserialize_struct("AssetPoolFolderExpandError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderExpandError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetPoolFolderExpandError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderExpandError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetPoolFolderExpandError::BadFolder => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderExpandError", 1)?;
+                s.serialize_field(".tag", "bad_folder")?;
+                s.end()
+            }
+            AssetPoolFolderExpandError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetPoolFolderExpandError {}
+
+impl ::std::fmt::Display for AssetPoolFolderExpandError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolFolderListArg {
+    pub prefix: Option<String>,
+}
+
+impl AssetPoolFolderListArg {
+    pub fn with_prefix(mut self, value: String) -> Self {
+        self.prefix = Some(value);
+        self
+    }
+}
+
+const ASSET_POOL_FOLDER_LIST_ARG_FIELDS: &[&str] = &["prefix"];
+impl AssetPoolFolderListArg {
+    // no _opt deserializer
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+    ) -> Result<AssetPoolFolderListArg, V::Error> {
+        let mut field_prefix = None;
+        while let Some(key) = map.next_key::<&str>()? {
+            match key {
+                "prefix" => {
+                    if field_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("prefix"));
+                    }
+                    field_prefix = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        let result = AssetPoolFolderListArg {
+            prefix: field_prefix.and_then(Option::flatten),
+        };
+        Ok(result)
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        if let Some(val) = &self.prefix {
+            s.serialize_field("prefix", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderListArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolFolderListArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderListArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolFolderListArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolFolderListArg",
+            ASSET_POOL_FOLDER_LIST_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderListArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolFolderListArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetPoolFolderListError {
+    BadPrefix,
+    NoPermission,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderListError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetPoolFolderListError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderListError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_prefix" => AssetPoolFolderListError::BadPrefix,
+                    "no_permission" => AssetPoolFolderListError::NoPermission,
+                    _ => AssetPoolFolderListError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_prefix", "no_permission", "other"];
+        deserializer.deserialize_struct("AssetPoolFolderListError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderListError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetPoolFolderListError::BadPrefix => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderListError", 1)?;
+                s.serialize_field(".tag", "bad_prefix")?;
+                s.end()
+            }
+            AssetPoolFolderListError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolFolderListError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetPoolFolderListError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetPoolFolderListError {}
+
+impl ::std::fmt::Display for AssetPoolFolderListError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolFolderListResult {
+    pub folders: Vec<String>,
+}
+
+impl AssetPoolFolderListResult {
+    pub fn new(folders: Vec<String>) -> Self {
+        AssetPoolFolderListResult { folders }
+    }
+}
+
+const ASSET_POOL_FOLDER_LIST_RESULT_FIELDS: &[&str] = &["folders"];
+impl AssetPoolFolderListResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolFolderListResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolFolderListResult>, V::Error> {
+        let mut field_folders = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "folders" => {
+                    if field_folders.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("folders"));
+                    }
+                    field_folders = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolFolderListResult {
+            folders: field_folders.ok_or_else(|| ::serde::de::Error::missing_field("folders"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("folders", &self.folders)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolFolderListResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolFolderListResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolFolderListResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolFolderListResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolFolderListResult",
+            ASSET_POOL_FOLDER_LIST_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolFolderListResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolFolderListResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
     }
 }
 

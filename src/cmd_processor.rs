@@ -1581,6 +1581,10 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
+
+            let folders = asset_iter_res.collapsed_prefixes.clone();
+            let mut printed_folders = HashSet::new();
+
             let mut asset_list_output = vec![];
             if asset_iter_res.has_more {
                 println!("[Listing assets unsorted due to size]");
@@ -1597,8 +1601,22 @@ pub async fn process_cmd(
                             continue;
                         }
                         seen.insert(entry.name.clone());
-                        let line = print_asset_entry(entry);
-                        asset_list_output.push(line);
+                        let line = if let Some(folder) = folders
+                            .iter()
+                            .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
+                        {
+                            if !printed_folders.contains(folder) {
+                                printed_folders.insert(folder);
+                                Some(print_folder(folder))
+                            } else {
+                                None
+                            }
+                        } else {
+                            Some(print_asset_entry(entry))
+                        };
+                        if let Some(line) = line {
+                            asset_list_output.push(line);
+                        }
                     }
                     if !asset_iter_res.has_more {
                         break;
@@ -1622,8 +1640,22 @@ pub async fn process_cmd(
                 entries.extend_from_slice(&asset_iter_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
                 for entry in &entries {
-                    let line = print_asset_entry(entry);
-                    asset_list_output.push(line);
+                    let line = if let Some(folder) = folders
+                        .iter()
+                        .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
+                    {
+                        if !printed_folders.contains(folder) {
+                            printed_folders.insert(folder);
+                            Some(print_folder(folder))
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some(print_asset_entry(entry))
+                    };
+                    if let Some(line) = line {
+                        asset_list_output.push(line);
+                    }
                 }
             }
             let asset_list_output = asset_list_output.join("\n");
@@ -2669,6 +2701,72 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetFolderCollapse(cmd::AssetFolderCollapseCmd { prefix }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let prefix = expand_pub_asset_name(prefix, &session.account);
+
+            use api::types::asset::AssetPoolFolderCollapseArg;
+            let api_client = mk_api_client(Some(session));
+            match api_client
+                .asset_folder_collapse(AssetPoolFolderCollapseArg { prefix })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: failed to collapse folder: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetFolderExpand(cmd::AssetFolderExpandCmd { prefix }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let prefix = expand_pub_asset_name(prefix, &session.account);
+
+            use api::types::asset::AssetPoolFolderExpandArg;
+            let api_client = mk_api_client(Some(session));
+            match api_client
+                .asset_folder_expand(AssetPoolFolderExpandArg { prefix })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: failed to expand folder: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetFolderList(cmd::AssetFolderListCmd { prefix }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let prefix = prefix
+                .as_ref()
+                .map(|prefix| expand_pub_asset_name(prefix, &session.account));
+
+            use api::types::asset::AssetPoolFolderListArg;
+            let api_client = mk_api_client(Some(session));
+            match api_client
+                .asset_folder_list(AssetPoolFolderListArg { prefix })
+                .await
+            {
+                Ok(res) => {
+                    for folder in res.folders {
+                        println!("{}", folder);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to list folders: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
             let chat_log_contents = if let Some(chat_log_name) = chat_log_name {
                 if session.account.is_none() {
@@ -3631,6 +3729,12 @@ fn print_asset_entry(entry: &AssetEntry) -> String {
         .map(|md_title| format!(" [{}]", md_title))
         .unwrap_or("".to_string());
     let line = format!("{}{}{}", entry.name, symbol, title);
+    println!("{}", line);
+    line
+}
+
+fn print_folder(folder: &str) -> String {
+    let line = format!("{}📁", folder);
     println!("{}", line);
     line
 }

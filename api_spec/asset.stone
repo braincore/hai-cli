@@ -205,6 +205,8 @@ struct AssetEntryIterResult
     entries List(AssetEntry)
     cursor String(min_length=1)
     has_more Boolean
+    collapsed_prefixes List(String)
+
 
 union AssetEntryIterError
     empty

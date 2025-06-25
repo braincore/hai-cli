@@ -339,6 +339,31 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_folder_collapse(
+        &self,
+        arg: asset::AssetPoolFolderCollapseArg,
+    ) -> Result<(), RequestError<asset::AssetPoolFolderCollapseError>> {
+        self.mk_api_request::<_, _, _>("/asset/folder/collapse", &arg)
+            .await
+    }
+
+    pub async fn asset_folder_expand(
+        &self,
+        arg: asset::AssetPoolFolderExpandArg,
+    ) -> Result<(), RequestError<asset::AssetPoolFolderExpandError>> {
+        self.mk_api_request::<_, _, _>("/asset/folder/expand", &arg)
+            .await
+    }
+
+    pub async fn asset_folder_list(
+        &self,
+        arg: asset::AssetPoolFolderListArg,
+    ) -> Result<asset::AssetPoolFolderListResult, RequestError<asset::AssetPoolFolderListError>>
+    {
+        self.mk_api_request::<_, _, _>("/asset/folder/list", &arg)
+            .await
+    }
+
     pub async fn asset_revision_iter(
         &self,
         arg: asset::AssetRevisionIterArg,

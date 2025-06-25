@@ -16,3 +16,46 @@ struct AssetPoolQuotaGetResult
 
 union AssetPoolQuotaGetError
     bad_mount_point
+
+# --
+
+route folder/collapse (AssetPoolFolderCollapseArg, Void, AssetPoolFolderCollapseError)
+    "Make a folder collapsed by default when calling :route:`entry/iter`."
+
+struct AssetPoolFolderCollapseArg
+    prefix String(min_length=1)
+
+union AssetPoolFolderCollapseError
+    no_permission
+    bad_folder
+    collapse_limit_reached
+
+# --
+
+route folder/expand (AssetPoolFolderExpandArg, Void, AssetPoolFolderExpandError)
+    "Make a folder expanded by default when calling :route:`entry/iter`."
+
+struct AssetPoolFolderExpandArg
+    prefix String(min_length=1)
+
+union AssetPoolFolderExpandError
+    no_permission
+    bad_folder
+
+# --
+
+route folder/list (AssetPoolFolderListArg, AssetPoolFolderListResult, AssetPoolFolderListError)
+    "List all collapsed folders relevant to a path."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetPoolFolderListArg
+    prefix String?
+
+struct AssetPoolFolderListResult
+    folders List(String(min_length=1))
+
+union AssetPoolFolderListError
+    bad_prefix
+    no_permission
