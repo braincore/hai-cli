@@ -687,6 +687,8 @@ Here are some interesting ones:
   code review of unstaged/staged/committed changes in your local git repo.
 - [`ken/task-safety-checker`](https://hai.superego.ai/task/ken/task-safety-checker) -
   Check that a task in the hai task repo isn't _obviously_ destructive.
+- [`ken/calendar`](https://hai.superego.ai/task/ken/calendar) -
+  Manage your personal calendar using plain text assets.
 
 #### Task-specific commands
 
