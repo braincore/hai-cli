@@ -677,8 +677,16 @@ Here are some interesting ones:
 - [`ken/music-player`](https://hai.superego.ai/task/ken/music-player) - Plays
   random MP3s from your `music/*.mp3` assets. If lyrics are available in the
   file’s `lrc` metadata, it can display them line-by-line as the song plays.
-- [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add search results in markdown to your conversation. Needs API token (free tier available) from [pure.md](https://pure.md). [[Video](https://www.youtube.com/watch?v=YfSnY-MFrNw)]
+- [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript
+  of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
+- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add
+  search results in markdown to your conversation. Needs API token (free tier
+  available) from [pure.md](https://pure.md).
+  [[Video](https://www.youtube.com/watch?v=YfSnY-MFrNw)]
+- [`ken/code-review`](https://hai.superego.ai/task/ken/code-review) - Get a
+  code review of unstaged/staged/committed changes in your local git repo.
+- [`ken/task-safety-checker`](https://hai.superego.ai/task/ken/task-safety-checker) -
+  Check that a task in the hai task repo isn't _obviously_ destructive.
 
 #### Task-specific commands
 
