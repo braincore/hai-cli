@@ -3531,7 +3531,6 @@ Assets (Experimental):
 - Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
 
-
 /a /asset <name> [<editor>]  - Open asset in editor (create if does not exist)
 /asset-new <name>            - Create a new asset and open editor
 /asset-edit <name>           - Open existing asset in editor
@@ -3559,6 +3558,12 @@ Assets (Experimental):
 /asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object.
 /asset-md-set-key <name> <k> <v> - Set key to JSON value.
 /asset-md-del-key <name> <k> - Delete a key from an asset's metadata.
+/asset-folder-collapse <path> - Collapse the specified folder when listing its parent, so it
+                                appears as a single entry.
+/asset-folder-expand <path>  - Expand a previously collapsed folder, showing its contents in the
+                               parent listing.
+/asset-folder-list [<path>]  - List all collapsed folders, optionally filtered by the given path
+                               prefix.
 
 /chat-save [<asset_name>]    - Save the conversation as an asset
                                If asset name omitted, name automatically generated
