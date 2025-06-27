@@ -33,6 +33,8 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 
 [![Watch Walkthrough on YouTube](https://img.youtube.com/vi/F6qAy8PF2WU/maxresdefault.jpg)](https://www.youtube.com/watch?v=F6qAy8PF2WU)
 
+Other videos: [analyzing YouTube transcripts](https://www.youtube.com/watch?v=hcv6N_mfpaw), [using a search engine](https://www.youtube.com/watch?v=YfSnY-MFrNw), [hai + ffmpeg](https://www.youtube.com/watch?v=fXd22bR9Vks)
+
 ## Installation
 
 ### Installer [Linux, macOS]
