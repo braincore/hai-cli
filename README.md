@@ -231,7 +231,7 @@ rm evidence.txt
 [QUESTION] Execute? y/[n]:
 ```
 
-To empower the AI to ignore your suggestive inclusion of a tool, add `?` after the tool name as a suffix:
+To let the AI to decide whether to use your suggested tool, add a "?" as a suffix to the tool’s name.
 
 ```
 [0]: !sh? how old is the earth?
