@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 ansi_colours = "1.2.3"
+atty = "0.2.14"
 base64 = "0.22.1"
 bytes = "1.8.0"
 chrono = "0.4.39"

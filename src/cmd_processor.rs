@@ -1075,6 +1075,13 @@ pub async fn process_cmd(
                 );
                 println!("  - /task-end -- Exit task mode (CTRL+D shortcut)");
                 println!();
+                if atty::is(atty::Stream::Stdout) {
+                    crossterm::queue!(
+                        std::io::stdout(),
+                        crossterm::terminal::SetTitle(haitask.name.clone())
+                    )
+                    .unwrap();
+                }
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
                     session.cmd_queue.push_front(session::CmdInput {
                         input: step.clone(),
@@ -1154,6 +1161,10 @@ pub async fn process_cmd(
                             }
                             _ => true,
                         });
+                    if atty::is(atty::Stream::Stdout) {
+                        crossterm::queue!(std::io::stdout(), crossterm::terminal::SetTitle(""))
+                            .unwrap();
+                    }
                     println!("info: task ended");
                 }
                 _ => {
