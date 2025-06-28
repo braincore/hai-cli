@@ -243,18 +243,18 @@ The Earth is approximately 4.54 billion years old.
 
 #### Other tools
 
-- `!py` — Run Python code.
-- `!shscript` — Execute a shell script (multi-line version of `!sh`).
-- `!clip` - Copy something to your system clipboard.
-- `!'<cmd>' <prompt>` - Run any program that accepts input via stdin.
-  - If `<cmd>` contains a `{file}` placeholder, it will be replaced with a
-    temporary file containing the AI-generated response.
-    - This is useful for programs that do not accept `stdin` or when `stdin` is
-      reserved for user input.
-  - You can specify a file extension using `{file.<ext>}` to force the
-    temporary file to have a particular extension, which also enables syntax
-    highlighting. This is especially helpful for programs like `uv` that
-    require a `.py` extension for Python scripts.
+| Tool                  | Description                                             |
+|-----------------------|---------------------------------------------------------|
+| `!py`                 | Run Python code.                                        |
+| `!shscript`           | Execute a shell script (multi-line version of `!sh`).   |
+| `!clip`               | Copy something to your system clipboard.                |
+| `!'<cmd>'`            | Run any program that accepts input via stdin.           |
+| `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |
+
+For the last tool using the `{file}` placeholder, a file extension can be
+specified (e.g. `{file.<ext>}`) to force the temporary file to have a
+particular extension, which also enables syntax highlighting. This is helpful
+for programs like `uv` that require a `.py` extension for Python scripts.
 
 ```
 # Uses stdin (-)
