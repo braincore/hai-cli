@@ -628,6 +628,7 @@ async fn repl(
         };
         if exit_when_done && session.cmd_queue.is_empty() {
             if let cmd::Cmd::Noop = cmd {
+                cleanup(&session);
                 process::exit(0);
             }
         }
@@ -670,6 +671,7 @@ async fn repl(
             cmd_processor::ProcessCmdResult::Break => break,
             cmd_processor::ProcessCmdResult::Loop => {
                 if exit_when_done && session.cmd_queue.is_empty() {
+                    cleanup(&session);
                     process::exit(0);
                 };
                 continue;
@@ -1135,6 +1137,7 @@ async fn repl(
         }
 
         if exit_when_done && session.cmd_queue.is_empty() {
+            cleanup(&session);
             process::exit(0);
         };
 
@@ -1147,7 +1150,17 @@ async fn repl(
         feature::save_chat::save_chat_to_db(&session, db).await;
     }
 
+    cleanup(&session);
+
     Ok(())
+}
+
+// --
+
+fn cleanup(session: &SessionState) {
+    if matches!(session.repl_mode, ReplMode::Task(_, _)) {
+        term::window_title_reset();
+    }
 }
 
 // --
