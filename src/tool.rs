@@ -42,7 +42,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
             if let Some(ext) = ext {
                 &format!("{}.{}", cmd, ext)
             } else {
-                &format!("{}", cmd)
+                &cmd.to_string()
             }
         }
         Tool::ShellExecWithStdin(cmd) => &format!("'{}'", cmd),
@@ -252,7 +252,7 @@ pub async fn shell_exec_with_file(
     temp_file.write_all(file_contents.as_bytes())?;
     temp_file.flush()?;
     let prepared_cmd = get_file_placeholder_re()
-        .replace(&cmd, &temp_file.path().to_string_lossy())
+        .replace(cmd, &temp_file.path().to_string_lossy())
         .into_owned();
     let mut child = Command::new(shell)
         .arg("-c")
