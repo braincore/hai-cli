@@ -3134,14 +3134,22 @@ lesson (e.g. "understanding").\n\n{}"#,
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AccountLogin => {
-            let username = match term::ask_question("Username?", false) {
-                Some(username) => username,
-                None => return ProcessCmdResult::Loop,
+        cmd::Cmd::AccountLogin(cmd::AccountLoginCmd { username, password }) => {
+            let username = if let Some(username) = username {
+                username.to_owned()
+            } else {
+                match term::ask_question("Username?", false) {
+                    Some(username) => username,
+                    None => return ProcessCmdResult::Loop,
+                }
             };
-            let password = match term::ask_question("Password?", true) {
-                Some(password) => password,
-                None => return ProcessCmdResult::Loop,
+            let password = if let Some(password) = password {
+                password.to_owned()
+            } else {
+                match term::ask_question("Password?", true) {
+                    Some(password) => password,
+                    None => return ProcessCmdResult::Loop,
+                }
             };
             use api::types::account::AccountTokenFromLoginArg;
             let client = mk_api_client(None);

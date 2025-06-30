@@ -78,7 +78,15 @@ enum CliSubcommand {
         /// The API key to save
         key: String,
     },
-    /// Enable task mode
+    /// Login to your hai account (optional)
+    Login {
+        /// Your hai account username
+        username: String,
+
+        /// Your hai account password (if omitted, interactive prompt)
+        password: Option<String>,
+    },
+    /// Start in task mode
     Task {
         /// The fully-qualified name of the task (username/task-name) or file path
         task_ref: String,
@@ -91,8 +99,8 @@ enum CliSubcommand {
     /// WARNING: Quote each command with single-quotes to avoid shell expansion.
     #[command(alias = "bai")]
     Bye {
-        /// Prompts to run
-        prompts: Vec<String>,
+        /// Commands to run
+        cmds: Vec<String>,
 
         /// Automatically confirm any prompts
         #[arg(short = 'y', long = "yes")]
@@ -132,8 +140,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
     } else {
         let (repl_mode, init_cmds, exit_when_done, force_yes) =
-            if let Some(CliSubcommand::Bye { prompts, yes }) = args.subcommand {
-                (ReplMode::Normal, prompts, true, yes)
+            if let Some(CliSubcommand::Bye { cmds, yes }) = args.subcommand {
+                (
+                    ReplMode::Normal,
+                    cmds.into_iter()
+                        .enumerate()
+                        .map(|(idx, prompt)| session::CmdInput {
+                            input: prompt,
+                            source: session::CmdSource::HaiBye(idx as u32),
+                        })
+                        .collect(),
+                    true,
+                    yes,
+                )
+            } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
+                let account_login_cmd = if let Some(password) = password {
+                    format!("/account-login {} {}", username, password)
+                } else {
+                    format!("/account-login {}", username)
+                };
+                (
+                    ReplMode::Normal,
+                    vec![session::CmdInput {
+                        input: account_login_cmd,
+                        // Use Internal to avoid printing command
+                        source: session::CmdSource::Internal,
+                    }],
+                    true,
+                    false,
+                )
             } else if let Some(CliSubcommand::Task { task_ref, trust }) = args.subcommand {
                 // When specified via the command-line, a relative file path may
                 // not be prefixed with "./" which will then be incorrectly treated
@@ -148,13 +183,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     task_ref
                 };
+                let task_cmd = if trust {
+                    format!("/task(trust=true) {}", fixed_task_ref)
+                } else {
+                    format!("/task {}", fixed_task_ref)
+                };
                 (
                     ReplMode::Normal,
-                    if trust {
-                        vec![format!("/task(trust=true) {}", fixed_task_ref)]
-                    } else {
-                        vec![format!("/task {}", fixed_task_ref)]
-                    },
+                    vec![session::CmdInput {
+                        input: task_cmd,
+                        source: session::CmdSource::User,
+                    }],
                     false,
                     false,
                 )
@@ -187,7 +226,7 @@ async fn repl(
     force_ai_model: Option<String>,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     repl_mode: ReplMode,
-    init_cmds: Vec<String>,
+    init_cmds: Vec<session::CmdInput>,
     exit_when_done: bool,
     force_yes: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -438,15 +477,8 @@ async fn repl(
         config::check_api_key(&session.ai, &cfg);
     }
 
-    for (index, init_cmd) in init_cmds.into_iter().enumerate() {
-        session.cmd_queue.push_back(session::CmdInput {
-            input: init_cmd,
-            source: if exit_when_done {
-                session::CmdSource::HaiBye(index as u32)
-            } else {
-                session::CmdSource::User
-            },
-        });
+    for init_cmd in init_cmds.into_iter() {
+        session.cmd_queue.push_back(init_cmd);
     }
 
     //

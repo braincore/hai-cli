@@ -149,7 +149,7 @@ pub enum Cmd {
     /// Make a new account
     AccountNew,
     /// Login to an account
-    AccountLogin,
+    AccountLogin(AccountLoginCmd),
     /// Logout of account (remove local credentials)
     AccountLogout(AccountLogoutCmd),
     /// Balance of an account
@@ -622,6 +622,14 @@ pub struct FnExecCmd {
 #[derive(Clone, Debug)]
 pub struct AccountCmd {
     pub username: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountLoginCmd {
+    // hai account username
+    pub username: Option<String>,
+    // hai account password
+    pub password: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1831,11 +1839,18 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
-                return None;
+            // The ability to specify the username/password is for internal use
+            // and is not advertised to the user.
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((username, password)) => Some(Cmd::AccountLogin(AccountLoginCmd {
+                    username: Some(username),
+                    password,
+                })),
+                None => Some(Cmd::AccountLogin(AccountLoginCmd {
+                    username: None,
+                    password: None,
+                })),
             }
-            Some(Cmd::AccountLogin)
         }
         "account-logout" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
