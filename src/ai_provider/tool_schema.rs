@@ -214,7 +214,7 @@ Assets:
 - Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
 
-/asset-new <name> ⏎<body> - Create/replace a `doc` asset. This is a MULTI-line command.
+/asset-new <name><NEWLINE><body> - Create/replace a `doc` asset. This is a MULTI-line command.
                            - Use a newline after `name` to write arbitrary multi-line content to the asset.
 
 /asset-list <prefix>    - List all assets with the given (optional) prefix
@@ -226,7 +226,7 @@ Assets:
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
                                   information about the asset. If cursor is set, begins listening
                                   at that specific revision to ensure no changes are missed.
-/asset-push <name> ⏎<body> - Push data into an asset. See pushed data w/ `/asset-revisions`
+/asset-push <name><NEWLINE><body> - Push data into an asset. See pushed data w/ `/asset-revisions`
                             - Use a newline after `name` to push arbitrary multi-line content.
 /asset-import <name> <path>   - Imports <path> from local machine into asset with <name>
 /asset-export <name> <path>   - Exports asset with name to <path> on local machine
@@ -240,7 +240,7 @@ Assets:
 
 --
 
-/email <subject> ⏎<body> - Send an email to user.
+/email <subject><NEWLINE><body> - Send an email to user.
                           - Use a newline after `subject` to specify a multi-line email body.
 
 --
@@ -252,11 +252,17 @@ Tasks
 /task-versions <name>   - List all versions of a task in the repo
 /task-publish <path>    - Publish task to repo (requires /account-login)
 
---
+Usage guideline for <NEWLINE>:
 
-Usage Guidelines:
+Example of /asset-new
 
-- ⏎ indicates a multi-line command. It must be replaced with an actual newline.
+```
+/asset-new path/to/asset/abc
+contents line 1
+contents line 2
+```
+
+
 "#,
                         }
                     },

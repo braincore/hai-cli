@@ -1091,7 +1091,7 @@ Save with a custom name:
 You (or the AI) can send emails using `/email` with a multi-line input:
 
 ```
-/email <subject> ⏎
+/email <subject>
 <body>
 ```
 

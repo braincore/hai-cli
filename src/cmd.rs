@@ -1423,7 +1423,7 @@ fn parse_command(
                     contents,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-new <name> [⏎ <body>]");
+                    eprintln!("Usage: /asset-new <name> [<NEWLINE><body>]");
                     None
                 }
             }
@@ -1451,7 +1451,7 @@ fn parse_command(
                     contents,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-push <name> [⏎ <body>]");
+                    eprintln!("Usage: /asset-push <name> [<NEWLINE><body>]");
                     None
                 }
             }
@@ -1802,7 +1802,7 @@ fn parse_command(
             match parse_one_arg_catchall(&cmd_arg) {
                 Some(subject) => Some(Cmd::Email(EmailCmd { subject, body })),
                 None => {
-                    eprintln!("Usage: /email <subject> [⏎ <body>]");
+                    eprintln!("Usage: /email <subject> [<NEWLINE><body>]");
                     None
                 }
             }
