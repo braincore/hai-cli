@@ -33,7 +33,15 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 
 [![Watch Walkthrough on YouTube](https://img.youtube.com/vi/F6qAy8PF2WU/maxresdefault.jpg)](https://www.youtube.com/watch?v=F6qAy8PF2WU)
 
-Other videos: [analyzing YouTube transcripts](https://www.youtube.com/watch?v=hcv6N_mfpaw), [using a search engine](https://www.youtube.com/watch?v=YfSnY-MFrNw), [hai + ffmpeg](https://www.youtube.com/watch?v=fXd22bR9Vks)
+#### More videos
+
+- [Using hai to manage a personal calendar](https://www.youtube.com/watch?v=vfAnEs_Fpx8)
+- [Using hai to get a code review](https://www.youtube.com/watch?v=vuf8FkpVBgo)
+- [Using the hai api](https://www.youtube.com/watch?v=WbncAz7yxj0)
+- [Using hai to encrypt/decrypt local files as assets](https://www.youtube.com/watch?v=_CA59Fzt-TY)
+- [Using hai to analyze YouTube transcripts](https://www.youtube.com/watch?v=hcv6N_mfpaw)
+- [Using hai with a search engine](https://www.youtube.com/watch?v=YfSnY-MFrNw)
+- [Making the hai walkthrough with ffmpeg](https://www.youtube.com/watch?v=fXd22bR9Vks)
 
 ## Installation
 
