@@ -32,4 +32,4 @@ EXPOSE 1337
 
 # To make uv available
 ENV PATH="/home/ubuntu/.cargo/bin:/home/ubuntu/.local/bin:${PATH}"
-CMD ["ttyd", "--writable", "-p", "1337", "/home/ubuntu/.local/bin/hai", "-u", "hn_demo", "-m", "41"]
+CMD ["ttyd", "--writable", "-p", "1337", "/home/ubuntu/.local/bin/hai", "-u", "hn_demo", "-m", "41", "task", "hai/tutorial"]
