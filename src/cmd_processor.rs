@@ -2844,7 +2844,34 @@ pub async fn process_cmd(
                         }
                         entry_body.push('\n');
                     }
-                    print!("{}[{}]: {}", role_name, i, entry_body);
+
+                    let left_prompt = format!("{}[{}]:", role_name, i);
+                    if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
+                        if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
+                            println!("{}", left_prompt.bright_green());
+                            for tool_call in tool_calls {
+                                let tool_name = tool_call.function.name.clone();
+                                let mut json_obj_acc = crate::ai_provider::util::JsonObjectAccumulator::new(
+                                    tool_call.id.clone(),
+                                    tool_name.clone(),
+                                    crate::ai_provider::tool_schema::get_syntax_highlighter_token_from_tool_name(&tool_name),
+                                    HashSet::new(),
+                                );
+                                json_obj_acc.acc(&tool_call.function.arguments);
+                                json_obj_acc.end();
+                                println!();
+                                println!();
+                            }
+                        } else {
+                            println!("{}", left_prompt.bright_green());
+                            let mut sh_printer =
+                                crate::ai_provider::util::SyntaxHighlighterPrinter::new();
+                            sh_printer.acc(&entry_body);
+                            sh_printer.end();
+                        }
+                    } else {
+                        print!("{} {}", left_prompt.bright_green(), entry_body);
+                    }
                 }
             }
             ProcessCmdResult::Loop

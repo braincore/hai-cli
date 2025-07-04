@@ -962,9 +962,7 @@ async fn repl(
                         uuid: Uuid::now_v7().to_string(),
                         message: chat::Message {
                             role: chat::MessageRole::Assistant,
-                            // FIXME: This `content` is redundant with the tool
-                            // call. Remove it? Set it to empty or null?
-                            content: vec![chat::MessageContent::Text { text: arg.clone() }],
+                            content: vec![],
                             tool_calls: Some(vec![chat::ToolCall {
                                 id: tool_id.clone(),
                                 type_: "function".to_string(),

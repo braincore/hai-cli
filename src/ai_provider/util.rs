@@ -756,6 +756,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                             Some(printer.buffer[1..printer.buffer.len() - 1].to_string());
                     }
                     self.buffer_print_cursor -= remaining.len();
+                    printer.end();
                     self.cur_printer = None;
                     self.key_search_start_index = self.buffer_print_cursor;
                 }
