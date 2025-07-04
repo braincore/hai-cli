@@ -8,6 +8,7 @@ use crate::{
     api::client::HaiClient,
     chat, cmd, config,
     db::{self, LogEntryRetentionPolicy},
+    tool,
 };
 
 #[derive(Clone, Debug)]
@@ -58,12 +59,7 @@ pub struct CmdInput {
 #[derive(Debug)]
 pub struct AiDefinedFn {
     pub fn_def: String,
-    pub language: AiDefinedFnLang,
-}
-
-#[derive(Debug)]
-pub enum AiDefinedFnLang {
-    Python,
+    pub fn_tool: tool::FnTool,
 }
 
 #[derive(Debug)]
