@@ -1,5 +1,5 @@
 use colored::*;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -7,7 +7,7 @@ use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::ai_provider::tool_schema::{get_tool_from_name, get_tool_name, get_tool_schema};
-use crate::ai_provider::util::{remove_nulls, run_jaq, JsonObjectAccumulator, TextAccumulator};
+use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;

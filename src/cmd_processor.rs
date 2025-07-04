@@ -14,9 +14,9 @@ use uuid::Uuid;
 
 use crate::api::client::RequestError;
 use crate::session::{
-    self, hai_router_set, hai_router_try_activate, mk_api_client,
-    session_history_add_user_cmd_and_reply_entries, session_history_add_user_image_entry,
-    session_history_add_user_text_entry, HaiRouterState, ReplMode, SessionState,
+    self, HaiRouterState, ReplMode, SessionState, hai_router_set, hai_router_try_activate,
+    mk_api_client, session_history_add_user_cmd_and_reply_entries,
+    session_history_add_user_image_entry, session_history_add_user_text_entry,
 };
 use crate::{
     api::{self, client::HaiClient},
@@ -442,7 +442,10 @@ pub async fn process_cmd(
         cmd::Cmd::SetVar(cmd::SetVarCmd { key, value }) => {
             let key_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_]*$").unwrap();
             if !key_regex.is_match(key) {
-                println!("error: variable name '{}' is invalid: must start with a letter and only contain alphanumeric characters or underscores.", key);
+                println!(
+                    "error: variable name '{}' is invalid: must start with a letter and only contain alphanumeric characters or underscores.",
+                    key
+                );
                 return ProcessCmdResult::Loop;
             }
             cfg.haivars.insert(key.to_owned(), value.to_owned());
@@ -714,7 +717,8 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Forget(cmd::ForgetCmd { mut n }) => {
+        cmd::Cmd::Forget(cmd::ForgetCmd { n }) => {
+            let mut n = n.clone();
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -745,7 +749,8 @@ pub async fn process_cmd(
             session.recalculate_input_tokens();
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Keep(cmd::KeepCmd { mut bottom, top }) => {
+        cmd::Cmd::Keep(cmd::KeepCmd { bottom, top }) => {
+            let mut bottom = bottom.clone();
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -1069,7 +1074,9 @@ pub async fn process_cmd(
                     haitask.name
                 );
                 println!("  - /new -- restarts the task");
-                println!("  - /reset -- restarts the task while retaining additional /pin and /load commands");
+                println!(
+                    "  - /reset -- restarts the task while retaining additional /pin and /load commands"
+                );
                 println!(
                     "  - /task-forget {} -- forgets cached/memorized answers",
                     task_ref
@@ -3246,12 +3253,16 @@ lesson (e.g. "understanding").\n\n{}"#,
                 Ok(res) => res.subscribe_link,
                 Err(_) => {
                     println!("You're already subscribed.");
-                    println!("Need more credits? Email me at ken@elkabany.com for help (sorry for the manual process)");
+                    println!(
+                        "Need more credits? Email me at ken@elkabany.com for help (sorry for the manual process)"
+                    );
                     return ProcessCmdResult::Loop;
                 }
             };
             println!("Subscribe to the hai basic plan ($6 USD / month):");
-            println!("- $3 USD in AI credits that can be used across OpenAI, Anthropic, Google, Deepseek");
+            println!(
+                "- $3 USD in AI credits that can be used across OpenAI, Anthropic, Google, Deepseek"
+            );
             println!("  - Use `/ai <model>` without having to provide your own API keys");
             println!("  - Unused credits expire after two months");
             println!("- 10 GB of asset storage and public link sharing");
@@ -3450,8 +3461,14 @@ lesson (e.g. "understanding").\n\n{}"#,
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ToolMode(tool_mode_cmd) => {
-            println!("Entering tool mode; All messages are treated as prompts for {}. Use `!exit` when done",
-            tool::tool_to_cmd(&tool_mode_cmd.tool, tool_mode_cmd.user_confirmation, tool_mode_cmd.force_tool));
+            println!(
+                "Entering tool mode; All messages are treated as prompts for {}. Use `!exit` when done",
+                tool::tool_to_cmd(
+                    &tool_mode_cmd.tool,
+                    tool_mode_cmd.user_confirmation,
+                    tool_mode_cmd.force_tool
+                )
+            );
             session.tool_mode = Some(tool_mode_cmd.clone());
             ProcessCmdResult::Loop
         }

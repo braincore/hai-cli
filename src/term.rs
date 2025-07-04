@@ -1,8 +1,8 @@
-use base64::engine::general_purpose;
 use base64::Engine;
+use base64::engine::general_purpose;
 use colored::*;
 use reedline::{
-    self, default_vi_insert_keybindings, default_vi_normal_keybindings, Reedline, Signal, Vi,
+    self, Reedline, Signal, Vi, default_vi_insert_keybindings, default_vi_normal_keybindings,
 };
 use std::io::Write;
 

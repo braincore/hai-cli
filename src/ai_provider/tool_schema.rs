@@ -1,5 +1,5 @@
 use crate::{config, tool::Tool};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// # Arguments
 /// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.

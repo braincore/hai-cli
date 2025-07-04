@@ -10,7 +10,7 @@ use crate::term_color;
 
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
-    if let Value::Object(ref mut map) = json {
+    if let Value::Object(map) = json {
         map.retain(|_, v| !v.is_null());
     }
 }

@@ -11,7 +11,7 @@
 )]
 
 #[allow(unused_imports)]
-use base64::{engine::general_purpose::STANDARD_NO_PAD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as BASE64};
 
 /// Access Control Entry (ACE)
 #[derive(Debug, Clone, PartialEq, Eq)]

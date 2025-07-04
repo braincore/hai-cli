@@ -32,7 +32,7 @@ mod term;
 mod term_color;
 mod tool;
 
-use session::{get_api_base_url, mk_api_client, HaiRouterState, ReplMode, SessionState};
+use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
 #[derive(Parser)]
@@ -505,7 +505,9 @@ async fn repl(
             println!("  - changelog: `/asset-view /hai/changelog` or `!!cat @/hai/changelog`");
             let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {
-                println!("  - installer (from shell): `curl -LsSf https://hai.superego.ai/hai-installer.sh | sh`");
+                println!(
+                    "  - installer (from shell): `curl -LsSf https://hai.superego.ai/hai-installer.sh | sh`"
+                );
             } else {
                 let asset_name =
                     format!("hai-cli-{}-{}.zip", version, config::get_machine_os_arch());
@@ -881,13 +883,13 @@ async fn repl(
             // Because it's from the cache, the response is not yet on the screen.
             for ai_response in &ai_responses {
                 match ai_response {
-                    chat::ChatCompletionResponse::Message { ref text } => {
+                    chat::ChatCompletionResponse::Message { text } => {
                         println!("{}", text);
                     }
                     chat::ChatCompletionResponse::Tool {
-                        ref tool_id,
-                        ref tool_name,
-                        ref arg,
+                        tool_id,
+                        tool_name,
+                        arg,
                         ..
                     } => {
                         // Since the tool response is saved raw in the history,
@@ -929,10 +931,10 @@ async fn repl(
 
             // Increment `input_tokens` b/c the AI output will be part of the next input
             let tokens = match ai_response {
-                chat::ChatCompletionResponse::Message { ref text } => {
+                chat::ChatCompletionResponse::Message { text } => {
                     bpe_tokenizer.encode_with_special_tokens(text).len() as u32
                 }
-                chat::ChatCompletionResponse::Tool { ref arg, .. } => {
+                chat::ChatCompletionResponse::Tool { arg, .. } => {
                     bpe_tokenizer.encode_with_special_tokens(arg).len() as u32
                 }
             };
@@ -940,7 +942,7 @@ async fn repl(
 
             // Append AI's response to history
             match ai_response {
-                chat::ChatCompletionResponse::Message { ref text } => {
+                chat::ChatCompletionResponse::Message { text } => {
                     session.history.push(db::LogEntry {
                         uuid: Uuid::now_v7().to_string(),
                         message: chat::Message {
@@ -954,9 +956,9 @@ async fn repl(
                     });
                 }
                 chat::ChatCompletionResponse::Tool {
-                    ref tool_id,
-                    ref tool_name,
-                    ref arg,
+                    tool_id,
+                    tool_name,
+                    arg,
                 } => {
                     session.history.push(db::LogEntry {
                         uuid: Uuid::now_v7().to_string(),

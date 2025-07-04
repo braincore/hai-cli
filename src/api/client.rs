@@ -1,9 +1,9 @@
 use reqwest::{
-    header::{self, HeaderValue},
     Client, Error as ReqwestError,
+    header::{self, HeaderValue},
 };
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fmt;
 
 use super::types::{account, asset, messaging, task};

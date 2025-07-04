@@ -2,7 +2,7 @@ use futures::future::join_all;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::fs::{create_dir_all, File};
+use tokio::fs::{File, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, Semaphore};
 

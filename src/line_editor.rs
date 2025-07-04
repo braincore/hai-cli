@@ -5,10 +5,10 @@ use crossterm::event::{
 };
 use crossterm::terminal::supports_keyboard_enhancement;
 use reedline::{
-    self, default_vi_insert_keybindings, default_vi_normal_keybindings, ColumnarMenu, Completer,
-    EditCommand, FileBackedHistory, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch,
-    PromptHistorySearchStatus, PromptViMode, Reedline, ReedlineEvent, ReedlineMenu, Span,
-    Suggestion, Vi,
+    self, ColumnarMenu, Completer, EditCommand, FileBackedHistory, MenuBuilder, Prompt,
+    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode, Reedline,
+    ReedlineEvent, ReedlineMenu, Span, Suggestion, Vi, default_vi_insert_keybindings,
+    default_vi_normal_keybindings,
 };
 use regex::Regex;
 use std::borrow::Cow;
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::api::client::HaiClient;
 use crate::db::Account;
-use crate::{config, HaiRouterState};
+use crate::{HaiRouterState, config};
 
 pub struct LineEditor {
     pub reedline: Reedline,
@@ -494,7 +494,13 @@ impl Completer for CmdAndFileCompleter {
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
                         "completer init: {} pos={} cmd_length={} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
-                        line, pos, cmd_length, cmd_word, arg_index, arg_prefix, line.find(arg_prefix).unwrap()
+                        line,
+                        pos,
+                        cmd_length,
+                        cmd_word,
+                        arg_index,
+                        arg_prefix,
+                        line.find(arg_prefix).unwrap()
                     ));
                 }
                 let mut completions = self.asset_completer(arg_prefix);
@@ -550,7 +556,14 @@ impl Completer for CmdAndFileCompleter {
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
                         "completer init: {} pos={} cmd_length={} cmd_word={:?} arg1_index={:?} arg1_prefix={:?} arg2_index={:?} arg2_prefix={:?}\n",
-                        line, pos, cmd_length, cmd_word, arg1_index, arg1_prefix, arg2_index, arg2_prefix,
+                        line,
+                        pos,
+                        cmd_length,
+                        cmd_word,
+                        arg1_index,
+                        arg1_prefix,
+                        arg2_index,
+                        arg2_prefix,
                     ));
                 }
                 if let Some(arg2_prefix) = arg2_prefix {
