@@ -1989,6 +1989,29 @@ fn parse_tool_command(
                 })),
             }
         }
+        "pyuv" => {
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => {
+                    Some(Cmd::Tool(ToolCmd {
+                        tool: tool::Tool::ExecPythonUvScript,
+                        // Include !py as it nudges AI to use the tool
+                        prompt: get_tool_prefixed_prompt(
+                            &tool::Tool::ExecPythonUvScript,
+                            user_confirmation,
+                            &prompt,
+                        ),
+                        user_confirmation,
+                        force_tool,
+                        cache: false,
+                    }))
+                }
+                None => Some(Cmd::ToolMode(ToolModeCmd {
+                    tool: tool::Tool::ExecPythonUvScript,
+                    user_confirmation,
+                    force_tool,
+                })),
+            }
+        }
         "sh" => {
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => {
@@ -2146,6 +2169,8 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
     let tool_call = match tool {
         tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),
         tool::Tool::ExecPythonScript => format!("{}py ", tool_call_type),
+        // !py may be understandable than !pyuv to the LLM--this is unscientific.
+        tool::Tool::ExecPythonUvScript => format!("{}py ", tool_call_type),
         tool::Tool::HaiRepl => format!("{}hai ", tool_call_type),
         tool::Tool::ShellExecWithFile(shell_cmd, _) | tool::Tool::ShellExecWithStdin(shell_cmd) => {
             format!("{}'{}' ", tool_call_type, shell_cmd)
