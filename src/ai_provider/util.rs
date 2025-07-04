@@ -587,6 +587,8 @@ pub struct JsonObjectAccumulator<'a> {
     pub unmasked_printed_text: String,
     masked_strings: HashSet<String>,
     cur_printer: Option<Printer<'a>>,
+    key_search_start_index: usize,
+    first_key_found: bool,
 }
 
 impl<'a> JsonObjectAccumulator<'a> {
@@ -606,104 +608,141 @@ impl<'a> JsonObjectAccumulator<'a> {
             unmasked_printed_text: String::new(),
             masked_strings,
             cur_printer: None,
+            key_search_start_index: 0,
+            first_key_found: false,
         }
     }
 
     pub fn acc(&mut self, next: &str) {
         self.buffer.push_str(next);
-        if self.buffer_print_cursor == 0 {
-            // This is triggered while we haven't yet identified the full
-            // "input" key in the JSON response.
+        loop {
+            if self.buffer_print_cursor <= self.key_search_start_index {
+                // This is triggered while we haven't yet identified the full
+                // "input" key in the JSON response.
 
-            // Unfortunately, the spacing in the prefix differs between
-            // services and is unreliable to depend on anyway.
-            // In fact, I've observed that as a conversation gets longer,
-            // progressively weirder formatting is used with a mix of newlines,
-            // whitespace, and indentation before the "input" key is finally
-            // specified.
+                // Unfortunately, the spacing in the prefix differs between
+                // services and is unreliable to depend on anyway.
+                // In fact, I've observed that as a conversation gets longer,
+                // progressively weirder formatting is used with a mix of newlines,
+                // whitespace, and indentation before the "input" key is finally
+                // specified.
 
-            // Find the second occurrence of `"` to be agnostic to spacing. This
-            // should match the opening of the value of the "input" key.
-            let second_quote_index = self
-                .buffer
-                .char_indices()
-                .filter(|&(_, c)| c == '"')
-                .nth(1)
-                .map(|(index, _)| index);
-            if let Some(second_quote_index) = second_quote_index {
-                let third_quote_index = self.buffer[second_quote_index + 1..]
+                // Find the second occurrence of `"` to be agnostic to spacing. This
+                // should match the opening of the value of the "input" key.
+                let mut quote_indices = self
+                    .buffer
                     .char_indices()
-                    .filter(|&(_, c)| c == '"')
-                    .nth(0)
-                    .map(|(index, _)| index + second_quote_index + 1);
-                let array_open_index = self.buffer[second_quote_index + 1..]
-                    .char_indices()
-                    .filter(|&(_, c)| c == '[')
-                    .nth(0)
-                    .map(|(index, _)| index + second_quote_index + 1);
+                    .skip_while(|&(i, _)| i < self.key_search_start_index)
+                    .filter(|&(_, c)| c == '"');
 
-                let (printer, index) = match (third_quote_index, array_open_index) {
-                    (Some(third_quote_index), Some(array_open_index)) => {
-                        if third_quote_index < array_open_index {
+                let first_quote_index = quote_indices.next().map(|(i, _)| i);
+                let second_quote_index = quote_indices.next().map(|(i, _)| i);
+                if let (Some(first_quote_index), Some(second_quote_index)) =
+                    (first_quote_index, second_quote_index)
+                {
+                    let third_quote_index = self
+                        .buffer
+                        .char_indices()
+                        .skip_while(|&(i, _)| i < second_quote_index + 1)
+                        .filter(|&(_, c)| c == '"')
+                        .nth(0)
+                        .map(|(index, _)| index);
+                    let array_open_index = self
+                        .buffer
+                        .char_indices()
+                        .skip_while(|&(i, _)| i < second_quote_index + 1)
+                        .filter(|&(_, c)| c == '[')
+                        .nth(0)
+                        .map(|(index, _)| index);
+
+                    let (printer, index) = match (third_quote_index, array_open_index) {
+                        (Some(third_quote_index), Some(array_open_index)) => {
+                            if third_quote_index < array_open_index {
+                                let mut printer =
+                                    MaskedJsonStringPrinter::new(self.masked_strings.clone());
+                                if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
+                                    printer.set_highlighter(sh_lang_token);
+                                }
+                                (Printer::String(printer), third_quote_index)
+                            } else {
+                                (
+                                    Printer::Array(JsonArrayAccumulator::new(
+                                        self.masked_strings.clone(),
+                                    )),
+                                    third_quote_index,
+                                )
+                            }
+                        }
+                        (Some(third_quote_index), None) => {
                             let mut printer =
                                 MaskedJsonStringPrinter::new(self.masked_strings.clone());
                             if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
                                 printer.set_highlighter(sh_lang_token);
                             }
                             (Printer::String(printer), third_quote_index)
-                        } else {
-                            (
-                                Printer::Array(JsonArrayAccumulator::new(
-                                    self.masked_strings.clone(),
-                                )),
-                                third_quote_index,
-                            )
                         }
-                    }
-                    (Some(third_quote_index), None) => {
-                        let mut printer = MaskedJsonStringPrinter::new(self.masked_strings.clone());
-                        if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
-                            printer.set_highlighter(sh_lang_token);
+                        (None, Some(array_open_index)) => (
+                            Printer::Array(JsonArrayAccumulator::new(self.masked_strings.clone())),
+                            array_open_index,
+                        ),
+                        (None, None) => {
+                            // Keep accumulating
+                            return;
                         }
-                        (Printer::String(printer), third_quote_index)
+                    };
+                    self.buffer_print_cursor = index;
+                    self.cur_printer = Some(printer);
+                    if self.first_key_found {
+                        self.printed_text.push_str("\n");
+                        self.unmasked_printed_text.push_str("\n");
+                        println!();
+                    } else {
+                        self.first_key_found = true;
                     }
-                    (None, Some(array_open_index)) => (
-                        Printer::Array(JsonArrayAccumulator::new(self.masked_strings.clone())),
-                        array_open_index,
-                    ),
-                    (None, None) => {
-                        // Keep accumulating
-                        return;
+                    let key_name = &self.buffer[first_quote_index + 1..second_quote_index];
+                    // FUTURE: Generalize this based on tool-type.
+                    if key_name != "cmds" && key_name != "input" {
+                        let key_label = format!("{}:\n", key_name);
+                        self.printed_text.push_str(&key_label);
+                        self.unmasked_printed_text.push_str(&key_label);
+                        print!("{}", key_label);
                     }
-                };
-                self.buffer_print_cursor = index;
-                self.cur_printer = Some(printer);
-            } else {
-                // Keep accumulating
+                } else {
+                    // Keep accumulating
+                    return;
+                }
+            }
+
+            if self.buffer_print_cursor == self.key_search_start_index {
                 return;
             }
-        }
 
-        let next_chunk_to_print = &self.buffer[self.buffer_print_cursor..];
-        if let Some(Printer::String(printer)) = &mut self.cur_printer {
-            let acc_result = printer.acc(next_chunk_to_print);
-            self.printed_text.push_str(&acc_result.printed_text_chunk);
-            self.unmasked_printed_text
-                .push_str(&acc_result.unmasked_printed_text_chunk);
-            self.buffer_print_cursor = self.buffer.len();
-            if let Some(remaining) = acc_result.remaining {
-                self.buffer_print_cursor -= remaining.len();
-                self.cur_printer = None;
+            let next_chunk_to_print = &self.buffer[self.buffer_print_cursor..];
+            if let Some(Printer::String(printer)) = &mut self.cur_printer {
+                let acc_result = printer.acc(next_chunk_to_print);
+                self.printed_text.push_str(&acc_result.printed_text_chunk);
+                self.unmasked_printed_text
+                    .push_str(&acc_result.unmasked_printed_text_chunk);
+                self.buffer_print_cursor = self.buffer.len();
+                if let Some(remaining) = acc_result.remaining {
+                    self.buffer_print_cursor -= remaining.len();
+                    self.cur_printer = None;
+                    self.key_search_start_index = self.buffer_print_cursor;
+                }
+            } else if let Some(Printer::Array(printer)) = &mut self.cur_printer {
+                let acc_result = printer.acc(next_chunk_to_print);
+                self.printed_text.push_str(&acc_result.printed_text_chunk);
+                self.unmasked_printed_text
+                    .push_str(&acc_result.unmasked_printed_text_chunk);
+                self.buffer_print_cursor = self.buffer.len();
+                if let Some(remaining) = acc_result.remaining {
+                    self.buffer_print_cursor -= remaining.len();
+                    self.cur_printer = None;
+                    self.key_search_start_index = self.buffer_print_cursor;
+                }
             }
-        } else if let Some(Printer::Array(printer)) = &mut self.cur_printer {
-            let acc_result = printer.acc(next_chunk_to_print);
-            self.printed_text.push_str(&acc_result.printed_text_chunk);
-            self.unmasked_printed_text
-                .push_str(&acc_result.unmasked_printed_text_chunk);
-            self.buffer_print_cursor = self.buffer.len();
-            if let Some(remaining) = acc_result.remaining {
-                self.buffer_print_cursor -= remaining.len();
-                self.cur_printer = None;
+            if self.buffer_print_cursor == self.buffer.len() {
+                break;
             }
         }
     }
@@ -770,6 +809,30 @@ impl<'a> JsonArrayAccumulator<'a> {
                     .filter(|&(_, c)| c == '"')
                     .nth(0)
                     .map(|(index, _)| index);
+                let close_bracket_index = self
+                    .buffer
+                    .char_indices()
+                    .filter(|&(_, c)| c == ']')
+                    .nth(0)
+                    .map(|(index, _)| index);
+                if let Some(close_bracket_index) = close_bracket_index {
+                    // Janky way to avoid an additional nest and duplicated code
+                    if close_bracket_index < quote_index.unwrap_or(close_bracket_index + 1) {
+                        let remaining = if close_bracket_index < self.buffer.len() - 1 {
+                            Some(self.buffer[close_bracket_index + 1..].to_string())
+                        } else {
+                            Some("".to_string())
+                        };
+                        self.printed_text.push_str(&printed_text_chunk);
+                        self.unmasked_printed_text
+                            .push_str(&unmasked_printed_text_chunk);
+                        return PrinterAccResult {
+                            printed_text_chunk,
+                            unmasked_printed_text_chunk,
+                            remaining,
+                        };
+                    }
+                }
                 if let Some(quote_index) = quote_index {
                     self.cur_printer =
                         Some(MaskedJsonStringPrinter::new(self.masked_strings.clone()));
@@ -783,38 +846,13 @@ impl<'a> JsonArrayAccumulator<'a> {
                 }
             }
         }
-
         self.printed_text.push_str(&printed_text_chunk);
         self.unmasked_printed_text
             .push_str(&unmasked_printed_text_chunk);
-
-        if self.cur_printer.is_none() {
-            let close_bracket_index = self
-                .buffer
-                .char_indices()
-                .filter(|&(_, c)| c == ']')
-                .nth(0)
-                .map(|(index, _)| index);
-            let remaining = if let Some(close_bracket_index) = close_bracket_index {
-                if close_bracket_index < self.buffer.len() - 1 {
-                    Some(self.buffer[close_bracket_index + 1..].to_string())
-                } else {
-                    Some("".to_string())
-                }
-            } else {
-                None
-            };
-            PrinterAccResult {
-                printed_text_chunk,
-                unmasked_printed_text_chunk,
-                remaining,
-            }
-        } else {
-            PrinterAccResult {
-                printed_text_chunk,
-                unmasked_printed_text_chunk,
-                remaining: None,
-            }
+        PrinterAccResult {
+            printed_text_chunk,
+            unmasked_printed_text_chunk,
+            remaining: None,
         }
     }
 }
@@ -831,9 +869,11 @@ mod tests {
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1);
+        assert_eq!(acc_res.printed_text_chunk, "- mango\n- pear\n");
+        assert_eq!(acc_res.unmasked_printed_text_chunk, "- mango\n- pear\n");
+        assert_eq!(acc_res.remaining, Some("".to_string()));
         assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
         assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
-        assert_eq!(acc_res.remaining, Some("".to_string()));
 
         // Test with masks
         let masked_strings = HashSet::from_iter(vec!["ear".to_string()]);
@@ -943,6 +983,46 @@ mod tests {
         accumulator.acc(input2);
 
         assert_eq!(accumulator.printed_text, "- Hello World!\n");
+    }
+
+    #[test]
+    fn test_json_obj_acc_multikey() {
+        let masked_strings = HashSet::new();
+        let mut accumulator =
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
+
+        let input1 = r#"{"input": "Hello "#;
+        let input2 = r#"World!",   "lang": "en"}"#;
+        accumulator.acc(input1);
+        accumulator.acc(input2);
+
+        assert_eq!(accumulator.printed_text, "Hello World!\nlang:\nen");
+        assert_eq!(
+            accumulator.buffer,
+            r#"{"input": "Hello World!",   "lang": "en"}"#
+        );
+        assert!(serde_json::from_str::<Value>(&accumulator.buffer).is_ok());
+
+        // Test more parts
+        let masked_strings = HashSet::new();
+        let mut accumulator =
+            JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
+
+        let input1 = r#"{"input": "Hello "#;
+        let input2 = r#"World!",   "#;
+        let input3 = r#"""#;
+        let input4 = r#"lang": "en"}"#;
+        accumulator.acc(input1);
+        accumulator.acc(input2);
+        accumulator.acc(input3);
+        accumulator.acc(input4);
+
+        assert_eq!(accumulator.printed_text, "Hello World!\nlang:\nen");
+        assert_eq!(
+            accumulator.buffer,
+            r#"{"input": "Hello World!",   "lang": "en"}"#
+        );
+        assert!(serde_json::from_str::<Value>(&accumulator.buffer).is_ok());
     }
 
     #[test]

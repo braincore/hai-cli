@@ -34,6 +34,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
                         "type": "string",
                         "description": "Python3-compatible script. The script should print important values to stdout.",
                     },
+
                 },
                 "required": ["input"],
                 "additionalProperties": false,
