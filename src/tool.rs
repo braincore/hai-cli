@@ -15,6 +15,7 @@ use crate::{clipboard, session};
 pub enum Tool {
     CopyToClipboard,
     ExecPythonScript,
+    ExecPythonUvScript,
     ExecShellScript,
     Fn,
     HaiRepl,
@@ -34,6 +35,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
     let tool_cmd = match tool {
         Tool::CopyToClipboard => "clip",
         Tool::ExecPythonScript => "py",
+        Tool::ExecPythonUvScript => "pyuv",
         Tool::ExecShellScript => "shscript",
         Tool::Fn => "fn",
         Tool::HaiRepl => "hai",
@@ -63,6 +65,7 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
     match tool {
         Tool::CopyToClipboard => None,
         Tool::ExecPythonScript => Some("py".to_string()),
+        Tool::ExecPythonUvScript => Some("py".to_string()),
         Tool::ExecShellScript => Some("bash".to_string()),
         Tool::Fn => Some("py".to_string()),
         Tool::HaiRepl => None,
@@ -97,6 +100,7 @@ pub async fn execute_shell_based_tool(
     Ok(match tool {
         Tool::CopyToClipboard => copy_to_clipboard(&input)?,
         Tool::ExecPythonScript => exec_python_script(&input).await?,
+        Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
         Tool::ExecShellScript => exec_shell_script(shell, &input).await?,
         Tool::ShellExec => shell_exec(shell, &input).await?,
         Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
@@ -170,14 +174,33 @@ pub fn copy_to_clipboard(text: &str) -> Result<String, Box<dyn std::error::Error
     Ok("Copied to clipboard".into())
 }
 
-/// `exec_python_script` is the execution of a python3 process that's fed a
-/// script via stdin.
+/// Executes python3 with a script provided by the -c flag.
 pub async fn exec_python_script(script: &str) -> Result<String, Box<dyn std::error::Error>> {
     // Use the `.venv/bin/python` if found, otherwise fallback to "python3"
     let python_exec = find_python_in_venv();
     let mut child = Command::new(python_exec)
         .arg("-c")
         .arg(script)
+        // Allow the script to read from the terminal's stdin
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    collect_and_print_command_output(&mut child).await
+}
+
+/// Executes python3 via `uv run`.
+///
+/// The advantage over `exec_python_script` is that it allows the script to
+/// automatically install "script dependencies".
+pub async fn exec_python_uv_script(script: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut temp_file = NamedTempFile::with_suffix(".py")?;
+    temp_file.write_all(script.as_bytes())?;
+    temp_file.flush()?;
+    let mut child = Command::new("uv")
+        .arg("--quiet") // Suppress uv's output (especially installation msgs)
+        .arg("run")
+        .arg(temp_file.path())
         // Allow the script to read from the terminal's stdin
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())

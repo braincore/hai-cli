@@ -40,6 +40,35 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
                 "additionalProperties": false,
             },
         }),
+        Tool::ExecPythonUvScript => json!({
+            "name": tool_name,
+            "description": format!("Execute a Python script. Everything the user wants should be printed to stdout.\nSystem = {}", system),
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": r#"Python3-compatible script. The script should print important values to stdout.
+
+If you use non-standard libraries, you must specify them with the following syntax at the beginning of input:
+
+```python
+# /// script
+# requires-python = ">=3.12"  # Omit if unnecessary
+# dependencies = [
+#   "example-python-pkg-1",
+#   "example-python-pkg-2>=version",  # Version spec if necessary
+# ]
+# ///
+```
+"#,
+                    },
+
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
         Tool::ExecShellScript => json!({
             "name": tool_name,
             "description": format!("Execute a Shell script. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
@@ -292,6 +321,7 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::HaiRepl => "hai_repl",
         Tool::CopyToClipboard => "copy_to_clipboard",
         Tool::ExecPythonScript => "exec_python_script",
+        Tool::ExecPythonUvScript => "exec_python_uv_script",
         Tool::ExecShellScript => "exec_shell_script",
         Tool::Fn => "fn",
         Tool::ShellExec => "shell_exec",
@@ -308,6 +338,7 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "hai_repl" => Some(Tool::HaiRepl),
         "copy_to_clipboard" => Some(Tool::CopyToClipboard),
         "exec_python_script" => Some(Tool::ExecPythonScript),
+        "exec_python_uv_script" => Some(Tool::ExecPythonUvScript),
         "exec_shell_script" => Some(Tool::ExecShellScript),
         "fn" => Some(Tool::Fn),
         "shell_exec" => Some(Tool::ShellExec),
@@ -329,6 +360,7 @@ pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String>
         "hai_repl" => None,
         "copy_to_clipboard" => None,
         "exec_python_script" => Some("py".to_string()),
+        "exec_python_uv_script" => Some("py".to_string()),
         "exec_shell_script" => Some("bash".to_string()),
         "fn" => Some("py".to_string()),
         "shell_exec" => Some("bash".to_string()),
