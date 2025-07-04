@@ -91,13 +91,19 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
             schema_key_name: {
                 "type": "object",
                 "properties": {
+                    // Prefixing with _ coaxes the AI to return the key first.
+                    "_lang_tag": {
+                        "type": "string",
+                        "description": "The lang tag to be used in a markdown code block to syntax highlight the `input`. If not applicable, set to empty string.",
+                    },
                     "input": {
                         "type": "string",
                         "description": format!("Executes program with this input passed as a temporary file {{file}} with ext={}. If it's a script, be aware that important values should be printed to stdout.", ext.as_ref().unwrap_or(&"none".to_string()))
                     },
                 },
-                "required": ["input"],
+                "required":["_lang_tag", "input"],
                 "additionalProperties": false,
+                "description": "Provide the `_lang_tag` property before the `input` property in your response."
             },
         }),
         Tool::ShellExecWithStdin(cmd) => json!({
@@ -106,13 +112,19 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
             schema_key_name: {
                 "type": "object",
                 "properties": {
+                    // Prefixing with _ coaxes the AI to return the key first.
+                    "_lang_tag": {
+                        "type": "string",
+                        "description": "The lang tag to be used in a markdown code block to syntax highlight the `input`. If not applicable, set to empty string.",
+                    },
                     "input": {
                         "type": "string",
                         "description": "Executes program with this script passed via stdin. The script should print important values to stdout."
                     },
                 },
-                "required": ["input"],
+                "required": ["_lang_tag", "input"],
                 "additionalProperties": false,
+                "description": "Provide the `_lang_tag` property before the `input` property in your response."
             },
         }),
         Tool::HaiRepl => json!({
