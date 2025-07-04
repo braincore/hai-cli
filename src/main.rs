@@ -1024,7 +1024,7 @@ async fn repl(
                 let tool_needs_user_confirmation = !matches!(
                     tool_policy_combined,
                     Some(tool::ToolPolicy {
-                        tool: tool::Tool::Fn | tool::Tool::CopyToClipboard,
+                        tool: tool::Tool::Fn(_) | tool::Tool::CopyToClipboard,
                         ..
                     })
                 );
@@ -1100,7 +1100,7 @@ async fn repl(
                                     err_text
                                 }
                             }
-                        } else if matches!(tp.tool, tool::Tool::Fn) {
+                        } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
                             // Get first free name
                             let mut i = session.ai_defined_fns.len();
                             let ai_defined_tool_name = loop {
@@ -1114,7 +1114,7 @@ async fn repl(
                                 Ok(fn_def) => {
                                     let ai_defined_fn = session::AiDefinedFn {
                                         fn_def,
-                                        language: session::AiDefinedFnLang::Python,
+                                        fn_tool: fn_tool.clone(),
                                     };
                                     session.ai_defined_fns.insert(
                                         ai_defined_tool_name.clone(),

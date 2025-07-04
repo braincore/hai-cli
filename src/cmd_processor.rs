@@ -3011,23 +3011,29 @@ lesson (e.g. "understanding").\n\n{}"#,
                 };
 
             let arg_with_default = if arg.is_empty()
-                && matches!(ai_defined_fn.language, session::AiDefinedFnLang::Python)
-            {
+                && matches!(
+                    ai_defined_fn.fn_tool,
+                    tool::FnTool::FnPy | tool::FnTool::FnPyUv
+                ) {
                 "None".to_string()
             } else {
                 arg.clone()
             };
 
             // Execute AI-defined tool/function
-            let output =
-                match tool::execute_ai_defined_tool(&ai_defined_fn.fn_def, &arg_with_default).await
-                {
-                    Ok(res) => res,
-                    Err(e) => {
-                        eprintln!("error: failed to execute tool: {}", e);
-                        e.to_string()
-                    }
-                };
+            let output = match tool::execute_ai_defined_tool(
+                &ai_defined_fn.fn_tool,
+                &ai_defined_fn.fn_def,
+                &arg_with_default,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to execute tool: {}", e);
+                    e.to_string()
+                }
+            };
 
             // Save output to conversation history
             session_history_add_user_cmd_and_reply_entries(

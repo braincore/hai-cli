@@ -1,4 +1,7 @@
-use crate::{config, tool::Tool};
+use crate::{
+    config,
+    tool::{FnTool, Tool},
+};
 use serde_json::{Value, json};
 
 /// # Arguments
@@ -84,7 +87,7 @@ If you use non-standard libraries, you must specify them with the following synt
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn => json!({
+        Tool::Fn(FnTool::FnPy) => json!({
             "name": tool_name,
             "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
             schema_key_name: {
@@ -93,6 +96,44 @@ If you use non-standard libraries, you must specify them with the following synt
                     "input": {
                         "type": "string",
                         "description": "A Python function definition. IT MUST BE NAMED `f`. All dependencies including imports and other functions should be defined in this function. The signature must be `f(arg: JsonCompatible) -> JsonCompatible` where JsonCompatible is a native type that's serializable with the `json` package (e.g. int, float, str, dict, list). Add Python type annotations for the function signature!"
+                    },
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
+        Tool::Fn(FnTool::FnPyUv) => json!({
+            "name": tool_name,
+            "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": r#"A Python function definition. IT MUST
+BE NAMED `f`.
+
+The signature must be `f(arg: JsonCompatible) -> JsonCompatible` where
+JsonCompatible is a native type that's serializable with the `json` package
+(e.g. int, float, str, dict, list). Add Python type annotations for the
+function signature!
+
+All import should be done inside the function.
+
+If you use non-standard libraries, you must specify them above the function
+definition with the following syntax:
+
+```python
+# /// script
+# requires-python = ">=3.12"  # Omit if unnecessary
+# dependencies = [
+#   "example-python-pkg-1",
+#   "example-python-pkg-2>=version",  # Version spec if necessary
+# ]
+# ///
+
+This is the only text allowed above the function definition.
+```"#
                     },
                 },
                 "required": ["input"],
@@ -323,7 +364,8 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::ExecPythonScript => "exec_python_script",
         Tool::ExecPythonUvScript => "exec_python_uv_script",
         Tool::ExecShellScript => "exec_shell_script",
-        Tool::Fn => "fn",
+        Tool::Fn(FnTool::FnPy) => "fn_py",
+        Tool::Fn(FnTool::FnPyUv) => "fn_pyuv",
         Tool::ShellExec => "shell_exec",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
@@ -340,7 +382,8 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "exec_python_script" => Some(Tool::ExecPythonScript),
         "exec_python_uv_script" => Some(Tool::ExecPythonUvScript),
         "exec_shell_script" => Some(Tool::ExecShellScript),
-        "fn" => Some(Tool::Fn),
+        "fn_py" => Some(Tool::Fn(FnTool::FnPy)),
+        "fn_pyuv" => Some(Tool::Fn(FnTool::FnPyUv)),
         "shell_exec" => Some(Tool::ShellExec),
         "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),
         // This is deprecated, but included for compatibility with old saved
@@ -362,7 +405,8 @@ pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String>
         "exec_python_script" => Some("py".to_string()),
         "exec_python_uv_script" => Some("py".to_string()),
         "exec_shell_script" => Some("bash".to_string()),
-        "fn" => Some("py".to_string()),
+        "fn_py" => Some("py".to_string()),
+        "fn_pyuv" => Some("py".to_string()),
         "shell_exec" => Some("bash".to_string()),
         "shell_exec_with_file" => None,
         // This is deprecated, but included for compatibility with old saved

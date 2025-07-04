@@ -17,7 +17,7 @@ pub enum Tool {
     ExecPythonScript,
     ExecPythonUvScript,
     ExecShellScript,
-    Fn,
+    Fn(FnTool),
     HaiRepl,
     ShellExec,
     /// (file_contents, extension)
@@ -29,6 +29,12 @@ pub enum Tool {
     ShellExecWithStdin(String),
 }
 
+#[derive(Clone, Debug)]
+pub enum FnTool {
+    FnPy,
+    FnPyUv,
+}
+
 /// Convert tool to repl command w/o prompt.
 pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> String {
     let tool_symbol = if user_confirmation { "!?" } else { "!" };
@@ -37,7 +43,8 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::ExecPythonScript => "py",
         Tool::ExecPythonUvScript => "pyuv",
         Tool::ExecShellScript => "shscript",
-        Tool::Fn => "fn",
+        Tool::Fn(FnTool::FnPy) => "fn-py",
+        Tool::Fn(FnTool::FnPyUv) => "fn-pyuv",
         Tool::HaiRepl => "hai",
         Tool::ShellExec => "sh",
         Tool::ShellExecWithFile(cmd, ext) => {
@@ -67,7 +74,8 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::ExecPythonScript => Some("py".to_string()),
         Tool::ExecPythonUvScript => Some("py".to_string()),
         Tool::ExecShellScript => Some("bash".to_string()),
-        Tool::Fn => Some("py".to_string()),
+        Tool::Fn(FnTool::FnPy) => Some("py".to_string()),
+        Tool::Fn(FnTool::FnPyUv) => Some("py".to_string()),
         Tool::HaiRepl => None,
         Tool::ShellExec => Some("bash".to_string()),
         // WARN: The work hasn't been done to ensure that syntax-highlighter
@@ -112,6 +120,7 @@ pub async fn execute_shell_based_tool(
 }
 
 pub async fn execute_ai_defined_tool(
+    fn_tool: &FnTool,
     fn_def: &str,
     arg: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -126,7 +135,11 @@ if __name__ == "__main__":
 "#,
         fn_def, arg
     );
-    exec_python_script(&script).await
+    if matches!(fn_tool, FnTool::FnPyUv) {
+        exec_python_uv_script(&script).await
+    } else {
+        exec_python_script(&script).await
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
