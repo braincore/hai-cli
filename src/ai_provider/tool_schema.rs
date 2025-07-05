@@ -80,7 +80,14 @@ If you use non-standard libraries, you must specify them with the following synt
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "A Python function definition. IT MUST BE NAMED `f`. All dependencies including imports and other functions should be defined in this function. The signature must be `f(arg: JsonCompatible) -> JsonCompatible` where JsonCompatible is a native type that's serializable with the `json` package (e.g. int, float, str, dict, list). Add Python type annotations for the function signature!"
+                        "description": r#"A Python function definition. IT MUST
+BE NAMED `f`.
+
+All dependencies including imports and other functions should be defined in
+this function. The signature must be `f(arg: JsonCompatible) -> JsonCompatible`
+where JsonCompatible is a native type that's serializable with the `json`
+package (e.g. int, float, str, dict, list). Add Python type annotations for the
+function signature!"#
                     },
                 },
                 "required": ["input"],
@@ -119,6 +126,24 @@ definition with the following syntax:
 
 This is the only text allowed above the function definition.
 ```"#
+                    },
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
+        Tool::Fn(FnTool::FnSh) => json!({
+            "name": tool_name,
+            "description": "Define a shell script that implements the prompt.",
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": r#"A shell script. The input argument to
+the script is stored in a variable called `arg`.
+
+The script should print important values to stdout."#
                     },
                 },
                 "required": ["input"],
@@ -349,6 +374,7 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::ExecPythonUvScript => "exec_python_uv_script",
         Tool::Fn(FnTool::FnPy) => "fn_py",
         Tool::Fn(FnTool::FnPyUv) => "fn_pyuv",
+        Tool::Fn(FnTool::FnSh) => "fn_sh",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
         Tool::ShellScriptExec => "shell_script_exec",
@@ -368,6 +394,7 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "exec_shell_script" => Some(Tool::ShellScriptExec),
         "fn_py" => Some(Tool::Fn(FnTool::FnPy)),
         "fn_pyuv" => Some(Tool::Fn(FnTool::FnPyUv)),
+        "fn_sh" => Some(Tool::Fn(FnTool::FnSh)),
         // Replaced by `shell_script_exec`
         "shell_exec" => Some(Tool::ShellScriptExec),
         "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),

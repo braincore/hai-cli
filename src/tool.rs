@@ -32,6 +32,7 @@ pub enum Tool {
 pub enum FnTool {
     FnPy,
     FnPyUv,
+    FnSh,
 }
 
 /// Convert tool to repl command w/o prompt.
@@ -43,6 +44,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::ExecPythonUvScript => "pyuv",
         Tool::Fn(FnTool::FnPy) => "fn-py",
         Tool::Fn(FnTool::FnPyUv) => "fn-pyuv",
+        Tool::Fn(FnTool::FnSh) => "fn-sh",
         Tool::HaiRepl => "hai",
         Tool::ShellExecWithFile(cmd, ext) => {
             if let Some(ext) = ext {
@@ -73,6 +75,7 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::ExecPythonUvScript => Some("py".to_string()),
         Tool::Fn(FnTool::FnPy) => Some("py".to_string()),
         Tool::Fn(FnTool::FnPyUv) => Some("py".to_string()),
+        Tool::Fn(FnTool::FnSh) => Some("bash".to_string()),
         Tool::HaiRepl => None,
         // WARN: The work hasn't been done to ensure that syntax-highlighter
         // tokens match all file extensions correctly.
@@ -120,8 +123,10 @@ pub async fn execute_ai_defined_tool(
     fn_def: &str,
     arg: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let script = format!(
-        r#"{}
+    match fn_tool {
+        FnTool::FnPy => {
+            let script = format!(
+                r#"{}
 
 if __name__ == "__main__":
     import json
@@ -129,12 +134,33 @@ if __name__ == "__main__":
     res = f(arg)
     print(json.dumps(res))
 "#,
-        fn_def, arg
-    );
-    if matches!(fn_tool, FnTool::FnPyUv) {
-        exec_python_uv_script(&script).await
-    } else {
-        exec_python_script(&script).await
+                fn_def, arg
+            );
+            exec_python_script(&script).await
+        }
+        FnTool::FnPyUv => {
+            let script = format!(
+                r#"{}
+
+if __name__ == "__main__":
+    import json
+    arg = {}
+    res = f(arg)
+    print(json.dumps(res))
+"#,
+                fn_def, arg
+            );
+            exec_python_uv_script(&script).await
+        }
+        FnTool::FnSh => {
+            let script = format!(
+                r#"arg={}
+{}
+"#,
+                arg, fn_def
+            );
+            shell_script_exec("sh", &script).await
+        }
     }
 }
 
