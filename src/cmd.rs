@@ -2012,14 +2012,14 @@ fn parse_tool_command(
                 })),
             }
         }
-        "sh" => {
+        "sh" | "shscript" => {
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => {
                     Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::ShellExec,
+                        tool: tool::Tool::ShellScriptExec,
                         // Exclude !sh as it tends to make its way into the command itself
                         prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::ShellExec,
+                            &tool::Tool::ShellScriptExec,
                             user_confirmation,
                             &prompt,
                         ),
@@ -2029,30 +2029,12 @@ fn parse_tool_command(
                     }))
                 }
                 None => Some(Cmd::ToolMode(ToolModeCmd {
-                    tool: tool::Tool::ShellExec,
+                    tool: tool::Tool::ShellScriptExec,
                     user_confirmation,
                     force_tool,
                 })),
             }
         }
-        "shscript" => match parse_one_arg_catchall(remaining) {
-            Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecShellScript,
-                prompt: get_tool_prefixed_prompt(
-                    &tool::Tool::ExecShellScript,
-                    user_confirmation,
-                    &prompt,
-                ),
-                user_confirmation,
-                force_tool,
-                cache: false,
-            })),
-            None => Some(Cmd::ToolMode(ToolModeCmd {
-                tool: tool::Tool::ExecShellScript,
-                user_confirmation,
-                force_tool,
-            })),
-        },
         "hai" => match parse_one_arg_catchall(remaining) {
             Some(prompt) => Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::HaiRepl,
@@ -2453,7 +2435,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExec,
+                tool: tool::Tool::ShellScriptExec,
                 prompt,
                 user_confirmation,
                 ..
@@ -2472,7 +2454,7 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecShellScript,
+                tool: tool::Tool::ShellScriptExec,
                 prompt,
                 user_confirmation,
                 ..
@@ -2746,7 +2728,7 @@ mod tests {
     #[test]
     fn test_tool_mode() {
         let last_tool_cmd = ToolCmd {
-            tool: tool::Tool::ShellExec,
+            tool: tool::Tool::ShellScriptExec,
             prompt: "list home dir".to_string(),
             user_confirmation: true,
             force_tool: true,
@@ -2804,7 +2786,7 @@ mod tests {
         );
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExec,
+                tool: tool::Tool::ShellScriptExec,
                 prompt,
                 user_confirmation,
                 ..

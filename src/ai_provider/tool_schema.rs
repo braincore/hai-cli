@@ -72,21 +72,6 @@ If you use non-standard libraries, you must specify them with the following synt
                 "additionalProperties": false,
             },
         }),
-        Tool::ExecShellScript => json!({
-            "name": tool_name,
-            "description": format!("Execute a Shell script. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
-            schema_key_name: {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": "Shell script. The script should print important values to stdout."
-                    },
-                },
-                "required": ["input"],
-                "additionalProperties": false,
-            },
-        }),
         Tool::Fn(FnTool::FnPy) => json!({
             "name": tool_name,
             "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
@@ -140,15 +125,15 @@ This is the only text allowed above the function definition.
                 "additionalProperties": false,
             },
         }),
-        Tool::ShellExec => json!({
+        Tool::ShellScriptExec => json!({
             "name": tool_name,
-            "description": format!("Execute a shell command or shell pipeline. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
+            "description": format!("Execute a Shell script. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "Shell command or pipeline. The script should print important values to stdout."
+                        "description": "Shell script. The script should print important values to stdout."
                     },
                 },
                 "required": ["input"],
@@ -268,8 +253,7 @@ Available Tools:
 !clip <prompt>        - Ask AI to copy a part of the conversation to your clipboard
 !py <prompt>          - Ask AI to write Python script that will be executed on your machine
                         Searches for virtualenv in current dir & ancestors before falling back to python3
-!sh <prompt>          - Ask AI to write shell cmd or pipeline that will be executed on your machine
-!shscript <prompt>    - Ask AI to write shell script and pipe it through stdin on your machine
+!sh <prompt>          - Ask AI to write shell script or pipeline that will be executed on your machine
 !'<cmd>' <prompt>     - Ask AI to write script that will be piped to this cmd through stdin
                         e.g. !'PG_PASSWORD=secret psql -h localhost -p 5432 -U postgres -d db' how many users?
                         e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
@@ -363,12 +347,11 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::CopyToClipboard => "copy_to_clipboard",
         Tool::ExecPythonScript => "exec_python_script",
         Tool::ExecPythonUvScript => "exec_python_uv_script",
-        Tool::ExecShellScript => "exec_shell_script",
         Tool::Fn(FnTool::FnPy) => "fn_py",
         Tool::Fn(FnTool::FnPyUv) => "fn_pyuv",
-        Tool::ShellExec => "shell_exec",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
+        Tool::ShellScriptExec => "shell_script_exec",
     }
 }
 
@@ -381,15 +364,18 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "copy_to_clipboard" => Some(Tool::CopyToClipboard),
         "exec_python_script" => Some(Tool::ExecPythonScript),
         "exec_python_uv_script" => Some(Tool::ExecPythonUvScript),
-        "exec_shell_script" => Some(Tool::ExecShellScript),
+        // Replaced by `shell_script_exec`
+        "exec_shell_script" => Some(Tool::ShellScriptExec),
         "fn_py" => Some(Tool::Fn(FnTool::FnPy)),
         "fn_pyuv" => Some(Tool::Fn(FnTool::FnPyUv)),
-        "shell_exec" => Some(Tool::ShellExec),
+        // Replaced by `shell_script_exec`
+        "shell_exec" => Some(Tool::ShellScriptExec),
         "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),
         // This is deprecated, but included for compatibility with old saved
         // chats.
         "shell_exec_with_script" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
         "shell_exec_with_stdin" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
+        "shell_script_exec" => Some(Tool::ShellScriptExec),
 
         _ => None,
     }
@@ -404,15 +390,18 @@ pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String>
         "copy_to_clipboard" => None,
         "exec_python_script" => Some("py".to_string()),
         "exec_python_uv_script" => Some("py".to_string()),
+        // Replaced by `shell_script_exec`
         "exec_shell_script" => Some("bash".to_string()),
         "fn_py" => Some("py".to_string()),
         "fn_pyuv" => Some("py".to_string()),
+        // Replaced by `shell_script_exec`
         "shell_exec" => Some("bash".to_string()),
         "shell_exec_with_file" => None,
         // This is deprecated, but included for compatibility with old saved
         // chats.
         "shell_exec_with_script" => Some("bash".to_string()),
         "shell_exec_with_stdin" => Some("bash".to_string()),
+        "shell_script_exec" => Some("bash".to_string()),
         _ => None,
     }
 }
