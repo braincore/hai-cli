@@ -624,16 +624,7 @@ impl CmdAndFileCompleter {
 
     fn tool_completer(&self, tool_cmd_prefix: &str) -> Vec<Suggestion> {
         let commands: Vec<String> = [
-            "!!",
-            "!py",
-            "!?py",
-            "!sh",
-            "!?sh",
-            "!shscript",
-            "!?shscript",
-            "!clip",
-            "!fn-py",
-            "!exit",
+            "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv", "!exit",
         ]
         .iter()
         .map(|s| s.to_string())

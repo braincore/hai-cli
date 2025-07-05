@@ -185,7 +185,7 @@ steps = [
     "/pin Checking what image tools you have",
     "/exec cairosvg --version",
     "/exec convert -version",
-    "!shscript Generate an SVG of a pelican riding a bicycle and pipe it into `cairosvg` or `convert` and output a png named `pelican-bicycle.png`",
+    "!sh Generate an SVG of a pelican riding a bicycle and pipe it into `cairosvg` or `convert` and output a png named `pelican-bicycle.png`",
     "/load pelican-bicycle.png",
     "/prompt Describe this image in one sentence."
 ]
@@ -254,7 +254,6 @@ The Earth is approximately 4.54 billion years old.
 | Tool                  | Description                                             |
 |-----------------------|---------------------------------------------------------|
 | `!py`                 | Run Python code.                                        |
-| `!shscript`           | Execute a shell script (multi-line version of `!sh`).   |
 | `!clip`               | Copy something to your system clipboard.                |
 | `!'<cmd>'`            | Run any program that accepts input via stdin.           |
 | `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |

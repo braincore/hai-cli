@@ -3561,8 +3561,7 @@ Available Tools:
 !clip <prompt>               - Ask AI to copy a part of the conversation to your clipboard
 !py <prompt>                 - Ask AI to write Python script that will be executed on your machine
                                Searches for virtualenv in current dir & ancestors before falling back to python3
-!sh <prompt>                 - Ask AI to write shell cmd or pipeline that will be executed on your machine
-!shscript <prompt>           - Ask AI to write shell script and pipe it through stdin on your machine
+!sh <prompt>                 - Ask AI to write shell script or pipeline that will be executed on your machine
 !hai <prompt>                - Ask AI to write and execute REPL command(s)
 !'<cmd>' <prompt>            - Ask AI to write script that will be piped to this cmd through stdin
                                e.g. !'PG_PASSWORD=secret psql -h localhost -p 5432 -U postgres -d db' how many users?

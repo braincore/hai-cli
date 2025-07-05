@@ -16,10 +16,9 @@ pub enum Tool {
     CopyToClipboard,
     ExecPythonScript,
     ExecPythonUvScript,
-    ExecShellScript,
     Fn(FnTool),
     HaiRepl,
-    ShellExec,
+    ShellScriptExec,
     /// (file_contents, extension)
     /// Extension is important because some programs make decisions based on
     /// the file's extension. For example, `uv run {file}` does not execute the
@@ -42,11 +41,9 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::CopyToClipboard => "clip",
         Tool::ExecPythonScript => "py",
         Tool::ExecPythonUvScript => "pyuv",
-        Tool::ExecShellScript => "shscript",
         Tool::Fn(FnTool::FnPy) => "fn-py",
         Tool::Fn(FnTool::FnPyUv) => "fn-pyuv",
         Tool::HaiRepl => "hai",
-        Tool::ShellExec => "sh",
         Tool::ShellExecWithFile(cmd, ext) => {
             if let Some(ext) = ext {
                 &format!("{}.{}", cmd, ext)
@@ -55,6 +52,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
             }
         }
         Tool::ShellExecWithStdin(cmd) => &format!("'{}'", cmd),
+        Tool::ShellScriptExec => "sh",
     };
     let force_tool_symbol = if force_tool { "" } else { "?" };
     format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
@@ -73,15 +71,14 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::CopyToClipboard => None,
         Tool::ExecPythonScript => Some("py".to_string()),
         Tool::ExecPythonUvScript => Some("py".to_string()),
-        Tool::ExecShellScript => Some("bash".to_string()),
         Tool::Fn(FnTool::FnPy) => Some("py".to_string()),
         Tool::Fn(FnTool::FnPyUv) => Some("py".to_string()),
         Tool::HaiRepl => None,
-        Tool::ShellExec => Some("bash".to_string()),
         // WARN: The work hasn't been done to ensure that syntax-highlighter
         // tokens match all file extensions correctly.
         Tool::ShellExecWithFile(_, ext) => ext.to_owned(),
         Tool::ShellExecWithStdin(_) => Some("bash".to_string()),
+        Tool::ShellScriptExec => Some("bash".to_string()),
     }
 }
 
@@ -109,12 +106,11 @@ pub async fn execute_shell_based_tool(
         Tool::CopyToClipboard => copy_to_clipboard(&input)?,
         Tool::ExecPythonScript => exec_python_script(&input).await?,
         Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
-        Tool::ExecShellScript => exec_shell_script(shell, &input).await?,
-        Tool::ShellExec => shell_exec(shell, &input).await?,
         Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
         Tool::ShellExecWithFile(cmd, ext) => {
             shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
         }
+        Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
         _ => "fatal: not a shell-based tool".to_string(),
     })
 }
@@ -242,21 +238,10 @@ fn find_python_in_venv() -> String {
     "python3".to_string()
 }
 
-/// `shell_exec` is the execution of a program on the "command line".
-/// No stdin is provided.
-pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let mut child = Command::new(shell)
-        .arg("-c")
-        .arg(cmd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    collect_and_print_command_output(&mut child).await
-}
-
-/// `exec_shell_script` is the execution of a shell that's fed a script via
-/// stdin.
-pub async fn exec_shell_script(
+/// Executes a shell script using -c to feed the script.
+///
+/// Capable of reading from stdin.
+pub async fn shell_script_exec(
     shell: &str,
     script: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
