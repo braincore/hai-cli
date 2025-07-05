@@ -2097,6 +2097,30 @@ fn parse_tool_command(
                 }
             }
         }
+        "fn-sh" => {
+            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            match parse_one_arg_catchall(remaining) {
+                Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                    tool: tool::Tool::Fn(tool::FnTool::FnSh),
+                    prompt,
+                    user_confirmation,
+                    force_tool,
+                    cache,
+                })),
+                None => {
+                    eprintln!("Usage: !fn-sh(cache=false) <prompt: function to implement>");
+                    None
+                }
+            }
+        }
         "exit" => Some(Cmd::ToolModeExit),
         "" => {
             // Tool (and possibly prompt) re-use

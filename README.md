@@ -942,6 +942,8 @@ Pushed 1 command(s) into queue
 1.7724538509055159
 ```
 
+For a reusable shell function, use `!fn-sh`.
+
 ### More on Assets
 
 #### Metadata
