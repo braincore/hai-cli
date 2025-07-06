@@ -74,7 +74,7 @@ If you use non-standard libraries, you must specify them with the following synt
         }),
         Tool::Fn(FnTool::FnPy) => json!({
             "name": tool_name,
-            "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
+            "description": "Define a Python function f(arg: Any) -> Any. It must be named `f`.",
             schema_key_name: {
                 "type": "object",
                 "properties": {
@@ -84,10 +84,12 @@ If you use non-standard libraries, you must specify them with the following synt
 BE NAMED `f`.
 
 All dependencies including imports and other functions should be defined in
-this function. The signature must be `f(arg: JsonCompatible) -> JsonCompatible`
-where JsonCompatible is a native type that's serializable with the `json`
-package (e.g. int, float, str, dict, list). Add Python type annotations for the
-function signature!"#
+this function. The signature can be narrowed to something more specific than
+`f(arg: Any) -> Any`. If so, use the correct Python type annotations.
+
+The user will only see output to stdout. The return value can be used for
+recursive functions, but otherwise, the user won't see it and it should be
+omitted (None) by default."#
                     },
                 },
                 "required": ["input"],
@@ -96,7 +98,7 @@ function signature!"#
         }),
         Tool::Fn(FnTool::FnPyUv) => json!({
             "name": tool_name,
-            "description": "Define a Python function f(arg: JsonCompatible) -> JsonCompatible. It must be named `f`.",
+            "description": "Define a Python function f(arg: Any) -> Any. It must be named `f`.",
             schema_key_name: {
                 "type": "object",
                 "properties": {
@@ -105,12 +107,14 @@ function signature!"#
                         "description": r#"A Python function definition. IT MUST
 BE NAMED `f`.
 
-The signature must be `f(arg: JsonCompatible) -> JsonCompatible` where
-JsonCompatible is a native type that's serializable with the `json` package
-(e.g. int, float, str, dict, list). Add Python type annotations for the
-function signature!
+The signature can be narrowed to something more specific than
+`f(arg: Any) -> Any`. If so, use the correct Python type annotations.
 
-All import should be done inside the function.
+The user will only see output to stdout. The return value can be used for
+recursive functions, but otherwise, the user won't see it and it should be
+omitted (None) by default.
+
+All import statements should be within the function definition.
 
 If you use non-standard libraries, you must specify them above the function
 definition with the following syntax:
@@ -288,16 +292,21 @@ Available Tools:
 
 --
 
-AI-Defined Tools:
+AI-Defined Reusable Functions:
 
-!fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>` or `!f<index>`.
-                        The function will be defined as `f(arg: JsonCompatible) -> JsonCompatible` where JsonCompatible
-                        is a native type that's serializable with the `json` package (e.g. int, float, str, dict, list).
-                        The function will be given a name `f<index>` where `index>` is a unique number which can be
-                        used to invoke it as a /command or !tool.
-/f<index> <arg>       - Invoke a Python function defined by AI with the given index.
-                        `arg` must be a serialized JSON string: 1 or "abc"
-                        The output will be serialized JSON.
+!fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>`.
+                        The function will take a single argument. The function will be given a name
+                        `f<index>` where `index>` is a unique number which can be used to invoke it
+                        as `/f<index>`.
+!fn-pyuv <prompt>     - Similar to `!fn-py` but `uv` is used allowing for the function to use
+                        additional library dependencies via a script dependency comment section.
+!fn-sh <prompt>       - Ask AI to write a shell script that can be invoked with `/f<index>`.
+                        The function will take a single argument. The function will be given a name
+                        `f<index>` where `index>` is a unique number which can be used to invoke it
+                        as `/f<index>`.
+/f<index> <arg>       - Invoke a AI-defined reusable function with the given index.
+                        For Python, `arg` must be a Python expression that can be evaluated.
+                        For shell, `arg` must be a shell value or expression.
 
 --
 
