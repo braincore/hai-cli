@@ -129,10 +129,8 @@ pub async fn execute_ai_defined_tool(
                 r#"{}
 
 if __name__ == "__main__":
-    import json
     arg = {}
-    res = f(arg)
-    print(json.dumps(res))
+    f(arg)
 "#,
                 fn_def, arg
             );
@@ -143,10 +141,8 @@ if __name__ == "__main__":
                 r#"{}
 
 if __name__ == "__main__":
-    import json
     arg = {}
-    res = f(arg)
-    print(json.dumps(res))
+    f(arg)
 "#,
                 fn_def, arg
             );
