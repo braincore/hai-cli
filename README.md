@@ -254,6 +254,7 @@ The Earth is approximately 4.54 billion years old.
 | Tool                  | Description                                             |
 |-----------------------|---------------------------------------------------------|
 | `!py`                 | Run Python code.                                        |
+| `!pyuv`               | Run Python code using `uv`.                             |
 | `!clip`               | Copy something to your system clipboard.                |
 | `!'<cmd>'`            | Run any program that accepts input via stdin.           |
 | `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |
@@ -288,6 +289,39 @@ print(distance)
 
 2571.9457567914133
 ```
+
+The above uses `uv` only for demonstration purposes. There's a dedicated
+`!pyuv` tool which instructs the AI to specify its dependencies and have them
+be installed by `uv` automatically:
+
+```
+[0]: !pyuv distance from sf to nyc
+```
+
+```python
+↓↓↓
+
+# /// script
+# dependencies = ["geopy"]
+# ///
+from geopy.distance import geodesic
+
+# Coordinates: (lat, lon)
+sf = (37.7749, -122.4194)
+nyc = (40.7128, -74.0060)
+
+distance_km = geodesic(sf, nyc).kilometers
+distance_miles = geodesic(sf, nyc).miles
+
+print(f"Distance from San Francisco to New York City: {distance_km:.2f} km ({distance_miles:.2f} miles)")
+
+⚙ ⚙ ⚙
+
+Distance from San Francisco to New York City: 4139.15 km (2571.95 miles)
+```
+
+
+Requires [`uv`](https://github.com/astral-sh/uv) to be installed.
 
 ### Assets [Experimental]
 
@@ -552,8 +586,15 @@ In a similar vein, any `/pin <message>` is kept around on `/reset`.
 
 ### For Python development
 
-When using the `!py` tool, the system python will be used unless a virtualenv
-(`.venv`) is available anywhere in the current directory tree.
+When using the `!py` tool, the system python will be used. If a virtualenv
+(`.venv`) is available anywhere in the current directory tree, it will be used
+instead which makes your custom Python library dependencies available.
+
+For a more modern approach, use `!pyuv` which instructs the AI to specify
+script dependencies using
+[PEP 723: Inline script dependencies](https://peps.python.org/pep-0723/). This
+solves most problems related to the AI writing Python with dependencies you
+don't have installed on your machine.
 
 ### Cost estimation
 
@@ -942,7 +983,8 @@ Pushed 1 command(s) into queue
 1.7724538509055159
 ```
 
-For a reusable shell function, use `!fn-sh`.
+For a reusable shell function, use `!fn-sh`. For a resuable python function
+that can declare script dependencies, use `!fn-pyuv`.
 
 ### More on Assets
 

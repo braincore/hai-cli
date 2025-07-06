@@ -45,7 +45,7 @@ pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value
         }),
         Tool::ExecPythonUvScript => json!({
             "name": tool_name,
-            "description": format!("Execute a Python script. Everything the user wants should be printed to stdout.\nSystem = {}", system),
+            "description": format!("Execute a Python script with support for installing script dependencies. Everything the user wants should be printed to stdout.\nSystem = {}", system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
