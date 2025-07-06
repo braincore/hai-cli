@@ -144,6 +144,8 @@ pub enum Cmd {
     FnExec(FnExecCmd),
     /// List all AI-defined functions
     Fns,
+    /// Execute a standard library function
+    Std(StdCmd),
     /// Get current account (or if specified, switch to logged-in account)
     Account(AccountCmd),
     /// Make a new account
@@ -617,6 +619,11 @@ pub struct FnExecCmd {
     /// Argument to fn
     /// Syntax should be native to language of function definition
     pub arg: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum StdCmd {
+    Now,
 }
 
 #[derive(Clone, Debug)]
@@ -1816,6 +1823,30 @@ fn parse_command(
                 return None;
             }
             Some(Cmd::Fns)
+        }
+        "std" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((fn_name, fn_arg)) => {
+                    if fn_name == "now" {
+                        if fn_arg.is_none() {
+                            Some(Cmd::Std(StdCmd::Now))
+                        } else {
+                            eprintln!("Usage: {fn_name} takes no arguments");
+                            return None;
+                        }
+                    } else {
+                        eprintln!("Unknown stdlib function: {fn_name}");
+                        None
+                    }
+                }
+                None => {
+                    eprintln!("Usage: /{cmd_name} <fn_name> [<fn_arg>]");
+                    None
+                }
+            }
         }
         "account" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

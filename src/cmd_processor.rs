@@ -3001,6 +3001,30 @@ lesson (e.g. "understanding").\n\n{}"#,
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Std(std_cmd) => {
+            match std_cmd {
+                cmd::StdCmd::Now => {
+                    let now = chrono::Local::now();
+                    let utc_now = chrono::Utc::now();
+                    let local_tz = now.offset();
+                    let output = format!(
+                        "Local datetime ({}): {}\nUTC datetime: {}\n",
+                        local_tz,
+                        now.format("%Y-%m-%d %H:%M:%S"),
+                        utc_now.format("%Y-%m-%d %H:%M:%S"),
+                    );
+                    print!("{}", output);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &output,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::FnExec(cmd::FnExecCmd { fn_name, arg }) => {
             let ai_defined_fn =
                 if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(fn_name) {
@@ -3572,6 +3596,11 @@ Available Tools:
 !<tool>                      - Activates tool mode for the specified tool
                                In tool mode, all messages are treated as prompts for the tool.
                                Use !exit to exit tool mode
+
+--
+
+Standard Library Functions:
+/std now                     - Print current date and time
 
 --
 

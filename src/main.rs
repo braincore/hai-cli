@@ -308,6 +308,7 @@ async fn repl(
         "/asset-folder-list",
         "/email",
         "/fns",
+        "/std",
         "/account",
         "/account-new",
         "/account-login",

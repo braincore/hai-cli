@@ -292,6 +292,11 @@ Available Tools:
 
 --
 
+Standard Library Functions:
+/std now                     - Print current date and time
+
+--
+
 AI-Defined Reusable Functions:
 
 !fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>`.
