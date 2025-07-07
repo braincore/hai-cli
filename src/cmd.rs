@@ -624,6 +624,7 @@ pub struct FnExecCmd {
 #[derive(Clone, Debug)]
 pub enum StdCmd {
     Now,
+    NewDayAlert,
 }
 
 #[derive(Clone, Debug)]
@@ -1833,6 +1834,13 @@ fn parse_command(
                     if fn_name == "now" {
                         if fn_arg.is_none() {
                             Some(Cmd::Std(StdCmd::Now))
+                        } else {
+                            eprintln!("Usage: {fn_name} takes no arguments");
+                            return None;
+                        }
+                    } else if fn_name == "new-day-alert" {
+                        if fn_arg.is_none() {
+                            Some(Cmd::Std(StdCmd::NewDayAlert))
                         } else {
                             eprintln!("Usage: {fn_name} takes no arguments");
                             return None;

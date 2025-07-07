@@ -99,6 +99,8 @@ pub struct SessionState {
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
     /// Tools defined by the AI: name -> (Fn def, is task step?).
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
+    /// Add new message if conversation has a day transition
+    pub add_msg_on_new_day: bool,
 }
 
 impl SessionState {
@@ -144,6 +146,7 @@ pub fn session_history_add_user_text_entry(
     }
     session.history.push(db::LogEntry {
         uuid: Uuid::now_v7().to_string(),
+        ts: chrono::Local::now(),
         message: chat::Message {
             role: chat::MessageRole::User,
             content: vec![chat::MessageContent::Text {
@@ -199,6 +202,7 @@ pub fn session_history_add_user_image_entry(
     }
     session.history.push(db::LogEntry {
         uuid: Uuid::now_v7().to_string(),
+        ts: chrono::Local::now(),
         message: chat::Message {
             role: chat::MessageRole::User,
             content: vec![chat::MessageContent::ImageUrl {

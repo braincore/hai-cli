@@ -460,6 +460,7 @@ async fn repl(
         use_hai_router: HaiRouterState::Off,
         temp_files: vec![],
         ai_defined_fns: HashMap::new(),
+        add_msg_on_new_day: false,
     };
 
     if let Some(account) = &account {
@@ -684,6 +685,36 @@ async fn repl(
         let tokenizer_locked = tokenizer.lock().await;
         let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
 
+        if session.add_msg_on_new_day {
+            // Check if it's a new day in local time. If so, add a message to
+            // the history so that the AI is aware of this.
+            if let Some(last_log_entry) = session.history.last() {
+                let last_date = last_log_entry.ts.date_naive();
+                let current_date = chrono::Local::now().date_naive();
+                if last_date != current_date {
+                    let now = chrono::Local::now();
+                    let utc_now = chrono::Utc::now();
+                    let local_tz = now.offset();
+                    let contents = format!(
+                        "It's a new day.\nLocal datetime ({}): {}\nUTC datetime: {}\n",
+                        local_tz,
+                        now.format("%Y-%m-%d %H:%M:%S"),
+                        utc_now.format("%Y-%m-%d %H:%M:%S"),
+                    );
+                    println!();
+                    println!("🕛🕛🕛");
+                    println!();
+                    print!("{}", contents);
+                    session::session_history_add_user_text_entry(
+                        &contents,
+                        &mut session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+        }
+
         //
         // REPL Eval/Print Commands
         //
@@ -772,6 +803,7 @@ async fn repl(
         session.input_tokens += tokens;
         session.history.push(db::LogEntry {
             uuid: Uuid::now_v7().to_string(),
+            ts: chrono::Local::now(),
             message: chat::Message {
                 role: chat::MessageRole::User,
                 content: msg_content,
@@ -946,6 +978,7 @@ async fn repl(
                 chat::ChatCompletionResponse::Message { text } => {
                     session.history.push(db::LogEntry {
                         uuid: Uuid::now_v7().to_string(),
+                        ts: chrono::Local::now(),
                         message: chat::Message {
                             role: chat::MessageRole::Assistant,
                             content: vec![chat::MessageContent::Text { text: text.clone() }],
@@ -963,6 +996,7 @@ async fn repl(
                 } => {
                     session.history.push(db::LogEntry {
                         uuid: Uuid::now_v7().to_string(),
+                        ts: chrono::Local::now(),
                         message: chat::Message {
                             role: chat::MessageRole::Assistant,
                             content: vec![],
@@ -1068,6 +1102,7 @@ async fn repl(
                         session.input_tokens += tokens;
                         session.history.push(db::LogEntry {
                             uuid: Uuid::now_v7().to_string(),
+                            ts: chrono::Local::now(),
                             message: chat::Message {
                                 role: chat::MessageRole::Tool,
                                 content: vec![chat::MessageContent::Text { text: error_text }],
@@ -1152,6 +1187,7 @@ async fn repl(
                         session.input_tokens += tokens;
                         session.history.push(db::LogEntry {
                             uuid: Uuid::now_v7().to_string(),
+                            ts: chrono::Local::now(),
                             message: chat::Message {
                                 role: chat::MessageRole::Tool,
                                 content: vec![chat::MessageContent::Text { text: output_text }],

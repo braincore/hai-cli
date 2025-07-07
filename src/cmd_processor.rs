@@ -699,6 +699,7 @@ pub async fn process_cmd(
                 0,
                 db::LogEntry {
                     uuid: Uuid::now_v7().to_string(),
+                    ts: chrono::Local::now(),
                     message: chat::Message {
                         role: chat::MessageRole::System,
                         content: vec![chat::MessageContent::Text {
@@ -3022,6 +3023,15 @@ lesson (e.g. "understanding").\n\n{}"#,
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                 }
+                cmd::StdCmd::NewDayAlert => {
+                    session.add_msg_on_new_day = true;
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
             }
             ProcessCmdResult::Loop
         }
@@ -3601,6 +3611,7 @@ Available Tools:
 
 Standard Library Functions:
 /std now                     - Print current date and time
+/std new-day-alert           - Make AI aware when a new day begins since the last interaction.
 
 --
 

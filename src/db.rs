@@ -3,9 +3,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{chat, config};
 
+fn default_now() -> chrono::DateTime<chrono::Local> {
+    chrono::Local::now()
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct LogEntry {
     pub uuid: String,
+    /// Defaults to the current time for backwards compatibility.
+    #[serde(default = "default_now")]
+    pub ts: chrono::DateTime<chrono::Local>,
     pub message: chat::Message,
     pub tokens: u32,
     /// If bool true, log_entry from task-mode step.

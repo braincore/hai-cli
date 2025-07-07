@@ -577,7 +577,7 @@ impl Completer for CmdAndFileCompleter {
                 (completions, false)
             } else if line.starts_with("/std ") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                let mut completions = self.simple_completer(arg_prefix, &["now"]);
+                let mut completions = self.simple_completer(arg_prefix, &["now", "new-day-alert"]);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
             } else if line.starts_with("/asset ")
