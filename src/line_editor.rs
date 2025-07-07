@@ -586,7 +586,14 @@ impl Completer for CmdAndFileCompleter {
                     completions
                 }
             } else {
-                self.command_completer(line)
+                self.simple_completer(
+                    line,
+                    &self
+                        .autocomplete_repl_cmds
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                )
             }
         } else if line.starts_with('!') {
             self.simple_completer(
@@ -616,28 +623,6 @@ fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize, debug: 
 }
 
 impl CmdAndFileCompleter {
-    fn command_completer(&self, cmd_prefix: &str) -> Vec<Suggestion> {
-        let mut completions = Vec::new();
-
-        for cmd in &self.autocomplete_repl_cmds {
-            if cmd.starts_with(cmd_prefix) {
-                completions.push(Suggestion {
-                    value: cmd.clone(),
-                    description: None,
-                    style: None,
-                    extra: None,
-                    span: Span {
-                        start: 0,
-                        end: cmd_prefix.len(),
-                    },
-                    append_whitespace: true,
-                });
-            }
-        }
-
-        completions
-    }
-
     fn simple_completer(&self, prefix: &str, options: &[&str]) -> Vec<Suggestion> {
         let mut completions = Vec::new();
         for option in options {
