@@ -410,7 +410,7 @@ impl Completer for CmdAndFileCompleter {
         }
         // Auto-completion never looks ahead of the cursor.
         let line = &line[..pos];
-        if line.starts_with('/') || line.starts_with("!!") {
+        let (completions, fallback_ok) = if line.starts_with('/') || line.starts_with("!!") {
             if line.starts_with("/load ")
                 || line.starts_with("/l ")
                 || line.starts_with("/cd ")
@@ -432,7 +432,7 @@ impl Completer for CmdAndFileCompleter {
                     .unwrap_or(0);
                 let mut completions = self.file_completer2(arg1_prefix, cmd_word == "/cd");
                 realign_suggestions(&mut completions, arg1_index, self.debug);
-                completions
+                (completions, false)
             } else if line.starts_with("/task ")
                 || line.starts_with("/t ")
                 || line.starts_with("/task-view ")
@@ -479,7 +479,7 @@ impl Completer for CmdAndFileCompleter {
                         ));
                     }
                 }
-                completions
+                (completions, false)
             } else if line.starts_with("/ai ") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions = self.simple_completer(
@@ -491,12 +491,12 @@ impl Completer for CmdAndFileCompleter {
                         .collect::<Vec<_>>(),
                 );
                 realign_suggestions(&mut completions, arg_index, self.debug);
-                completions
+                (completions, false)
             } else if line.starts_with("/std ") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions = self.simple_completer(arg_prefix, &["now"]);
                 realign_suggestions(&mut completions, arg_index, self.debug);
-                completions
+                (completions, false)
             } else if line.starts_with("/asset ")
                 || line.starts_with("/a ")
                 || line.starts_with("/asset-edit ")
@@ -524,7 +524,7 @@ impl Completer for CmdAndFileCompleter {
                 }
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
-                completions
+                (completions, true)
             } else if line.starts_with("/exec ") || line.starts_with("!!") {
                 // Find/extract current token
                 let last_whitespace_pos = line.rfind(char::is_whitespace).unwrap_or(0);
@@ -541,12 +541,12 @@ impl Completer for CmdAndFileCompleter {
                 if let Some(asset_prefix) = current_token.strip_prefix('@') {
                     let mut completions = self.asset_completer(asset_prefix);
                     realign_suggestions(&mut completions, last_whitespace_pos + 2, self.debug);
-                    completions
+                    (completions, false)
                 } else {
                     // Fallback to file completion
                     let mut completions = self.file_completer2(current_token, false);
                     realign_suggestions(&mut completions, last_whitespace_pos + 1, self.debug);
-                    completions
+                    (completions, false)
                 }
             } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
                 let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
@@ -581,32 +581,66 @@ impl Completer for CmdAndFileCompleter {
                 if let Some(arg2_prefix) = arg2_prefix {
                     let mut completions = self.file_completer2(arg2_prefix, false);
                     realign_suggestions(&mut completions, arg2_index.unwrap(), self.debug);
-                    completions
+                    (completions, false)
                 } else {
                     let mut completions = self.asset_completer(arg1_prefix);
                     realign_suggestions(&mut completions, arg1_index, self.debug);
-                    completions
+                    (completions, false)
                 }
             } else {
-                self.simple_completer(
-                    line,
-                    &self
-                        .autocomplete_repl_cmds
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>(),
+                (
+                    self.simple_completer(
+                        line,
+                        &self
+                            .autocomplete_repl_cmds
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>(),
+                    ),
+                    true,
                 )
             }
         } else if line.starts_with('!') {
-            self.simple_completer(
-                line,
-                &[
-                    "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv", "!fn-sh",
-                    "!exit",
-                ],
+            (
+                self.simple_completer(
+                    line,
+                    &[
+                        "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv",
+                        "!fn-sh", "!exit",
+                    ],
+                ),
+                true,
             )
         } else {
-            vec![]
+            (vec![], true)
+        };
+        if completions.is_empty() && fallback_ok {
+            // Fallback to asset/file completion across all inputs
+            let (arg_index, current_token) = match line.rfind(char::is_whitespace) {
+                Some(whitespace_pos) => (whitespace_pos + 1, &line[whitespace_pos..].trim_start()),
+                None => (0, &line),
+            };
+
+            if self.debug {
+                let _ = config::write_to_debug_log(format!(
+                    "fallback completer: line={} arg_index={} current_token={:?}\n",
+                    line, arg_index, current_token
+                ));
+            }
+
+            // If the token starts with '@', complete with assets
+            if let Some(asset_prefix) = current_token.strip_prefix('@') {
+                let mut completions = self.asset_completer(asset_prefix);
+                realign_suggestions(&mut completions, arg_index + 1, self.debug);
+                completions
+            } else {
+                // Fallback to file completion
+                let mut completions = self.file_completer2(current_token, false);
+                realign_suggestions(&mut completions, arg_index, self.debug);
+                completions
+            }
+        } else {
+            completions
         }
     }
 }
