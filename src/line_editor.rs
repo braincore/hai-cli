@@ -769,9 +769,22 @@ impl CmdAndFileCompleter {
         let shellexpand_applied = path_prefix != expanded_path_line;
         let partial_path = Path::new(&expanded_path_line);
 
+        if self.debug {
+            let _ = config::write_to_debug_log(format!(
+                "file_completer start: path_prefix={:?} dir_only={:?} cur_dir={:?} expanded_path_line={:?} shellexpand_applied={:?} partial_path={:?}\n",
+                path_prefix,
+                dir_only,
+                current_dir,
+                expanded_path_line,
+                shellexpand_applied,
+                partial_path
+            ));
+        }
+
         // If set, it means the cursor is at the root of a directory and the
-        // entire directory's contents are valid suggestions.
-        let scan_full_dir = partial_path.is_dir();
+        // entire directory's contents are valid suggestions. An empty
+        // `path_prefix` is special-cased to scan the current directory.
+        let scan_full_dir = path_prefix.is_empty() || partial_path.is_dir();
 
         let dir_to_search = if scan_full_dir {
             if partial_path.is_absolute() {
@@ -794,8 +807,8 @@ impl CmdAndFileCompleter {
 
         if self.debug {
             let _ = config::write_to_debug_log(format!(
-                "file_completer: {:?} {:?} {:?}\n",
-                current_dir, dir_to_search, partial_path
+                "file_completer: dir_to_search={:?} scan_full_dir={:?}\n",
+                dir_to_search, scan_full_dir
             ));
         }
 
