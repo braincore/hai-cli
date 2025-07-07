@@ -543,8 +543,10 @@ impl Completer for CmdAndFileCompleter {
                     realign_suggestions(&mut completions, last_whitespace_pos + 2, self.debug);
                     completions
                 } else {
-                    // No completions yet for non-assets (e.g. local file paths)
-                    vec![]
+                    // Fallback to file completion
+                    let mut completions = self.file_completer2(current_token, false);
+                    realign_suggestions(&mut completions, last_whitespace_pos + 1, self.debug);
+                    completions
                 }
             } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
                 let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
