@@ -3604,12 +3604,18 @@ Standard Library Functions:
 
 --
 
-AI-Defined Functions (Experimental):
+AI-Defined Reusable Functions (Experimental):
 !fn-py <prompt>              - Ask AI to write a Python function to implement your prompt.
                                Function is given a name (`f<index>`) to invoke with: `/f<index> <arg>`
-/f<index> <arg>              - <arg> must be a valid Python value (e.g. 1 or "abc")
-                               Output will be added to the conversation
-                               Use the !hai tool to prompt the AI invoke the function
+!fn-pyuv <prompt>            - Similar to `!fn-py` but `uv` is used allowing for the function to use
+                               additional library dependencies via a script dependency comment section.
+!fn-sh <prompt>              - Ask AI to write a shell script that can be invoked with `/f<index>`.
+                               The function will take a single argument. The function will be given a name
+                               `f<index>` where `index>` is a unique number which can be used to invoke it
+                               as `/f<index>`.
+/f<index> <arg>              - Invoke a AI-defined reusable function with the given index.
+                               For Python, `arg` must be a Python expression that can be evaluated.
+                               For shell, `arg` must be a shell value or expression.
 /fns                         - List all available functions.
 
 --
