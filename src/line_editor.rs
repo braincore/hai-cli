@@ -13,6 +13,7 @@ use reedline::{
 use regex::Regex;
 use std::borrow::Cow;
 use std::cmp;
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -403,6 +404,88 @@ fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
     (cmd_word, arg_prefix, arg_index)
 }
 
+/// Parses the input string into a vector of token indices, where each token is
+/// represented by a tuple of (start_index, end_index).
+fn parse_tokens(s: &str) -> Vec<(usize, usize)> {
+    let mut indices = Vec::new();
+
+    let mut in_token = false;
+    let mut token_start = 0;
+    let mut end_in_whitespace = false;
+
+    for (i, c) in s.char_indices() {
+        if c.is_whitespace() {
+            end_in_whitespace = true;
+            if in_token {
+                indices.push((token_start, i));
+                in_token = false;
+            }
+        } else {
+            end_in_whitespace = false;
+            if !in_token {
+                token_start = i;
+                in_token = true;
+            }
+        }
+    }
+    // Handle last token if string doesn't end with whitespace
+    if in_token {
+        indices.push((token_start, s.len()));
+    } else if end_in_whitespace {
+        indices.push((s.len(), s.len()));
+    }
+    indices
+}
+
+/// Finds all programs in the PATH that start with the given prefix.
+///
+/// Only the first occurrence of each program name is included, mimicking PATH
+/// resolution order.
+fn find_programs_with_prefix(prefix: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let mut seen = HashSet::new();
+    if let Ok(path_var) = env::var("PATH") {
+        for dir in env::split_paths(&path_var) {
+            if let Ok(entries) = fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                        if file_name.starts_with(prefix)
+                            && is_executable::is_executable(&path)
+                            && seen.insert(file_name.to_string())
+                        {
+                            results.push(file_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    results.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    results
+}
+
+/// # Returns
+/// (token ID (counting from left, 0 is cmd), token, token index in line)
+fn get_current_token(line: &str) -> (u32, &str, usize) {
+    let (_cmd_word, all_args, all_args_index) = if line.starts_with("!!") {
+        ("!!", &line[2..], 2)
+    } else {
+        split_cmd_and_args(line)
+    };
+
+    let mut tokens = parse_tokens(all_args);
+    if let Some((cur_token_start, cur_token_end)) = tokens.pop() {
+        (
+            tokens.len() as u32 + 1,
+            &all_args[cur_token_start..cur_token_end],
+            all_args_index + cur_token_start,
+        )
+    } else {
+        (1, "", all_args_index)
+    }
+}
+
 impl Completer for CmdAndFileCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         if self.debug {
@@ -526,27 +609,31 @@ impl Completer for CmdAndFileCompleter {
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, true)
             } else if line.starts_with("/exec ") || line.starts_with("!!") {
-                // Find/extract current token
-                let last_whitespace_pos = line.rfind(char::is_whitespace).unwrap_or(0);
-                let current_token = &line[last_whitespace_pos..].trim_start();
-
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "exec completer: line={} last_whitespace={} current_token={:?}\n",
-                        line, last_whitespace_pos, current_token
-                    ));
-                }
-
-                // If the token starts with '@', it's an asset lookup
-                if let Some(asset_prefix) = current_token.strip_prefix('@') {
-                    let mut completions = self.asset_completer(asset_prefix);
-                    realign_suggestions(&mut completions, last_whitespace_pos + 2, self.debug);
-                    (completions, false)
+                let (cur_token_id, cur_token, cur_token_offset) = get_current_token(line);
+                if cur_token_id == 1 {
+                    // Handle executables
+                    let mut completions = self.simple_completer(
+                        cur_token,
+                        &find_programs_with_prefix(cur_token)
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>(),
+                    );
+                    realign_suggestions(&mut completions, cur_token_offset, self.debug);
+                    (completions, true)
                 } else {
-                    // Fallback to file completion
-                    let mut completions = self.file_completer2(current_token, false);
-                    realign_suggestions(&mut completions, last_whitespace_pos + 1, self.debug);
-                    (completions, false)
+                    // Find/extract current token
+                    // If the token starts with '@', it's an asset lookup
+                    if let Some(asset_prefix) = cur_token.strip_prefix('@') {
+                        let mut completions = self.asset_completer(asset_prefix);
+                        realign_suggestions(&mut completions, cur_token_offset + 1, self.debug);
+                        (completions, false)
+                    } else {
+                        // Fallback to file completion
+                        let mut completions = self.file_completer2(cur_token, false);
+                        realign_suggestions(&mut completions, cur_token_offset, self.debug);
+                        (completions, false)
+                    }
                 }
             } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
                 let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
