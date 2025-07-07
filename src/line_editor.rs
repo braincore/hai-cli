@@ -379,11 +379,37 @@ fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
     re.is_match(line)
 }
 
+/// # Arguments
+///
+/// - `line` -  The input line to process.
+///
+/// # Returns
+/// (command word, argument prefix, argument index)
+fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
+    let (cmd_word, arg_prefix) = line
+        .split_once(char::is_whitespace)
+        .map(|(cmd, args)| (cmd, args.trim_start()))
+        .unwrap_or((line, ""));
+    let cmd_length = cmd_word.len();
+    let arg_index = if arg_prefix.is_empty() {
+        //if arg_prefix hasn't been specified yet, use the current cursor
+        line.len()
+    } else {
+        line[cmd_length..]
+            .find(arg_prefix)
+            .map(|i| i + cmd_length)
+            .unwrap_or(0)
+    };
+    (cmd_word, arg_prefix, arg_index)
+}
+
 impl Completer for CmdAndFileCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         if self.debug {
             let _ = config::write_to_debug_log(format!("completer init: {} pos={}\n", line, pos,));
         }
+        // Auto-completion never looks ahead of the cursor.
+        let line = &line[..pos];
         if line.starts_with('/') || line.starts_with("!!") {
             if line.starts_with("/load ")
                 || line.starts_with("/l ")
@@ -402,7 +428,7 @@ impl Completer for CmdAndFileCompleter {
                 let cmd_length = cmd_word.len();
                 let arg1_index = line[cmd_length..]
                     .find(arg1_prefix)
-                    .map(|i| i + cmd_length + 1)
+                    .map(|i| i + cmd_length)
                     .unwrap_or(0);
                 let mut completions = self.file_completer2(arg1_prefix, cmd_word == "/cd");
                 realign_suggestions(&mut completions, arg1_index, self.debug);
@@ -427,7 +453,7 @@ impl Completer for CmdAndFileCompleter {
                     task_cache_prefix.to_string_lossy().to_string().len() + 1;
                 task_cache_prefix.push(arg_prefix);
                 let cmd_length = cmd_word.len();
-                let offset = cmp::max(0, pos - cmd_length + task_cache_prefix_offset);
+                let offset = cmp::max(0, line.len() - cmd_length + task_cache_prefix_offset);
 
                 let mut completions = self.file_completer(
                     task_cache_prefix.to_string_lossy().as_ref(),
@@ -455,37 +481,20 @@ impl Completer for CmdAndFileCompleter {
                 }
                 completions
             } else if line.starts_with("/ai ") {
-                let (cmd_word, arg_prefix) = line
-                    .split_once(char::is_whitespace)
-                    .map(|(cmd, args)| (cmd, args.trim_start()))
-                    .unwrap_or((line, ""));
-                let cmd_length = cmd_word.len();
-                let arg_index = line[cmd_length..]
-                    .find(arg_prefix)
-                    .map(|i| i + cmd_length + 1)
-                    .unwrap_or(0);
-
-                let mut completions = self.ai_model_completer(arg_prefix);
+                let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
+                let mut completions = self.simple_completer(
+                    arg_prefix,
+                    &self
+                        .autocomplete_repl_ai_models
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                );
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
             } else if line.starts_with("/std ") {
-                let (cmd_word, arg_prefix) = line
-                    .split_once(char::is_whitespace)
-                    .map(|(cmd, args)| (cmd, args.trim_start()))
-                    .unwrap_or((line, ""));
-                let cmd_length = cmd_word.len();
-                let arg_index = line[cmd_length..]
-                    .find(arg_prefix)
-                    .map(|i| i + cmd_length + 1)
-                    .unwrap_or(0);
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "std completer: arg_prefix={} (arg_index={}) (cmd_length={:?})\n",
-                        arg_prefix, arg_index, cmd_length
-                    ));
-                }
-
-                let mut completions = self.std_completer(arg_prefix);
+                let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
+                let mut completions = self.simple_completer(arg_prefix, &["now"]);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
             } else if line.starts_with("/asset ")
@@ -502,21 +511,11 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/ls ")
                 || line.starts_with("/asset-md-get ")
             {
-                let (cmd_word, arg_prefix) = line
-                    .split_once(char::is_whitespace)
-                    .map(|(cmd, args)| (cmd, args.trim_start()))
-                    .unwrap_or((line, ""));
-                let cmd_length = cmd_word.len();
-                let arg_index = line[cmd_length..]
-                    .find(arg_prefix)
-                    .map(|i| i + cmd_length + 1)
-                    .unwrap_or(0);
+                let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
-                        "completer init: {} pos={} cmd_length={} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
+                        "completer init: {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
                         line,
-                        pos,
-                        cmd_length,
                         cmd_word,
                         arg_index,
                         arg_prefix,
@@ -527,19 +526,14 @@ impl Completer for CmdAndFileCompleter {
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 completions
             } else if line.starts_with("/exec ") || line.starts_with("!!") {
-                // For /exec command, complete asset references
-                let substring_before_cursor = &line[..pos];
-
                 // Find/extract current token
-                let last_whitespace_pos = substring_before_cursor
-                    .rfind(char::is_whitespace)
-                    .unwrap_or(0);
-                let current_token = &substring_before_cursor[last_whitespace_pos..].trim_start();
+                let last_whitespace_pos = line.rfind(char::is_whitespace).unwrap_or(0);
+                let current_token = &line[last_whitespace_pos..].trim_start();
 
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
-                        "exec completer: line={} pos={} last_whitespace={} current_token={:?}\n",
-                        line, pos, last_whitespace_pos, current_token
+                        "exec completer: line={} last_whitespace={} current_token={:?}\n",
+                        line, last_whitespace_pos, current_token
                     ));
                 }
 
@@ -553,31 +547,27 @@ impl Completer for CmdAndFileCompleter {
                     vec![]
                 }
             } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
-                let (cmd_word, arg1_prefix) = line
-                    .split_once(char::is_whitespace)
-                    .map(|(cmd, args)| (cmd, args.trim_start()))
-                    .unwrap_or((line, ""));
+                let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
                 let cmd_length = cmd_word.len();
-                let arg1_index = line[cmd_length..]
-                    .find(arg1_prefix)
-                    .map(|i| i + cmd_length + 1)
-                    .unwrap_or(0);
-                let (arg1_prefix, arg2_prefix) = arg1_prefix
+                let (arg1_prefix, arg2_prefix) = arg_prefix
                     .split_once(char::is_whitespace)
                     .map(|(arg1, arg2)| (arg1, Some(arg2.trim_start())))
-                    .unwrap_or((arg1_prefix, None));
+                    .unwrap_or((arg_prefix, None));
                 let arg2_index = if let Some(arg2_prefix) = arg2_prefix {
-                    line[cmd_length + arg1_prefix.len()..]
-                        .find(arg2_prefix)
-                        .map(|i| i + cmd_length + arg1_prefix.len())
+                    if arg2_prefix.is_empty() {
+                        Some(line.len())
+                    } else {
+                        line[cmd_length + arg1_prefix.len()..]
+                            .find(arg2_prefix)
+                            .map(|i| i + cmd_length + arg1_prefix.len())
+                    }
                 } else {
                     None
                 };
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
-                        "completer init: {} pos={} cmd_length={} cmd_word={:?} arg1_index={:?} arg1_prefix={:?} arg2_index={:?} arg2_prefix={:?}\n",
+                        "completer init: {} cmd_length={} cmd_word={:?} arg1_index={:?} arg1_prefix={:?} arg2_index={:?} arg2_prefix={:?}\n",
                         line,
-                        pos,
                         cmd_length,
                         cmd_word,
                         arg1_index,
@@ -599,7 +589,13 @@ impl Completer for CmdAndFileCompleter {
                 self.command_completer(line)
             }
         } else if line.starts_with('!') {
-            self.tool_completer(line)
+            self.simple_completer(
+                line,
+                &[
+                    "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv", "!fn-sh",
+                    "!exit",
+                ],
+            )
         } else {
             vec![]
         }
@@ -612,8 +608,8 @@ fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize, debug: 
         suggestion.span.end += offset;
         if debug {
             let _ = config::write_to_debug_log(format!(
-                "suggestion: value={} (span-start={}) (span-end={:?})\n",
-                suggestion.value, suggestion.span.start, suggestion.span.end
+                "suggestion: value={} offset={} (span-start={}) (span-end={:?})\n",
+                suggestion.value, offset, suggestion.span.start, suggestion.span.end
             ));
         }
     }
@@ -642,84 +638,23 @@ impl CmdAndFileCompleter {
         completions
     }
 
-    fn tool_completer(&self, tool_cmd_prefix: &str) -> Vec<Suggestion> {
-        let commands: Vec<String> = [
-            "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv", "!fn-sh", "!exit",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
+    fn simple_completer(&self, prefix: &str, options: &[&str]) -> Vec<Suggestion> {
         let mut completions = Vec::new();
-
-        for cmd in &commands {
-            if cmd.starts_with(tool_cmd_prefix) {
+        for option in options {
+            if option.starts_with(prefix) {
                 completions.push(Suggestion {
-                    value: cmd.clone(),
+                    value: option.to_string(),
                     description: None,
                     style: None,
                     extra: None,
                     span: Span {
                         start: 0,
-                        end: tool_cmd_prefix.len(),
+                        end: prefix.len(),
                     },
                     append_whitespace: true,
                 });
             }
         }
-
-        completions
-    }
-
-    fn ai_model_completer(&self, ai_model_prefix: &str) -> Vec<Suggestion> {
-        let mut completions = Vec::new();
-
-        for ai_model in &self.autocomplete_repl_ai_models {
-            if ai_model.starts_with(ai_model_prefix) {
-                completions.push(Suggestion {
-                    value: ai_model.clone(),
-                    description: None,
-                    style: None,
-                    extra: None,
-                    span: Span {
-                        start: 0,
-                        end: ai_model_prefix.len(),
-                    },
-                    append_whitespace: true,
-                });
-            }
-        }
-
-        completions
-    }
-
-    fn std_completer(&self, std_fn_prefix: &str) -> Vec<Suggestion> {
-        let mut completions = Vec::new();
-        let std_fns = ["now"];
-
-        for std_fn in &std_fns {
-            if std_fn.starts_with(std_fn_prefix) {
-                completions.push(Suggestion {
-                    value: std_fn.to_string(),
-                    description: None,
-                    style: None,
-                    extra: None,
-                    span: Span {
-                        start: 0,
-                        end: std_fn_prefix.len(),
-                    },
-                    append_whitespace: true,
-                });
-
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "std_completer: {:?} {:?}\n",
-                        std_fn_prefix, std_fn,
-                    ));
-                }
-            }
-        }
-
         completions
     }
 
