@@ -798,6 +798,8 @@ There are some `hai`-repl commands that are specifically made for tasks:
   - If running in non-interactive mode (e.g. as a cron job), use `-y` to
     confirm all user prompts, `-m` to set the model, and `-u` to set the user
     account.
+  - Use `-` as a command to create a `/prep` message with data from stdin.
+    e.g. `cat meeting_notes.txt | hai bye - 'summary please'`
 - `hai -i` - Enter incognito mode to keep no history. Pair with
   `default_incognito_ai_model` to a local LLM (e.g. ollama) to be fully
   incognito.

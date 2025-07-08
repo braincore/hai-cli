@@ -7,6 +7,7 @@ use reedline::{self, Signal};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
+use std::io::Read;
 use std::ops::Deref;
 use std::process;
 use std::sync::Arc;
@@ -99,7 +100,8 @@ enum CliSubcommand {
     /// WARNING: Quote each command with single-quotes to avoid shell expansion.
     #[command(alias = "bai")]
     Bye {
-        /// Commands to run
+        /// Commands to run. Use '-' to read from stdin into /prep
+        #[arg(required = true, num_args = 1..)]
         cmds: Vec<String>,
 
         /// Automatically confirm any prompts
@@ -139,67 +141,85 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         };
     } else {
-        let (repl_mode, init_cmds, exit_when_done, force_yes) =
-            if let Some(CliSubcommand::Bye { cmds, yes }) = args.subcommand {
-                (
+        let (repl_mode, init_cmds, exit_when_done, force_yes) = if let Some(CliSubcommand::Bye {
+            cmds,
+            yes,
+        }) = args.subcommand
+        {
+            (
                     ReplMode::Normal,
                     cmds.into_iter()
                         .enumerate()
-                        .map(|(idx, prompt)| session::CmdInput {
-                            input: prompt,
-                            source: session::CmdSource::HaiBye(idx as u32),
+                        .map(|(idx, prompt)| {
+                            if prompt == "-" {
+                                if atty::is(atty::Stream::Stdin) {
+                                        eprintln!("No input detected on stdin. Did you forget to pipe or redirect a file?");
+                                        std::process::exit(1);
+                                    }
+                                    let mut stdin_buffer = String::new();
+                                    std::io::stdin().read_to_string(&mut stdin_buffer).unwrap();
+                                    session::CmdInput {
+                                        input: format!("/prep {}", stdin_buffer),
+                                        source: session::CmdSource::HaiBye(idx as u32),
+                                    }
+                                } else {
+                                    session::CmdInput {
+                                        input: prompt,
+                                        source: session::CmdSource::HaiBye(idx as u32),
+                                    }
+                                }
                         })
                         .collect(),
                     true,
                     yes,
                 )
-            } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
-                let account_login_cmd = if let Some(password) = password {
-                    format!("/account-login {} {}", username, password)
-                } else {
-                    format!("/account-login {}", username)
-                };
-                (
-                    ReplMode::Normal,
-                    vec![session::CmdInput {
-                        input: account_login_cmd,
-                        // Use Internal to avoid printing command
-                        source: session::CmdSource::Internal,
-                    }],
-                    true,
-                    false,
-                )
-            } else if let Some(CliSubcommand::Task { task_ref, trust }) = args.subcommand {
-                // When specified via the command-line, a relative file path may
-                // not be prefixed with "./" which will then be incorrectly treated
-                // as a task-fqn. To catch this, prefix "./" if the name has a dot
-                // (due to a .toml extension) which an fqn cannot have.
-                let fixed_task_ref = if !task_ref.starts_with("/")
-                    && !task_ref.starts_with("./")
-                    && !task_ref.starts_with("~")
-                    && task_ref.contains(".")
-                {
-                    format!("./{}", task_ref)
-                } else {
-                    task_ref
-                };
-                let task_cmd = if trust {
-                    format!("/task(trust=true) {}", fixed_task_ref)
-                } else {
-                    format!("/task {}", fixed_task_ref)
-                };
-                (
-                    ReplMode::Normal,
-                    vec![session::CmdInput {
-                        input: task_cmd,
-                        source: session::CmdSource::User,
-                    }],
-                    false,
-                    false,
-                )
+        } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
+            let account_login_cmd = if let Some(password) = password {
+                format!("/account-login {} {}", username, password)
             } else {
-                (ReplMode::Normal, vec![], false, false)
+                format!("/account-login {}", username)
             };
+            (
+                ReplMode::Normal,
+                vec![session::CmdInput {
+                    input: account_login_cmd,
+                    // Use Internal to avoid printing command
+                    source: session::CmdSource::Internal,
+                }],
+                true,
+                false,
+            )
+        } else if let Some(CliSubcommand::Task { task_ref, trust }) = args.subcommand {
+            // When specified via the command-line, a relative file path may
+            // not be prefixed with "./" which will then be incorrectly treated
+            // as a task-fqn. To catch this, prefix "./" if the name has a dot
+            // (due to a .toml extension) which an fqn cannot have.
+            let fixed_task_ref = if !task_ref.starts_with("/")
+                && !task_ref.starts_with("./")
+                && !task_ref.starts_with("~")
+                && task_ref.contains(".")
+            {
+                format!("./{}", task_ref)
+            } else {
+                task_ref
+            };
+            let task_cmd = if trust {
+                format!("/task(trust=true) {}", fixed_task_ref)
+            } else {
+                format!("/task {}", fixed_task_ref)
+            };
+            (
+                ReplMode::Normal,
+                vec![session::CmdInput {
+                    input: task_cmd,
+                    source: session::CmdSource::User,
+                }],
+                false,
+                false,
+            )
+        } else {
+            (ReplMode::Normal, vec![], false, false)
+        };
         repl(
             &config_path_override,
             args.debug,
