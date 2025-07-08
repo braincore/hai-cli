@@ -258,6 +258,7 @@ The Earth is approximately 4.54 billion years old.
 | `!clip`               | Copy something to your system clipboard.                |
 | `!'<cmd>'`            | Run any program that accepts input via stdin.           |
 | `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |
+| `!!<cmd>`             | Not a tool, but a shorthand for `/exec`.                |
 
 For the last tool using the `{file}` placeholder, a file extension can be
 specified (e.g. `{file.<ext>}`) to force the temporary file to have a
@@ -399,7 +400,7 @@ be transparently downloaded.
 ```
 [0] !!cat @/hai/changelog | grep -A 2 v1.3.0
 equivalent to:
-[0] !!!grep -A 2 v1.3.0 @/hai/changelog
+[0] !!grep -A 2 v1.3.0 @/hai/changelog
 ```
 ```
 ## v1.3.0
