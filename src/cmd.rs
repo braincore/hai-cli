@@ -2257,9 +2257,12 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
     format!("{}{}", tool_call, prompt)
 }
 
-/// Parse command options: /cmd(key=value, ...)
+/// Parse command options: /cmd(key1=value, key2, ...)
 ///
-/// - `options_input`: The portion of the input between the parentheses. Do not
+/// If a key is specified without a value, the value is set to `true`.
+///
+/// # Arguments
+/// - `options_input`- The portion of the input between the parentheses. Do not
 ///   include the `/cmd` nor what follows the command.
 fn parse_options(options_input: &str) -> HashMap<String, String> {
     let mut options = HashMap::new();
@@ -2269,6 +2272,8 @@ fn parse_options(options_input: &str) -> HashMap<String, String> {
         for pair in content.split(',') {
             if let Some((key, value)) = pair.split_once('=') {
                 options.insert(key.trim().to_string(), value.trim().to_string());
+            } else {
+                options.insert(pair.trim().to_string(), "true".to_string());
             }
         }
     }

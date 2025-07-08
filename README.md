@@ -197,7 +197,7 @@ steps = [
 
 Some task steps require user confirmation because of the danger they pose (see
 [Security Warning](#security-warning)). To skip these confirmations, you can
-set the `trust` option to true: `/task(trust=true)`
+set the `trust` option to true: `/task(trust=true)` or `/task(trust)`
 
 ### !Tools
 
@@ -624,7 +624,7 @@ steps = [
     "/load-url https://developers.strava.com/swagger/swagger.json",
     "/pin Loaded Strava API's swagger definition.",
     "/pin Next, you'll need an access token from https://www.strava.com/settings/api",
-    "/ask-human(secret=true,cache=true) What's you're strava access token?",
+    "/ask-human(secret,cache) What's you're strava access token?",
     """\
 /pin When making requests to the Strava API from the shell, use HTTPie (`http`)
 with the `--pretty=all` flag. If unavailable, fallback to curl.
@@ -748,9 +748,9 @@ clearing the entire conversation. To clear, use `/task-end`.
 There are some `hai`-repl commands that are specifically made for tasks:
 
 - `/ask-human <prompt>` - Ask the question.
-- `/ask-human(secret=true) <prompt>` - User's answer is treated as a secret and
+- `/ask-human(secret) <prompt>` - User's answer is treated as a secret and
   hidden.
-- `/ask-human(cache=true) <prompt>` - When a user runs the task again, their
+- `/ask-human(cache) <prompt>` - When a user runs the task again, their
   previous answer is used. `/task-forget` to reset.
 
 - `/set-mask-secrets on` - AI output that includes the secret is masked in the
@@ -761,14 +761,14 @@ There are some `hai`-repl commands that are specifically made for tasks:
 
 - `/exec <cmd>` - Execute a command on the local machine. The user is always
   prompted yes/no.
-- `/exec(cache=true) <cmd>` - When a user runs the task again, the output from
+- `/exec(cache) <cmd>` - When a user runs the task again, the output from
   the previous invocation is used.
   - An example use of `/exec` is to make the first task command
-    `/exec(cache=true) ffmpeg -version` so that the AI knows to tweak its
+    `/exec(cache) ffmpeg -version` so that the AI knows to tweak its
     `fmpeg` command-line with the exact version in mind.
 
 - `/prompt <message>` - Makes it explicit that the line is prompting the AI.
-- `/prompt(cache=true) <message>` - When a user runs the task again, the AI
+- `/prompt(cache) <message>` - When a user runs the task again, the AI
   output from the previous invocation is used instead of re-prompting.
   - The cache is useful for avoiding the delay of an AI response and reducing
     costs for expensive prompts.
