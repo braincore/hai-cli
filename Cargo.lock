@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "hai-cli"
-version = "1.15.0"
+version = "1.16.0"
 dependencies = [
  "ansi_colours",
  "assert_cmd",
