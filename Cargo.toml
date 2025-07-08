@@ -67,6 +67,7 @@ two-face = { version = "0.4.3", default-features = false, features = ["syntect-d
 unicode-width = "0.1.14"
 uuid = { version = "1.11.0", features = ["std", "v7"] }
 viuer = "0.9.1"
+which = "8.0.0"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 xattr = "1.5.0"

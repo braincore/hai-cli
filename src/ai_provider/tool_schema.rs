@@ -295,6 +295,7 @@ Available Tools:
 Standard Library Functions:
 /std now              - Print current date and time
 /std new-day-alert    - Make AI aware when a new day begins since the last interaction
+/std which <prog>     - Checks if program is available.
 
 --
 

@@ -3032,6 +3032,22 @@ lesson (e.g. "understanding").\n\n{}"#,
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                 }
+                cmd::StdCmd::Which(prog) => {
+                    session.add_msg_on_new_day = true;
+                    let output = match which::which(prog) {
+                        Ok(path) => path.display().to_string(),
+                        Err(which::Error::CannotFindBinaryPath) => format!("'{}' not found", prog),
+                        Err(e) => format!("error: could not find {}: {}", prog, e),
+                    };
+                    println!("{}", output);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &output,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
             }
             ProcessCmdResult::Loop
         }
@@ -3612,6 +3628,7 @@ Available Tools:
 Standard Library Functions:
 /std now                     - Print current date and time
 /std new-day-alert           - Make AI aware when a new day begins since the last interaction.
+/std which <prog>            - Checks if program is available.
 
 --
 

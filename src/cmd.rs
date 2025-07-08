@@ -625,6 +625,7 @@ pub struct FnExecCmd {
 pub enum StdCmd {
     Now,
     NewDayAlert,
+    Which(String),
 }
 
 #[derive(Clone, Debug)]
@@ -1843,6 +1844,13 @@ fn parse_command(
                             Some(Cmd::Std(StdCmd::NewDayAlert))
                         } else {
                             eprintln!("Usage: {fn_name} takes no arguments");
+                            return None;
+                        }
+                    } else if fn_name == "which" {
+                        if let Some(prog) = fn_arg {
+                            Some(Cmd::Std(StdCmd::Which(prog)))
+                        } else {
+                            eprintln!("Usage: {fn_name} <prog>");
                             return None;
                         }
                     } else {
