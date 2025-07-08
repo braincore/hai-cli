@@ -22,7 +22,7 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
 - 📂 Load images, code, or text into the conversation.
 - 🔗 Load URLs with automatic article extraction and markdown conversion.
-- 🎨 Highlights syntax for code snippets.
+- 🎨 Highlights syntax for markdown and code snippets.
 - 💾 Auto-saves last conversation for easy resumption.
 - ☁ Store and share data on the cloud for easy access by AIs.
 - 📧 Get emails from AI—send notifications or share data.
