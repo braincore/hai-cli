@@ -613,7 +613,13 @@ async fn repl(
                     println!();
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
-                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+                if cmd::get_cmds_with_markdown_body_re().is_match(&cmd_info.input) {
+                    let message = format!("{} {}", step_badge.black().on_white(), cmd_info.input);
+                    term_color::print_multi_lang_syntax_highlighting(&message);
+                    println!();
+                } else {
+                    println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+                }
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 let step_badge = format!("!hai-tool[{}]:", index);
                 println!("{} {}", step_badge.black().on_white(), cmd_info.input);

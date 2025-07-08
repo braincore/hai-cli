@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::io::{self, Write};
 use two_face::re_exports::syntect::easy::HighlightLines;
 use two_face::re_exports::syntect::highlighting::Style;
-use unicode_width::UnicodeWidthStr;
 
 use crate::term_color;
 
@@ -242,7 +241,7 @@ impl SyntaxHighlighterPrinter<'_> {
             if let Some(highlighter) = self.highlighter.as_mut() {
                 if let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
                 {
-                    let line_width = UnicodeWidthStr::width(full_first_line.as_str()) as u16;
+                    let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
                     let (terminal_width, terminal_height) = crossterm::terminal::size().unwrap();
                     // This is a bit tricky.
                     // Let W be the terminal_width. If W characters are
@@ -338,7 +337,7 @@ impl SyntaxHighlighterPrinter<'_> {
         if let Some(color_capability) = self.terminal_color_capability.clone() {
             if let Some(highlighter) = self.highlighter.as_mut() {
                 let ps = term_color::get_syntax_set();
-                let line_width = UnicodeWidthStr::width(self.buffer.as_str()) as u16;
+                let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
                 let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
                 let height = if line_width == 0 {
                     0

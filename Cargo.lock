@@ -67,6 +67,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ansi-width"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "219e3ce6f2611d83b51ec2098a12702112c29e57203a6b0a0929b2cddb486608"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "ansi_colours"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1266,6 +1275,7 @@ dependencies = [
 name = "hai-cli"
 version = "1.16.0"
 dependencies = [
+ "ansi-width",
  "ansi_colours",
  "assert_cmd",
  "atty",
@@ -1318,7 +1328,6 @@ dependencies = [
  "toml",
  "toml_edit",
  "two-face",
- "unicode-width",
  "uuid",
  "viuer",
  "which 8.0.0",

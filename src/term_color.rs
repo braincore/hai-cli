@@ -205,3 +205,11 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
         std::io::stdout().flush().unwrap();
     }
 }
+
+/// Assumes `text` is markdown text. Supports highlighting markdown and
+/// embedded code blocks.
+pub fn print_multi_lang_syntax_highlighting(markdown: &str) {
+    let mut sh_printer = crate::ai_provider::util::SyntaxHighlighterPrinter::new();
+    sh_printer.acc(&markdown);
+    sh_printer.end();
+}

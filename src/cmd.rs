@@ -666,6 +666,12 @@ fn get_ai_def_tool_re() -> &'static Regex {
     TOOL_RE.get_or_init(|| Regex::new(r"^f([0-9]*|'(?:\\'|[^'])*')?( |$)").unwrap())
 }
 
+pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
+    static CMDS_WITH_MARKDOWN_BODY_RE: OnceLock<Regex> = OnceLock::new();
+    CMDS_WITH_MARKDOWN_BODY_RE
+        .get_or_init(|| Regex::new(r"^/(pin|prep|prompt|system-prompt)[\s(]").unwrap())
+}
+
 /// Parses user/task input.
 ///
 /// Errors are printed to the screen so the caller is not expected to.
@@ -2930,5 +2936,14 @@ mod tests {
             }
             _ => panic!("Failed to parse !py command properly"),
         }
+    }
+
+    #[test]
+    fn test_cmds_with_markdown_body_re() {
+        assert!(get_cmds_with_markdown_body_re().is_match("/prep "));
+        assert!(get_cmds_with_markdown_body_re().is_match("/prep("));
+        assert!(get_cmds_with_markdown_body_re().is_match("/prep\n"));
+        assert!(!get_cmds_with_markdown_body_re().is_match("/prepz"));
+        assert!(!get_cmds_with_markdown_body_re().is_match("/prep["));
     }
 }

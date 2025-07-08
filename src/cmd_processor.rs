@@ -2872,10 +2872,9 @@ pub async fn process_cmd(
                             }
                         } else {
                             println!("{}", left_prompt.bright_green());
-                            let mut sh_printer =
-                                crate::ai_provider::util::SyntaxHighlighterPrinter::new();
-                            sh_printer.acc(&entry_body);
-                            sh_printer.end();
+                            let prompt_and_message =
+                                format!("{} {}", left_prompt.bright_green(), &entry_body);
+                            term_color::print_multi_lang_syntax_highlighting(&prompt_and_message);
                         }
                     } else {
                         print!("{} {}", left_prompt.bright_green(), entry_body);
