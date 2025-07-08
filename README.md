@@ -514,7 +514,8 @@ Clear +77°F ↙11mph
 ```
 
 A more realistic example is when using `hai` with `psql` (postgres client) to
-avoid typing in the connection string each time.
+avoid typing in the connection string each time (Note the location of the
+semicolon `:`).
 
 ```
 [0]: !'psql -h localhost -p 5432 -U ken -d grapdb_1'
