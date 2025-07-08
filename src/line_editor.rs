@@ -693,8 +693,8 @@ impl Completer for CmdAndFileCompleter {
                 self.simple_completer(
                     line,
                     &[
-                        "!!", "!py", "!?py", "!sh", "!?sh", "!clip", "!fn-py", "!fn-pyuv",
-                        "!fn-sh", "!exit",
+                        "!!", "!py", "!?py", "!pyuv", "!?pyuv", "!sh", "!?sh", "!hai", "!?hai",
+                        "!clip", "!fn-py", "!fn-pyuv", "!fn-sh", "!exit",
                     ],
                 ),
                 true,
