@@ -2082,7 +2082,7 @@ fn parse_tool_command(
                 })),
             }
         }
-        "hai" => match parse_one_arg_catchall(remaining) {
+        "hai" | "h" => match parse_one_arg_catchall(remaining) {
             Some(prompt) => Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::HaiRepl,
                 prompt: get_tool_prefixed_prompt(&tool::Tool::HaiRepl, user_confirmation, &prompt),
