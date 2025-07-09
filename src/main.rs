@@ -40,7 +40,7 @@ use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_c
 #[command(name = "hai")]
 #[command(
     about = "A CLI for interacting with LLMs in a hacker-centric way",
-    version = "0.1.0"
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
     /// Debug mode (logs to ~/.hai/debug.log)
