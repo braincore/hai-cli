@@ -62,7 +62,7 @@ pub fn as_terminal_escaped(
     style: highlighting::Style,
     text: &str,
     color_capability: &ColorCapability,
-    background_color: Option<highlighting::Color>,
+    background_color: &Option<highlighting::Color>,
 ) -> String {
     if text.is_empty() {
         return text.to_string();
@@ -199,7 +199,7 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
             highlighter.highlight_line(&line_with_ending, ps).unwrap();
 
         for (style, text) in highlighted_parts {
-            let escaped = as_terminal_escaped(style, text, &color_capability, None);
+            let escaped = as_terminal_escaped(style, text, &color_capability, &None);
             print!("{}", escaped);
         }
         std::io::stdout().flush().unwrap();
@@ -208,8 +208,14 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
 
 /// Assumes `text` is markdown text. Supports highlighting markdown and
 /// embedded code blocks.
-pub fn print_multi_lang_syntax_highlighting(markdown: &str) {
-    let mut sh_printer = crate::ai_provider::util::SyntaxHighlighterPrinter::new();
+pub fn print_multi_lang_syntax_highlighting(
+    markdown: &str,
+    background_color: &Option<(u8, u8, u8)>,
+) {
+    let mut sh_printer = crate::ai_provider::util::SyntaxHighlighterPrinter::new(true);
+    if let Some((r, g, b)) = background_color {
+        sh_printer.set_background_color(*r, *g, *b, 255);
+    };
     sh_printer.acc(&markdown);
     sh_printer.end();
 }

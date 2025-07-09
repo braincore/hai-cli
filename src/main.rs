@@ -614,8 +614,22 @@ async fn repl(
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
                 if cmd::get_cmds_with_markdown_body_re().is_match(&cmd_info.input) {
-                    let message = format!("{} {}", step_badge.black().on_white(), cmd_info.input);
-                    term_color::print_multi_lang_syntax_highlighting(&message);
+                    print!("{} ", step_badge.black().on_white());
+                    let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
+                    | Some(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
+                        cmd::parse_user_input(&cmd_info.input, None, None)
+                    {
+                        match accent {
+                            Some(cmd::Accent::Danger) => Some((128, 0, 0)),
+                            Some(cmd::Accent::Warn) => Some((153, 102, 0)),
+                            Some(cmd::Accent::Info) => Some((0, 51, 102)),
+                            Some(cmd::Accent::Success) => Some((0, 102, 51)),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    term_color::print_multi_lang_syntax_highlighting(&cmd_info.input, &color);
                     println!();
                 } else {
                     println!("{} {}", step_badge.black().on_white(), cmd_info.input);

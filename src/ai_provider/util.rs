@@ -81,7 +81,7 @@ pub struct MaskedPrinter<'a> {
 impl MaskedPrinter<'_> {
     pub fn new(masked_strings: HashSet<String>) -> Self {
         MaskedPrinter {
-            sh_printer: SyntaxHighlighterPrinter::new(),
+            sh_printer: SyntaxHighlighterPrinter::new(false),
             buffer: String::new(),
             masked_buffer: String::new(),
             masked_strings,
@@ -131,6 +131,8 @@ impl MaskedPrinter<'_> {
 
 // --
 
+use two_face::re_exports::syntect::highlighting::Color;
+
 pub struct SyntaxHighlighterPrinter<'a> {
     buffer: String,
     highlighter: Option<HighlightLines<'a>>,
@@ -138,10 +140,13 @@ pub struct SyntaxHighlighterPrinter<'a> {
     // fences but resumes afterwards to maximize syntax context.
     default_highlighter: Option<HighlightLines<'a>>,
     terminal_color_capability: Option<term_color::ColorCapability>,
+    background_color: Option<Color>,
+    cur_line_partial: bool,
+    one_shot: bool,
 }
 
 impl SyntaxHighlighterPrinter<'_> {
-    pub fn new() -> Self {
+    pub fn new(one_shot: bool) -> Self {
         let printer = SyntaxHighlighterPrinter {
             buffer: String::new(),
             highlighter: Some(HighlightLines::new(
@@ -157,8 +162,15 @@ impl SyntaxHighlighterPrinter<'_> {
             // The default_highlighter starts out as the "active" highlighter.
             default_highlighter: None,
             terminal_color_capability: term_color::terminal_color_capability(),
+            background_color: None,
+            cur_line_partial: false,
+            one_shot,
         };
         printer
+    }
+
+    pub fn set_background_color(&mut self, r: u8, g: u8, b: u8, a: u8) {
+        self.background_color = Some(Color { r, g, b, a });
     }
 
     pub fn set_highlighter(&mut self, token: &str) {
@@ -205,6 +217,27 @@ impl SyntaxHighlighterPrinter<'_> {
         }
     }
 
+    /// Responsible for printing text at any increment (letters, words, or
+    /// lines). Syntax highlighting is applied after a line is complete,
+    /// which involves rewinding the cursor and reprinting the entire line with
+    /// syntax highlighting. This approach is taken since syntax highlighting
+    /// works best one-line-at-a-time.
+    ///
+    /// There are a couple of optimizations:
+    ///
+    /// First, if `next` is composed of multiple lines, then only the first
+    /// line is reprinted with syntax highlighting, while the rest of the lines
+    /// are printed with syntax highlighting the first time.
+    ///
+    /// Second, if `acc()`` is called for the first time and `next` has at
+    /// least one line, then even that first line isn't reprinted but instead
+    /// printed with syntax highlighting the first time.
+    ///
+    /// So, if you want to print a prefix (e.g. line prompt >>>) prior to
+    /// outputting with the syntax highlighter, you can as long as you pass
+    /// the entire first line as `next` or you set `one_shot` to `true` in
+    /// `new()` so that it syntax highlights regardless of an explicit newline
+    /// end.
     pub fn acc(&mut self, next: &str) {
         let color_capability =
             if let Some(color_capability) = self.terminal_color_capability.clone() {
@@ -220,17 +253,30 @@ impl SyntaxHighlighterPrinter<'_> {
 
         let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
         if lines.len() > 1 {
-            let ps = term_color::get_syntax_set();
-
             // Record the position in case we need to reprint it.
             let cursor_pos_preprint = crossterm::cursor::position().ok();
 
-            // Finish the current line
-            let _ = writeln!(stdout, "{}", &lines[0]);
-            stdout.flush().unwrap();
-
             let full_first_line = format!("{}{}", self.buffer, &lines[0]);
             self.buffer.clear();
+
+            let need_reprint = if !self.cur_line_partial
+                && let Some(highlighter) = self.highlighter.as_mut()
+            {
+                let line_with_ending = format!("{}\n", full_first_line);
+                print_line_syntax_highlighted(
+                    &mut stdout,
+                    &color_capability,
+                    highlighter,
+                    &self.background_color,
+                    &line_with_ending,
+                );
+                false
+            } else {
+                // Either finishing the current line or there was no highlighter set
+                let _ = writeln!(stdout, "{}", &lines[0]);
+                stdout.flush().unwrap();
+                self.highlighter.is_some()
+            };
 
             // If this line is the end of a code block, end it before
             // triggering the highlight logic.
@@ -238,7 +284,7 @@ impl SyntaxHighlighterPrinter<'_> {
 
             // If highlighter is set, clear the previous line and reprint with
             // colors.
-            if let Some(highlighter) = self.highlighter.as_mut() {
+            if need_reprint && let Some(highlighter) = self.highlighter.as_mut() {
                 if let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
                 {
                     let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
@@ -270,14 +316,13 @@ impl SyntaxHighlighterPrinter<'_> {
                     crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
 
                     let line_with_ending = format!("{}\n", full_first_line);
-                    let highlighted_parts: Vec<(Style, &str)> =
-                        highlighter.highlight_line(&line_with_ending, ps).unwrap();
-                    for (style, text) in highlighted_parts {
-                        let escaped =
-                            term_color::as_terminal_escaped(style, text, &color_capability, None);
-                        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
-                    }
-                    stdout.flush().unwrap();
+                    print_line_syntax_highlighted(
+                        &mut stdout,
+                        &color_capability,
+                        highlighter,
+                        &self.background_color,
+                        &line_with_ending,
+                    );
                 }
             }
 
@@ -292,16 +337,13 @@ impl SyntaxHighlighterPrinter<'_> {
                 self.highlighter_check_end(middle_line);
                 let middle_line_with_ending = format!("{}\n", middle_line);
                 if let Some(highlighter) = self.highlighter.as_mut() {
-                    let highlighted_parts: Vec<(Style, &str)> = highlighter
-                        .highlight_line(&middle_line_with_ending, ps)
-                        .unwrap();
-
-                    for (style, text) in highlighted_parts {
-                        let escaped =
-                            term_color::as_terminal_escaped(style, text, &color_capability, None);
-                        let _ = write!(stdout, "{}", escaped);
-                    }
-                    stdout.flush().unwrap();
+                    print_line_syntax_highlighted(
+                        &mut stdout,
+                        &color_capability,
+                        highlighter,
+                        &self.background_color,
+                        &middle_line_with_ending,
+                    );
                 } else {
                     let _ = write!(stdout, "{}", middle_line_with_ending);
                     stdout.flush().unwrap();
@@ -315,17 +357,46 @@ impl SyntaxHighlighterPrinter<'_> {
                 "LAST line partial: {:?}\n",
                 last_line_partial
             ));
-            let _ = write!(stdout, "{}", last_line_partial);
-            stdout.flush().unwrap();
-            self.buffer.push_str(last_line_partial)
+            if self.one_shot
+                && let Some(highlighter) = self.highlighter.as_mut()
+            {
+                print_line_syntax_highlighted(
+                    &mut stdout,
+                    &color_capability,
+                    highlighter,
+                    &self.background_color,
+                    &last_line_partial,
+                );
+            } else {
+                let _ = write!(stdout, "{}", last_line_partial);
+                stdout.flush().unwrap();
+            }
+            self.cur_line_partial = !last_line_partial.is_empty();
+            self.buffer.push_str(last_line_partial);
         } else {
-            self.buffer.push_str(next);
-            let _ = write!(stdout, "{}", next);
-            stdout.flush().unwrap(); // Flush to skip line-buffer
+            if self.one_shot
+                && let Some(highlighter) = self.highlighter.as_mut()
+            {
+                print_line_syntax_highlighted(
+                    &mut stdout,
+                    &color_capability,
+                    highlighter,
+                    &self.background_color,
+                    &next,
+                );
+            } else {
+                self.cur_line_partial = true;
+                self.buffer.push_str(next);
+                let _ = write!(stdout, "{}", next);
+                stdout.flush().unwrap(); // Flush to skip line-buffer
+            }
         }
     }
 
     pub fn end(&mut self) {
+        if self.one_shot {
+            return;
+        }
         if self.buffer.is_empty() {
             return;
         }
@@ -336,7 +407,6 @@ impl SyntaxHighlighterPrinter<'_> {
         // w/o a trailing newline.
         if let Some(color_capability) = self.terminal_color_capability.clone() {
             if let Some(highlighter) = self.highlighter.as_mut() {
-                let ps = term_color::get_syntax_set();
                 let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
                 let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
                 let height = if line_width == 0 {
@@ -360,17 +430,35 @@ impl SyntaxHighlighterPrinter<'_> {
                     crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
                 }
 
-                let highlighted_parts: Vec<(Style, &str)> =
-                    highlighter.highlight_line(&self.buffer, ps).unwrap();
-                for (style, text) in highlighted_parts {
-                    let escaped =
-                        term_color::as_terminal_escaped(style, text, &color_capability, None);
-                    crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
-                }
-                stdout.flush().unwrap();
+                print_line_syntax_highlighted(
+                    &mut stdout,
+                    &color_capability,
+                    highlighter,
+                    &self.background_color,
+                    &self.buffer,
+                );
             }
         }
     }
+}
+
+pub fn print_line_syntax_highlighted(
+    stdout: &mut io::StdoutLock,
+    color_capability: &term_color::ColorCapability,
+    highlighter: &mut HighlightLines,
+    background_color: &Option<Color>,
+    line_with_ending: &str,
+) {
+    let ps = term_color::get_syntax_set();
+    let highlighted_parts: Vec<(Style, &str)> =
+        highlighter.highlight_line(&line_with_ending, ps).unwrap();
+
+    for (style, text) in highlighted_parts {
+        let escaped =
+            term_color::as_terminal_escaped(style, text, color_capability, background_color);
+        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
+    }
+    stdout.flush().unwrap();
 }
 
 // --
@@ -414,7 +502,7 @@ impl<'a> MaskedJsonStringPrinter<'a> {
             buffer_print_cursor: 0,
             printed_text: String::new(),
             unmasked_printed_text: String::new(),
-            sh_printer: SyntaxHighlighterPrinter::new(),
+            sh_printer: SyntaxHighlighterPrinter::new(false),
         }
     }
 

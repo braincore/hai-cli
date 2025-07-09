@@ -261,15 +261,27 @@ pub struct LoadUrlCmd {
 }
 
 #[derive(Clone, Debug)]
+pub enum Accent {
+    Danger,
+    Warn,
+    Info,
+    Success,
+}
+
+#[derive(Clone, Debug)]
 pub struct PinCmd {
     /// Message to pin to the conversation
     pub message: String,
+    /// Accent color for the pinned message
+    pub accent: Option<Accent>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PrepCmd {
     /// Message to send without triggering AI response
     pub message: String,
+    /// Accent color for the prep message
+    pub accent: Option<Accent>,
 }
 
 #[derive(Clone, Debug)]
@@ -809,6 +821,7 @@ pub fn parse_user_input(
         println!("It was not sent because it ended with two blank lines.");
         Some(Cmd::Prep(PrepCmd {
             message: input.into(),
+            accent: None,
         }))
     } else {
         let input = input.trim_end();
@@ -1168,11 +1181,16 @@ fn parse_command(
             }
         }
         "prep" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(
+                cmd_name,
+                &options,
+                &["danger", "warn", "info", "success"],
+            ) {
                 return None;
             }
+            let accent = parse_accent(&options);
             match parse_one_arg_catchall(remaining) {
-                Some(message) => Some(Cmd::Prep(PrepCmd { message })),
+                Some(message) => Some(Cmd::Prep(PrepCmd { message, accent })),
                 None => {
                     eprintln!("Usage: /prep <message>");
                     None
@@ -1180,11 +1198,16 @@ fn parse_command(
             }
         }
         "pin" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(
+                cmd_name,
+                &options,
+                &["danger", "warn", "info", "success"],
+            ) {
                 return None;
             }
+            let accent = parse_accent(&options);
             match parse_one_arg_catchall(remaining) {
-                Some(message) => Some(Cmd::Pin(PinCmd { message })),
+                Some(message) => Some(Cmd::Pin(PinCmd { message, accent })),
                 None => {
                     eprintln!("Usage: /pin <message>");
                     None
@@ -2241,6 +2264,30 @@ fn parse_tool_command(
                 }))
             }
         }
+    }
+}
+
+fn parse_accent(options: &HashMap<String, String>) -> Option<Accent> {
+    let expected_types = HashMap::from([
+        ("danger".to_string(), OptionType::Bool),
+        ("warn".to_string(), OptionType::Bool),
+        ("info".to_string(), OptionType::Bool),
+        ("success".to_string(), OptionType::Bool),
+    ]);
+    if let Err(type_error) = validate_option_types(options, &expected_types) {
+        eprintln!("Error: {}", type_error);
+        return None;
+    }
+    if options.get("danger").map(|v| v == "true").unwrap_or(false) {
+        Some(Accent::Danger)
+    } else if options.get("warn").map(|v| v == "true").unwrap_or(false) {
+        Some(Accent::Warn)
+    } else if options.get("info").map(|v| v == "true").unwrap_or(false) {
+        Some(Accent::Info)
+    } else if options.get("success").map(|v| v == "true").unwrap_or(false) {
+        Some(Accent::Success)
+    } else {
+        None
     }
 }
 

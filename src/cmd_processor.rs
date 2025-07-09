@@ -635,7 +635,8 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Prep(cmd::PrepCmd { message }) | cmd::Cmd::Pin(cmd::PinCmd { message }) => {
+        cmd::Cmd::Prep(cmd::PrepCmd { message, .. })
+        | cmd::Cmd::Pin(cmd::PinCmd { message, .. }) => {
             let retention_policy = if matches!(cmd, cmd::Cmd::Pin(_)) {
                 db::LogEntryRetentionPolicy::ConversationPin
             } else {
@@ -2871,10 +2872,9 @@ pub async fn process_cmd(
                                 println!();
                             }
                         } else {
-                            println!("{}", left_prompt.bright_green());
-                            let prompt_and_message =
-                                format!("{} {}", left_prompt.bright_green(), &entry_body);
-                            term_color::print_multi_lang_syntax_highlighting(&prompt_and_message);
+                            print!("{} ", left_prompt.bright_green());
+                            term_color::print_multi_lang_syntax_highlighting(&entry_body, &None);
+                            println!();
                         }
                     } else {
                         print!("{} {}", left_prompt.bright_green(), entry_body);
