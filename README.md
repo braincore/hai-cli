@@ -790,6 +790,9 @@ There are some `hai`-repl commands that are specifically made for tasks:
   running in a loop that want to forget messages to bound the size of the
   conversation.
 
+- `/pin(danger|warn|info|success)` - Add a message for the AI or user without
+  prompting the AI for a response.
+
 ### Command-line options
 
 - `hai task <task_name>` - Immediately drops user into task-mode.
