@@ -1068,6 +1068,100 @@ pub async fn process_cmd(
                 "task",
                 matches!(cmd_input.source, session::CmdSource::Internal),
             ) {
+                if let Some(dependencies) = haitask.dependencies.as_ref() {
+                    let dependency_re = Regex::new(
+                        r"^\s*([a-zA-Z0-9_\-]+)\s*(>=|<=|=|>|<)\s*([0-9A-Za-z\.\-\+]+)\s*$",
+                    )
+                    .unwrap();
+                    for dependency in dependencies {
+                        if let Some(caps) = dependency_re.captures(dependency) {
+                            let task_dependency_name = &caps[1];
+                            let comparison_op = &caps[2];
+                            let task_dependency_version = &caps[3];
+                            let task_dependency_semver = if let Ok(task_dependency_semver) =
+                                semver::Version::parse(&task_dependency_version)
+                            {
+                                task_dependency_semver
+                            } else {
+                                eprintln!(
+                                    "error: failed to parse semver: {}",
+                                    task_dependency_version
+                                );
+                                return ProcessCmdResult::Loop;
+                            };
+                            let local_dependency_version = if task_dependency_name == "hai" {
+                                semver::Version::parse(env!("CARGO_PKG_VERSION"))
+                                    .expect("unexpected unparse-able version")
+                            } else {
+                                eprintln!("error: unknown dependency: {}", task_dependency_name);
+                                return ProcessCmdResult::Loop;
+                            };
+
+                            if comparison_op == ">=" {
+                                if local_dependency_version < task_dependency_semver {
+                                    eprintln!(
+                                        "error: task '{}' requires {} >= {}, but you have {}",
+                                        haitask.name,
+                                        task_dependency_name,
+                                        task_dependency_version,
+                                        local_dependency_version
+                                    );
+                                    return ProcessCmdResult::Loop;
+                                }
+                            } else if comparison_op == "<=" {
+                                if local_dependency_version > task_dependency_semver {
+                                    eprintln!(
+                                        "error: task '{}' requires {} <= {}, but you have {}",
+                                        haitask.name,
+                                        task_dependency_name,
+                                        task_dependency_version,
+                                        local_dependency_version
+                                    );
+                                    return ProcessCmdResult::Loop;
+                                }
+                            } else if comparison_op == "=" {
+                                if local_dependency_version != task_dependency_semver {
+                                    eprintln!(
+                                        "error: task '{}' requires {} = {}, but you have {}",
+                                        haitask.name,
+                                        task_dependency_name,
+                                        task_dependency_version,
+                                        local_dependency_version
+                                    );
+                                    return ProcessCmdResult::Loop;
+                                }
+                            } else if comparison_op == ">" {
+                                if local_dependency_version <= task_dependency_semver {
+                                    eprintln!(
+                                        "error: task '{}' requires {} > {}, but you have {}",
+                                        haitask.name,
+                                        task_dependency_name,
+                                        task_dependency_version,
+                                        local_dependency_version
+                                    );
+                                    return ProcessCmdResult::Loop;
+                                }
+                            } else if comparison_op == "<" {
+                                if local_dependency_version >= task_dependency_semver {
+                                    eprintln!(
+                                        "error: task '{}' requires {} < {}, but you have {}",
+                                        haitask.name,
+                                        task_dependency_name,
+                                        task_dependency_version,
+                                        local_dependency_version
+                                    );
+                                    return ProcessCmdResult::Loop;
+                                }
+                            } else {
+                                eprintln!("error: unknown comparison operator: {}", comparison_op);
+                                return ProcessCmdResult::Loop;
+                            }
+                        } else {
+                            eprintln!("error: malformed dependency: {}", dependency);
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
+                }
                 term::window_title_set(&haitask.name);
                 println!();
                 println!(

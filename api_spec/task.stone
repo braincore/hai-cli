@@ -23,6 +23,7 @@ union TaskPutError
             too_many_steps
             bad_name
             bad_description
+            bad_dependency
             invalid_version
             version_already_exists
             version_nonmonotonic

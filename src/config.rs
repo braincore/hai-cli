@@ -654,6 +654,8 @@ pub struct HaiTask {
     pub version: String,
     #[allow(dead_code)]
     pub description: String,
+    #[allow(dead_code)]
+    pub dependencies: Option<Vec<String>>,
     pub steps: Vec<String>,
 }
 

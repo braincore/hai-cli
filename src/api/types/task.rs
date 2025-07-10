@@ -25,6 +25,7 @@ pub enum BadConfigError {
     TooManySteps,
     BadName,
     BadDescription,
+    BadDependency,
     InvalidVersion,
     VersionAlreadyExists,
     VersionNonmonotonic,
@@ -58,6 +59,7 @@ impl<'de> ::serde::de::Deserialize<'de> for BadConfigError {
                     "too_many_steps" => BadConfigError::TooManySteps,
                     "bad_name" => BadConfigError::BadName,
                     "bad_description" => BadConfigError::BadDescription,
+                    "bad_dependency" => BadConfigError::BadDependency,
                     "invalid_version" => BadConfigError::InvalidVersion,
                     "version_already_exists" => BadConfigError::VersionAlreadyExists,
                     "version_nonmonotonic" => BadConfigError::VersionNonmonotonic,
@@ -77,6 +79,7 @@ impl<'de> ::serde::de::Deserialize<'de> for BadConfigError {
             "too_many_steps",
             "bad_name",
             "bad_description",
+            "bad_dependency",
             "invalid_version",
             "version_already_exists",
             "version_nonmonotonic",
@@ -143,6 +146,12 @@ impl ::serde::ser::Serialize for BadConfigError {
                 // unit
                 let mut s = serializer.serialize_struct("BadConfigError", 1)?;
                 s.serialize_field(".tag", "bad_description")?;
+                s.end()
+            }
+            BadConfigError::BadDependency => {
+                // unit
+                let mut s = serializer.serialize_struct("BadConfigError", 1)?;
+                s.serialize_field(".tag", "bad_dependency")?;
                 s.end()
             }
             BadConfigError::InvalidVersion => {
