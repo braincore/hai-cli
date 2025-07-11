@@ -748,6 +748,8 @@ Here are some interesting ones:
   Check that a task in the hai task repo isn't _obviously_ destructive.
 - [`ken/calendar`](https://hai.superego.ai/task/ken/calendar) -
   Manage your personal calendar using plain text assets.
+- [`ken/cargo-build-fix`](https://hai.superego.ai/task/ken/cargo-build-fix) -
+  Tries to patch rust code to fix `cargo build` errors automatically.
 
 #### Task-specific commands
 
