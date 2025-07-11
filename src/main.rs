@@ -613,33 +613,13 @@ async fn repl(
                     println!();
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
-                if cmd::get_cmds_with_markdown_body_re().is_match(&cmd_info.input) {
-                    print!("{} ", step_badge.black().on_white());
-                    let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
-                    | Some(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
-                        cmd::parse_user_input(&cmd_info.input, None, None)
-                    {
-                        match accent {
-                            Some(cmd::Accent::Danger) => Some((128, 0, 0)),
-                            Some(cmd::Accent::Warn) => Some((153, 102, 0)),
-                            Some(cmd::Accent::Info) => Some((0, 51, 102)),
-                            Some(cmd::Accent::Success) => Some((0, 102, 51)),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    };
-                    term_color::print_multi_lang_syntax_highlighting(&cmd_info.input, &color);
-                    println!();
-                } else {
-                    println!("{} {}", step_badge.black().on_white(), cmd_info.input);
-                }
+                print_step(&step_badge, &cmd_info.input);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 let step_badge = format!("!hai-tool[{}]:", index);
-                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+                print_step(&step_badge, &cmd_info.input);
             } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
                 let step_badge = format!("bye[{}]:", index);
-                println!("{} {}", step_badge.black().on_white(), cmd_info.input);
+                print_step(&step_badge, &cmd_info.input);
             }
             cmd_info
         } else {
@@ -1269,6 +1249,34 @@ async fn repl(
 fn cleanup(session: &SessionState) {
     if matches!(session.repl_mode, ReplMode::Task(_, _)) {
         term::window_title_reset();
+    }
+}
+
+// --
+
+/// Prints step (a REPL command from a source such as a task-step, bye-step, or
+/// hai-tool-step) with appropriate syntax highlighting and accent color.
+fn print_step(step_badge: &str, input: &str) {
+    if cmd::get_cmds_with_markdown_body_re().is_match(input) {
+        print!("{} ", step_badge.black().on_white());
+        let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
+        | Some(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
+            cmd::parse_user_input(input, None, None)
+        {
+            match accent {
+                Some(cmd::Accent::Danger) => Some((128, 0, 0)),
+                Some(cmd::Accent::Warn) => Some((153, 102, 0)),
+                Some(cmd::Accent::Info) => Some((0, 51, 102)),
+                Some(cmd::Accent::Success) => Some((0, 102, 51)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        term_color::print_multi_lang_syntax_highlighting(input, &color);
+        println!();
+    } else {
+        println!("{} {}", step_badge.black().on_white(), input);
     }
 }
 
