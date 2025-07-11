@@ -7,7 +7,7 @@
 
 A CLI (`hai`) with a REPL for hackers using LLMs.
 
-![](doc/hai-intro.gif)
+![](doc-site/docs/image/hai-intro.gif)
 
 ## Highlights
 
@@ -79,7 +79,7 @@ cargo install hai-cli
 > I wasn't using the right AI for the right job because it was too annoying to
 > switch around.
 
-![](doc/hai-multi-ai.gif)
+![](doc-site/docs/image/hai-multi-ai.gif)
 
 - `/ai <model>` - Switch with one command (tab-completion and abbreviations
   supported)
@@ -164,7 +164,7 @@ Set an API key for each provider (`openai`, `anthropic`, `google`, `deepseek`,
 
 > I wasn't asking all the crazy-person questions I wanted to.
 
-![](doc/hai-incognito.gif)
+![](doc-site/docs/image/hai-incognito.gif)
 
 - Run `hai --incognito` (`hai -i` for short).
 - Local conversation history isn't saved.
@@ -219,7 +219,7 @@ steps = [
 ]
 ```
 
-![](doc/hai-pelican.gif)
+![](doc-site/docs/image/hai-pelican.gif)
 
 #### Trusting a task
 
@@ -231,7 +231,7 @@ set the `trust` option to true: `/task(trust=true)` or `/task(trust)`
 
 > I got tired of being the people-person between the AI and my terminal.
 
-![](doc/hai-tool.gif)
+![](doc-site/docs/image/hai-tool.gif)
 
 #### Shell Tool `!sh`
 
@@ -464,7 +464,7 @@ To prompt the AI to help you visualize output, you can ask for HTML output that
 will be opened by your configured system-default browser. Asking for iterations
 using the `!html` tool will trigger reloads automatically.
 
-![](doc/html_tool_nyc_skyline.png)
+![](doc-site/docs/image/html_tool_nyc_skyline.png)
 
 #### Clipboard Tool `!clip`
 

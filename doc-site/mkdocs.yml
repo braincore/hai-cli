@@ -1,0 +1,70 @@
+site_name: hai
+site_url: https://braincore.github.io/hai-cli
+repo_url: https://www.github.com/braincore/hai-cli
+repo_name: hai-cli
+
+theme:
+  favicon: image/hai-favicon.svg
+  features:
+    - content.tabs.link
+    - navigation.expand
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.instant.progress
+  icon:
+    repo: fontawesome/brands/github
+  language: en
+  logo: image/hai-logo.svg
+  name: material
+  palette:
+    scheme: slate
+    primary: yellow
+    accent: yellow
+
+plugins:
+  - search
+
+nav:
+  - Introduction: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - API keys: getting-started/api-keys.md
+    - Getting help: getting-started/getting-help.md
+  - REPL:
+    - Basics: repl/basics.md
+    - Tools: repl/tools.md
+    - Tasks: repl/tasks.md
+    - Assets: repl/assets.md
+    - Stdlib: repl/stdlib.md
+    - LLM models: repl/llm-models.md
+    - Send email: repl/send-email.md
+  - CLI:
+    - Subcommands and options: cli/subcommands-and-options.md
+    - Run and exit: cli/run-and-exit.md
+    - Incognito: cli/incognito.md
+    - Websocket queue: cli/websocket-queue.md
+  - Config: config.md
+  - API: api.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - def_list
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.saneheaders
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
