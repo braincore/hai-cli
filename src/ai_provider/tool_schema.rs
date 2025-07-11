@@ -268,8 +268,10 @@ Available Commands:
                         by `name` which avoids the need to `/asset-import` them to the
                         local filesystem. Shell output redirection (>) to `@name` will
                         be uploaded to the `@name` asset avoiding `/asset-export`.
-/prep                 - Queue a message to be sent with your next message (or, end with two blank lines)
+/prep <msg>           - Add message to converation without prompting AI for response.
+/prep(<accent>) <msg> - Adds message with accent color: danger, warn, info, success
 /pin                  - Like /prep but the message is retained on /reset
+/pin(<accent>) <msg>  - Add /pin with accent color: danger, warn, info, success
 /clip                 - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
 
 --
