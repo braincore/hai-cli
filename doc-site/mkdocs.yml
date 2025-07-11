@@ -1,0 +1,59 @@
+site_name: hai
+site_url: https://braincore.github.io/hai-cli/
+
+theme:
+  name: material
+  favicon: image/hai-favicon.svg
+  logo: image/hai-logo.svg
+  palette:
+    scheme: slate
+    primary: yellow
+    accent: yellow
+  features:
+    - content.tabs.link
+    - navigation.expand
+
+plugins:
+  - search
+
+nav:
+  - Introduction: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - API keys: getting-started/api-keys.md
+    - Getting help: getting-started/getting-help.md
+  - Features:
+    - Basics (like /new): features/basics.md
+    - Tools: features/tools.md
+    - AI Defined Functions: features/ai-defined-functions.md
+    - Tasks: features/tasks.md
+    - Assets: features/assets.md
+    - Stdlib: features/stdlib.md
+    - LLM models: features/llm-models.md
+    - Incognito: features/incognito.md
+    - API: features/api.md
+  - CLI Features: cli.md
+  - Config Options: config.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - def_list
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.magiclink
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.saneheaders
+  - pymdownx.superfences
+  - pymdownx.tabbed
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
