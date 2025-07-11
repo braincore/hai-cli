@@ -7,7 +7,7 @@
 set -u
 
 APP_NAME="hai"
-APP_VERSION="v1.16.0"  # Change this line to update the version
+APP_VERSION="v1.17.0"  # Change this line to update the version
 INSTALLER_BASE_URL="https://github.com"
 ARTIFACT_DOWNLOAD_URL="${INSTALLER_BASE_URL}/braincore/hai-cli/releases/download/${APP_VERSION}"
 PRINT_VERBOSE=${INSTALLER_PRINT_VERBOSE:-0}
