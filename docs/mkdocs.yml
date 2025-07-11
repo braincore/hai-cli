@@ -1,0 +1,13 @@
+site_name: hai docs
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: indigo
+
+plugins:
+  - search
+
+nav:
+  - Introduction: index.md
