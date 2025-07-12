@@ -1074,7 +1074,7 @@ fn parse_command(
                 Some((provider, key)) => Some(Cmd::SetKey(SetKeyCmd { provider, key })),
                 None => {
                     eprintln!("Usage: /set-key <provider> <key>");
-                    eprintln!("providers: openai, anthropic, deepseek, google");
+                    eprintln!("providers: openai, anthropic, deepseek, google, xai");
                     None
                 }
             }

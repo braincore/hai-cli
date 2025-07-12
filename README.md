@@ -15,8 +15,8 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 - 📦 Single, standalone binary—no installation or dependencies required.
 - 🪶 Lightweight (< 9MB compressed) for your machine, SBCs, and servers.
 - 🗯 Run many instances for simultaneous conversations.
-- 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, and Ollama (local)
-  all in a single conversation.
+- 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, xAI, and Ollama
+  (local) all in a single conversation.
 - 🕶 Go incognito `hai -i`.
 - ⚙ Give AI the power to run programs on your computer.
 - 🍝 Share AI prompt-pasta publicly using the task repository.
@@ -82,7 +82,8 @@ cargo install hai-cli
 
 - `/ai <model>` - Switch with one command (tab-completion and abbreviations
   supported)
-- Switch between OpenAI, Anthropic, DeepSeek, Google, and local Ollama models
+- Switch between OpenAI, Anthropic, DeepSeek, Google, xAI, and local Ollama
+  models
 
 
 | Provider   | Notable Models (Not Comprehensive)      |
@@ -92,6 +93,7 @@ cargo install hai-cli
 | Anthropic  | sonnet-4 (`sonnet`), sonnet-4-thinking (`sonnet-thinking`), opus-4 (`opus`), opus-4-thinking (`opus-thinking`), haiku-3.5 (`haiku`) |
 | Google     | gemini-2.5-flash (`flash25`), gemini-2.5-pro (`gemini25pro`), gemini-2.0-flash (`flash20`) |
 | DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
+| xAI        | grok-4                                         |
 | Ollama     | gemma3, llama3.2, llama3.3                     |
 
 If a model doesn’t have a built-in shortcut, or if you want to use a specific
@@ -128,8 +130,8 @@ You have two options:
     - via REPL: `/set-key <provider> <key>`
 2. Activate `hai router`: `/hai-router on`
     - Requires a subscription: `/account-subscribe`
-    - Access models from OpenAI, Anthropic, DeepSeek, and Google—no API keys or
-      extra setup needed—just log in.
+    - Access models from OpenAI, Anthropic, DeepSeek, Google, xAI—no API keys
+      or extra setup needed—just log in.
     - An easy way to support the hai project and its ongoing experimentation.
 
 #### Incognito
@@ -822,8 +824,8 @@ There are some `hai`-repl commands that are specifically made for tasks:
   multi-account setups.
 - `hai -m <model>` - Force the AI model.
 - `hai set-key <provider> <key>` - Set API keys for providers (openai,
-  anthropic, deepseek, google). You don't need to do this if you've subscribed
-  to hai.
+  anthropic, deepseek, google, xai). You don't need to do this if you've
+  subscribed to hai.
 
 ### More config options
 

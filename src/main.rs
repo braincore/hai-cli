@@ -73,7 +73,7 @@ struct Cli {
 enum CliSubcommand {
     /// Set API keys
     SetKey {
-        /// The AI provider (e.g., openai, anthropic, google, deepseek)
+        /// The AI provider (e.g., openai, anthropic, google, deepseek, xai)
         provider: String,
 
         /// The API key to save
@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut ctrlc_handler = ctrlc_handler::CtrlcHandler::new();
     if let Some(CliSubcommand::SetKey { provider, key }) = args.subcommand {
         match provider.as_str() {
-            "openai" | "anthropic" | "google" | "deepseek" => {
+            "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
                 config::insert_config_kv(
                     &config_path_override,
                     Some(&provider),
@@ -384,9 +384,15 @@ async fn repl(
         "deepseek",
         "v3",
         "r1",
+        "grok-3",
+        "grok-3-fast",
+        "grok-3-mini",
+        "grok-3-mini-fast",
+        "grok-4",
         "openai/",
         "anthropic/",
         "google/",
+        "xai/",
         "ollama/",
     ]
     .iter()
@@ -1338,7 +1344,10 @@ pub async fn prompt_ai(
     let api_base_url = get_api_base_url();
     let mut used_hai_router = false;
     let ai_provider_response = match session.ai {
-        config::AiModel::OpenAi(_) | config::AiModel::Google(_) | config::AiModel::DeepSeek(_) => {
+        config::AiModel::OpenAi(_)
+        | config::AiModel::Google(_)
+        | config::AiModel::DeepSeek(_)
+        | config::AiModel::Xai(_) => {
             let deepseek_flatten_nonuser_content =
                 matches!(session.ai, config::AiModel::DeepSeek(_));
             let (base_url, api_key, provider_header) =
@@ -1355,6 +1364,7 @@ pub async fn prompt_ai(
                         config::AiModel::OpenAi(_) => "openai".to_string(),
                         config::AiModel::Google(_) => "google".to_string(),
                         config::AiModel::DeepSeek(_) => "deepseek".to_string(),
+                        config::AiModel::Xai(_) => "xai".to_string(),
                         _ => {
                             eprintln!("error: unexpected provider");
                             return vec![];
@@ -1395,6 +1405,11 @@ pub async fn prompt_ai(
                                 .as_ref()
                                 .unwrap()
                                 .clone(),
+                            None,
+                        ),
+                        config::AiModel::Xai(_) => (
+                            Some("https://api.x.ai/v1"),
+                            cfg.xai.as_ref().unwrap().api_key.as_ref().unwrap().clone(),
                             None,
                         ),
                         _ => {

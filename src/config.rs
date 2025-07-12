@@ -25,6 +25,7 @@ pub struct Config {
     pub ollama: Option<OllamaConfig>,
     pub google: Option<GoogleConfig>,
     pub deepseek: Option<DeepSeekConfig>,
+    pub xai: Option<XaiConfig>,
     #[serde(default)]
     pub haivars: HashMap<String, String>,
 }
@@ -59,6 +60,11 @@ pub struct DeepSeekConfig {
     pub api_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct XaiConfig {
+    pub api_key: Option<String>,
+}
+
 pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     match ai_model.replace("-", "").replace(".", "").as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
@@ -77,6 +83,11 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
+        "grok3" => Some(AiModel::Xai(XaiModel::Grok3)),
+        "grok3fast" | "grok3f" => Some(AiModel::Xai(XaiModel::Grok3Fast)),
+        "grok3mini" | "grok3m" => Some(AiModel::Xai(XaiModel::Grok3Mini)),
+        "grok3minifast" | "grok3mf" => Some(AiModel::Xai(XaiModel::Grok3MiniFast)),
+        "grok4" | "grok" => Some(AiModel::Xai(XaiModel::Grok4)),
         "o1" => Some(AiModel::OpenAi(OpenAiModel::O1)),
         "o1mini" | "o1m" => Some(AiModel::OpenAi(OpenAiModel::O1Mini)),
         "o3" => Some(AiModel::OpenAi(OpenAiModel::O3)),
@@ -133,6 +144,12 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
                     return Some(AiModel::DeepSeek(DeepSeekModel::Other(
                         submodel.as_str().to_string(),
                     )));
+                }
+            }
+            let xai_regex = Regex::new(r"^xai/(\S+)$").unwrap();
+            if let Some(captures) = xai_regex.captures(ai_model) {
+                if let Some(submodel) = captures.get(1) {
+                    return Some(AiModel::Xai(XaiModel::Other(submodel.as_str().to_string())));
                 }
             }
             let void_regex = Regex::new(r"^void/(\S+)$").unwrap();
@@ -218,6 +235,10 @@ pub fn read_config_as_string(
 [deepseek]
 # Your DeepSeek API key (required to use DeepSeek models).
 #api_key = ""
+
+[xai]
+# Your xAI API key (required to use xAI models).
+#api_key = ""
 "#;
             write_config(&path.to_string_lossy(), default_config);
         }
@@ -287,6 +308,7 @@ pub enum AiModel {
     OpenAi(OpenAiModel),
     /// For testing only
     Void(VoidModel),
+    Xai(XaiModel),
 }
 
 #[derive(Debug)]
@@ -323,6 +345,7 @@ pub enum OllamaModel {
     Llama32Vision,
     Other(String),
 }
+
 #[derive(Debug)]
 pub enum OpenAiModel {
     ChatGpt4o,
@@ -336,6 +359,16 @@ pub enum OpenAiModel {
     O3,
     O3Mini,
     O4Mini,
+    Other(String),
+}
+
+#[derive(Debug)]
+pub enum XaiModel {
+    Grok4,
+    Grok3,
+    Grok3Fast,
+    Grok3Mini,
+    Grok3MiniFast,
     Other(String),
 }
 
@@ -390,6 +423,14 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
         AiModel::Void(model) => match model {
             VoidModel::Other(name) => name,
         },
+        AiModel::Xai(model) => match model {
+            XaiModel::Grok4 => "grok-4-0709",
+            XaiModel::Grok3 => "grok-3",
+            XaiModel::Grok3Fast => "grok-3-fast",
+            XaiModel::Grok3Mini => "grok-3-mini",
+            XaiModel::Grok3MiniFast => "grok-3-mini-fast",
+            XaiModel::Other(name) => name,
+        },
     }
 }
 
@@ -441,6 +482,14 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
         },
         AiModel::Void(model) => match model {
             VoidModel::Other(name) => name,
+        },
+        AiModel::Xai(model) => match model {
+            XaiModel::Grok4 => "grok-4",
+            XaiModel::Grok3 => "grok-3",
+            XaiModel::Grok3Fast => "grok-3-fast",
+            XaiModel::Grok3Mini => "grok-3-mini",
+            XaiModel::Grok3MiniFast => "grok-3-mini-fast",
+            XaiModel::Other(name) => name,
         },
     }
 }
@@ -519,6 +568,10 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             image: true,
             tool: true,
         },
+        AiModel::Xai(_) => AiModelCapability {
+            image: true,
+            tool: true,
+        },
     }
 }
 
@@ -563,6 +616,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | OpenAiModel::O4Mini
         ),
         AiModel::Void(_) => false,
+        AiModel::Xai(_) => false,
     }
 }
 
@@ -610,6 +664,14 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::Other(_) => None,
         },
         AiModel::Void(_) => None,
+        AiModel::Xai(model) => match model {
+            XaiModel::Grok4 => Some((3000, 15000)),
+            XaiModel::Grok3 => Some((3000, 15000)),
+            XaiModel::Grok3Fast => Some((5000, 25000)),
+            XaiModel::Grok3Mini => Some((300, 500)),
+            XaiModel::Grok3MiniFast => Some((600, 4000)),
+            XaiModel::Other(_) => None,
+        },
     }
 }
 
@@ -851,6 +913,15 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
                 return false;
             }
         }
+        AiModel::Xai(_) => {
+            if cfg.xai.as_ref().and_then(|c| c.api_key.as_ref()).is_none() {
+                eprintln!(
+                    "error: model '{}' requires a xAI API Key: `/set-key xai <key>` OR `/hai-router on`",
+                    get_ai_model_display_name(ai)
+                );
+                return false;
+            }
+        }
         AiModel::Ollama(_) | AiModel::Void(_) => {
             // No auth needed
         }
@@ -890,6 +961,8 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     }) = cfg.google
     {
         AiModel::Google(GoogleModel::Gemini25Flash)
+    } else if let Some(XaiConfig { api_key: Some(_) }) = cfg.xai {
+        AiModel::Xai(XaiModel::Grok4)
     } else if let Some(OllamaConfig { base_url: Some(_) }) = cfg.ollama {
         AiModel::Ollama(OllamaModel::Llama32)
     } else {

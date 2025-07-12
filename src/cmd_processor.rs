@@ -198,6 +198,7 @@ pub async fn process_cmd(
                     .as_ref()
                     .and_then(|c| c.api_key.as_ref())
                     .is_none();
+                let need_xai_key = cfg.xai.as_ref().and_then(|c| c.api_key.as_ref()).is_none();
                 let need_key = "  (NEED API KEY: /set-key OR /hai-router)";
                 println!("Try these popular models:");
                 println!(
@@ -215,6 +216,10 @@ pub async fn process_cmd(
                 println!(
                     "From Google: flash, google/___{}",
                     if need_google_key { need_key } else { "" }
+                );
+                println!(
+                    "From xAI: grok-4, xai/___{}",
+                    if need_xai_key { need_key } else { "" }
                 );
                 println!(
                     "Using Ollama: llama, llama-vision, ollama/___ (configure host in config)"
@@ -254,7 +259,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::SetKey(cmd::SetKeyCmd { provider, key }) => {
             match provider.as_str() {
-                "openai" | "anthropic" | "google" | "deepseek" => {
+                "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
                     config::insert_config_kv(
                         config_path_override,
                         Some(provider),
@@ -266,7 +271,7 @@ pub async fn process_cmd(
                 }
                 _ => {
                     eprintln!(
-                        "error: unknown provider: {} (try openai, anthropic, google, deepseek)",
+                        "error: unknown provider: {} (try openai, anthropic, google, deepseek, xai)",
                         provider
                     );
                 }
@@ -3410,7 +3415,7 @@ lesson (e.g. "understanding").\n\n{}"#,
             };
             println!("Subscribe to the hai basic plan ($6 USD / month):");
             println!(
-                "- $3 USD in AI credits that can be used across OpenAI, Anthropic, Google, Deepseek"
+                "- $3 USD in AI credits that can be used across OpenAI, Anthropic, Google, Deepseek, xAI"
             );
             println!("  - Use `/ai <model>` without having to provide your own API keys");
             println!("  - Unused credits expire after two months");
@@ -3599,10 +3604,11 @@ lesson (e.g. "understanding").\n\n{}"#,
                     config::AiModel::OpenAi(config::OpenAiModel::O4Mini),
                     config::AiModel::Google(config::GoogleModel::Gemini25Flash),
                     config::AiModel::Google(config::GoogleModel::Gemini25Pro),
-                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet37(false)),
+                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet4(false)),
                     config::AiModel::Anthropic(config::AnthropicModel::Haiku35),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekReasoner),
+                    config::AiModel::Xai(config::XaiModel::Grok4),
                 ] {
                     print_ai_model_prices(&ai);
                 }
