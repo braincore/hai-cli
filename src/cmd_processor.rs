@@ -54,7 +54,7 @@ pub async fn process_cmd(
     // actioned as part of a process-wide task-mode.
     let is_task_mode_step =
         task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(..));
-    let trusted = if let ReplMode::Task(_, trusted) = session.repl_mode {
+    let trusted = if let ReplMode::Task(_, _, trusted) = session.repl_mode {
         trusted && is_task_mode_step
     } else {
         false
@@ -462,69 +462,73 @@ pub async fn process_cmd(
             });
             let api_client = mk_api_client(Some(session));
 
-            let (shell_exec_output, from_cache) = if let Some((ref task_fqn, step_index)) =
-                task_step_signature
-            {
-                let cached_output = if *cache {
-                    db::get_task_step_cache(
-                        &*db.lock().await,
-                        session
-                            .account
-                            .as_ref()
-                            .map(|a| a.username.as_str())
-                            .unwrap_or(""),
-                        task_fqn,
-                        step_index,
-                        raw_user_input,
-                    )
-                } else {
-                    None
-                };
-                if let Some(cached_output) = cached_output {
-                    (cached_output, true)
-                } else {
-                    // If we're initializing a task, it's critical that we ask the
-                    // user for confirmation. Otherwise, a destructive command could
-                    // be hidden in a task.
-                    if !force_yes && !trusted {
-                        println!();
-                        let answer = term::ask_question_default_empty(
-                            "Execute above command? y/[n]:",
-                            false,
-                        );
-                        let answered_yes = answer.starts_with('y');
-                        if !answered_yes {
-                            println!("USER CANCELLED EXEC. TASK MAY MALFUNCTION.");
-                            return ProcessCmdResult::Loop;
+            let (shell_exec_output, from_cache) =
+                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
+                    let cached_output = if *cache {
+                        db::get_task_step_cache(
+                            &*db.lock().await,
+                            session
+                                .account
+                                .as_ref()
+                                .map(|a| a.username.as_str())
+                                .unwrap_or(""),
+                            task_fqn,
+                            task_key.as_deref(),
+                            step_index,
+                            raw_user_input,
+                        )
+                    } else {
+                        None
+                    };
+                    if let Some(cached_output) = cached_output {
+                        (cached_output, true)
+                    } else {
+                        // If we're initializing a task, it's critical that we ask the
+                        // user for confirmation. Otherwise, a destructive command could
+                        // be hidden in a task.
+                        if !force_yes && !trusted {
+                            println!();
+                            let answer = term::ask_question_default_empty(
+                                "Execute above command? y/[n]:",
+                                false,
+                            );
+                            let answered_yes = answer.starts_with('y');
+                            if !answered_yes {
+                                println!("USER CANCELLED EXEC. TASK MAY MALFUNCTION.");
+                                return ProcessCmdResult::Loop;
+                            }
                         }
+                        (
+                            shell_exec_with_asset_substitution(
+                                &api_client,
+                                &session.shell,
+                                command,
+                            )
+                            .await
+                            .unwrap(),
+                            false,
+                        )
                     }
+                } else {
                     (
                         shell_exec_with_asset_substitution(&api_client, &session.shell, command)
                             .await
                             .unwrap(),
                         false,
                     )
-                }
-            } else {
-                (
-                    shell_exec_with_asset_substitution(&api_client, &session.shell, command)
-                        .await
-                        .unwrap(),
-                    false,
-                )
-            };
+                };
             println!();
 
             ctrlc_handler.remove_handler(shell_exec_handler_id);
 
             if from_cache {
-                if let Some((ref task_fqn, _)) = task_step_signature {
+                if let Some((ref task_fqn, _, _)) = task_step_signature {
                     println!("[Retrieved from cache; `/task-forget {task_fqn}` to execute again]");
                 }
                 // Because it's from the cache, the value is not yet on the screen.
                 println!("{}", shell_exec_output);
             } else if *cache {
-                if let Some((ref task_fqn, step_index)) = task_step_signature {
+                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
                         session
@@ -533,6 +537,7 @@ pub async fn process_cmd(
                             .map(|a| a.username.as_str())
                             .unwrap_or(""),
                         task_fqn,
+                        task_key.as_deref(),
                         step_index,
                         raw_user_input,
                         &shell_exec_output,
@@ -554,7 +559,7 @@ pub async fn process_cmd(
             cache,
         }) => {
             let (answer, from_cache) = if *cache {
-                if let Some((ref task_fqn, step_index)) = task_step_signature {
+                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                     db::get_task_step_cache(
                         &*db.lock().await,
                         session
@@ -563,6 +568,7 @@ pub async fn process_cmd(
                             .map(|a| a.username.as_str())
                             .unwrap_or(""),
                         task_fqn,
+                        task_key.as_deref(),
                         step_index,
                         raw_user_input,
                     )
@@ -593,7 +599,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             if from_cache {
-                if let Some((ref task_fqn, _)) = task_step_signature {
+                if let Some((ref task_fqn, _, _)) = task_step_signature {
                     println!("[Retrieved from cache; `/task-forget {task_fqn}` to execute again]");
                 }
                 // Because it's from the cache, the value is not yet on the screen.
@@ -606,7 +612,7 @@ pub async fn process_cmd(
                     println!("{}", answer);
                 }
             } else if *cache {
-                if let Some((ref task_fqn, step_index)) = task_step_signature {
+                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                     db::set_task_step_cache(
                         &*db.lock().await,
                         session
@@ -615,6 +621,7 @@ pub async fn process_cmd(
                             .map(|a| a.username.as_str())
                             .unwrap_or(""),
                         task_fqn,
+                        task_key.as_deref(),
                         step_index,
                         raw_user_input,
                         &answer,
@@ -1051,7 +1058,11 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Task(cmd::TaskCmd { task_ref, trust }) => {
+        cmd::Cmd::Task(cmd::TaskCmd {
+            task_ref,
+            key,
+            trust,
+        }) => {
             if is_task_mode_step {
                 eprintln!("error: cannot use /task within task steps: try /task-include");
                 return ProcessCmdResult::Loop;
@@ -1167,7 +1178,16 @@ pub async fn process_cmd(
                         }
                     }
                 }
-                term::window_title_set(&haitask.name);
+                let window_title = format!(
+                    "{}{}",
+                    haitask.name,
+                    if let Some(key) = key {
+                        format!(" ({key})")
+                    } else {
+                        "".to_string()
+                    }
+                );
+                term::window_title_set(&window_title);
                 println!();
                 println!(
                     "{} {}",
@@ -1187,14 +1207,18 @@ pub async fn process_cmd(
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
                     session.cmd_queue.push_front(session::CmdInput {
                         input: step.clone(),
-                        source: session::CmdSource::TaskStep(haitask.name.clone(), index as u32),
+                        source: session::CmdSource::TaskStep(
+                            haitask.name.clone(),
+                            key.clone(),
+                            index as u32,
+                        ),
                     });
                 }
-                session.repl_mode = ReplMode::Task(haitask.name.clone(), *trust);
+                session.repl_mode = ReplMode::Task(haitask.name.clone(), key.clone(), *trust);
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::TaskInclude(cmd::TaskIncludeCmd { task_ref }) => {
+        cmd::Cmd::TaskInclude(cmd::TaskIncludeCmd { task_ref, key }) => {
             if let Some((_, haitask)) = get_haitask_from_task_ref(
                 task_ref,
                 session,
@@ -1204,7 +1228,11 @@ pub async fn process_cmd(
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
                     session.cmd_queue.push_front(session::CmdInput {
                         input: step.clone(),
-                        source: session::CmdSource::TaskStep(haitask.name.clone(), index as u32),
+                        source: session::CmdSource::TaskStep(
+                            haitask.name.clone(),
+                            key.clone(),
+                            index as u32,
+                        ),
                     });
                 }
             }
@@ -1249,7 +1277,7 @@ pub async fn process_cmd(
             // /task instead of /task-include an inconvenience rather than
             // fatal.
             match session.repl_mode.clone() {
-                ReplMode::Task(task_fqn, _) => {
+                ReplMode::Task(task_fqn, _, _) => {
                     session.repl_mode = ReplMode::Normal;
                     session.tool_mode = None;
                     // Support ending task prematurely while task steps are
@@ -1258,7 +1286,7 @@ pub async fn process_cmd(
                     session
                         .cmd_queue
                         .retain(|cmd_input| match &cmd_input.source {
-                            session::CmdSource::TaskStep(step_task_fqn, _) => {
+                            session::CmdSource::TaskStep(step_task_fqn, _, _) => {
                                 step_task_fqn != &task_fqn
                             }
                             _ => true,
@@ -1324,7 +1352,7 @@ pub async fn process_cmd(
 
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::TaskForget(cmd::TaskForgetCmd { task_ref }) => {
+        cmd::Cmd::TaskForget(cmd::TaskForgetCmd { task_ref, key }) => {
             let task_name = if config::is_valid_task_fqn(task_ref).is_some() {
                 task_ref.clone()
             } else if task_ref.starts_with(".")
@@ -1349,7 +1377,16 @@ pub async fn process_cmd(
                 eprint!("error: unknown task: {}", task_ref);
                 return ProcessCmdResult::Loop;
             };
-            db::purge_task_step_cache(&*db.lock().await, &task_name);
+            db::forget_task_step_cache(
+                &*db.lock().await,
+                &session
+                    .account
+                    .as_ref()
+                    .map(|account| account.username.as_str())
+                    .unwrap_or(""),
+                &task_name,
+                key.as_deref(),
+            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskPurge(cmd::TaskPurgeCmd { task_fqn }) => {

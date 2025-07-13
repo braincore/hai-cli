@@ -353,6 +353,8 @@ pub struct AskHumanCmd {
 pub struct TaskCmd {
     /// Task fqn or local path (prefix with ./ or /)
     pub task_ref: String,
+    /// Caching for a task is on a per-key basis.
+    pub key: Option<String>,
     /// If trusted, skip user confirmations on task initialization
     pub trust: bool,
 }
@@ -361,6 +363,8 @@ pub struct TaskCmd {
 pub struct TaskForgetCmd {
     /// Task fqn or local path to forget cached answers for
     pub task_ref: String,
+    /// Forget cached answers for a specific key
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -385,6 +389,8 @@ pub struct TaskFetchCmd {
 pub struct TaskIncludeCmd {
     /// Task fqn or local path (prefix with ./ or /)
     pub task_ref: String,
+    /// Caching for a task is on a per-key basis.
+    pub key: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1319,17 +1325,29 @@ fn parse_command(
             }
         }
         "task" | "t" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["trust"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["key", "trust"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("trust".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("key".to_string(), OptionType::String),
+                ("trust".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
+            let key = options.get("key").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             let trust = options.get("trust").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::Task(TaskCmd { task_ref, trust })),
+                Some(task_ref) => Some(Cmd::Task(TaskCmd {
+                    task_ref,
+                    key,
+                    trust,
+                })),
                 None => {
                     eprintln!("Usage: /task <task_ref>");
                     None
@@ -1343,11 +1361,21 @@ fn parse_command(
             Some(Cmd::TaskEnd)
         }
         "task-forget" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["key"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let key = options.get("key").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref })),
+                Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref, key })),
                 None => {
                     eprintln!("Usage: /task-forget <task_ref>");
                     None
@@ -1391,11 +1419,21 @@ fn parse_command(
             }
         }
         "task-include" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["key"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let key = options.get("key").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref })),
+                Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref, key })),
                 None => {
                     eprintln!("Usage: /task-include <task_ref>");
                     None
@@ -2347,6 +2385,9 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
 ///
 /// If a key is specified without a value, the value is set to `true`.
 ///
+/// FUTURE: This function is terribly naive. It doesn't support escaping in
+/// quoted strings.
+///
 /// # Arguments
 /// - `options_input`- The portion of the input between the parentheses. Do not
 ///   include the `/cmd` nor what follows the command.
@@ -2355,7 +2396,31 @@ fn parse_options(options_input: &str) -> HashMap<String, String> {
     let content = options_input.trim();
     if content.starts_with('(') && content.ends_with(')') {
         let content = &content[1..content.len() - 1];
-        for pair in content.split(',') {
+        let mut pairs = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut chars = content.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => {
+                    current.push(c);
+                    in_quotes = !in_quotes;
+                }
+                ',' if !in_quotes => {
+                    pairs.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => {
+                    current.push(c);
+                }
+            }
+        }
+        if !current.trim().is_empty() {
+            pairs.push(current.trim().to_string());
+        }
+
+        for pair in pairs {
             if let Some((key, value)) = pair.split_once('=') {
                 options.insert(key.trim().to_string(), value.trim().to_string());
             } else {
@@ -3039,5 +3104,42 @@ mod tests {
         assert!(get_cmds_with_markdown_body_re().is_match("/prep\n"));
         assert!(!get_cmds_with_markdown_body_re().is_match("/prepz"));
         assert!(!get_cmds_with_markdown_body_re().is_match("/prep["));
+    }
+
+    #[test]
+    fn test_string_option() {
+        // Test simple
+        let input = "/task(key=\"A\", trust) hai/test";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Task(TaskCmd {
+                task_ref,
+                key,
+                trust,
+                ..
+            })) => {
+                assert_eq!(task_ref, "hai/test");
+                assert_eq!(key, Some("A".to_string()));
+                assert!(trust);
+            }
+            _ => panic!("Failed to parse /task command properly"),
+        }
+
+        // Test comma in string
+        let input = "/task(key=\"A,B\", trust) hai/test";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Task(TaskCmd {
+                task_ref,
+                key,
+                trust,
+                ..
+            })) => {
+                assert_eq!(task_ref, "hai/test");
+                assert_eq!(key, Some("A,B".to_string()));
+                assert!(trust);
+            }
+            _ => panic!("Failed to parse /task command properly"),
+        }
     }
 }

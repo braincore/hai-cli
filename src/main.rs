@@ -95,6 +95,10 @@ enum CliSubcommand {
         /// Automatically confirm any prompts
         #[arg(long = "trust")]
         trust: bool,
+
+        /// Task key for separate caches
+        #[arg(long = "key")]
+        key: Option<String>,
     },
     /// Run a set of commands/prompts and quit (alias: "bai").
     /// WARNING: Quote each command with single-quotes to avoid shell expansion.
@@ -189,7 +193,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 true,
                 false,
             )
-        } else if let Some(CliSubcommand::Task { task_ref, trust }) = args.subcommand {
+        } else if let Some(CliSubcommand::Task {
+            task_ref,
+            trust,
+            key,
+        }) = args.subcommand
+        {
             // When specified via the command-line, a relative file path may
             // not be prefixed with "./" which will then be incorrectly treated
             // as a task-fqn. To catch this, prefix "./" if the name has a dot
@@ -203,10 +212,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 task_ref
             };
-            let task_cmd = if trust {
-                format!("/task(trust=true) {}", fixed_task_ref)
-            } else {
+            let mut options = vec![];
+            if trust {
+                options.push("trust".to_string());
+            }
+            if let Some(key) = key {
+                options.push(format!("key=\"{key}\""));
+            }
+            let task_cmd = if options.is_empty() {
                 format!("/task {}", fixed_task_ref)
+            } else {
+                format!("/task({}) {}", options.join(","), fixed_task_ref)
             };
             (
                 ReplMode::Normal,
@@ -583,7 +599,7 @@ async fn repl(
         editor_prompt.set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
         editor_prompt.set_hai_router(session.use_hai_router.clone());
         editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
-        if let ReplMode::Task(task_fqn, _) = &session.repl_mode {
+        if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
             editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
         } else {
             editor_prompt.set_task_mode(None);
@@ -614,7 +630,7 @@ async fn repl(
         // - Either reads from a queue of waiting cmds or from user input.
         //
         let cmd_input = if let Some(cmd_info) = session.cmd_queue.pop_front() {
-            if let session::CmdSource::TaskStep(task_fqn, step_id) = &cmd_info.source {
+            if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
                 if *step_id > 0 {
                     println!();
                 }
@@ -670,7 +686,7 @@ async fn repl(
         let task_step_signature = cmd_input.source.get_task_step_signature();
         let is_task_mode_step =
             task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(..));
-        let trusted = if let ReplMode::Task(_, trusted) = session.repl_mode {
+        let trusted = if let ReplMode::Task(_, _, trusted) = session.repl_mode {
             trusted && is_task_mode_step
         } else {
             false
@@ -863,7 +879,7 @@ async fn repl(
             .collect();
 
         let (ai_responses, from_cache) =
-            if let Some((ref task_fqn, step_index)) = task_step_signature {
+            if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                 let ai_responses_from_cache = if cache {
                     // An error deserializing is likely due to a change
                     // in format due to a version update. Assume that
@@ -877,6 +893,7 @@ async fn repl(
                             .map(|a| a.username.as_str())
                             .unwrap_or(""),
                         task_fqn,
+                        task_key.as_deref(),
                         step_index,
                         &prompt,
                     )
@@ -936,7 +953,7 @@ async fn repl(
             };
 
         if from_cache {
-            if let Some((ref task_fqn, _)) = task_step_signature {
+            if let Some((ref task_fqn, _, _)) = task_step_signature {
                 println!("[Retrieved from cache; `/task-forget {task_fqn}` to prompt again]");
             }
             // Because it's from the cache, the response is not yet on the screen.
@@ -967,7 +984,7 @@ async fn repl(
                 };
             }
         } else if cache {
-            if let Some((task_fqn, step_index)) = &task_step_signature {
+            if let Some((task_fqn, task_key, step_index)) = &task_step_signature {
                 db::set_task_step_cache(
                     &*db.lock().await,
                     session
@@ -976,6 +993,7 @@ async fn repl(
                         .map(|a| a.username.as_str())
                         .unwrap_or(""),
                     task_fqn,
+                    task_key.as_deref(),
                     *step_index,
                     &prompt,
                     &serde_json::to_string(&ai_responses).unwrap(),
@@ -1259,7 +1277,7 @@ async fn repl(
 // --
 
 fn cleanup(session: &SessionState) {
-    if matches!(session.repl_mode, ReplMode::Task(_, _)) {
+    if matches!(session.repl_mode, ReplMode::Task(_, _, _)) {
         term::window_title_reset();
     }
 }
