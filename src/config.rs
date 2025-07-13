@@ -616,7 +616,14 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | OpenAiModel::O4Mini
         ),
         AiModel::Void(_) => false,
-        AiModel::Xai(_) => false,
+        AiModel::Xai(model) => matches!(
+            model,
+            XaiModel::Grok3
+                | XaiModel::Grok3Fast
+                | XaiModel::Grok3Mini
+                | XaiModel::Grok3MiniFast
+                | XaiModel::Grok4
+        ),
     }
 }
 
