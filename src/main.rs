@@ -1163,14 +1163,20 @@ async fn repl(
                                 }
                             }
                         } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
-                            // Get first free name
-                            let mut i = session.ai_defined_fns.len();
-                            let ai_defined_tool_name = loop {
-                                let test_name = format!("f{}", i);
-                                if !session.ai_defined_fns.contains_key(&test_name) {
-                                    break test_name;
+                            let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref() {
+                                // If name already in use, replaces.
+                                // This makes iteration easier.
+                                format!("f_{}", name)
+                            } else {
+                                // Get first free name
+                                let mut i = session.ai_defined_fns.len();
+                                loop {
+                                    let test_name = format!("f{}", i);
+                                    if !session.ai_defined_fns.contains_key(&test_name) {
+                                        break test_name;
+                                    }
+                                    i += 1;
                                 }
-                                i += 1;
                             };
                             match tool::extract_ai_defined_fn_def(arg) {
                                 Ok(fn_def) => {

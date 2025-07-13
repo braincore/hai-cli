@@ -665,7 +665,7 @@ pub struct WhoisCmd {
 
 fn get_cmd_re() -> &'static Regex {
     static CMD_RE: OnceLock<Regex> = OnceLock::new();
-    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z0-9-]*)( |\(|$)").unwrap())
+    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z0-9-_]*)( |\(|$)").unwrap())
 }
 
 fn get_tool_re() -> &'static Regex {
@@ -675,7 +675,7 @@ fn get_tool_re() -> &'static Regex {
 
 fn get_ai_def_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| Regex::new(r"^f([0-9]*|'(?:\\'|[^'])*')?( |$)").unwrap())
+    TOOL_RE.get_or_init(|| Regex::new(r"^f([0-9]+|_[A-Za-z]+|'(?:\\'|[^'])*')?( |$)").unwrap())
 }
 
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
@@ -2126,18 +2126,29 @@ fn parse_tool_command(
             })),
         },
         "fn-py" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache"]) {
+            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("cache".to_string(), OptionType::Bool),
+                ("name".to_string(), OptionType::String),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            let name = options.get("name").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool::FnPy),
+                    tool: tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnPy,
+                        name,
+                    }),
                     prompt,
                     user_confirmation,
                     force_tool,
@@ -2150,18 +2161,29 @@ fn parse_tool_command(
             }
         }
         "fn-pyuv" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache"]) {
+            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("cache".to_string(), OptionType::Bool),
+                ("name".to_string(), OptionType::String),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            let name = options.get("name").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool::FnPyUv),
+                    tool: tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnPyUv,
+                        name,
+                    }),
                     prompt,
                     user_confirmation,
                     force_tool,
@@ -2174,18 +2196,29 @@ fn parse_tool_command(
             }
         }
         "fn-sh" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache"]) {
+            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("cache".to_string(), OptionType::Bool),
+                ("name".to_string(), OptionType::String),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            let name = options.get("name").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool::FnSh),
+                    tool: tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnSh,
+                        name,
+                    }),
                     prompt,
                     user_confirmation,
                     force_tool,
@@ -2396,6 +2429,7 @@ enum OptionType {
     Bool,
     #[allow(dead_code)]
     Number,
+    String,
 }
 
 /// Validates the types for a set of options.
@@ -2425,6 +2459,15 @@ fn validate_option_types(
                     if value.parse::<f64>().is_err() {
                         return Err(format!(
                             "Invalid value for '{}': expected a number, got '{}'",
+                            key, value
+                        ));
+                    }
+                }
+                OptionType::String => {
+                    // Ensure value is surrounded by quotes.
+                    if !value.starts_with('"') || !value.ends_with('"') {
+                        return Err(format!(
+                            "Invalid value for '{}': expected a quoted string, got '{}'",
                             key, value
                         ));
                     }
@@ -2933,7 +2976,11 @@ mod tests {
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::Fn(tool::FnTool::FnPy),
+                tool:
+                    tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnPy,
+                        name: None,
+                    }),
                 prompt,
                 user_confirmation,
                 force_tool,

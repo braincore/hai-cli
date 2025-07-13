@@ -29,7 +29,13 @@ pub enum Tool {
 }
 
 #[derive(Clone, Debug)]
-pub enum FnTool {
+pub struct FnTool {
+    pub kind: FnToolType,
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum FnToolType {
     FnPy,
     FnPyUv,
     FnSh,
@@ -39,22 +45,43 @@ pub enum FnTool {
 pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> String {
     let tool_symbol = if user_confirmation { "!?" } else { "!" };
     let tool_cmd = match tool {
-        Tool::CopyToClipboard => "clip",
-        Tool::ExecPythonScript => "py",
-        Tool::ExecPythonUvScript => "pyuv",
-        Tool::Fn(FnTool::FnPy) => "fn-py",
-        Tool::Fn(FnTool::FnPyUv) => "fn-pyuv",
-        Tool::Fn(FnTool::FnSh) => "fn-sh",
-        Tool::HaiRepl => "hai",
+        Tool::CopyToClipboard => "clip".to_string(),
+        Tool::ExecPythonScript => "py".to_string(),
+        Tool::ExecPythonUvScript => "pyuv".to_string(),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            name: None,
+        }) => "fn-py".to_string(),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            name: Some(name),
+        }) => format!("fn-py(name=\"{}\")", name),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            name: None,
+        }) => "fn-pyuv".to_string(),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            name: Some(name),
+        }) => format!("fn-pyuv(name=\"{}\")", name),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            name: None,
+        }) => "fn-sh".to_string(),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            name: Some(name),
+        }) => format!("fn-sh(name=\"{}\")", name),
+        Tool::HaiRepl => "hai".to_string(),
         Tool::ShellExecWithFile(cmd, ext) => {
             if let Some(ext) = ext {
-                &format!("{}.{}", cmd, ext)
+                format!("{}.{}", cmd, ext)
             } else {
-                &cmd.to_string()
+                cmd.to_string()
             }
         }
-        Tool::ShellExecWithStdin(cmd) => &format!("'{}'", cmd),
-        Tool::ShellScriptExec => "sh",
+        Tool::ShellExecWithStdin(cmd) => format!("'{}'", cmd),
+        Tool::ShellScriptExec => "sh".to_string(),
     };
     let force_tool_symbol = if force_tool { "" } else { "?" };
     format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
@@ -73,9 +100,18 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::CopyToClipboard => None,
         Tool::ExecPythonScript => Some("py".to_string()),
         Tool::ExecPythonUvScript => Some("py".to_string()),
-        Tool::Fn(FnTool::FnPy) => Some("py".to_string()),
-        Tool::Fn(FnTool::FnPyUv) => Some("py".to_string()),
-        Tool::Fn(FnTool::FnSh) => Some("bash".to_string()),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            ..
+        }) => Some("py".to_string()),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            ..
+        }) => Some("py".to_string()),
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            ..
+        }) => Some("bash".to_string()),
         Tool::HaiRepl => None,
         // WARN: The work hasn't been done to ensure that syntax-highlighter
         // tokens match all file extensions correctly.
@@ -123,8 +159,8 @@ pub async fn execute_ai_defined_tool(
     fn_def: &str,
     arg: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    match fn_tool {
-        FnTool::FnPy => {
+    match fn_tool.kind {
+        FnToolType::FnPy => {
             let script = format!(
                 r#"{}
 
@@ -136,7 +172,7 @@ if __name__ == "__main__":
             );
             exec_python_script(&script).await
         }
-        FnTool::FnPyUv => {
+        FnToolType::FnPyUv => {
             let script = format!(
                 r#"{}
 
@@ -148,7 +184,7 @@ if __name__ == "__main__":
             );
             exec_python_uv_script(&script).await
         }
-        FnTool::FnSh => {
+        FnToolType::FnSh => {
             let script = format!(
                 r#"arg={}
 {}

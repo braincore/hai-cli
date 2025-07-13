@@ -1,6 +1,6 @@
 use crate::{
     config,
-    tool::{FnTool, Tool},
+    tool::{FnTool, FnToolType, Tool},
 };
 use serde_json::{Value, json};
 
@@ -72,7 +72,10 @@ If you use non-standard libraries, you must specify them with the following synt
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool::FnPy) => json!({
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            ..
+        }) => json!({
             "name": tool_name,
             "description": "Define a Python function f(arg: Any) -> Any. It must be named `f`.",
             schema_key_name: {
@@ -96,7 +99,10 @@ omitted (None) by default."#
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool::FnPyUv) => json!({
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            ..
+        }) => json!({
             "name": tool_name,
             "description": "Define a Python function f(arg: Any) -> Any. It must be named `f`.",
             schema_key_name: {
@@ -136,7 +142,10 @@ This is the only text allowed above the function definition.
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool::FnSh) => json!({
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            ..
+        }) => json!({
             "name": tool_name,
             "description": "Define a shell script that implements the prompt.",
             schema_key_name: {
@@ -144,8 +153,9 @@ This is the only text allowed above the function definition.
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": r#"A shell script. The input argument to
-the script is stored in a variable called `arg`.
+                        "description": r#"A shell script. The input to the
+script is available in a variable called `arg` so just use it. There's no
+reason to prompt the user with read for the input.
 
 The script should print important values to stdout."#
                     },
@@ -390,9 +400,18 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::CopyToClipboard => "copy_to_clipboard",
         Tool::ExecPythonScript => "exec_python_script",
         Tool::ExecPythonUvScript => "exec_python_uv_script",
-        Tool::Fn(FnTool::FnPy) => "fn_py",
-        Tool::Fn(FnTool::FnPyUv) => "fn_pyuv",
-        Tool::Fn(FnTool::FnSh) => "fn_sh",
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            ..
+        }) => "fn_py",
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            ..
+        }) => "fn_pyuv",
+        Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            ..
+        }) => "fn_sh",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
         Tool::ShellScriptExec => "shell_script_exec",
@@ -410,9 +429,18 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
         "exec_python_uv_script" => Some(Tool::ExecPythonUvScript),
         // Replaced by `shell_script_exec`
         "exec_shell_script" => Some(Tool::ShellScriptExec),
-        "fn_py" => Some(Tool::Fn(FnTool::FnPy)),
-        "fn_pyuv" => Some(Tool::Fn(FnTool::FnPyUv)),
-        "fn_sh" => Some(Tool::Fn(FnTool::FnSh)),
+        "fn_py" => Some(Tool::Fn(FnTool {
+            kind: FnToolType::FnPy,
+            name: None,
+        })),
+        "fn_pyuv" => Some(Tool::Fn(FnTool {
+            kind: FnToolType::FnPyUv,
+            name: None,
+        })),
+        "fn_sh" => Some(Tool::Fn(FnTool {
+            kind: FnToolType::FnSh,
+            name: None,
+        })),
         // Replaced by `shell_script_exec`
         "shell_exec" => Some(Tool::ShellScriptExec),
         "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),

@@ -3160,8 +3160,8 @@ lesson (e.g. "understanding").\n\n{}"#,
 
             let arg_with_default = if arg.is_empty()
                 && matches!(
-                    ai_defined_fn.fn_tool,
-                    tool::FnTool::FnPy | tool::FnTool::FnPyUv
+                    ai_defined_fn.fn_tool.kind,
+                    tool::FnToolType::FnPy | tool::FnToolType::FnPyUv
                 ) {
                 "None".to_string()
             } else {
