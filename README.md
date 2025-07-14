@@ -1200,6 +1200,51 @@ To have the AI send you an email, you'll need to use the `!hai` tool:
 !hai send me an email with an uplifting quote of the day
 ```
 
+### Receiving Commands via WebSockets [Experimental]
+
+`hai` can expose a WebSocket interface, allowing other programs, processes, or
+even web services to enqueue commands for execution.
+
+#### 1. Start the Queue Listener
+
+Launch the listener with:
+
+```sh
+hai listen -a <address> -w <whitelisted_origin_header>
+```
+
+- If `-a` is omitted, the listener defaults to `127.0.0.1:1338`.
+- To prevent unauthorized access, use `-w` to whitelist an `Origin` header
+  value. Only requests with a matching `Origin` header will be accepted.
+
+> **Note**
+> If a request does **not** include an `Origin` header (it does not originate
+  from a browser), the whitelist is not enforced and the request is allowed.
+
+#### 2. Enqueue Commands via WebSocket
+
+Connect to the WebSocket and send a JSON payload like:
+
+```json
+{
+  ".tag": "push",
+  "cmds": [
+    "/load-url <url-populated-by-requester>",
+    "Key takeaways?",
+  ]
+}
+```
+
+- The `cmds` array can contain one or more commands to enqueue.
+
+As long as the `hai listen` process is running, incoming commands will be added
+to the queue.
+
+#### 3. Processing the Queue
+
+To process (pop) queued commands, use the `/queue-pop` command from within the
+`hai` REPL.
+
 ### Open Source
 
 > I don't like running software that I and others can't audit the code of.

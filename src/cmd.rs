@@ -162,6 +162,8 @@ pub enum Cmd {
     Whois(WhoisCmd),
     /// See cost of models
     Cost,
+    /// Pop a message from the listen queue
+    QueuePop(QueuePopCmd),
     /// Dumps raw chat history (undocumented)
     Dump,
     /// Dumps session info (undocumented)
@@ -667,6 +669,11 @@ pub struct AccountLogoutCmd {
 #[derive(Clone, Debug)]
 pub struct WhoisCmd {
     pub username: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct QueuePopCmd {
+    pub queue_name: Option<String>,
 }
 
 fn get_cmd_re() -> &'static Regex {
@@ -2015,6 +2022,14 @@ fn parse_command(
                 return None;
             }
             Some(Cmd::Cost)
+        }
+        "queue-pop" | "qpop" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::QueuePop(QueuePopCmd {
+                queue_name: parse_one_arg_catchall(remaining),
+            }))
         }
         "prompt" => {
             if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {

@@ -85,6 +85,17 @@ pub fn open_db() -> rusqlite::Result<rusqlite::Connection> {
         )",
         rusqlite::params![],
     )?;
+
+    // Create listen_queue table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS listen_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            queue_name TEXT NOT NULL,
+            cmds TEXT NOT NULL, -- JSON-serialized commands
+            ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        rusqlite::params![],
+    )?;
     Ok(conn)
 }
 
@@ -422,4 +433,58 @@ pub fn purge_task_step_cache(conn: &rusqlite::Connection, task_name: &str) {
         rusqlite::params![task_name],
     )
     .expect("Failed to delete rows");
+}
+
+///
+/// Listen Queue functions
+///
+use serde_json;
+
+/// Push a command (as Vec<String>) to the listen_queue for a given queue_name.
+pub fn listen_queue_push(
+    conn: &rusqlite::Connection,
+    queue_name: &str,
+    cmds: &Vec<String>,
+) -> rusqlite::Result<()> {
+    let cmds_json = serde_json::to_string(cmds)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    conn.execute(
+        "INSERT INTO listen_queue (queue_name, cmds, ts) VALUES (?1, ?2, CURRENT_TIMESTAMP)",
+        rusqlite::params![queue_name, cmds_json],
+    )?;
+    Ok(())
+}
+
+/// Pop (fetch and remove) the oldest entry for a given queue_name.
+/// Returns Some(Vec<String>) if found, or None if the queue is empty.
+pub fn listen_queue_pop(
+    conn: &mut rusqlite::Connection,
+    queue_name: &str,
+) -> rusqlite::Result<Option<Vec<String>>> {
+    let tx = conn.transaction()?;
+
+    // Fetch the oldest entry for this queue_name
+    let row = tx
+        .prepare(
+            "SELECT id, cmds FROM listen_queue WHERE queue_name = ?1 ORDER BY ts ASC, id ASC LIMIT 1",
+        )?
+        .query_row(rusqlite::params![queue_name], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .optional()?;
+
+    if let Some((id, cmds_json)) = row {
+        tx.execute(
+            "DELETE FROM listen_queue WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        tx.commit()?;
+        let cmds: Vec<String> = serde_json::from_str(&cmds_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        Ok(Some(cmds))
+    } else {
+        tx.commit()?;
+        Ok(None)
+    }
 }

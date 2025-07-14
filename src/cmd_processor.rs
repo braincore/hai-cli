@@ -3652,6 +3652,26 @@ lesson (e.g. "understanding").\n\n{}"#,
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::QueuePop(cmd::QueuePopCmd { queue_name }) => {
+            let cmds = db::listen_queue_pop(
+                &mut *db.lock().await,
+                &queue_name.as_ref().unwrap_or(&"".to_string()),
+            )
+            .expect("failed to pop from queue");
+            if let Some(cmds) = cmds {
+                for (index, cmd) in cmds.iter().enumerate().rev() {
+                    session.cmd_queue.push_front(session::CmdInput {
+                        input: cmd.clone(),
+                        source: session::CmdSource::ListenQueue(queue_name.clone(), index as u32),
+                    });
+                }
+                session.cmd_queue.push_front(session::CmdInput {
+                    input: "/new".to_string(),
+                    source: session::CmdSource::Internal,
+                });
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::ToolMode(tool_mode_cmd) => {
             println!(
                 "Entering tool mode; All messages are treated as prompts for {}. Use `!exit` when done",

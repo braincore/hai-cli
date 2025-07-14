@@ -39,6 +39,8 @@ pub enum CmdSource {
     HaiTool(u32),
     // task_signature: (task_name, task_key, task_step_id)
     TaskStep(String, Option<String>, u32),
+    // Input generated from listen queue (queue_name, index)
+    ListenQueue(Option<String>, u32),
 }
 
 impl CmdSource {

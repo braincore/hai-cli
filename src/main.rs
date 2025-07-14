@@ -112,6 +112,16 @@ enum CliSubcommand {
         #[arg(short = 'y', long = "yes")]
         yes: bool,
     },
+    /// Setup websocket listener for API-based commands
+    Listen {
+        /// The address to listen on (default: 127.0.0.1:1338)
+        #[arg(short = 'a', long = "address", default_value = "127.0.0.1:1338")]
+        address: String,
+
+        /// The origin allowed to send messages
+        #[arg(short = 'w', long = "whitelisted-origin")]
+        whitelisted_origin: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -144,6 +154,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 process::exit(1);
             }
         };
+    } else if let Some(CliSubcommand::Listen {
+        address,
+        whitelisted_origin,
+    }) = args.subcommand
+    {
+        crate::feature::queue_listen::listen(&address, whitelisted_origin).await;
     } else {
         let (repl_mode, init_cmds, exit_when_done, force_yes) = if let Some(CliSubcommand::Bye {
             cmds,
@@ -356,6 +372,7 @@ async fn repl(
         "/whois",
         "/hai-router",
         "/cost",
+        "/queue-pop",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -635,6 +652,13 @@ async fn repl(
                     println!();
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
+                print_step(&step_badge, &cmd_info.input);
+            } else if let session::CmdSource::ListenQueue(queue_name, index) = &cmd_info.source {
+                let step_badge = if let Some(queue_name) = queue_name {
+                    format!("queue/{}[{}]:", queue_name, index)
+                } else {
+                    format!("queue[{}]:", index)
+                };
                 print_step(&step_badge, &cmd_info.input);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 let step_badge = format!("!hai-tool[{}]:", index);
