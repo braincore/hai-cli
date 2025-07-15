@@ -39,7 +39,6 @@ pub async fn listen(address: &str, whitelisted_origin: Option<String>) {
                     }
                 };
                 let db = db.clone();
-                let address = address.to_string();
                 let whitelisted_origin = whitelisted_origin.clone();
                 tokio::spawn(async move {
                     let ws_stream = accept_hdr_async(stream, |req: &Request, response: Response| {
