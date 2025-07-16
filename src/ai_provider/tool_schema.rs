@@ -164,6 +164,21 @@ The script should print important values to stdout."#
                 "additionalProperties": false,
             },
         }),
+        Tool::Html => json!({
+            "name": tool_name,
+            "description": format!("Generate HTML <body> tag (including embedded javascript/css) to implement the prompt.\nSystem = {}", system),
+            schema_key_name: {
+                "type": "object",
+                "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": "HTML <body></body> tag that will be injected. It can include embedded javascript and CSS.",
+                    },
+                },
+                "required": ["input"],
+                "additionalProperties": false,
+            },
+        }),
         Tool::ShellScriptExec => json!({
             "name": tool_name,
             "description": format!("Execute a Shell script. Everything the user wants should be printed to stdout.\nShell = {}\nSystem = {}", shell, system),
@@ -412,6 +427,7 @@ pub fn get_tool_name(tool: &Tool) -> &str {
             kind: FnToolType::FnSh,
             ..
         }) => "fn_sh",
+        Tool::Html => "html",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
         Tool::ShellScriptExec => "shell_script_exec",
@@ -441,6 +457,7 @@ pub fn get_tool_from_name(name: &str) -> Option<Tool> {
             kind: FnToolType::FnSh,
             name: None,
         })),
+        "html" => Some(Tool::Html),
         // Replaced by `shell_script_exec`
         "shell_exec" => Some(Tool::ShellScriptExec),
         "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),
@@ -467,6 +484,8 @@ pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String>
         "exec_shell_script" => Some("bash".to_string()),
         "fn_py" => Some("py".to_string()),
         "fn_pyuv" => Some("py".to_string()),
+        "fn_sh" => Some("sh".to_string()),
+        "html" => Some("html".to_string()),
         // Replaced by `shell_script_exec`
         "shell_exec" => Some("bash".to_string()),
         "shell_exec_with_file" => None,

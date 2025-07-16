@@ -18,6 +18,7 @@ pub enum Tool {
     ExecPythonUvScript,
     Fn(FnTool),
     HaiRepl,
+    Html,
     ShellScriptExec,
     /// (file_contents, extension)
     /// Extension is important because some programs make decisions based on
@@ -73,6 +74,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
             name: Some(name),
         }) => format!("fn-sh(name=\"{}\")", name),
         Tool::HaiRepl => "hai".to_string(),
+        Tool::Html => "html".to_string(),
         Tool::ShellExecWithFile(cmd, ext) => {
             if let Some(ext) = ext {
                 format!("{}.{}", cmd, ext)
@@ -113,6 +115,7 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
             ..
         }) => Some("bash".to_string()),
         Tool::HaiRepl => None,
+        Tool::Html => Some("html".to_string()),
         // WARN: The work hasn't been done to ensure that syntax-highlighter
         // tokens match all file extensions correctly.
         Tool::ShellExecWithFile(_, ext) => ext.to_owned(),

@@ -694,7 +694,7 @@ impl Completer for CmdAndFileCompleter {
                     line,
                     &[
                         "!!", "!py", "!?py", "!pyuv", "!?pyuv", "!sh", "!?sh", "!hai", "!?hai",
-                        "!clip", "!fn-py", "!fn-pyuv", "!fn-sh", "!exit",
+                        "!html", "!?html", "!clip", "!fn-py", "!fn-pyuv", "!fn-sh", "!exit",
                     ],
                 ),
                 true,

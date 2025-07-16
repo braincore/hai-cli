@@ -2178,6 +2178,20 @@ fn parse_tool_command(
                 force_tool,
             })),
         },
+        "html" => match parse_one_arg_catchall(remaining) {
+            Some(prompt) => Some(Cmd::Tool(ToolCmd {
+                tool: tool::Tool::Html,
+                prompt: get_tool_prefixed_prompt(&tool::Tool::Html, user_confirmation, &prompt),
+                user_confirmation,
+                force_tool,
+                cache: false,
+            })),
+            None => Some(Cmd::ToolMode(ToolModeCmd {
+                tool: tool::Tool::Html,
+                user_confirmation,
+                force_tool,
+            })),
+        },
         "fn-py" => {
             if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
                 return None;
@@ -2388,6 +2402,7 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
         // !py may be understandable than !pyuv to the LLM--this is unscientific.
         tool::Tool::ExecPythonUvScript => format!("{}py ", tool_call_type),
         tool::Tool::HaiRepl => format!("{}hai ", tool_call_type),
+        tool::Tool::Html => format!("{}html ", tool_call_type),
         tool::Tool::ShellExecWithFile(shell_cmd, _) | tool::Tool::ShellExecWithStdin(shell_cmd) => {
             format!("{}'{}' ", tool_call_type, shell_cmd)
         }

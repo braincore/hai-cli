@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
@@ -104,6 +105,16 @@ pub struct SessionState {
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
     /// Add new message if conversation has a day transition
     pub add_msg_on_new_day: bool,
+    /// (Temp file for HTML output, is task step?, socket address for
+    /// websocket server, connected clients, cancellation token to shutdown
+    /// server)
+    pub html_output: Option<(
+        tempfile::NamedTempFile,
+        bool,
+        std::net::SocketAddr,
+        crate::feature::html_tool::Clients,
+        CancellationToken,
+    )>,
 }
 
 impl SessionState {

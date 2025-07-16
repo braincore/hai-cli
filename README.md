@@ -257,6 +257,7 @@ The Earth is approximately 4.54 billion years old.
 |-----------------------|---------------------------------------------------------|
 | `!py`                 | Run Python code.                                        |
 | `!pyuv`               | Run Python code using `uv`.                             |
+| `!html`               | Show HTML/CSS/JS in default browser.                    |
 | `!clip`               | Copy something to your system clipboard.                |
 | `!'<cmd>'`            | Run any program that accepts input via stdin.           |
 | `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |

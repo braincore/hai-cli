@@ -520,6 +520,7 @@ async fn repl(
         temp_files: vec![],
         ai_defined_fns: HashMap::new(),
         add_msg_on_new_day: false,
+        html_output: None,
     };
 
     if let Some(account) = &account {
@@ -1237,6 +1238,25 @@ async fn repl(
                                 }
                                 Err(e) => {
                                     let err_text = format!("error extracting function: {}", e);
+                                    println!("{}", err_text);
+                                    err_text
+                                }
+                            }
+                        } else if matches!(tp.tool, tool::Tool::Html) {
+                            match feature::html_tool::execute_html_tool(
+                                &mut session,
+                                is_task_mode_step,
+                                arg,
+                            )
+                            .await
+                            {
+                                Ok(temp_file_path) => {
+                                    let output_text = format!("Updated {}", temp_file_path);
+                                    println!("{}", output_text);
+                                    output_text
+                                }
+                                Err(e) => {
+                                    let err_text = format!("error executing HTML tool: {}", e);
                                     println!("{}", err_text);
                                     err_text
                                 }
