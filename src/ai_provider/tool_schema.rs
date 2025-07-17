@@ -302,18 +302,20 @@ Available Commands:
 --
 
 Available Tools:
+!sh <prompt>          - Ask AI to write shell script or pipeline that will be executed on your machine
+!py <prompt>          - Ask AI to write Python script that will be executed on your machine
+                        Searches for virtualenv in current dir & ancestors before falling back to python3
+!pyuv <prompt>        - Ask AI to write Python script with inline dependencies auto-installed via uv
+!html <prompt>        - Ask AI to write HTML/CSS/JS and open in system browser
+!'<cmd>' <prompt>     - Ask AI to write script that will be piped to this cmd through stdin
+                        e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
+                        If `{file}` present in `<cmd>`, AI output written to temporary file
+                        and substituted for `{file}` in the command
 !hai <prompt>         - Ask AI to generate REPL commands to fulfill the prompt with the
                         full conversation as context. It's a way for an AI to recursively call
                         itself to construct a new set of commands based on new information in
                         the conversation.
 !clip <prompt>        - Ask AI to copy a part of the conversation to your clipboard
-!py <prompt>          - Ask AI to write Python script that will be executed on your machine
-                        Searches for virtualenv in current dir & ancestors before falling back to python3
-!sh <prompt>          - Ask AI to write shell script or pipeline that will be executed on your machine
-!'<cmd>' <prompt>     - Ask AI to write script that will be piped to this cmd through stdin
-                        e.g. !'PG_PASSWORD=secret psql -h localhost -p 5432 -U postgres -d db' how many users?
-                        e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
-                        Vars from haivars & /setvar can be used: !'$psql' describe users table
 ! <prompt>            - Re-use previous tool with new prompt
 !                     - Re-use previous tool and prompt
 

@@ -3774,15 +3774,18 @@ const HELP_MSG: &str = r##"Available Commands:
 --
 
 Available Tools:
-!clip <prompt>               - Ask AI to copy a part of the conversation to your clipboard
+!sh <prompt>                 - Ask AI to write shell script that will be executed on your machine
 !py <prompt>                 - Ask AI to write Python script that will be executed on your machine
                                Searches for virtualenv in current dir & ancestors before falling back to python3
-!sh <prompt>                 - Ask AI to write shell script or pipeline that will be executed on your machine
-!hai <prompt>                - Ask AI to write and execute REPL command(s)
+!pyuv <prompt>               - Ask AI to write Python script with inline dependencies auto-installed via uv
+!html <prompt>               - Ask AI to write HTML/CSS/JS and open in system browser
 !'<cmd>' <prompt>            - Ask AI to write script that will be piped to this cmd through stdin
-                               e.g. !'PG_PASSWORD=secret psql -h localhost -p 5432 -U postgres -d db' how many users?
                                e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
                                Vars from haivars & /setvar can be used: !'$psql' describe users table
+                               If `{file}` present in `<cmd>`, AI output written to temporary file
+                               and substituted for `{file}` in the command
+!hai <prompt>                - Ask AI to write and execute REPL command(s)
+!clip <prompt>               - Ask AI to copy a part of the conversation to your clipboard
 ! <prompt>                   - Re-use previous tool with new prompt
 !                            - Re-use previous tool and prompt
 !<tool>                      - Activates tool mode for the specified tool
