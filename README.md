@@ -207,41 +207,52 @@ set the `trust` option to true: `/task(trust=true)` or `/task(trust)`
 
 ![](doc/hai-tool.gif)
 
+#### Shell Tool `!sh`
+
 `!sh <prompt>` - Ask the AI to execute shell commands directly.
 
+The shell tool prompts the AI to generate a shell script to be executed on your
+machine. Both the code and the output is added to the conversation history.
+
 ```
-[0]: /exec ls ~/.hai
-```
-```
-data.db
-data.db-shm
-data.db-wal
-hai.toml
-```
-```
-[2]: !sh list tables
-```
-```
-↓↓↓
-sqlite3 ~/.hai/data.db ".tables"
-⚙ ⚙ ⚙
-account          asset            task_step_cache
-ask_cache        misc
+[0]: !sh list my home dir
 ```
 
-If I feel like being a manager I provide valuable oversight with `!?sh`
+```
+↓↓↓
+
+ls -lh ~
+
+⚙ ⚙ ⚙
+
+Desktop
+Documents
+...
+```
+
+#### Requiring Confirmation `!?`
+
+If you're worried about destructive side effects, you can require your final
+confirmation with `!?sh`.
 
 ```
 [0]: !?sh delete evidence.txt
 ```
+
 ```
 ↓↓↓
+
 rm evidence.txt
+
 ⚙ ⚙ ⚙
+
 [QUESTION] Execute? y/[n]:
 ```
 
-To let the AI to decide whether to use your suggested tool, add a "?" as a suffix to the tool’s name.
+#### Making Tool Optional `?`
+
+To let the AI to decide whether to use your suggested tool, add a "?" as a
+suffix to the tool’s name.
 
 ```
 [0]: !sh? how old is the earth?
@@ -251,52 +262,89 @@ To let the AI to decide whether to use your suggested tool, add a "?" as a suffi
 The Earth is approximately 4.54 billion years old.
 ```
 
-#### Other tools
+Note that the answer was given without invoking the shell tool.
 
-| Tool                  | Description                                             |
-|-----------------------|---------------------------------------------------------|
-| `!py`                 | Run Python code.                                        |
-| `!pyuv`               | Run Python code using `uv`.                             |
-| `!html`               | Show HTML/CSS/JS in default browser.                    |
-| `!clip`               | Copy something to your system clipboard.                |
-| `!'<cmd>'`            | Run any program that accepts input via stdin.           |
-| `!'<cmd>..{file}..'`  | Run any program with the AI populating a temp file.     |
-| `!!<cmd>`             | Not a tool, but a shorthand for `/exec`.                |
+#### Repeat `!`
 
-For the last tool using the `{file}` placeholder, a file extension can be
-specified (e.g. `{file.<ext>}`) to force the temporary file to have a
-particular extension, which also enables syntax highlighting. This is helpful
-for programs like `uv` that require a `.py` extension for Python scripts.
+Sometimes simply asking the AI the same prompt over again helps it work through
+errors it may have encountered in script or code writing. A lone `!` in the
+REPL is a shortcut to do this. Note that the previous invocation and error is
+now in the conversation history which guides the AI to improve its answer.
 
 ```
-# Uses stdin (-)
-[0]: !'uv run --with geopy -' distance from sf to nyc
-
-OR
-
-# Uses temporary file
-[0]: !'uv run --with geopy {file.py}' distance from sf to nyc
+[0]: !sh what's the weather in santa clara, ca
 ```
-
-```python
+```
 ↓↓↓
 
-from geopy.distance import geodesic
-
-sf_coords = (37.7749, -122.4194)  # San Francisco coordinates
-nyc_coords = (40.7128, -74.0060)   # New York City coordinates
-
-distance = geodesic(sf_coords, nyc_coords).miles
-print(distance)
+curl -s 'wttr.in/Santa+Clara,CA?format=%C+%t'
 
 ⚙ ⚙ ⚙
 
-2571.9457567914133
+Unknown location; please try ~37.2333253,-121.6846349
+```
+```
+[3]: !
+```
+```
+↓↓↓
+
+curl -s 'wttr.in/Santa+Clara?format=%C+%t'
+
+⚙ ⚙ ⚙
+
+Partly cloudy +51°F
 ```
 
-The above uses `uv` only for demonstration purposes. There's a dedicated
-`!pyuv` tool which instructs the AI to specify its dependencies and have them
-be installed by `uv` automatically:
+### Repeat `! <prompt>`
+
+If you need to change your prompt while using the same tool, use `! <prompt>`
+(note that `sh` is omitted). Following from the above weather example:
+
+```
+[6]: ! how about tokyo?
+```
+```
+↓↓↓
+
+curl -s 'wttr.in/Tokyo?format=%C+%t'
+
+⚙ ⚙ ⚙
+
+Clear +59°F
+```
+
+#### Tool Mode
+
+If you find yourself using the same tool over-and-over, you can enter tool-mode
+by specifying a tool without a prompt (e.g. `!sh`).
+
+```
+[0]: !sh
+```
+```
+Entering tool mode; All messages are treated as prompts for !sh. Use `!exit` when done
+```
+
+When publishing tasks, you can place users directly into tool-mode by making it
+the final command in your task's list of steps. This approach is helpful when
+your task relies on a tool to respond to user requests. If your task requires
+tool use and regular text responses, consider using the optional suffix for
+the tool mode (e.g. `!sh?`).
+
+#### Python Tool `!py` `!pyuv`
+
+`!py` prompts the AI to write a Python script and executes it with your system
+Python or your virtual env if available. It may use dependencies that you do
+not have installed: you can either install them, try repeat `!` to see if the
+AI can work around it, or use `!pyuv` described below.
+
+`!pyuv` prompts the AI to write Python with
+[script dependencies](https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies)
+so that dependencies can be automatically installed. It requires
+[`uv`](https://github.com/astral-sh/uv).
+
+Here's an example of it in action:
 
 ```
 [0]: !pyuv distance from sf to nyc
@@ -324,8 +372,104 @@ print(f"Distance from San Francisco to New York City: {distance_km:.2f} km ({dis
 Distance from San Francisco to New York City: 4139.15 km (2571.95 miles)
 ```
 
+#### Custom Program Tool `!'<cmd>'`
 
-Requires [`uv`](https://github.com/astral-sh/uv) to be installed.
+You can prompt the AI to generate the `stdin` to any program. For example, to
+use `psql`:
+
+```
+[0]: !'psql -U postgres -d my_db' what db users are there?
+```
+```
+↓↓↓
+
+SELECT usename FROM pg_user;
+
+⚙ ⚙ ⚙
+
+ usename
+---------
+postgres
+...
+```
+
+A `{file}` placeholder can be used to prompt the AI to generate an input file
+rather than `stdin`. The below example demonstrates the difference using `uv`.
+
+```
+# Uses stdin (-)
+[0]: !'uv run --with geopy -' distance from sf to nyc
+
+OR
+
+# Uses temporary file
+[0]: !'uv run --with geopy {file.py}' distance from sf to nyc
+```
+
+```python
+↓↓↓
+
+from geopy.distance import geodesic
+
+sf_coords = (37.7749, -122.4194)  # San Francisco coordinates
+nyc_coords = (40.7128, -74.0060)   # New York City coordinates
+
+distance = geodesic(sf_coords, nyc_coords).miles
+print(distance)
+
+⚙ ⚙ ⚙
+
+2571.9457567914133
+```
+
+Note that a file extension was specified (e.g. `{file.<ext>}`) to force the
+temporary file to have a particular extension and enable syntax highlighting.
+This is helpful for programs that require input to have a specific extension
+(`uv` happens to be one of them, requiring `.py`).
+
+Note that `uv` is used for demonstrative purposes only and `!pyuv` would be the
+recommended tool for this task.
+
+#### HTML/CSS/JS Tool `!html`
+
+To prompt the AI to help you visualize output, you can ask for HTML output that
+will be opened by your configured system-default browser. Asking for iterations
+using the `!html` tool will trigger reloads automatically.
+
+![](doc/html_tool_nyc_skyline.png)
+
+#### Clipboard Tool `!clip`
+
+Are you a caveman reaching over to your mouse to copy-and-paste from the
+terminal? Use `!clip` to ask the AI to copy-and-paste whatever your need.
+
+#### Non-tool Execution `/exec` `!!`
+
+If you need to run shell commands directly without involving the AI, use
+`/exec` or its alias `!!`:
+
+```
+[0]: /exec ls ~
+
+OR
+
+[0]: !!ls ~
+```
+
+```
+Desktop
+Documents
+...
+```
+
+The command and output is added to the conversation history. This is often
+useful for generating relevant context to the AI.
+
+```
+[2]: What interesting files do i have?
+```
+
+The AI can also use `/exec` when using the `!hai` tool.
 
 ### Assets [Experimental]
 
@@ -445,136 +589,6 @@ See all client commands with `/help` (`/h`).
 - `/account <username>` - Switch account
 - `/account-subscribe` - Subscribe to support the project
 - `/account-balance` - See AI credits remaining
-
-### More on tools
-
-Nothing makes me more secure as a human than the neverending mistakes AI makes
-when using tools. Use a lone `!` to repeat the previous tool command & prompt.
-Often, the AI will read the error message and fix itself:
-
-```
-[0]: !sh what's the weather in santa clara, ca
-```
-```
-↓↓↓
-
-curl -s 'wttr.in/Santa+Clara,CA?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Unknown location; please try ~37.2333253,-121.6846349
-```
-```
-[3]: !
-```
-```
-↓↓↓
-
-curl -s 'wttr.in/Santa+Clara?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Partly cloudy +51°F
-```
-
-Or, if you need to change your prompt while using the same tool, use
-`! <prompt>` (note that `sh` is omitted):
-
-```
-[6]: ! how about tokyo?
-```
-```
-↓↓↓
-
-curl -s 'wttr.in/Tokyo?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Clear +59°F
-```
-
-### Tool mode
-
-If you find yourself using the same tool over-and-over, you can enter tool-mode
-by specifying a tool without a prompt (e.g. `!sh`).
-
-```
-[0]: !sh
-```
-```
-Entering tool mode; All messages are treated as prompts for !sh. Use `!exit` when done
-```
-```
-[0] !sh: what's the weather in alexandria, egypt?
-```
-```
-↓↓↓
-
-curl -s 'http://wttr.in/Alexandria?format=%C+%t+%w'
-
-⚙ ⚙ ⚙
-
-Clear +77°F ↙11mph
-```
-
-A more realistic example is when using `hai` with `psql` (postgres client) to
-avoid typing in the connection string each time (Note the location of the
-semicolon `:`).
-
-```
-[0]: !'psql -h localhost -p 5432 -U ken -d grapdb_1'
-```
-```
-Entering tool mode; All messages are treated as prompts for !'psql -h localhost -p 5432 -U ken -d grapdb_1'. Use `!exit` when done
-```
-```
-[3] !'psql -h localhost -p 5432 -U ken -d grapdb_1': what db users are there?
-```
-```
-↓↓↓
-
-SELECT usename FROM pg_user;
-
-⚙ ⚙ ⚙
-
- usename
----------
- ken
-```
-```
-[5] !'psql -h localhost -p 5432 -U ken -d grapdb_1': is query logging turned on?
-
-↓↓↓
-
-SHOW logging_collector;
-
-⚙ ⚙ ⚙
-
- logging_collector
--------------------
- off
-```
-
-When publishing tasks, you can place users directly into tool-mode by making it
-the final command in your task's command list. This approach is helpful when
-writing tasks for less technical folks.
-
-Lastly, variables can come in handy:
-
-```
-[11]: /setvar db psql -h localhost -p 5432 -U ken -d grapdb_1
-```
-```
-[12]: !'$db' what version is the db?
-```
-```
-↓↓↓
-
-SELECT version();
-
-⚙ ⚙ ⚙
-...
-```
 
 ### For general software development
 
