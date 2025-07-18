@@ -123,17 +123,42 @@ You’re right—my mistake. “Strawberry” has three “r”s: s t r a w�
 
 #### Authenticating with AI Providers
 
-You have two options:
+You can authenticate with AI providers in two ways:
 
-1. Set an API key for each AI provider you plan to use.
-    - via config: `~/.hai/hai.toml`
-    - via CLI: `$ hai set-key <provider> <key>`
-    - via REPL: `/set-key <provider> <key>`
-2. Activate `hai router`: `/hai-router on`
-    - Requires a subscription: `/account-subscribe`
-    - Access models from OpenAI, Anthropic, DeepSeek, Google, xAI—no API keys
-      or extra setup needed—just log in.
-    - An easy way to support the hai project and its ongoing experimentation.
+**1. Use Your Own API Keys**
+
+Set an API key for each provider (`openai`, `anthropic`, `google`, `deepseek`,
+`xai`) you intend to use. Choose any of the following methods:
+
+- **CLI command:**  
+  ```sh
+  $ hai set-key <provider> <key>
+  ```
+- **REPL command:**  
+  ```
+  /set-key <provider> <key>
+  ```
+- **Environment variable:**  
+  ```sh
+  $ <PROVIDER>_API_KEY=<key> hai
+  ```
+- **Config file:** Add your keys to `~/.hai/hai.toml`
+
+**2. Use hai router (No API Keys Needed)**
+
+- Enable via REPL:
+  ```
+  /hai-router on
+  ```
+- Requires a subscription:
+  ```
+  /account-subscribe
+  ```
+- Works on every machine once you login:
+  ```
+  /account-login
+  ```
+- An easy way to support the hai project and its ongoing development.
 
 #### Incognito
 

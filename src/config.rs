@@ -861,16 +861,51 @@ pub fn get_history_path() -> PathBuf {
 
 // --
 
+pub fn get_openai_api_key(cfg: &Config) -> Option<String> {
+    std::env::var("OPENAI_API_KEY").ok().or(cfg
+        .openai
+        .as_ref()
+        .and_then(|c| c.api_key.as_ref())
+        .map(|s| s.to_string()))
+}
+
+pub fn get_anthropic_api_key(cfg: &Config) -> Option<String> {
+    std::env::var("ANTHROPIC_API_KEY").ok().or(cfg
+        .anthropic
+        .as_ref()
+        .and_then(|c| c.api_key.as_ref())
+        .map(|s| s.to_string()))
+}
+
+pub fn get_google_api_key(cfg: &Config) -> Option<String> {
+    std::env::var("GOOGLE_API_KEY").ok().or(cfg
+        .google
+        .as_ref()
+        .and_then(|c| c.api_key.as_ref())
+        .map(|s| s.to_string()))
+}
+
+pub fn get_deepseek_api_key(cfg: &Config) -> Option<String> {
+    std::env::var("DEEPSEEK_API_KEY").ok().or(cfg
+        .deepseek
+        .as_ref()
+        .and_then(|c| c.api_key.as_ref())
+        .map(|s| s.to_string()))
+}
+
+pub fn get_xai_api_key(cfg: &Config) -> Option<String> {
+    std::env::var("XAI_API_KEY").ok().or(cfg
+        .xai
+        .as_ref()
+        .and_then(|c| c.api_key.as_ref())
+        .map(|s| s.to_string()))
+}
+
 /// Prints error to terminal if key not set.
 pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
     match ai {
         AiModel::OpenAi(_) => {
-            if cfg
-                .openai
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
+            if get_openai_api_key(cfg).is_none() {
                 eprintln!(
                     "error: model '{}' requires an OpenAI API Key: `/set-key openai <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
@@ -879,12 +914,7 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
             }
         }
         AiModel::Anthropic(_) => {
-            if cfg
-                .anthropic
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
+            if get_anthropic_api_key(cfg).is_none() {
                 eprintln!(
                     "error: model '{}' requires an Anthropic API Key: `/set-key anthropic <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
@@ -893,12 +923,7 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
             }
         }
         AiModel::DeepSeek(_) => {
-            if cfg
-                .deepseek
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
+            if get_deepseek_api_key(cfg).is_none() {
                 eprintln!(
                     "error: model '{}' requires a DeepSeek API Key: `/set-key deepseek <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
@@ -907,12 +932,7 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
             }
         }
         AiModel::Google(_) => {
-            if cfg
-                .google
-                .as_ref()
-                .and_then(|c| c.api_key.as_ref())
-                .is_none()
-            {
+            if get_google_api_key(cfg).is_none() {
                 eprintln!(
                     "error: model '{}' requires a Google API Key: `/set-key google <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
@@ -921,9 +941,9 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
             }
         }
         AiModel::Xai(_) => {
-            if cfg.xai.as_ref().and_then(|c| c.api_key.as_ref()).is_none() {
+            if get_xai_api_key(cfg).is_none() {
                 eprintln!(
-                    "error: model '{}' requires a xAI API Key: `/set-key xai <key>` OR `/hai-router on`",
+                    "error: model '{}' requires an xAI API Key: `/set-key xai <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;
@@ -948,27 +968,15 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     };
     if let Some(ai_model) = default_ai_model {
         ai_model
-    } else if let Some(OpenAiConfig {
-        api_key: Some(_), ..
-    }) = cfg.openai
-    {
+    } else if get_openai_api_key(cfg).is_some() {
         AiModel::OpenAi(OpenAiModel::Gpt41)
-    } else if let Some(AnthropicConfig {
-        api_key: Some(_), ..
-    }) = cfg.anthropic
-    {
+    } else if get_anthropic_api_key(cfg).is_some() {
         AiModel::Anthropic(AnthropicModel::Sonnet4(false))
-    } else if let Some(DeepSeekConfig {
-        api_key: Some(_), ..
-    }) = cfg.deepseek
-    {
+    } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
-    } else if let Some(GoogleConfig {
-        api_key: Some(_), ..
-    }) = cfg.google
-    {
+    } else if get_google_api_key(cfg).is_some() {
         AiModel::Google(GoogleModel::Gemini25Flash)
-    } else if let Some(XaiConfig { api_key: Some(_) }) = cfg.xai {
+    } else if get_xai_api_key(cfg).is_some() {
         AiModel::Xai(XaiModel::Grok4)
     } else if let Some(OllamaConfig { base_url: Some(_) }) = cfg.ollama {
         AiModel::Ollama(OllamaModel::Llama32)
@@ -976,6 +984,8 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
         AiModel::OpenAi(OpenAiModel::Gpt41)
     }
 }
+
+// OPENAI_API_KEY
 
 // --
 

@@ -1442,42 +1442,22 @@ pub async fn prompt_ai(
                     (Some(api_base_url.deref()), api_key, Some(provider_header))
                 } else {
                     match session.ai {
-                        config::AiModel::OpenAi(_) => (
-                            None,
-                            cfg.openai
-                                .as_ref()
-                                .unwrap()
-                                .api_key
-                                .as_ref()
-                                .unwrap()
-                                .clone(),
-                            None,
-                        ),
+                        config::AiModel::OpenAi(_) => {
+                            (None, config::get_openai_api_key(cfg).unwrap(), None)
+                        }
                         config::AiModel::Google(_) => (
                             Some("https://generativelanguage.googleapis.com/v1beta/openai"),
-                            cfg.google
-                                .as_ref()
-                                .unwrap()
-                                .api_key
-                                .as_ref()
-                                .unwrap()
-                                .clone(),
+                            config::get_google_api_key(cfg).unwrap(),
                             None,
                         ),
                         config::AiModel::DeepSeek(_) => (
                             Some("https://api.deepseek.com/v1"),
-                            cfg.deepseek
-                                .as_ref()
-                                .unwrap()
-                                .api_key
-                                .as_ref()
-                                .unwrap()
-                                .clone(),
+                            config::get_deepseek_api_key(cfg).unwrap(),
                             None,
                         ),
                         config::AiModel::Xai(_) => (
                             Some("https://api.x.ai/v1"),
-                            cfg.xai.as_ref().unwrap().api_key.as_ref().unwrap().clone(),
+                            config::get_xai_api_key(cfg).unwrap(),
                             None,
                         ),
                         _ => {
@@ -1518,17 +1498,7 @@ pub async fn prompt_ai(
                         Some("anthropic".to_string()),
                     )
                 } else {
-                    (
-                        None,
-                        cfg.anthropic
-                            .as_ref()
-                            .unwrap()
-                            .api_key
-                            .as_ref()
-                            .unwrap()
-                            .clone(),
-                        None,
-                    )
+                    (None, config::get_anthropic_api_key(cfg).unwrap(), None)
                 };
             let use_thinking = match anthropic_model {
                 config::AnthropicModel::Opus4(use_thinking)

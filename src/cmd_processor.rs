@@ -178,27 +178,11 @@ pub async fn process_cmd(
             );
             if model.is_none() {
                 println!("--");
-                let need_openai_key = cfg
-                    .openai
-                    .as_ref()
-                    .and_then(|c| c.api_key.as_ref())
-                    .is_none();
-                let need_anthropic_key = cfg
-                    .anthropic
-                    .as_ref()
-                    .and_then(|c| c.api_key.as_ref())
-                    .is_none();
-                let need_deepseek_key = cfg
-                    .deepseek
-                    .as_ref()
-                    .and_then(|c| c.api_key.as_ref())
-                    .is_none();
-                let need_google_key = cfg
-                    .google
-                    .as_ref()
-                    .and_then(|c| c.api_key.as_ref())
-                    .is_none();
-                let need_xai_key = cfg.xai.as_ref().and_then(|c| c.api_key.as_ref()).is_none();
+                let need_openai_key = config::get_openai_api_key(cfg).is_none();
+                let need_anthropic_key = config::get_anthropic_api_key(cfg).is_none();
+                let need_deepseek_key = config::get_deepseek_api_key(cfg).is_none();
+                let need_google_key = config::get_google_api_key(cfg).is_none();
+                let need_xai_key = config::get_xai_api_key(cfg).is_none();
                 let need_key = "  (NEED API KEY: /set-key OR /hai-router)";
                 println!("Try these popular models:");
                 println!(
