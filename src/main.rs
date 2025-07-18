@@ -417,6 +417,7 @@ async fn repl(
         "deepseek",
         "v3",
         "r1",
+        "grok",
         "grok-3",
         "grok-3-fast",
         "grok-3-mini",
