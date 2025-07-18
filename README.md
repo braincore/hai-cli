@@ -458,6 +458,8 @@ recommended tool for this task.
 
 #### HTML/CSS/JS Tool `!html`
 
+> Even a terminal jockey needs to touch grass every now and then.
+
 To prompt the AI to help you visualize output, you can ask for HTML output that
 will be opened by your configured system-default browser. Asking for iterations
 using the `!html` tool will trigger reloads automatically.
