@@ -194,7 +194,7 @@ pub fn read_config_as_string(
         if !path.exists() {
             let default_config = r#"
 # The default AI model to use.
-#default_ai_model = "4o"
+#default_ai_model = "gpt-4.1"
 
 # The default AI model in incognito mode.
 #default_incognito_ai_model = "llama32"
