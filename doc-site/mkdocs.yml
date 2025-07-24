@@ -38,6 +38,7 @@ nav:
     - Stdlib: repl/stdlib.md
     - LLM models: repl/llm-models.md
     - Send email: repl/send-email.md
+    - Account: repl/account.md
   - CLI:
     - Subcommands and options: cli/subcommands-and-options.md
     - Run and exit: cli/run-and-exit.md
