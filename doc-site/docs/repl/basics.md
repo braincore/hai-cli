@@ -31,7 +31,7 @@ On the right-hand side is a set of status information:
 
 - The current working directory which is important for tools that use the local
   filesystem.
-- The token count of the conversation. See `/cost`.
+- The token count of the conversation. See [Cost estimation](#cost-estimation).
 - The active LLM model.
 - The current timestamp.
 
@@ -204,3 +204,26 @@ Save with a custom name:
 ```
 /chat-save [<name>]
 ```
+
+## Cost estimation
+
+The REPL's right-hand prompt shows the number of tokens in the current
+conversation. To understand how much the converation has cost so far and what
+the input cost is for the next prompt, use:
+
+```
+/cost
+```
+
+This is especially useful when files, urls, images, and assets have been loaded
+for context.
+
+!!!warning "Tokenizer"
+    Token counts are estimated using the GPT-3.5 tokenizer because of its
+    smaller size and therefore faster loading time. Unscientifically, token
+    counts can differ by as much as 20%.
+
+!!!warning "Tokens for images"
+    Token counts for images are only accurate for OpenAI models because all
+    images are assumed to consume the hard coded number of tokens for a "low
+    detail" image in the OpenAI API.
