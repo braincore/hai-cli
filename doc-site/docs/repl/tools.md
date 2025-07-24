@@ -132,10 +132,11 @@ Entering tool mode; All messages are treated as prompts for !sh. Use `!exit` whe
 
 ## Python Tool `!py` `!pyuv`
 
-`!py` prompts the AI to write a Python script and executes it with your system
-Python or your virtual env if available. It may use dependencies that you do
-not have installed: you can either install them, try repeat `!` to see if the
-AI can work around it, or use `!pyuv` described below.
+`!py` prompts the AI to write a Python script and execute it with your system
+Python or virtual env (`.venv`) if available in the current working directory.
+It may use dependencies that you do not have installed: you can either install
+them, try [repeat `!`](#repeat-) to see if the AI can work around it, or use
+`!pyuv` described below.
 
 `!pyuv` prompts the AI to write Python with
 [script dependencies](https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies)
