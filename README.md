@@ -9,6 +9,13 @@ A CLI (`hai`) with a REPL for hackers using LLMs.
 
 ![](doc-site/docs/image/hai-intro.gif)
 
+## Documentation
+
+Documentation is available at [braincore.github.io/hai-cli](https://braincore.github.io/hai-cli/)
+
+Or, you can dive in and rely on `hai -h` (CLI), `/help` (REPL), and
+`/task hai/help` (LLM helper within REPL).
+
 ## Highlights
 
 - ⚡️ Starts in 30ms (on my machine).
