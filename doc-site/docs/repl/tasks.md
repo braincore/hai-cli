@@ -59,7 +59,7 @@ ken/absolute-mode[1]:
 
 In task mode, `/new` (`/n`) resets the conversation to the initial task state.
 
-To exit task mode, use `/task-end` or `CTRL + D`.
+To exit task mode, use `/task-end` or `Ctrl + D`.
 
 ### Examples
 

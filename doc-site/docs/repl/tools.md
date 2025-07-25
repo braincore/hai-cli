@@ -120,8 +120,10 @@ by specifying a tool without a prompt (e.g. `!sh`).
 [0]: !sh
 ```
 ```
-Entering tool mode; All messages are treated as prompts for !sh. Use `!exit` when done
+Entering tool mode; All messages are treated as prompts for !sh.
 ```
+
+To exit tool mode, use `!exit` or `Ctrl + D`.
 
 !!!tip "Tool mode in tasks"
     When publishing tasks, you can place users directly into tool-mode by

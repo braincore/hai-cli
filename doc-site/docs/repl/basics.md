@@ -6,7 +6,7 @@
 $ hai
 ```
 
-To exit, use `/quit` or `CTRL + D`.
+To exit, use `/quit` or `Ctrl + D`.
 
 ## Chat
 
@@ -164,7 +164,7 @@ completion is unavailable, it falls back to local file path completion.
 Command history is stored in `~/.hai/history`. To access it in the REPL:
 
 - Arrow up/down cycles through recently used commands.
-- `CTRL + R` performs a reverse-search with partial string matching.
+- `Ctrl + R` performs a reverse-search with partial string matching.
 
 ## Save and resume chats
 

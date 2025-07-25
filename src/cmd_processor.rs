@@ -3668,7 +3668,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         }
         cmd::Cmd::ToolMode(tool_mode_cmd) => {
             println!(
-                "Entering tool mode; All messages are treated as prompts for {}. Use `!exit` when done",
+                "Entering tool mode; All messages are treated as prompts for {}. Use `!exit` or CTRL+D when done",
                 tool::tool_to_cmd(
                     &tool_mode_cmd.tool,
                     tool_mode_cmd.user_confirmation,
@@ -3730,7 +3730,7 @@ const HELP_MSG: &str = r##"Available Commands:
 /task-search <query>         - Search for tasks in the repository
 /task-view <name|path>       - View a task without loading it from repo or file path
 /task-versions <name>        - List all versions of a task in the repository
-/task-end                    - End task mode
+/task-end                    - End task mode (CTRL+D works too)
 /task-update <name>          - Update task to latest version
 /task-publish <path>         - Publish task to repo (requires /account-login)
 /task-forget <name>          - Forget all cached /ask-human answers
@@ -3774,7 +3774,7 @@ Available Tools:
 !                            - Re-use previous tool and prompt
 !<tool>                      - Activates tool mode for the specified tool
                                In tool mode, all messages are treated as prompts for the tool.
-                               Use !exit to exit tool mode
+                               Use !exit or Ctrl+D to exit tool mode
 
 --
 
