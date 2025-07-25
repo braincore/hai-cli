@@ -3776,16 +3776,7 @@ Available Tools:
                                In tool mode, all messages are treated as prompts for the tool.
                                Use !exit or Ctrl+D to exit tool mode
 
---
-
-Standard Library Functions:
-/std now                     - Displays the current date and time.
-/std new-day-alert           - Make AI aware when a new day begins since the last interaction.
-/std which <prog>            - Checks if program is available.
-
---
-
-AI-Defined Reusable Functions (Experimental):
+Function Tools:
 !fn-py <prompt>              - Ask AI to write a Python function to implement your prompt.
                                Function is given a name (`f<index>`) to invoke with: `/f<index> <arg>`
 !fn-pyuv <prompt>            - Similar to `!fn-py` but `uv` is used allowing for the function to use
@@ -3798,6 +3789,13 @@ AI-Defined Reusable Functions (Experimental):
                                For Python, `arg` must be a Python expression that can be evaluated.
                                For shell, `arg` must be a shell value or expression.
 /fns                         - List all available functions.
+
+--
+
+Standard Library Functions:
+/std now                     - Displays the current date and time.
+/std new-day-alert           - Make AI aware when a new day begins since the last interaction.
+/std which <prog>            - Checks if program is available.
 
 --
 

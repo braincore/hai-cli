@@ -319,17 +319,7 @@ Available Tools:
 ! <prompt>            - Re-use previous tool with new prompt
 !                     - Re-use previous tool and prompt
 
---
-
-Standard Library Functions:
-/std now              - Print current date and time
-/std new-day-alert    - Make AI aware when a new day begins since the last interaction
-/std which <prog>     - Checks if program is available.
-
---
-
-AI-Defined Reusable Functions:
-
+Function Tools:
 !fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>`.
                         The function will take a single argument. The function will be given a name
                         `f<index>` where `index>` is a unique number which can be used to invoke it
@@ -343,6 +333,13 @@ AI-Defined Reusable Functions:
 /f<index> <arg>       - Invoke a AI-defined reusable function with the given index.
                         For Python, `arg` must be a Python expression that can be evaluated.
                         For shell, `arg` must be a shell value or expression.
+
+--
+
+Standard Library Functions:
+/std now              - Print current date and time
+/std new-day-alert    - Make AI aware when a new day begins since the last interaction
+/std which <prog>     - Checks if program is available.
 
 --
 
