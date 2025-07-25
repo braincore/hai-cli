@@ -246,6 +246,11 @@ using the `!html` tool will trigger reloads automatically.
 
 Are you a caveman reaching over to your mouse to copy-and-paste from the
 terminal? Use `!clip` to ask the AI to copy-and-paste whatever your need.
+For example:
+
+```
+!clip option #3
+```
 
 ## hai tool `!hai`
 
@@ -530,4 +535,12 @@ def f(arg):
 ⚙ ⚙ ⚙
 
 Stored as command: /f_sqrt
+```
+
+### Show all functions
+
+To see all functions declared in the current conversation, use:
+
+```
+/fns
 ```

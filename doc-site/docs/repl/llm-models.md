@@ -15,14 +15,15 @@ Select a default model with:
 /ai-default <model>
 ```
 
-Alternatively, it can be specified in `~/.hai/hai.toml`:
+This writes to your `hai.toml` [config](../config.md#default-ai-model) which
+can also be changed manually:
 
 ```toml
 default_ai_model = "gpt-4.1"
 ```
 
-If a default model isn't set, it's automatically chosen based on the API keys
-you have specified.
+If a default model isn't set, it's automatically chosen based on API key
+availability.
 
 ## Switching models
 

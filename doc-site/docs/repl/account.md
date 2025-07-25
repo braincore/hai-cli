@@ -7,7 +7,7 @@ Accounts are optional but are necessary for features including:
 
 ## View active account
 
-To check the active account and see all available accounts:
+To check the active account and see all available accounts, use:
 
 ```
 /account
@@ -32,6 +32,14 @@ To check the active account and see all available accounts:
 ```
 
 You must have previously logged into this account.
+
+## Who-is
+
+To get information about a user including the tasks they've published, use:
+
+```
+/whois <username>
+```
 
 ## Subscribe to support the project
 

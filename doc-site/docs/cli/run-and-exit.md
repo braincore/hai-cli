@@ -14,8 +14,9 @@ exits at the end.
 
 ## Reading from stdin
 
-Use `-` as a command to create a `/prep` message with data from stdin. For
-example:
+Use `-` as a command to create a
+[`/prep` message](../repl/basics.md#pin-and-prep-messages) with data from
+stdin. For example:
 
 ```
 cat meeting_notes.txt | hai bye - 'summary please'`

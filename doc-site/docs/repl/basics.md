@@ -133,6 +133,17 @@ psql_index_notes.txt
 You engage in technical, organizational, and analytical work. You handle SQL, PostgreSQL, and security topics.
 ```
 
+## Change working directory
+
+To change your current working directory, use:
+
+```
+/cd <path>
+```
+
+Changing the working directory is important for loading files, executing
+programs, and using tools that interact with your local filesystem.
+
 ## Switch LLM model
 
 To switch LLM models, use:
@@ -152,7 +163,10 @@ If you make a mistake, you can forget the last interaction with:
 ```
 
 By default, one interaction is removed from the conversation, but `n` can be
-specified to forget that many interactions.
+specified to forget multiple interactions at once.
+
+For the opposite effect—retaining interactions instead of removing them—see
+[`/keep`](./tasks.md#task-specific-commands).
 
 ## Tab completion
 
@@ -227,3 +241,40 @@ for context.
     Token counts for images are only accurate for OpenAI models because all
     images are assumed to consume the hard coded number of tokens for a "low
     detail" image in the OpenAI API.
+
+## Pin and prep messages
+
+To add a message that doesn't prompt the LLM and is retained on `/reset`, use:
+
+```
+/pin <message>
+```
+
+To add a message that doesn't prompt the LLM but is cleared on `/reset`, use:
+
+```
+/prep <message>
+```
+
+Using `/prep` directly is uncommon. A shortcut for `/prep` is to add two blank
+newlines at the end of a message. This is helpful if you want to add more
+content (such as a copy-and-paste) before requesting a response.
+
+## System prompt
+
+To set a system prompt, use:
+
+```
+/system-prompt <message>
+```
+
+## Copy to clipboard
+
+To copy the last message verbatim to your machine's clipboard, use:
+
+```
+/clip
+```
+
+For a version that lets you prompt the LLM to add to your clipboard, see
+[!clip](./tools.md#clipboard-tool-clip).
