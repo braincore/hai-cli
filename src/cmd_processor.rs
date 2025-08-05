@@ -3029,8 +3029,8 @@ pub async fn process_cmd(
             let abridged_history_tokens =
                 bpe_tokenizer.encode_with_special_tokens(&abridged_history);
             let chat_title = if abridged_history.len() > 100 {
-                print!(
-                    "Generating title ({} tokens)... ",
+                println!(
+                    "Generating title ({} tokens)...",
                     abridged_history_tokens
                         .len()
                         .to_formatted_string(&Locale::en)
