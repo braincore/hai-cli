@@ -402,6 +402,8 @@ async fn repl(
         "opus",
         "opus4",
         "opus4-thinking",
+        "opus41",
+        "opus41-thinking",
         "sonnet",
         "sonnet-thinking",
         "sonnet35",
