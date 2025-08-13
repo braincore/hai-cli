@@ -19,7 +19,7 @@ This writes to your `hai.toml` [config](../config.md#default-ai-model) which
 can also be changed manually:
 
 ```toml
-default_ai_model = "gpt-4.1"
+default_ai_model = "gpt-5"
 ```
 
 If a default model isn't set, it's automatically chosen based on API key
@@ -40,7 +40,7 @@ supports all the capabilities (images, tools) utilized in the conversation.
 
 | Provider   | Notable Models (Not Comprehensive)      |
 |------------|-----------------------------------------|
-| OpenAI     | gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`), chatgpt-4o, gpt-4o (`4o`), gpt-4o-mini (`4om`) |
+| OpenAI     | gpt-5 (`g5`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`), gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`), chatgpt-4o, gpt-4o (`4o`), gpt-4o-mini (`4om`) |
 |            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
 | Anthropic  | sonnet-4 (`sonnet`), sonnet-4-thinking (`sonnet-thinking`), opus-4 (`opus`), opus-4-thinking (`opus-thinking`), haiku-3.5 (`haiku`) |
 | Google     | gemini-2.5-flash (`flash25`), gemini-2.5-pro (`gemini25pro`), gemini-2.0-flash (`flash20`) |

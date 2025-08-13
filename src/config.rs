@@ -81,6 +81,9 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt41" | "41" => Some(AiModel::OpenAi(OpenAiModel::Gpt41)),
         "gpt41mini" | "41mini" | "41m" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Mini)),
         "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
+        "gpt5" | "g5" | "5" => Some(AiModel::OpenAi(OpenAiModel::Gpt5)),
+        "gpt5mini" | "g5mini" | "g5m" | "5m" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Mini)),
+        "gpt5nano" | "g5nano" | "g5n" | "5n" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Nano)),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
         "grok3" => Some(AiModel::Xai(XaiModel::Grok3)),
@@ -352,6 +355,9 @@ pub enum OpenAiModel {
     Gpt41,
     Gpt41Mini,
     Gpt41Nano,
+    Gpt5,
+    Gpt5Mini,
+    Gpt5Nano,
     Gpt4o,
     Gpt4oMini,
     O1,
@@ -411,6 +417,9 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OpenAiModel::Gpt41 => "gpt-4.1-2025-04-14",
             OpenAiModel::Gpt41Mini => "gpt-4.1-mini-2025-04-14",
             OpenAiModel::Gpt41Nano => "gpt-4.1-nano-2025-04-14",
+            OpenAiModel::Gpt5 => "gpt-5-2025-08-07",
+            OpenAiModel::Gpt5Mini => "gpt-5-mini-2025-08-07",
+            OpenAiModel::Gpt5Nano => "gpt-5-nano-2025-08-07",
             OpenAiModel::Gpt4o => "gpt-4o-2024-11-20",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini-2024-07-18",
             OpenAiModel::O1 => "o1-2024-12-17",
@@ -471,6 +480,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             OpenAiModel::Gpt41 => "gpt-4.1",
             OpenAiModel::Gpt41Mini => "gpt-4.1-mini",
             OpenAiModel::Gpt41Nano => "gpt-4.1-nano",
+            OpenAiModel::Gpt5 => "gpt-5",
+            OpenAiModel::Gpt5Mini => "gpt-5-mini",
+            OpenAiModel::Gpt5Nano => "gpt-5-nano",
             OpenAiModel::Gpt4o => "gpt-4o",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini",
             OpenAiModel::O1 => "o1",
@@ -607,6 +619,9 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
             OpenAiModel::Gpt41
                 | OpenAiModel::Gpt41Mini
                 | OpenAiModel::Gpt41Nano
+                | OpenAiModel::Gpt5
+                | OpenAiModel::Gpt5Mini
+                | OpenAiModel::Gpt5Nano
                 | OpenAiModel::Gpt4o
                 | OpenAiModel::Gpt4oMini
                 | OpenAiModel::O1
@@ -661,6 +676,9 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::Gpt41 => Some((2000, 8000)),
             OpenAiModel::Gpt41Mini => Some((400, 1600)),
             OpenAiModel::Gpt41Nano => Some((100, 400)),
+            OpenAiModel::Gpt5 => Some((1250, 10000)),
+            OpenAiModel::Gpt5Mini => Some((250, 2000)),
+            OpenAiModel::Gpt5Nano => Some((50, 400)),
             OpenAiModel::Gpt4o => Some((2500, 10000)),
             OpenAiModel::Gpt4oMini => Some((150, 600)),
             OpenAiModel::O1 => Some((15000, 60000)),
