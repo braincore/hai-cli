@@ -435,6 +435,7 @@ async fn repl(
         "google/",
         "xai/",
         "ollama/",
+        "llamacpp",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -1423,7 +1424,8 @@ pub async fn prompt_ai(
         config::AiModel::OpenAi(_)
         | config::AiModel::Google(_)
         | config::AiModel::DeepSeek(_)
-        | config::AiModel::Xai(_) => {
+        | config::AiModel::Xai(_)
+        | config::AiModel::LlamaCpp(_) => {
             let deepseek_flatten_nonuser_content =
                 matches!(session.ai, config::AiModel::DeepSeek(_));
             let (base_url, api_key, provider_header) =
@@ -1466,6 +1468,14 @@ pub async fn prompt_ai(
                         config::AiModel::Xai(_) => (
                             Some("https://api.x.ai/v1"),
                             config::get_xai_api_key(cfg).unwrap(),
+                            None,
+                        ),
+                        config::AiModel::LlamaCpp(_) => (
+                            cfg.llama_cpp
+                                .as_ref()
+                                .and_then(|llama_cpp| llama_cpp.base_url.as_deref())
+                                .or(Some("http://127.0.0.1:8080")),
+                            "null".to_string(), // No API key needed for llama.cpp
                             None,
                         ),
                         _ => {

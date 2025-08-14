@@ -22,8 +22,8 @@ Or, you can dive in and rely on `hai -h` (CLI), `/help` (REPL), and
 - 📦 Single, standalone binary—no installation or dependencies required.
 - 🪶 Lightweight (< 9MB compressed) for your machine, SBCs, and servers.
 - 🗯 Run many instances for simultaneous conversations.
-- 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, xAI, and Ollama
-  (local) all in a single conversation.
+- 🤖 Supports AIs from OpenAI, Anthropic, DeepSeek, Google, xAI, and
+  llama.cpp/Ollama (local) all in a single conversation.
 - 🕶 Go incognito `hai -i`.
 - ⚙ Give AI the power to run programs on your computer.
 - 🍝 Share AI prompt-pasta publicly using the task repository.

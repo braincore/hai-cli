@@ -22,6 +22,7 @@ pub struct Config {
     pub check_for_updates: bool,
     pub openai: Option<OpenAiConfig>,
     pub anthropic: Option<AnthropicConfig>,
+    pub llama_cpp: Option<LlamaCppConfig>,
     pub ollama: Option<OllamaConfig>,
     pub google: Option<GoogleConfig>,
     pub deepseek: Option<DeepSeekConfig>,
@@ -47,6 +48,12 @@ pub struct GoogleConfig {
 #[derive(Debug, Deserialize)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LlamaCppConfig {
+    /// If unspecified, defaults to "http://127.0.0.1:8080"
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +119,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         }
         "sonnet37thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
+        "llamacpp" => Some(AiModel::LlamaCpp(LlamaCppModel::Other("n/a".to_string()))),
         _ => {
             let openai_regex = Regex::new(r"^openai/(\S+)$").unwrap();
             if let Some(captures) = openai_regex.captures(ai_model) {
@@ -125,6 +133,16 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
             if let Some(captures) = anthropic_regex.captures(ai_model) {
                 if let Some(submodel) = captures.get(1) {
                     return Some(AiModel::Anthropic(AnthropicModel::Other(
+                        submodel.as_str().to_string(),
+                    )));
+                }
+            }
+            // The model is for display purposes only. llama.cpp server ignores
+            // the model parameter.
+            let llama_cpp_regex = Regex::new(r"^llamacpp/(\S+)$").unwrap();
+            if let Some(captures) = llama_cpp_regex.captures(ai_model) {
+                if let Some(submodel) = captures.get(1) {
+                    return Some(AiModel::LlamaCpp(LlamaCppModel::Other(
                         submodel.as_str().to_string(),
                     )));
                 }
@@ -231,6 +249,10 @@ pub fn read_config_as_string(
 # Your Anthropic API key (required to use Anthropic models).
 #api_key = ""
 
+[llama_cpp]
+# Base URL for the llama.cpp server (default: http://127.0.0.1:8080).
+#base_url = ""
+
 [ollama]
 # Base URL for the Ollama API (default: http://localhost:11434).
 #base_url = ""
@@ -311,6 +333,7 @@ pub enum AiModel {
     Anthropic(AnthropicModel),
     DeepSeek(DeepSeekModel),
     Google(GoogleModel),
+    LlamaCpp(LlamaCppModel),
     Ollama(OllamaModel),
     OpenAi(OpenAiModel),
     /// For testing only
@@ -344,6 +367,11 @@ pub enum GoogleModel {
     Gemini15Flash,
     Gemini15Flash8B,
     Gemini15Pro,
+    Other(String),
+}
+
+#[derive(Debug)]
+pub enum LlamaCppModel {
     Other(String),
 }
 
@@ -415,6 +443,9 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             GoogleModel::Gemini15Pro => "gemini-1.5-pro",
             GoogleModel::Other(name) => name,
         },
+        AiModel::LlamaCpp(model) => match model {
+            LlamaCppModel::Other(name) => name,
+        },
         AiModel::Ollama(model) => match model {
             OllamaModel::Gemma3 => "gemma3:27b",
             OllamaModel::GptOss20b => "gpt-oss:20b",
@@ -481,6 +512,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             GoogleModel::Gemini15Flash8B => "flash-1.5-8b",
             GoogleModel::Gemini15Pro => "gemini-1.5-pro",
             GoogleModel::Other(name) => name,
+        },
+        AiModel::LlamaCpp(model) => match model {
+            LlamaCppModel::Other(name) => name,
         },
         AiModel::Ollama(model) => match model {
             OllamaModel::Gemma3 => "gemma3:27b",
@@ -562,6 +596,12 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
                 tool: false,
             },
         },
+        AiModel::LlamaCpp(model) => match model {
+            LlamaCppModel::Other(_) => AiModelCapability {
+                image: true,
+                tool: true,
+            },
+        },
         AiModel::Ollama(model) => match model {
             OllamaModel::Gemma3 => AiModelCapability {
                 image: true,
@@ -636,6 +676,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | GoogleModel::Gemini15Flash8B
                 | GoogleModel::Gemini15Pro
         ),
+        AiModel::LlamaCpp(_) => false,
         AiModel::Ollama(_) => false,
         AiModel::OpenAi(model) => matches!(
             model,
@@ -694,6 +735,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             GoogleModel::Gemini15Pro => Some((1250, 5000)),
             GoogleModel::Other(_) => None,
         },
+        AiModel::LlamaCpp(_) => None,
         AiModel::Ollama(_) => None,
         AiModel::OpenAi(model) => match model {
             OpenAiModel::ChatGpt4o => Some((5000, 15000)),
@@ -991,7 +1033,7 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
                 return false;
             }
         }
-        AiModel::Ollama(_) | AiModel::Void(_) => {
+        AiModel::LlamaCpp(_) | AiModel::Ollama(_) | AiModel::Void(_) => {
             // No auth needed
         }
     };
@@ -1020,9 +1062,9 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
         AiModel::Google(GoogleModel::Gemini25Flash)
     } else if get_xai_api_key(cfg).is_some() {
         AiModel::Xai(XaiModel::Grok4)
-    } else if let Some(OllamaConfig { base_url: Some(_) }) = cfg.ollama {
-        AiModel::Ollama(OllamaModel::GptOss20b)
     } else {
+        // Do not default to a llama.cpp or ollama model since there are too
+        // many options and it is not clear which one to use.
         AiModel::OpenAi(OpenAiModel::Gpt41)
     }
 }

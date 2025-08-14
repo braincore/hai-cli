@@ -1,7 +1,7 @@
 # LLM models
 
-`hai` supports models from OpenAI, Anthropic, DeepSeek, Google, xAI, and
-Ollama.
+`hai` supports models from OpenAI, Anthropic, DeepSeek, Google, and xAI. Local
+models served via llama.cpp or Ollama are supported as well.
 
 ![](../image/hai-multi-ai.gif)
 
@@ -50,3 +50,13 @@ supports all the capabilities (images, tools) utilized in the conversation.
 
 If a model doesn’t have a built-in shortcut, or if you want to use a specific
 version, you can specify it as `<ai_provider>/<official_model_name>`.
+
+### `llama.cpp` server
+
+`llama-server` serves only one model per instance decided by the command-line
+arguments. Because the `model` parameter in the API request is ignored,
+`llamacpp` can be specified as the `<ai_provider>` without any model name.
+
+```
+/ai llamacpp
+```
