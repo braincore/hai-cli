@@ -78,6 +78,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "flash158b" | "gemini15flash8b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
         "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
+        "gemma3" | "gemma" => Some(AiModel::Ollama(OllamaModel::Gemma3)),
         "gpt41" | "41" => Some(AiModel::OpenAi(OpenAiModel::Gpt41)),
         "gpt41mini" | "41mini" | "41m" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Mini)),
         "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
@@ -86,6 +87,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt5nano" | "g5nano" | "g5n" | "5n" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Nano)),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
+        "gptoss" | "oss" => Some(AiModel::Ollama(OllamaModel::GptOss20b)),
         "grok3" => Some(AiModel::Xai(XaiModel::Grok3)),
         "grok3fast" | "grok3f" => Some(AiModel::Xai(XaiModel::Grok3Fast)),
         "grok3mini" | "grok3m" => Some(AiModel::Xai(XaiModel::Grok3Mini)),
@@ -202,7 +204,7 @@ pub fn read_config_as_string(
 #default_ai_model = "gpt-4.1"
 
 # The default AI model in incognito mode.
-#default_incognito_ai_model = "llama32"
+#default_incognito_ai_model = "gpt-oss:20b"
 
 # The default editor to use for modifying assets (default: vim)
 #default_editor = "vim"
@@ -347,6 +349,8 @@ pub enum GoogleModel {
 
 #[derive(Debug)]
 pub enum OllamaModel {
+    Gemma3,
+    GptOss20b,
     Llama32,
     Llama32Vision,
     Other(String),
@@ -412,6 +416,8 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             GoogleModel::Other(name) => name,
         },
         AiModel::Ollama(model) => match model {
+            OllamaModel::Gemma3 => "gemma3:27b",
+            OllamaModel::GptOss20b => "gpt-oss:20b",
             OllamaModel::Llama32 => "llama3.2",
             OllamaModel::Llama32Vision => "llama3.2-vision",
             OllamaModel::Other(name) => name,
@@ -477,6 +483,8 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
             GoogleModel::Other(name) => name,
         },
         AiModel::Ollama(model) => match model {
+            OllamaModel::Gemma3 => "gemma3:27b",
+            OllamaModel::GptOss20b => "gpt-oss:20b",
             OllamaModel::Llama32 => "llama3.2",
             OllamaModel::Llama32Vision => "llama3.2-vision",
             OllamaModel::Other(name) => name,
@@ -555,6 +563,14 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             },
         },
         AiModel::Ollama(model) => match model {
+            OllamaModel::Gemma3 => AiModelCapability {
+                image: true,
+                tool: false,
+            },
+            OllamaModel::GptOss20b => AiModelCapability {
+                image: false,
+                tool: true,
+            },
             OllamaModel::Llama32 => AiModelCapability {
                 image: false,
                 tool: true,
@@ -1005,7 +1021,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else if get_xai_api_key(cfg).is_some() {
         AiModel::Xai(XaiModel::Grok4)
     } else if let Some(OllamaConfig { base_url: Some(_) }) = cfg.ollama {
-        AiModel::Ollama(OllamaModel::Llama32)
+        AiModel::Ollama(OllamaModel::GptOss20b)
     } else {
         AiModel::OpenAi(OpenAiModel::Gpt41)
     }

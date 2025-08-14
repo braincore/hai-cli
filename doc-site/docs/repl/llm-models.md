@@ -46,7 +46,7 @@ supports all the capabilities (images, tools) utilized in the conversation.
 | Google     | gemini-2.5-flash (`flash25`), gemini-2.5-pro (`gemini25pro`), gemini-2.0-flash (`flash20`) |
 | DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
 | xAI        | grok-4                                         |
-| Ollama     | gemma3, llama3.2, llama3.3                     |
+| Ollama     | gemma3:27b, gpt-oss:20b, llama3.2, llama3.2-vision |
 
 If a model doesn’t have a built-in shortcut, or if you want to use a specific
 version, you can specify it as `<ai_provider>/<official_model_name>`.

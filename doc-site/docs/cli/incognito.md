@@ -17,10 +17,10 @@ Modify `~/.hai/hai.toml`:
 
 ```
 # The default AI model in incognito mode.
-#default_incognito_ai_model = "ollama/gemma3:27b"
+#default_incognito_ai_model = "ollama/gpt-oss:20b"
 ```
 
-While any AI model can be specified, a local model (e.g. `ollama/gemma3:27b`)
+While any AI model can be specified, a local model (e.g. `ollama/gpt-oss:20b`)
 lets you be fully discrete: no conversation history and no data leaves your
 machine.
 

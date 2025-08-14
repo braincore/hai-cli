@@ -206,7 +206,7 @@ pub async fn process_cmd(
                     if need_xai_key { need_key } else { "" }
                 );
                 println!(
-                    "Using Ollama: llama, llama-vision, ollama/___ (configure host in config)"
+                    "Using Ollama: oss, gemma3, llama, llama-vision, ollama/___ (configure host in config)"
                 );
             }
             ProcessCmdResult::Loop
@@ -3704,7 +3704,7 @@ const HELP_MSG: &str = r##"Available Commands:
 
 /ai                          - Show the current AI model
 /ai <model>                  - Switch AI model
-                               Available models: 4o, 4o-mini, sonnet35, haiku35, llama32, llama32-vision, flash15
+                               Available models: gpt5, o4mini, opus, sonnet, r1, grok, gpt-oss, ...
                                Prefix provider for any model: openai/*, anthropic/*, ollama/*, google/*
 /ai-default                  - Show the default AI model on start up
 /ai-default <model>          - Set the default AI model on start up
