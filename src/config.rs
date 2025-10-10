@@ -73,7 +73,13 @@ pub struct XaiConfig {
 }
 
 pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
-    match ai_model.replace("-", "").replace(".", "").as_str() {
+    // TODO:
+    // parse out a string by splitting 0 or more commas after the ai_model
+    // which are "arguments" to the ai_model like reasoning_effort
+    // e.g. "gpt-4,reasoning=high,verbosity=low"
+    let opts: Vec<&str> = ai_model.split(',').collect();
+    let model_name = opts.get(0)?.replace("-", "").replace(".", "");
+    match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
@@ -89,9 +95,13 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt41" | "41" => Some(AiModel::OpenAi(OpenAiModel::Gpt41)),
         "gpt41mini" | "41mini" | "41m" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Mini)),
         "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
-        "gpt5" | "g5" | "5" => Some(AiModel::OpenAi(OpenAiModel::Gpt5)),
-        "gpt5mini" | "g5mini" | "g5m" | "5m" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Mini)),
-        "gpt5nano" | "g5nano" | "g5n" | "5n" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Nano)),
+        "gpt5" | "g5" | "5" => Some(AiModel::OpenAi(OpenAiModel::Gpt5(parse_gpt5_opts(opts)))),
+        "gpt5mini" | "g5mini" | "g5m" | "5m" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Mini(
+            parse_gpt5_opts(opts),
+        ))),
+        "gpt5nano" | "g5nano" | "g5n" | "5n" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Nano(
+            parse_gpt5_opts(opts),
+        ))),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
         "gptoss" | "oss" => Some(AiModel::Ollama(OllamaModel::GptOss20b)),
@@ -187,6 +197,52 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
             }
             None
         }
+    }
+}
+
+pub fn parse_gpt5_opts(opts: Vec<&str>) -> Gpt5Options {
+    let mut reasoning_effort = None;
+    let mut verbosity = None;
+    for opt in opts {
+        let mut kv = opt.split('=');
+        let key = match kv.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let value = match kv.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        match key {
+            "r" | "reasoning" => {
+                reasoning_effort = match value {
+                    "min" | "minimal" => Some(OpenAiReasoningEffort::Minimal),
+                    "l" | "low" => Some(OpenAiReasoningEffort::Low),
+                    "m" | "medium" => Some(OpenAiReasoningEffort::Medium),
+                    "h" | "high" => Some(OpenAiReasoningEffort::High),
+                    _ => {
+                        println!("ignoring unknown reasoning effort: {}", value);
+                        continue;
+                    }
+                };
+            }
+            "v" | "verbosity" => match value {
+                "l" | "low" => verbosity = Some(OpenAiVerbosity::Low),
+                "m" | "medium" => verbosity = Some(OpenAiVerbosity::Medium),
+                "h" | "high" => verbosity = Some(OpenAiVerbosity::High),
+                _ => {
+                    println!("ignoring unknown verbosity level: {}", value);
+                    continue;
+                }
+            },
+            _ => {
+                println!("ignoring unknown option: {}", key);
+            }
+        }
+    }
+    Gpt5Options {
+        reasoning_effort,
+        verbosity,
     }
 }
 
@@ -385,14 +441,35 @@ pub enum OllamaModel {
 }
 
 #[derive(Debug)]
+pub enum OpenAiReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug)]
+pub enum OpenAiVerbosity {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug)]
+pub struct Gpt5Options {
+    pub reasoning_effort: Option<OpenAiReasoningEffort>,
+    pub verbosity: Option<OpenAiVerbosity>,
+}
+
+#[derive(Debug)]
 pub enum OpenAiModel {
     ChatGpt4o,
     Gpt41,
     Gpt41Mini,
     Gpt41Nano,
-    Gpt5,
-    Gpt5Mini,
-    Gpt5Nano,
+    Gpt5(Gpt5Options),
+    Gpt5Mini(Gpt5Options),
+    Gpt5Nano(Gpt5Options),
     Gpt4o,
     Gpt4oMini,
     O1,
@@ -458,9 +535,9 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OpenAiModel::Gpt41 => "gpt-4.1-2025-04-14",
             OpenAiModel::Gpt41Mini => "gpt-4.1-mini-2025-04-14",
             OpenAiModel::Gpt41Nano => "gpt-4.1-nano-2025-04-14",
-            OpenAiModel::Gpt5 => "gpt-5-2025-08-07",
-            OpenAiModel::Gpt5Mini => "gpt-5-mini-2025-08-07",
-            OpenAiModel::Gpt5Nano => "gpt-5-nano-2025-08-07",
+            OpenAiModel::Gpt5(_) => "gpt-5-2025-08-07",
+            OpenAiModel::Gpt5Mini(_) => "gpt-5-mini-2025-08-07",
+            OpenAiModel::Gpt5Nano(_) => "gpt-5-nano-2025-08-07",
             OpenAiModel::Gpt4o => "gpt-4o-2024-11-20",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini-2024-07-18",
             OpenAiModel::O1 => "o1-2024-12-17",
@@ -484,73 +561,102 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
     }
 }
 
-pub fn get_ai_model_display_name(ai_model: &AiModel) -> &str {
+pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
     match ai_model {
         AiModel::Anthropic(model) => match model {
-            AnthropicModel::Haiku35 => "haiku-3.5",
-            AnthropicModel::Opus4(false) => "opus-4",
-            AnthropicModel::Opus4(true) => "opus-4-thinking",
-            AnthropicModel::Opus41(false) => "opus-4.1",
-            AnthropicModel::Opus41(true) => "opus-4.1-thinking",
-            AnthropicModel::Sonnet35 => "sonnet-3.5",
-            AnthropicModel::Sonnet37(false) => "sonnet-3.7",
-            AnthropicModel::Sonnet37(true) => "sonnet-3.7-thinking",
-            AnthropicModel::Sonnet4(false) => "sonnet-4",
-            AnthropicModel::Sonnet4(true) => "sonnet-4-thinking",
-            AnthropicModel::Other(name) => name,
+            AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
+            AnthropicModel::Opus4(false) => "opus-4".to_string(),
+            AnthropicModel::Opus4(true) => "opus-4-thinking".to_string(),
+            AnthropicModel::Opus41(false) => "opus-4.1".to_string(),
+            AnthropicModel::Opus41(true) => "opus-4.1-thinking".to_string(),
+            AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
+            AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
+            AnthropicModel::Sonnet37(true) => "sonnet-3.7-thinking".to_string(),
+            AnthropicModel::Sonnet4(false) => "sonnet-4".to_string(),
+            AnthropicModel::Sonnet4(true) => "sonnet-4-thinking".to_string(),
+            AnthropicModel::Other(name) => name.clone(),
         },
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => "deepseek-chat",
-            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner",
-            DeepSeekModel::Other(name) => name,
+            DeepSeekModel::DeepSeekChat => "deepseek-chat".to_string(),
+            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner".to_string(),
+            DeepSeekModel::Other(name) => name.clone(),
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini25Flash => "gemini-2.5-flash",
-            GoogleModel::Gemini25Pro => "gemini-2.5-pro",
-            GoogleModel::Gemini20Flash => "flash-2.0",
-            GoogleModel::Gemini15Flash => "flash-1.5",
-            GoogleModel::Gemini15Flash8B => "flash-1.5-8b",
-            GoogleModel::Gemini15Pro => "gemini-1.5-pro",
-            GoogleModel::Other(name) => name,
+            GoogleModel::Gemini25Flash => "gemini-2.5-flash".to_string(),
+            GoogleModel::Gemini25Pro => "gemini-2.5-pro".to_string(),
+            GoogleModel::Gemini20Flash => "flash-2.0".to_string(),
+            GoogleModel::Gemini15Flash => "flash-1.5".to_string(),
+            GoogleModel::Gemini15Flash8B => "flash-1.5-8b".to_string(),
+            GoogleModel::Gemini15Pro => "gemini-1.5-pro".to_string(),
+            GoogleModel::Other(name) => name.clone(),
         },
         AiModel::LlamaCpp(model) => match model {
-            LlamaCppModel::Other(name) => name,
+            LlamaCppModel::Other(name) => name.clone(),
         },
         AiModel::Ollama(model) => match model {
-            OllamaModel::Gemma3 => "gemma3:27b",
-            OllamaModel::GptOss20b => "gpt-oss:20b",
-            OllamaModel::Llama32 => "llama3.2",
-            OllamaModel::Llama32Vision => "llama3.2-vision",
-            OllamaModel::Other(name) => name,
+            OllamaModel::Gemma3 => "gemma3:27b".to_string(),
+            OllamaModel::GptOss20b => "gpt-oss:20b".to_string(),
+            OllamaModel::Llama32 => "llama3.2".to_string(),
+            OllamaModel::Llama32Vision => "llama3.2-vision".to_string(),
+            OllamaModel::Other(name) => name.clone(),
         },
         AiModel::OpenAi(model) => match model {
-            OpenAiModel::ChatGpt4o => "chatgpt-4o",
-            OpenAiModel::Gpt41 => "gpt-4.1",
-            OpenAiModel::Gpt41Mini => "gpt-4.1-mini",
-            OpenAiModel::Gpt41Nano => "gpt-4.1-nano",
-            OpenAiModel::Gpt5 => "gpt-5",
-            OpenAiModel::Gpt5Mini => "gpt-5-mini",
-            OpenAiModel::Gpt5Nano => "gpt-5-nano",
-            OpenAiModel::Gpt4o => "gpt-4o",
-            OpenAiModel::Gpt4oMini => "gpt-4o-mini",
-            OpenAiModel::O1 => "o1",
-            OpenAiModel::O1Mini => "o1-mini",
-            OpenAiModel::O3 => "o3",
-            OpenAiModel::O3Mini => "o3-mini",
-            OpenAiModel::O4Mini => "o4-mini",
-            OpenAiModel::Other(name) => name,
+            OpenAiModel::ChatGpt4o => "chatgpt-4o".to_string(),
+            OpenAiModel::Gpt41 => "gpt-4.1".to_string(),
+            OpenAiModel::Gpt41Mini => "gpt-4.1-mini".to_string(),
+            OpenAiModel::Gpt41Nano => "gpt-4.1-nano".to_string(),
+            OpenAiModel::Gpt5(opts) => format!("gpt-5{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt5Mini(opts) => format!("gpt-5-mini{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt5Nano(opts) => format!("gpt-5-nano{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt4o => "gpt-4o".to_string(),
+            OpenAiModel::Gpt4oMini => "gpt-4o-mini".to_string(),
+            OpenAiModel::O1 => "o1".to_string(),
+            OpenAiModel::O1Mini => "o1-mini".to_string(),
+            OpenAiModel::O3 => "o3".to_string(),
+            OpenAiModel::O3Mini => "o3-mini".to_string(),
+            OpenAiModel::O4Mini => "o4-mini".to_string(),
+            OpenAiModel::Other(name) => name.clone(),
         },
         AiModel::Void(model) => match model {
-            VoidModel::Other(name) => name,
+            VoidModel::Other(name) => name.clone(),
         },
         AiModel::Xai(model) => match model {
-            XaiModel::Grok4 => "grok-4",
-            XaiModel::Grok3 => "grok-3",
-            XaiModel::Grok3Fast => "grok-3-fast",
-            XaiModel::Grok3Mini => "grok-3-mini",
-            XaiModel::Grok3MiniFast => "grok-3-mini-fast",
-            XaiModel::Other(name) => name,
+            XaiModel::Grok4 => "grok-4".to_string(),
+            XaiModel::Grok3 => "grok-3".to_string(),
+            XaiModel::Grok3Fast => "grok-3-fast".to_string(),
+            XaiModel::Grok3Mini => "grok-3-mini".to_string(),
+            XaiModel::Grok3MiniFast => "grok-3-mini-fast".to_string(),
+            XaiModel::Other(name) => name.clone(),
         },
+    }
+}
+
+pub fn get_gpt5_opts_display(opts: &Gpt5Options) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(ref r) = opts.reasoning_effort {
+        let r_str = match r {
+            OpenAiReasoningEffort::Minimal => "min",
+            OpenAiReasoningEffort::Low => "l",
+            OpenAiReasoningEffort::Medium => "m",
+            OpenAiReasoningEffort::High => "h",
+        };
+        parts.push(format!("r={}", r_str));
+    }
+
+    if let Some(ref v) = opts.verbosity {
+        let v_str = match v {
+            OpenAiVerbosity::Low => "l",
+            OpenAiVerbosity::Medium => "m",
+            OpenAiVerbosity::High => "h",
+        };
+        parts.push(format!("v={}", v_str));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(","))
     }
 }
 
@@ -683,9 +789,9 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
             OpenAiModel::Gpt41
                 | OpenAiModel::Gpt41Mini
                 | OpenAiModel::Gpt41Nano
-                | OpenAiModel::Gpt5
-                | OpenAiModel::Gpt5Mini
-                | OpenAiModel::Gpt5Nano
+                | OpenAiModel::Gpt5(_)
+                | OpenAiModel::Gpt5Mini(_)
+                | OpenAiModel::Gpt5Nano(_)
                 | OpenAiModel::Gpt4o
                 | OpenAiModel::Gpt4oMini
                 | OpenAiModel::O1
@@ -742,9 +848,9 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::Gpt41 => Some((2000, 8000)),
             OpenAiModel::Gpt41Mini => Some((400, 1600)),
             OpenAiModel::Gpt41Nano => Some((100, 400)),
-            OpenAiModel::Gpt5 => Some((1250, 10000)),
-            OpenAiModel::Gpt5Mini => Some((250, 2000)),
-            OpenAiModel::Gpt5Nano => Some((50, 400)),
+            OpenAiModel::Gpt5(_) => Some((1250, 10000)),
+            OpenAiModel::Gpt5Mini(_) => Some((250, 2000)),
+            OpenAiModel::Gpt5Nano(_) => Some((50, 400)),
             OpenAiModel::Gpt4o => Some((2500, 10000)),
             OpenAiModel::Gpt4oMini => Some((150, 600)),
             OpenAiModel::O1 => Some((15000, 60000)),

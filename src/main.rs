@@ -1426,6 +1426,22 @@ pub async fn prompt_ai(
         | config::AiModel::DeepSeek(_)
         | config::AiModel::Xai(_)
         | config::AiModel::LlamaCpp(_) => {
+            let openai_reasoning_effort = match &session.ai {
+                config::AiModel::OpenAi(
+                    config::OpenAiModel::Gpt5(opts)
+                    | config::OpenAiModel::Gpt5Mini(opts)
+                    | config::OpenAiModel::Gpt5Nano(opts),
+                ) => &opts.reasoning_effort,
+                _ => &None,
+            };
+            let openai_verbosity = match &session.ai {
+                config::AiModel::OpenAi(
+                    config::OpenAiModel::Gpt5(opts)
+                    | config::OpenAiModel::Gpt5Mini(opts)
+                    | config::OpenAiModel::Gpt5Nano(opts),
+                ) => &opts.verbosity,
+                _ => &None,
+            };
             let deepseek_flatten_nonuser_content =
                 matches!(session.ai, config::AiModel::DeepSeek(_));
             let (base_url, api_key, provider_header) =
@@ -1496,6 +1512,8 @@ pub async fn prompt_ai(
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
+                &openai_reasoning_effort,
+                &openai_verbosity,
                 deepseek_flatten_nonuser_content,
             )
             .await

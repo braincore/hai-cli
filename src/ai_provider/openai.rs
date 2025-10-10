@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::ai_provider::tool_schema::get_tool_schema;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
-use crate::config;
+use crate::config::{self, OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
 
@@ -62,6 +62,8 @@ pub async fn send_to_openai(
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &HashSet<String>,
     debug: bool,
+    reasoning_effort: &Option<OpenAiReasoningEffort>,
+    verbosity: &Option<OpenAiVerbosity>,
     deepseek_flatten_nonuser_content: bool, // DeepSeek specific
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
@@ -120,6 +122,23 @@ pub async fn send_to_openai(
             // supports it, callers are currently unprepared to structure the
             // message history correctly.
             request_obj.insert("parallel_tool_calls".to_string(), json!(false));
+        }
+        if let Some(reasoning_effort) = reasoning_effort {
+            let reasoning_effort_str = match reasoning_effort {
+                OpenAiReasoningEffort::Minimal => "minimal",
+                OpenAiReasoningEffort::Low => "low",
+                OpenAiReasoningEffort::Medium => "medium",
+                OpenAiReasoningEffort::High => "high",
+            };
+            request_obj.insert("reasoning_effort".to_string(), json!(reasoning_effort_str));
+        }
+        if let Some(verbosity) = verbosity {
+            let verbosity_str = match verbosity {
+                OpenAiVerbosity::Low => "low",
+                OpenAiVerbosity::Medium => "medium",
+                OpenAiVerbosity::High => "high",
+            };
+            request_obj.insert("verbosity".to_string(), json!(verbosity_str));
         }
     }
     remove_nulls(&mut request_body);
