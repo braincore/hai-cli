@@ -29,6 +29,15 @@ pub async fn edit_with_editor_api(
 
     let tx_main = tx.clone();
 
+    if let Some(asset_entry_ref) = asset_entry_ref.as_ref() {
+        let init_msg = WorkerAssetMsg::Init(WorkerAssetInit {
+            asset_name: asset_name.to_string(),
+            asset_entry_ref: asset_entry_ref.clone(),
+            new_contents: initial_content.to_vec(),
+        });
+        let _ = tx_main.send(init_msg).await;
+    }
+
     // Create a thread-safe notify watcher
     let api_client_cloned = api_client.clone();
     let asset_name_cloned = asset_name.to_string();
@@ -161,8 +170,16 @@ use crate::api::types::asset::{
 
 #[derive(Debug)]
 pub enum WorkerAssetMsg {
+    Init(WorkerAssetInit),
     Update(WorkerAssetUpdate),
     Done(String), // asset_name
+}
+
+#[derive(Debug)]
+pub struct WorkerAssetInit {
+    pub asset_name: String,
+    pub asset_entry_ref: (String, String), // (entry_id, rev_id)
+    pub new_contents: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -191,6 +208,15 @@ pub async fn worker_update_asset(
     let mut asset_errors: HashMap<String, Vec<String>> = HashMap::new();
     while let Some(msg) = rx.recv().await {
         match msg {
+            WorkerAssetMsg::Init(WorkerAssetInit {
+                asset_name,
+                asset_entry_ref,
+                new_contents,
+            }) => {
+                let new_hash = Sha256::digest(&new_contents).to_vec();
+                asset_bottom_map
+                    .insert(asset_name, (asset_entry_ref.0, asset_entry_ref.1, new_hash));
+            }
             WorkerAssetMsg::Update(WorkerAssetUpdate {
                 asset_name,
                 asset_entry_ref,
