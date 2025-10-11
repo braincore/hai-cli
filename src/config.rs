@@ -512,8 +512,8 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini25Flash => "gemini-2.5-flash-preview-04-17",
-            GoogleModel::Gemini25Pro => "gemini-2.5-pro-preview-03-25",
+            GoogleModel::Gemini25Flash => "gemini-2.5-flash",
+            GoogleModel::Gemini25Pro => "gemini-2.5-pro",
             GoogleModel::Gemini20Flash => "gemini-2.0-flash",
             GoogleModel::Gemini15Flash => "gemini-1.5-flash",
             GoogleModel::Gemini15Flash8B => "gemini-1.5-flash-8b",
