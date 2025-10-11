@@ -186,7 +186,7 @@ pub async fn process_cmd(
                 let need_key = "  (NEED API KEY: /set-key OR /hai-router)";
                 println!("Try these popular models:");
                 println!(
-                    "From OpenAI: 4o, 4o-mini, o1, o1-mini, o3-mini, openai/___{}",
+                    "From OpenAI: gpt5, gpt5-mini, o4-mini, o3, openai/___{}",
                     if need_openai_key { need_key } else { "" }
                 );
                 println!(
