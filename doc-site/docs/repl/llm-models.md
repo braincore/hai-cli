@@ -64,22 +64,26 @@ arguments. Because the `model` parameter in the API request is ignored,
 ## Model-specific options
 
 Some models support additional options. These are specified as a list of comma-
-delimited key-values following the model name:
+delimited keys or key-values following the model name:
 
 ```
-/ai <model>,<option1>=<value1>,<option2>=<value2>,...
+/ai <model>,<option1>[=<value1>],...
 ```
 
-| Model | Option key        | Accepted Values                                             |
-|-------|-------------------|-------------------------------------------------------------|
-| GPT-5 | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
-| GPT-5 | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
+| Model      | Option key        | Accepted Values                                             |
+|------------|-------------------|-------------------------------------------------------------|
+| GPT-5      | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
+| GPT-5      | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
+| Sonnet-3.7 | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Sonnet-4.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Opus-4.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 
-
-For example:
+Examples:
 
 ```
 /ai gpt-5,reasoning=low,verbosity=medium
 /ai gpt-5,r=l,v=m
 /ai gpt-5,r=h
+/ai sonnet,thinking
+/ai sonnet,t
 ```

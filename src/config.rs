@@ -73,12 +73,12 @@ pub struct XaiConfig {
 }
 
 pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
-    // TODO:
-    // parse out a string by splitting 0 or more commas after the ai_model
-    // which are "arguments" to the ai_model like reasoning_effort
+    // Parse out a string by splitting 0 or more commas after the ai_model
+    // which are parameters to the ai_model like `reasoning_effort`
     // e.g. "gpt-4,reasoning=high,verbosity=low"
-    let opts: Vec<&str> = ai_model.split(',').collect();
+    let mut opts: Vec<&str> = ai_model.split(',').collect();
     let model_name = opts.get(0)?.replace("-", "").replace(".", "");
+    opts.remove(0);
     match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
@@ -118,15 +118,27 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "haiku" | "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
         "llama" | "llama32" => Some(AiModel::Ollama(OllamaModel::Llama32)),
         "llamavision" | "llama32vision" => Some(AiModel::Ollama(OllamaModel::Llama32Vision)),
-        "opus4" => Some(AiModel::Anthropic(AnthropicModel::Opus4(false))),
+        "opus4" => Some(AiModel::Anthropic(AnthropicModel::Opus4(
+            parse_anthropic_opts(opts),
+        ))),
         "opus4thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus4(true))),
-        "opus" | "opus41" => Some(AiModel::Anthropic(AnthropicModel::Opus41(false))),
+        "opus" | "opus41" => Some(AiModel::Anthropic(AnthropicModel::Opus41(
+            parse_anthropic_opts(opts),
+        ))),
         "opus41thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus41(true))),
-        "sonnet" | "sonnet4" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(false))),
-        "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(false))),
-        "sonnetthinking" | "sonnet4thinking" => {
-            Some(AiModel::Anthropic(AnthropicModel::Sonnet4(true)))
+        "sonnet" | "sonnet45" => Some(AiModel::Anthropic(AnthropicModel::Sonnet45(
+            parse_anthropic_opts(opts),
+        ))),
+        "sonnetthinking" | "sonnet45thinking" => {
+            Some(AiModel::Anthropic(AnthropicModel::Sonnet45(true)))
         }
+        "sonnet4" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(
+            parse_anthropic_opts(opts),
+        ))),
+        "sonnet4thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(true))),
+        "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(
+            parse_anthropic_opts(opts),
+        ))),
         "sonnet37thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
         "llamacpp" => Some(AiModel::LlamaCpp(LlamaCppModel::Other("n/a".to_string()))),
@@ -244,6 +256,36 @@ pub fn parse_gpt5_opts(opts: Vec<&str>) -> Gpt5Options {
         reasoning_effort,
         verbosity,
     }
+}
+
+pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
+    for opt in opts {
+        let mut kv = opt.split('=');
+        let key = match kv.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let value = match kv.next() {
+            Some(v) => v,
+            None => "true",
+        };
+        match key {
+            "t" | "thinking" => {
+                match value {
+                    "true" => return true,
+                    "false" => return false,
+                    _ => {
+                        println!("ignoring unknown thinking value: {}", value);
+                        continue;
+                    }
+                };
+            }
+            _ => {
+                println!("ignoring unknown option: {}", key);
+            }
+        }
+    }
+    false
 }
 
 impl Config {
@@ -405,6 +447,7 @@ pub enum AnthropicModel {
     Sonnet35,
     Sonnet37(bool), // If true, enables thinking
     Sonnet4(bool),  // If true, enables thinking
+    Sonnet45(bool), // If true, enables thinking
     Other(String),
 }
 
@@ -504,6 +547,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
+            AnthropicModel::Sonnet45(_) => "claude-sonnet-4-5-20250929",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
@@ -566,14 +610,16 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
             AnthropicModel::Opus4(false) => "opus-4".to_string(),
-            AnthropicModel::Opus4(true) => "opus-4-thinking".to_string(),
+            AnthropicModel::Opus4(true) => "opus-4(t)".to_string(),
             AnthropicModel::Opus41(false) => "opus-4.1".to_string(),
-            AnthropicModel::Opus41(true) => "opus-4.1-thinking".to_string(),
+            AnthropicModel::Opus41(true) => "opus-4.1(t)".to_string(),
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
-            AnthropicModel::Sonnet37(true) => "sonnet-3.7-thinking".to_string(),
+            AnthropicModel::Sonnet37(true) => "sonnet-3.7(t)".to_string(),
             AnthropicModel::Sonnet4(false) => "sonnet-4".to_string(),
-            AnthropicModel::Sonnet4(true) => "sonnet-4-thinking".to_string(),
+            AnthropicModel::Sonnet4(true) => "sonnet-4(t)".to_string(),
+            AnthropicModel::Sonnet45(false) => "sonnet-4.5".to_string(),
+            AnthropicModel::Sonnet45(true) => "sonnet-4.5(t)".to_string(),
             AnthropicModel::Other(name) => name.clone(),
         },
         AiModel::DeepSeek(model) => match model {
@@ -767,6 +813,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
+                    | AnthropicModel::Sonnet45(_)
             )
         }
         AiModel::DeepSeek(model) => matches!(
@@ -820,9 +867,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Haiku35 => Some((800, 4000)),
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
-            AnthropicModel::Sonnet35 | AnthropicModel::Sonnet37(_) | AnthropicModel::Sonnet4(_) => {
-                Some((3000, 15000))
-            }
+            AnthropicModel::Sonnet35
+            | AnthropicModel::Sonnet37(_)
+            | AnthropicModel::Sonnet4(_)
+            | AnthropicModel::Sonnet45(_) => Some((3000, 15000)),
             AnthropicModel::Other(_) => None,
         },
         AiModel::DeepSeek(model) => match model {
@@ -1161,7 +1209,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else if get_openai_api_key(cfg).is_some() {
         AiModel::OpenAi(OpenAiModel::Gpt41)
     } else if get_anthropic_api_key(cfg).is_some() {
-        AiModel::Anthropic(AnthropicModel::Sonnet4(false))
+        AiModel::Anthropic(AnthropicModel::Sonnet45(false))
     } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
     } else if get_google_api_key(cfg).is_some() {
