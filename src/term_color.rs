@@ -178,6 +178,13 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
     let ts = get_theme_set();
     let ps = get_syntax_set();
 
+    // jsx isn't supported by two_face, but tsx is.
+    let lang_token = if lang_token == "jsx" {
+        "tsx"
+    } else {
+        lang_token
+    };
+
     let mut highlighter = if let Some(syntax) = ps.find_syntax_by_token(lang_token) {
         HighlightLines::new(
             syntax,

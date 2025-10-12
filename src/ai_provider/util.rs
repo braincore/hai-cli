@@ -174,6 +174,8 @@ impl SyntaxHighlighterPrinter<'_> {
     }
 
     pub fn set_highlighter(&mut self, token: &str) {
+        // jsx isn't supported by two_face, but tsx is.
+        let token = if token == "jsx" { "tsx" } else { token };
         if self.default_highlighter.is_none() {
             self.default_highlighter = Some(
                 self.highlighter
