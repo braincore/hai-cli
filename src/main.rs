@@ -124,6 +124,12 @@ enum CliSubcommand {
     },
 }
 
+use rmcp::{ServiceExt,
+    model::{CallToolRequestParam},
+    object,
+    transport::{TokioChildProcess, ConfigureCommandExt}};
+use tokio::process::Command;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
@@ -132,6 +138,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if config_path_override.is_none() {
         config::create_config_dir_if_missing().expect("Could not create dir");
     }
+
+    let client = ().serve(TokioChildProcess::new(Command::new("npx").configure(|cmd| {
+        cmd.arg("-y").arg("@modelcontextprotocol/server-everything");
+    }))?).await?;
+
+    println!("client: {:?}", client);
+    // Initialize
+    let server_info = client.peer_info();
+    println!("Connected to server: {server_info:#?}");
+
+    // List tools
+    let tools = client.list_all_tools().await?;
+    println!("Available tools: {tools:#?}");
+
+    // Call tool longRunningOperation
+    let tool_result = client
+        .call_tool(CallToolRequestParam {
+            //name: "longRunningOperation".into(),
+            //arguments: Some(object!({ "duration": 3, "steps": 1 })),
+            name: "echo".into(),
+            arguments: Some(object!({ "message": "Hello, world!" })),
+        })
+        .await?;
+    println!("Tool result: {tool_result:#?}");
+
+    // List resources
+    //let resources = client.list_all_resources().await?;
+    //println!("Available resources: {resources:#?}");
 
     // Typically, reedline (line-editor) is intercepting signals. However, when
     // a tool subprocess is running, reedline isn't blocking, and therefore
