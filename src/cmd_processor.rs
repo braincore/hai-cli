@@ -3627,6 +3627,18 @@ lesson (e.g. "understanding").\n\n{}"#,
                     "Model", "Per 1M input tokens"
                 );
                 for ai in [
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5(config::Gpt5Options {
+                        reasoning_effort: None,
+                        verbosity: None,
+                    })),
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5Mini(config::Gpt5Options {
+                        reasoning_effort: None,
+                        verbosity: None,
+                    })),
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5Nano(config::Gpt5Options {
+                        reasoning_effort: None,
+                        verbosity: None,
+                    })),
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt41),
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt41Mini),
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt4o),
@@ -3636,6 +3648,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                     config::AiModel::Google(config::GoogleModel::Gemini25Flash),
                     config::AiModel::Google(config::GoogleModel::Gemini25Pro),
                     config::AiModel::Anthropic(config::AnthropicModel::Sonnet45(false)),
+                    config::AiModel::Anthropic(config::AnthropicModel::Opus41(false)),
                     config::AiModel::Anthropic(config::AnthropicModel::Haiku35),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekReasoner),
