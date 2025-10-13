@@ -8,6 +8,12 @@ description = "A CLI with a REPL for hackers using LLMs."
 documentation = "https://github.com/braincore/hai-cli/blob/master/README.md"
 repository = "https://github.com/braincore/hai-cli"
 readme = "README.md"
+exclude = [
+    "api_spec/",
+    "doc-site/",
+    "scripts/",
+    "ttyd_demo/",
+]
 
 [[bin]]
 name = "hai"
@@ -80,3 +86,4 @@ lto = "fat"
 [dev-dependencies]
 assert_cmd = "2.0.17"
 predicates = "3.1.3"
+
