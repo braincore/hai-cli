@@ -1279,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "hai-cli"
-version = "1.19.0"
+version = "1.20.0"
 dependencies = [
  "ansi-width",
  "ansi_colours",
