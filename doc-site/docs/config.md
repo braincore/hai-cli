@@ -79,3 +79,16 @@ default_ai_temperature_to_absolute_zero = false
 ```
 
 Alternatively, you can use the `/temperature` command in the REPL.
+
+# Environment Variables
+
+The following environment variables are recognized:
+
+| Environment variable   | Description |
+| ---------------------- | ----------- |
+| `OPENAI_API_KEY`       | API key for OpenAI. |
+| `GOOGLE_API_KEY`       | API key for Google AI. |
+| `ANTHROPIC_API_KEY`    | API key for Anthropic. |
+| `DEEPSEEK_API_KEY`     | API key for DeepSeek. |
+| `XAI_API_KEY`          | API key for xAI. |
+| `HAI_NO_PRETTY_IMAGES` | Disables high-resolution terminal image protocols (set to any value to enable). |

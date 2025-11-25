@@ -73,7 +73,7 @@ toml = "0.8.19"
 toml_edit = "0.22.22"
 two-face = { version = "0.4.3", default-features = false, features = ["syntect-default-fancy"] }
 uuid = { version = "1.11.0", features = ["std", "v7"] }
-viuer = "0.9.1"
+viuer = { version = "0.10.0", features = ["icy_sixel"] }
 which = "8.0.0"
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
