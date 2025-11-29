@@ -460,13 +460,11 @@ async fn repl(
     });
 
     let mut default_ai_model = config::choose_init_ai_model(&cfg);
-    if incognito {
-        if let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
-            if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
-                default_ai_model = ai_model;
-            } else {
-                eprintln!("error: unknown incognito model {}", ai_model_unmatched_str);
-            }
+    if incognito && let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
+        if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
+            default_ai_model = ai_model;
+        } else {
+            eprintln!("error: unknown incognito model {}", ai_model_unmatched_str);
         }
     }
     if let Some(force_ai_model) = force_ai_model {
@@ -738,11 +736,12 @@ async fn repl(
         } else {
             continue;
         };
-        if exit_when_done && session.cmd_queue.is_empty() {
-            if let cmd::Cmd::Noop = cmd {
-                cleanup(&session);
-                process::exit(0);
-            }
+        if exit_when_done
+            && session.cmd_queue.is_empty()
+            && let cmd::Cmd::Noop = cmd
+        {
+            cleanup(&session);
+            process::exit(0);
         }
 
         // Block further progress until tokenizer has been loaded. Rarely
@@ -826,11 +825,11 @@ async fn repl(
         //
 
         // Check model supports tools (if necessary)
-        if let cmd::Cmd::Tool(_) = cmd {
-            if !config::get_ai_model_capability(&session.ai).tool {
-                eprintln!("error: model does not support tools");
-                continue;
-            }
+        if let cmd::Cmd::Tool(_) = cmd
+            && !config::get_ai_model_capability(&session.ai).tool
+        {
+            eprintln!("error: model does not support tools");
+            continue;
         }
 
         // Check api-key for ai provider is set (prints error msg to stderr)
@@ -1017,22 +1016,20 @@ async fn repl(
                     }
                 };
             }
-        } else if cache {
-            if let Some((task_fqn, task_key, step_index)) = &task_step_signature {
-                db::set_task_step_cache(
-                    &*db.lock().await,
-                    session
-                        .account
-                        .as_ref()
-                        .map(|a| a.username.as_str())
-                        .unwrap_or(""),
-                    task_fqn,
-                    task_key.as_deref(),
-                    *step_index,
-                    &prompt,
-                    &serde_json::to_string(&ai_responses).unwrap(),
-                )
-            }
+        } else if cache && let Some((task_fqn, task_key, step_index)) = &task_step_signature {
+            db::set_task_step_cache(
+                &*db.lock().await,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| a.username.as_str())
+                    .unwrap_or(""),
+                task_fqn,
+                task_key.as_deref(),
+                *step_index,
+                &prompt,
+                &serde_json::to_string(&ai_responses).unwrap(),
+            )
         }
 
         for ai_response in &ai_responses {
@@ -1199,111 +1196,103 @@ async fn repl(
                     true
                 };
 
-                if user_confirmed_tool_execute {
-                    if let Some(ref tp) = tool_policy_combined {
-                        let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
-                            println!("Tool Interrupted");
-                        });
-                        let output_text = if matches!(tp.tool, tool::Tool::HaiRepl) {
-                            match tool::execute_hai_repl_tool(&tp.tool, arg, &mut session.cmd_queue)
-                            {
-                                Ok(output_text) => output_text,
-                                Err(e) => {
-                                    let err_text = format!("error executing hai-repl tool: {}", e);
-                                    println!("{}", err_text);
-                                    err_text
-                                }
+                if user_confirmed_tool_execute && let Some(ref tp) = tool_policy_combined {
+                    let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
+                        println!("Tool Interrupted");
+                    });
+                    let output_text = if matches!(tp.tool, tool::Tool::HaiRepl) {
+                        match tool::execute_hai_repl_tool(&tp.tool, arg, &mut session.cmd_queue) {
+                            Ok(output_text) => output_text,
+                            Err(e) => {
+                                let err_text = format!("error executing hai-repl tool: {}", e);
+                                println!("{}", err_text);
+                                err_text
                             }
-                        } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
-                            let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref() {
-                                // If name already in use, replaces.
-                                // This makes iteration easier.
-                                format!("f_{}", name)
-                            } else {
-                                // Get first free name
-                                let mut i = session.ai_defined_fns.len();
-                                loop {
-                                    let test_name = format!("f{}", i);
-                                    if !session.ai_defined_fns.contains_key(&test_name) {
-                                        break test_name;
-                                    }
-                                    i += 1;
-                                }
-                            };
-                            match tool::extract_ai_defined_fn_def(arg) {
-                                Ok(fn_def) => {
-                                    let ai_defined_fn = session::AiDefinedFn {
-                                        fn_def,
-                                        fn_tool: fn_tool.clone(),
-                                    };
-                                    session.ai_defined_fns.insert(
-                                        ai_defined_tool_name.clone(),
-                                        (ai_defined_fn, is_task_mode_step),
-                                    );
-                                    let output_text =
-                                        format!("Stored as command: /{}", ai_defined_tool_name);
-                                    println!("{}", output_text);
-                                    output_text
-                                }
-                                Err(e) => {
-                                    let err_text = format!("error extracting function: {}", e);
-                                    println!("{}", err_text);
-                                    err_text
-                                }
-                            }
-                        } else if matches!(tp.tool, tool::Tool::Html) {
-                            match feature::html_tool::execute_html_tool(
-                                &mut session,
-                                is_task_mode_step,
-                                arg,
-                            )
-                            .await
-                            {
-                                Ok(temp_file_path) => {
-                                    let output_text = format!("Updated {}", temp_file_path);
-                                    println!("{}", output_text);
-                                    output_text
-                                }
-                                Err(e) => {
-                                    let err_text = format!("error executing HTML tool: {}", e);
-                                    println!("{}", err_text);
-                                    err_text
-                                }
-                            }
+                        }
+                    } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
+                        let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref() {
+                            // If name already in use, replaces.
+                            // This makes iteration easier.
+                            format!("f_{}", name)
                         } else {
-                            match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell)
-                                .await
-                            {
-                                Ok(output_text) => output_text,
-                                Err(e) => {
-                                    let err_text = format!("error executing tool: {}", e);
-                                    println!("{}", err_text);
-                                    err_text
+                            // Get first free name
+                            let mut i = session.ai_defined_fns.len();
+                            loop {
+                                let test_name = format!("f{}", i);
+                                if !session.ai_defined_fns.contains_key(&test_name) {
+                                    break test_name;
                                 }
+                                i += 1;
                             }
                         };
-                        ctrlc_handler.remove_handler(tool_exec_handler_id);
-                        // Increment tokens because the tool output will be part of
-                        // the next message's input.
-                        let tokens =
-                            bpe_tokenizer.encode_with_special_tokens(&output_text).len() as u32;
-                        session.input_tokens += tokens;
-                        session.history.push(db::LogEntry {
-                            uuid: Uuid::now_v7().to_string(),
-                            ts: chrono::Local::now(),
-                            message: chat::Message {
-                                role: chat::MessageRole::Tool,
-                                content: vec![chat::MessageContent::Text { text: output_text }],
-                                tool_calls: None,
-                                tool_call_id: Some(tool_id.clone()),
-                            },
-                            tokens,
-                            retention_policy: (
-                                is_task_mode_step,
-                                db::LogEntryRetentionPolicy::None,
-                            ),
-                        });
-                    }
+                        match tool::extract_ai_defined_fn_def(arg) {
+                            Ok(fn_def) => {
+                                let ai_defined_fn = session::AiDefinedFn {
+                                    fn_def,
+                                    fn_tool: fn_tool.clone(),
+                                };
+                                session.ai_defined_fns.insert(
+                                    ai_defined_tool_name.clone(),
+                                    (ai_defined_fn, is_task_mode_step),
+                                );
+                                let output_text =
+                                    format!("Stored as command: /{}", ai_defined_tool_name);
+                                println!("{}", output_text);
+                                output_text
+                            }
+                            Err(e) => {
+                                let err_text = format!("error extracting function: {}", e);
+                                println!("{}", err_text);
+                                err_text
+                            }
+                        }
+                    } else if matches!(tp.tool, tool::Tool::Html) {
+                        match feature::html_tool::execute_html_tool(
+                            &mut session,
+                            is_task_mode_step,
+                            arg,
+                        )
+                        .await
+                        {
+                            Ok(temp_file_path) => {
+                                let output_text = format!("Updated {}", temp_file_path);
+                                println!("{}", output_text);
+                                output_text
+                            }
+                            Err(e) => {
+                                let err_text = format!("error executing HTML tool: {}", e);
+                                println!("{}", err_text);
+                                err_text
+                            }
+                        }
+                    } else {
+                        match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell).await {
+                            Ok(output_text) => output_text,
+                            Err(e) => {
+                                let err_text = format!("error executing tool: {}", e);
+                                println!("{}", err_text);
+                                err_text
+                            }
+                        }
+                    };
+                    ctrlc_handler.remove_handler(tool_exec_handler_id);
+                    // Increment tokens because the tool output will be part of
+                    // the next message's input.
+                    let tokens =
+                        bpe_tokenizer.encode_with_special_tokens(&output_text).len() as u32;
+                    session.input_tokens += tokens;
+                    session.history.push(db::LogEntry {
+                        uuid: Uuid::now_v7().to_string(),
+                        ts: chrono::Local::now(),
+                        message: chat::Message {
+                            role: chat::MessageRole::Tool,
+                            content: vec![chat::MessageContent::Text { text: output_text }],
+                            tool_calls: None,
+                            tool_call_id: Some(tool_id.clone()),
+                        },
+                        tokens,
+                        retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                    });
                 }
             }
         }
@@ -1512,8 +1501,8 @@ pub async fn prompt_ai(
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
-                &openai_reasoning_effort,
-                &openai_verbosity,
+                openai_reasoning_effort,
+                openai_verbosity,
                 deepseek_flatten_nonuser_content,
             )
             .await

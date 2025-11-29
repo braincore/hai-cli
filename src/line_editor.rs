@@ -206,7 +206,7 @@ impl EditorPrompt {
 }
 
 impl Prompt for EditorPrompt {
-    fn render_prompt_left(&self) -> Cow<str> {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
         let incognito_emoji = if self.incognito { "😎" } else { "" };
         let is_dev_emoji = if self.is_dev { "🔧" } else { "" };
         let task_name = self.task_mode.clone().unwrap_or("".into());
@@ -221,7 +221,7 @@ impl Prompt for EditorPrompt {
         ))
     }
 
-    fn render_prompt_right(&self) -> Cow<str> {
+    fn render_prompt_right(&self) -> Cow<'_, str> {
         let username_str = self
             .username
             .as_ref()
@@ -245,7 +245,7 @@ impl Prompt for EditorPrompt {
         ))
     }
 
-    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> Cow<str> {
+    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> Cow<'_, str> {
         match _edit_mode {
             PromptEditMode::Custom(_)
             | PromptEditMode::Default
@@ -255,14 +255,14 @@ impl Prompt for EditorPrompt {
         }
     }
 
-    fn render_prompt_multiline_indicator(&self) -> Cow<str> {
+    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
         Cow::Borrowed("::: ")
     }
 
     fn render_prompt_history_search_indicator(
         &self,
         history_search: PromptHistorySearch,
-    ) -> Cow<str> {
+    ) -> Cow<'_, str> {
         let prefix = match history_search.status {
             PromptHistorySearchStatus::Passing => "",
             PromptHistorySearchStatus::Failing => "failing ",
@@ -290,17 +290,17 @@ impl QuestionPrompt {
 }
 
 impl Prompt for QuestionPrompt {
-    fn render_prompt_left(&self) -> Cow<str> {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
         Cow::Owned(format!("[QUESTION] {}", self.question))
     }
 
-    fn render_prompt_right(&self) -> Cow<str> {
+    fn render_prompt_right(&self) -> Cow<'_, str> {
         let now: DateTime<Local> = Local::now();
         let formatted_time = now.format("%m/%d/%y %I:%M:%S %p").to_string();
         Cow::Owned(format!("{} {}", abbreviate_cwd(), formatted_time))
     }
 
-    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> Cow<str> {
+    fn render_prompt_indicator(&self, _edit_mode: PromptEditMode) -> Cow<'_, str> {
         match _edit_mode {
             PromptEditMode::Custom(_)
             | PromptEditMode::Default
@@ -310,14 +310,14 @@ impl Prompt for QuestionPrompt {
         }
     }
 
-    fn render_prompt_multiline_indicator(&self) -> Cow<str> {
+    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
         Cow::Borrowed("::: ")
     }
 
     fn render_prompt_history_search_indicator(
         &self,
         history_search: PromptHistorySearch,
-    ) -> Cow<str> {
+    ) -> Cow<'_, str> {
         let prefix = match history_search.status {
             PromptHistorySearchStatus::Passing => "",
             PromptHistorySearchStatus::Failing => "failing ",
@@ -340,11 +340,11 @@ fn abbreviate_cwd() -> String {
 
 fn abbreviate_path(path: PathBuf) -> String {
     // Get the user's home directory (fall back to returning the full path if unavailable)
-    if let Some(home_dir) = dirs::home_dir() {
-        if let Ok(stripped) = path.strip_prefix(&home_dir) {
-            // If the cwd starts with the home directory, replace the prefix with '~'
-            return format!("~/{}", stripped.display());
-        }
+    if let Some(home_dir) = dirs::home_dir()
+        && let Ok(stripped) = path.strip_prefix(&home_dir)
+    {
+        // If the cwd starts with the home directory, replace the prefix with '~'
+        return format!("~/{}", stripped.display());
     }
 
     // If no abbreviation is possible, return the full path as-is
@@ -449,13 +449,12 @@ fn find_programs_with_prefix(prefix: &str) -> Vec<String> {
             if let Ok(entries) = fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                        if file_name.starts_with(prefix)
-                            && is_executable::is_executable(&path)
-                            && seen.insert(file_name.to_string())
-                        {
-                            results.push(file_name.to_string());
-                        }
+                    if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                        && file_name.starts_with(prefix)
+                        && is_executable::is_executable(&path)
+                        && seen.insert(file_name.to_string())
+                    {
+                        results.push(file_name.to_string());
                     }
                 }
             }
@@ -468,8 +467,8 @@ fn find_programs_with_prefix(prefix: &str) -> Vec<String> {
 /// # Returns
 /// (token ID (counting from left, 0 is cmd), token, token index in line)
 fn get_current_token(line: &str) -> (u32, &str, usize) {
-    let (_cmd_word, all_args, all_args_index) = if line.starts_with("!!") {
-        ("!!", &line[2..], 2)
+    let (_cmd_word, all_args, all_args_index) = if let Some(stripped) = line.strip_prefix("!!") {
+        ("!!", stripped, 2)
     } else {
         split_cmd_and_args(line)
     };

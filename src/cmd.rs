@@ -949,14 +949,14 @@ fn parse_command(
     full_input: &str, // Only for the fallback case
 ) -> Option<Cmd> {
     let ai_def_tool_re = get_ai_def_tool_re();
-    if let Some(captures) = ai_def_tool_re.captures(cmd_name) {
-        if let Some(m) = captures.get(1) {
-            let fn_name = format!("f{}", m.as_str());
-            return Some(Cmd::FnExec(FnExecCmd {
-                fn_name,
-                arg: remaining.trim().to_string(),
-            }));
-        }
+    if let Some(captures) = ai_def_tool_re.captures(cmd_name)
+        && let Some(m) = captures.get(1)
+    {
+        let fn_name = format!("f{}", m.as_str());
+        return Some(Cmd::FnExec(FnExecCmd {
+            fn_name,
+            arg: remaining.trim().to_string(),
+        }));
     }
     match cmd_name {
         "quit" | "q" => {
@@ -1911,21 +1911,21 @@ fn parse_command(
                             Some(Cmd::Std(StdCmd::Now))
                         } else {
                             eprintln!("Usage: {fn_name} takes no arguments");
-                            return None;
+                            None
                         }
                     } else if fn_name == "new-day-alert" {
                         if fn_arg.is_none() {
                             Some(Cmd::Std(StdCmd::NewDayAlert))
                         } else {
                             eprintln!("Usage: {fn_name} takes no arguments");
-                            return None;
+                            None
                         }
                     } else if fn_name == "which" {
                         if let Some(prog) = fn_arg {
                             Some(Cmd::Std(StdCmd::Which(prog)))
                         } else {
                             eprintln!("Usage: {fn_name} <prog>");
-                            return None;
+                            None
                         }
                     } else {
                         eprintln!("Unknown stdlib function: {fn_name}");
@@ -2429,9 +2429,9 @@ fn parse_options(options_input: &str) -> HashMap<String, String> {
         let mut pairs = Vec::new();
         let mut current = String::new();
         let mut in_quotes = false;
-        let mut chars = content.chars().peekable();
+        let chars = content.chars().peekable();
 
-        while let Some(c) = chars.next() {
+        for c in chars {
             match c {
                 '"' => {
                     current.push(c);

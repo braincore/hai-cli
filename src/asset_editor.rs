@@ -62,19 +62,18 @@ pub async fn edit_with_editor_api(
                     }
                     if let notify::EventKind::Modify(notify::event::ModifyKind::Data(_)) =
                         event.kind
+                        && let Ok(new_contents) = fs::read(&file_path)
                     {
-                        if let Ok(new_contents) = fs::read(&file_path) {
-                            // Send an async message to the worker thread when the file changes
-                            let msg = WorkerAssetMsg::Update(WorkerAssetUpdate {
-                                asset_name,
-                                asset_entry_ref,
-                                new_contents,
-                                is_push,
-                                api_client,
-                                one_shot: false,
-                            });
-                            let _ = tx.blocking_send(msg);
-                        }
+                        // Send an async message to the worker thread when the file changes
+                        let msg = WorkerAssetMsg::Update(WorkerAssetUpdate {
+                            asset_name,
+                            asset_entry_ref,
+                            new_contents,
+                            is_push,
+                            api_client,
+                            one_shot: false,
+                        });
+                        let _ = tx.blocking_send(msg);
                     }
                 }
                 Err(e) => eprintln!("Watch error: {:?}", e),
@@ -235,31 +234,29 @@ pub async fn worker_update_asset(
                     }
                 };
                 let mut md_title = None;
-                if is_markdown {
-                    if let Ok(content_str) = std::str::from_utf8(&new_contents) {
-                        if let Some(first_line) = content_str.lines().next() {
-                            if let Some(title_candidate) = first_line.strip_prefix("# ") {
-                                let title = title_candidate.trim().to_string();
-                                if !title.is_empty() {
-                                    md_title = Some(serde_json::Value::String(title));
-                                }
-                            }
-                        }
+                if is_markdown
+                    && let Ok(content_str) = std::str::from_utf8(&new_contents)
+                    && let Some(first_line) = content_str.lines().next()
+                    && let Some(title_candidate) = first_line.strip_prefix("# ")
+                {
+                    let title = title_candidate.trim().to_string();
+                    if !title.is_empty() {
+                        md_title = Some(serde_json::Value::String(title));
                     }
                 }
 
                 let new_hash = Sha256::digest(&new_contents).to_vec();
                 // Check if the hash matches the last known hash
-                if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name) {
-                    if &new_hash == last_hash {
-                        if debug {
-                            let _ = crate::config::write_to_debug_log(format!(
-                                "worker-update-asset: skipped update for '{}' (hash unchanged)\n",
-                                asset_name
-                            ));
-                        }
-                        continue;
+                if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name)
+                    && &new_hash == last_hash
+                {
+                    if debug {
+                        let _ = crate::config::write_to_debug_log(format!(
+                            "worker-update-asset: skipped update for '{}' (hash unchanged)\n",
+                            asset_name
+                        ));
                     }
+                    continue;
                 }
                 if is_push {
                     match api_client
@@ -367,29 +364,24 @@ pub async fn worker_update_asset(
                             }
                         }
                     };
-                    if is_markdown {
-                        if let Ok(asset_entry) =
+                    if is_markdown
+                        && let Ok(asset_entry) =
                             asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
                                 .await
-                        {
-                            if !one_shot {
-                                if let Some((_, _, existing_hash)) =
-                                    asset_bottom_map.get(&asset_name)
-                                {
-                                    // Metadata updates change the revision
-                                    // ID which we need to update to avoid
-                                    // forking.
-                                    asset_bottom_map.insert(
-                                        asset_name.clone(),
-                                        (
-                                            asset_entry.entry_id,
-                                            asset_entry.asset.rev_id,
-                                            existing_hash.clone(),
-                                        ),
-                                    );
-                                }
-                            }
-                        }
+                        && !one_shot
+                        && let Some((_, _, existing_hash)) = asset_bottom_map.get(&asset_name)
+                    {
+                        // Metadata updates change the revision
+                        // ID which we need to update to avoid
+                        // forking.
+                        asset_bottom_map.insert(
+                            asset_name.clone(),
+                            (
+                                asset_entry.entry_id,
+                                asset_entry.asset.rev_id,
+                                existing_hash.clone(),
+                            ),
+                        );
                     }
                 }
             }
@@ -402,12 +394,12 @@ pub async fn worker_update_asset(
                 }
                 asset_bottom_map.remove(&asset_name);
                 let errors = asset_errors.remove(&asset_name);
-                if let Some(errors) = errors {
-                    if !errors.is_empty() {
-                        eprintln!("errors while in editor:");
-                        for error_msg in errors {
-                            eprintln!("{}", error_msg);
-                        }
+                if let Some(errors) = errors
+                    && !errors.is_empty()
+                {
+                    eprintln!("errors while in editor:");
+                    for error_msg in errors {
+                        eprintln!("{}", error_msg);
                     }
                 }
             }

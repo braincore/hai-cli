@@ -143,17 +143,17 @@ pub async fn prompt_to_chat_message_content(
             }
         }
     }
-    if !cur_md_group.is_empty() {
-        if let Ok(cur_md_group_text) = mdast_util_to_markdown::to_markdown(
+    if !cur_md_group.is_empty()
+        && let Ok(cur_md_group_text) = mdast_util_to_markdown::to_markdown(
             &markdown::mdast::Node::Root(markdown::mdast::Root {
                 children: cur_md_group,
                 position: None,
             }),
-        ) {
-            msg_content.push(MessageContent::Text {
-                text: cur_md_group_text,
-            });
-        }
+        )
+    {
+        msg_content.push(MessageContent::Text {
+            text: cur_md_group_text,
+        });
     }
     msg_content
 }

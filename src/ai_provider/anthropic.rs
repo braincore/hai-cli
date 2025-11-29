@@ -66,11 +66,6 @@ pub enum ContentBlockType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ContentText {
-    text: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDeltaInfo {
     stop_reason: String,
 }
@@ -208,18 +203,18 @@ pub async fn send_to_anthropic(
             "tool_choice": tool_choice,
         })
     };
-    if let Some(request_obj) = request_body.as_object_mut() {
-        if use_thinking {
-            request_obj.insert(
-                "thinking".to_string(),
-                json!({
-                    "type": "enabled",
-                    "budget_tokens": 4096,
-                }),
-            );
-            // API requires thinking to be set to 1 if thinking is enabled.
-            request_obj.insert("temperature".to_string(), json!(1));
-        }
+    if let Some(request_obj) = request_body.as_object_mut()
+        && use_thinking
+    {
+        request_obj.insert(
+            "thinking".to_string(),
+            json!({
+                "type": "enabled",
+                "budget_tokens": 4096,
+            }),
+        );
+        // API requires thinking to be set to 1 if thinking is enabled.
+        request_obj.insert("temperature".to_string(), json!(1));
     }
     remove_nulls(&mut request_body);
 

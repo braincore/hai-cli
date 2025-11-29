@@ -147,7 +147,7 @@ pub struct SyntaxHighlighterPrinter<'a> {
 
 impl SyntaxHighlighterPrinter<'_> {
     pub fn new(one_shot: bool) -> Self {
-        let printer = SyntaxHighlighterPrinter {
+        SyntaxHighlighterPrinter {
             buffer: String::new(),
             highlighter: Some(HighlightLines::new(
                 term_color::get_syntax_set()
@@ -165,8 +165,7 @@ impl SyntaxHighlighterPrinter<'_> {
             background_color: None,
             cur_line_partial: false,
             one_shot,
-        };
-        printer
+        }
     }
 
     pub fn set_background_color(&mut self, r: u8, g: u8, b: u8, a: u8) {
@@ -203,10 +202,10 @@ impl SyntaxHighlighterPrinter<'_> {
 
     pub fn highlighter_check_start(&mut self, line: &str) {
         let markdown_code_block_re = term_color::get_markdown_code_block_re();
-        if let Some(captures) = markdown_code_block_re.captures(line) {
-            if let Some(lang) = captures.get(1).map(|m| m.as_str().to_string()) {
-                self.set_highlighter(&lang);
-            }
+        if let Some(captures) = markdown_code_block_re.captures(line)
+            && let Some(lang) = captures.get(1).map(|m| m.as_str().to_string())
+        {
+            self.set_highlighter(&lang);
         }
     }
 
@@ -286,46 +285,46 @@ impl SyntaxHighlighterPrinter<'_> {
 
             // If highlighter is set, clear the previous line and reprint with
             // colors.
-            if need_reprint && let Some(highlighter) = self.highlighter.as_mut() {
-                if let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
-                {
-                    let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
-                    let (terminal_width, terminal_height) = crossterm::terminal::size().unwrap();
-                    // This is a bit tricky.
-                    // Let W be the terminal_width. If W characters are
-                    // printed, the cursor will report its position as W-1.
-                    // Therefore, if W characters are printed, we want the
-                    // division to be 0: (W-1)/W.
-                    let height = if line_width == 0 {
-                        1
-                    } else {
-                        ((line_width - 1) / terminal_width) + 1
-                    };
-                    let _ = crate::config::write_to_debug_log(format!(
-                        "FIRST line: {:?}\n",
-                        full_first_line
-                    ));
-                    let _ = crate::config::write_to_debug_log(format!(
-                        "term: cursor=({}, {}) term-size=({}, {}) line-width={} height={}\n",
-                        _cursor_x_preprint,
-                        cursor_y_preprint,
-                        terminal_width,
-                        terminal_height,
-                        line_width,
-                        height
-                    ));
+            if need_reprint
+                && let Some(highlighter) = self.highlighter.as_mut()
+                && let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
+            {
+                let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
+                let (terminal_width, terminal_height) = crossterm::terminal::size().unwrap();
+                // This is a bit tricky.
+                // Let W be the terminal_width. If W characters are
+                // printed, the cursor will report its position as W-1.
+                // Therefore, if W characters are printed, we want the
+                // division to be 0: (W-1)/W.
+                let height = if line_width == 0 {
+                    1
+                } else {
+                    ((line_width - 1) / terminal_width) + 1
+                };
+                let _ = crate::config::write_to_debug_log(format!(
+                    "FIRST line: {:?}\n",
+                    full_first_line
+                ));
+                let _ = crate::config::write_to_debug_log(format!(
+                    "term: cursor=({}, {}) term-size=({}, {}) line-width={} height={}\n",
+                    _cursor_x_preprint,
+                    cursor_y_preprint,
+                    terminal_width,
+                    terminal_height,
+                    line_width,
+                    height
+                ));
 
-                    crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
+                crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
 
-                    let line_with_ending = format!("{}\n", full_first_line);
-                    print_line_syntax_highlighted(
-                        &mut stdout,
-                        &color_capability,
-                        highlighter,
-                        &self.background_color,
-                        &line_with_ending,
-                    );
-                }
+                let line_with_ending = format!("{}\n", full_first_line);
+                print_line_syntax_highlighted(
+                    &mut stdout,
+                    &color_capability,
+                    highlighter,
+                    &self.background_color,
+                    &line_with_ending,
+                );
             }
 
             // It's important to activate highlighting after the start so that
@@ -367,7 +366,7 @@ impl SyntaxHighlighterPrinter<'_> {
                     &color_capability,
                     highlighter,
                     &self.background_color,
-                    &last_line_partial,
+                    last_line_partial,
                 );
             } else {
                 let _ = write!(stdout, "{}", last_line_partial);
@@ -375,23 +374,21 @@ impl SyntaxHighlighterPrinter<'_> {
             }
             self.cur_line_partial = !last_line_partial.is_empty();
             self.buffer.push_str(last_line_partial);
+        } else if self.one_shot
+            && let Some(highlighter) = self.highlighter.as_mut()
+        {
+            print_line_syntax_highlighted(
+                &mut stdout,
+                &color_capability,
+                highlighter,
+                &self.background_color,
+                next,
+            );
         } else {
-            if self.one_shot
-                && let Some(highlighter) = self.highlighter.as_mut()
-            {
-                print_line_syntax_highlighted(
-                    &mut stdout,
-                    &color_capability,
-                    highlighter,
-                    &self.background_color,
-                    &next,
-                );
-            } else {
-                self.cur_line_partial = true;
-                self.buffer.push_str(next);
-                let _ = write!(stdout, "{}", next);
-                stdout.flush().unwrap(); // Flush to skip line-buffer
-            }
+            self.cur_line_partial = true;
+            self.buffer.push_str(next);
+            let _ = write!(stdout, "{}", next);
+            stdout.flush().unwrap(); // Flush to skip line-buffer
         }
     }
 
@@ -407,39 +404,38 @@ impl SyntaxHighlighterPrinter<'_> {
         // activated, the current line should be cleared and reprinted with
         // highlighting. This is only an issue when the output ends with ```
         // w/o a trailing newline.
-        if let Some(color_capability) = self.terminal_color_capability.clone() {
-            if let Some(highlighter) = self.highlighter.as_mut() {
-                let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
-                let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
-                let height = if line_width == 0 {
-                    0
-                } else {
-                    (line_width - 1) / terminal_width
-                };
+        if let Some(color_capability) = self.terminal_color_capability.clone()
+            && let Some(highlighter) = self.highlighter.as_mut()
+        {
+            let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
+            let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
+            let height = if line_width == 0 {
+                0
+            } else {
+                (line_width - 1) / terminal_width
+            };
 
-                let _ = crate::config::write_to_debug_log(format!(
-                    "UNCLOSED END: {} {} {:?}\n",
-                    line_width, height, &self.buffer,
-                ));
+            let _ = crate::config::write_to_debug_log(format!(
+                "UNCLOSED END: {} {} {:?}\n",
+                line_width, height, &self.buffer,
+            ));
 
-                // WARN: In some terminals, MoveToPreviousLine(0) will
-                // default to 1 which is undesirable so it's handled
-                // separately.
-                if height > 0 {
-                    crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height))
-                        .unwrap();
-                } else {
-                    crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
-                }
-
-                print_line_syntax_highlighted(
-                    &mut stdout,
-                    &color_capability,
-                    highlighter,
-                    &self.background_color,
-                    &self.buffer,
-                );
+            // WARN: In some terminals, MoveToPreviousLine(0) will
+            // default to 1 which is undesirable so it's handled
+            // separately.
+            if height > 0 {
+                crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height)).unwrap();
+            } else {
+                crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
             }
+
+            print_line_syntax_highlighted(
+                &mut stdout,
+                &color_capability,
+                highlighter,
+                &self.background_color,
+                &self.buffer,
+            );
         }
     }
 }
@@ -453,7 +449,7 @@ pub fn print_line_syntax_highlighted(
 ) {
     let ps = term_color::get_syntax_set();
     let highlighted_parts: Vec<(Style, &str)> =
-        highlighter.highlight_line(&line_with_ending, ps).unwrap();
+        highlighter.highlight_line(line_with_ending, ps).unwrap();
 
     for (style, text) in highlighted_parts {
         let escaped =

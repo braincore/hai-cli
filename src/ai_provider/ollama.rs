@@ -1,5 +1,4 @@
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -11,22 +10,6 @@ use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
-
-//
-// Start Ollama Response Types
-// - Some bozos "designed" their types
-//
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-struct ToolCallResponse {
-    function: FunctionResponse,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug)]
-struct FunctionResponse {
-    name: String,
-    arguments: String,
-}
 
 //
 // End Ollama Response Types
@@ -239,30 +222,29 @@ pub async fn send_to_ollama(
                         json_length = Some(i + 1);
                         if let Ok(tool_response) = serde_json::from_value::<serde_json::Value>(
                             json_data["message"]["tool_calls"][0]["function"].clone(),
-                        ) {
-                            if !tool_response.is_null() {
-                                let tool_name = tool_response["name"].as_str().unwrap().to_string();
-                                // HACK: Just serialize it again to re-use machinery.
-                                let arguments =
-                                    serde_json::to_string(&tool_response["arguments"]).unwrap();
-                                tool_calls.insert(
-                                    0,
-                                    JsonObjectAccumulator::new(
-                                        "STUB".to_string(),
-                                        tool_name,
-                                        tool_policy.and_then(|tp| {
-                                            tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
-                                        }),
-                                        masked_strings.clone(),
-                                    ),
-                                );
-                                if let Some(json_accumulator) = tool_calls.get_mut(&0) {
-                                    json_accumulator.acc(&arguments);
-                                } else {
-                                    eprintln!("error: unexpected tool call ID: {}", 0);
-                                }
-                                break;
+                        ) && !tool_response.is_null()
+                        {
+                            let tool_name = tool_response["name"].as_str().unwrap().to_string();
+                            // HACK: Just serialize it again to re-use machinery.
+                            let arguments =
+                                serde_json::to_string(&tool_response["arguments"]).unwrap();
+                            tool_calls.insert(
+                                0,
+                                JsonObjectAccumulator::new(
+                                    "STUB".to_string(),
+                                    tool_name,
+                                    tool_policy.and_then(|tp| {
+                                        tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
+                                    }),
+                                    masked_strings.clone(),
+                                ),
+                            );
+                            if let Some(json_accumulator) = tool_calls.get_mut(&0) {
+                                json_accumulator.acc(&arguments);
+                            } else {
+                                eprintln!("error: unexpected tool call ID: {}", 0);
                             }
+                            break;
                         }
                         if let Some(content) = json_data["message"]["content"].as_str() {
                             text_accumulator.acc(content);

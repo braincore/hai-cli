@@ -301,10 +301,10 @@ pub async fn account_nobody_setup_session(
 
 pub fn mk_api_client(session: Option<&SessionState>) -> HaiClient {
     let mut client = HaiClient::new(&get_api_base_url());
-    if let Some(session) = session {
-        if let Some(ref account) = session.account {
-            client.set_token(&account.token);
-        }
+    if let Some(session) = session
+        && let Some(ref account) = session.account
+    {
+        client.set_token(&account.token);
     }
     client
 }

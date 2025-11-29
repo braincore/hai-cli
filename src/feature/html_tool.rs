@@ -29,7 +29,7 @@ pub async fn execute_html_tool(
                 session.html_output = Some((
                     temp_file,
                     is_task_mode_step,
-                    hot_reload_addr.clone(),
+                    hot_reload_addr,
                     clients,
                     cancel_token,
                 ));
@@ -73,10 +73,8 @@ pub async fn execute_html_tool(
         temp_file.flush()?;
     }
 
-    if !new_browser {
-        if let Some((_, _, _, clients, _)) = session.html_output.as_mut() {
-            notify_clients(&clients, "reload");
-        }
+    if !new_browser && let Some((_, _, _, clients, _)) = session.html_output.as_mut() {
+        notify_clients(clients, "reload");
     }
 
     Ok(temp_file_path)

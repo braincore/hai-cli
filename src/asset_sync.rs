@@ -287,54 +287,47 @@ async fn sync_entries(
 
         // Ensure the parent directory exists
         let target_data_file = std::path::Path::new(&target_data_file_path);
-        if let Some(parent) = target_data_file.parent() {
-            if !parent.exists() {
-                match std::fs::create_dir_all(parent) {
-                    Ok(_) => {
-                        if debug {
-                            let _ = config::write_to_debug_log(format!(
-                                "Created directory: {}\n",
-                                parent.display()
-                            ));
-                        }
+        if let Some(parent) = target_data_file.parent()
+            && !parent.exists()
+        {
+            match std::fs::create_dir_all(parent) {
+                Ok(_) => {
+                    if debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "Created directory: {}\n",
+                            parent.display()
+                        ));
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "error: failed to create directory '{}': {}",
-                            parent.display(),
-                            e
-                        );
-                        continue; // Skip this file but continue with others
-                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "error: failed to create directory '{}': {}",
+                        parent.display(),
+                        e
+                    );
+                    continue; // Skip this file but continue with others
                 }
             }
         }
 
-        if download_data {
-            if let Some(data_url) = entry.asset.url.as_ref() {
-                let data_download_task = Some(DownloadTask {
-                    entry_name: entry.name.clone(),
-                    url: data_url.clone(),
-                    task_type: DownloadTaskType::Data,
-                });
-                entry_with_tasks.push((entry.clone(), target_data_file_path, data_download_task));
-            }
+        if download_data && let Some(data_url) = entry.asset.url.as_ref() {
+            let data_download_task = Some(DownloadTask {
+                entry_name: entry.name.clone(),
+                url: data_url.clone(),
+                task_type: DownloadTaskType::Data,
+            });
+            entry_with_tasks.push((entry.clone(), target_data_file_path, data_download_task));
         }
-        if download_metadata {
-            if let Some(metadata_info) = entry.metadata.as_ref() {
-                if let Some(metadata_url) = metadata_info.url.as_ref() {
-                    let metadata_download_task = Some(DownloadTask {
-                        entry_name: entry.name.clone(),
-                        url: metadata_url.clone(),
-                        task_type: DownloadTaskType::Metadata,
-                    });
-                    entry_with_tasks.push((
-                        entry,
-                        target_metadata_file_path,
-                        metadata_download_task,
-                    ));
-                }
-            }
+        if download_metadata
+            && let Some(metadata_info) = entry.metadata.as_ref()
+            && let Some(metadata_url) = metadata_info.url.as_ref()
+        {
+            let metadata_download_task = Some(DownloadTask {
+                entry_name: entry.name.clone(),
+                url: metadata_url.clone(),
+                task_type: DownloadTaskType::Metadata,
+            });
+            entry_with_tasks.push((entry, target_metadata_file_path, metadata_download_task));
         }
     }
 
@@ -441,46 +434,43 @@ async fn sync_entries(
                                 eprintln!("failed to set hash xattr");
                             }
                         }
-                    } else if matches!(task.task_type, DownloadTaskType::Metadata) {
-                        if let Some(AssetMetadataInfo {
+                    } else if matches!(task.task_type, DownloadTaskType::Metadata)
+                        && let Some(AssetMetadataInfo {
                             hash: Some(hash),
                             rev_id,
                             ..
                         }) = entry_clone.metadata
-                        {
-                            if xattr_set(&target_path_clone, "user.hai.is_metadata", "true")
-                                .is_err()
+                    {
+                        if xattr_set(&target_path_clone, "user.hai.is_metadata", "true").is_err() {
+                            eprintln!("failed to set is_metadata xattr");
+                        }
+                        if xattr_set(&target_path_clone, "user.hai.rev_id", &rev_id).is_err() {
+                            eprintln!("failed to set rev_id xattr");
+                        }
+                        //
+                        // Write the file hash and the mtime of the file into
+                        // xattrs to make change detection easier.
+                        //
+                        let metadata = std::fs::metadata(&target_path_clone)
+                            .expect("failed to read file metadata");
+                        if let Ok(modified_time) = metadata.modified() {
+                            let mtime_ts = modified_time
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .expect("Time went backwards")
+                                .as_secs();
+                            if xattr_set(
+                                &target_path_clone,
+                                "user.hai.hash_mtime",
+                                &mtime_ts.to_string(),
+                            )
+                            .is_err()
                             {
-                                eprintln!("failed to set is_metadata xattr");
+                                eprintln!("failed to set hash_mtime xattr");
                             }
-                            if xattr_set(&target_path_clone, "user.hai.rev_id", &rev_id).is_err() {
-                                eprintln!("failed to set rev_id xattr");
-                            }
-                            //
-                            // Write the file hash and the mtime of the file into
-                            // xattrs to make change detection easier.
-                            //
-                            let metadata = std::fs::metadata(&target_path_clone)
-                                .expect("failed to read file metadata");
-                            if let Ok(modified_time) = metadata.modified() {
-                                let mtime_ts = modified_time
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .expect("Time went backwards")
-                                    .as_secs();
-                                if xattr_set(
-                                    &target_path_clone,
-                                    "user.hai.hash_mtime",
-                                    &mtime_ts.to_string(),
-                                )
-                                .is_err()
-                                {
-                                    eprintln!("failed to set hash_mtime xattr");
-                                }
-                            }
+                        }
 
-                            if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
-                                eprintln!("failed to set hash xattr");
-                            }
+                        if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
+                            eprintln!("failed to set hash xattr");
                         }
                     }
                 }
@@ -606,23 +596,23 @@ async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
         if Some(mtime_ts) == xattr_mtime_ts {
             // If the filesystem doesn't show any modifications since the file
             // was tagged, use the hash set in xattrs.
-            if let Some(xattr_hash_bytes) = xattr_get(file_path, "user.hai.hash") {
-                if let Ok(xattr_hash_hex_str) = std::str::from_utf8(&xattr_hash_bytes) {
-                    match hex::decode(xattr_hash_hex_str) {
-                        Ok(binary_data) => {
-                            // Validate that it's the correct length for SHA-256 (32 bytes)
-                            if binary_data.len() == 32 {
-                                return Ok(binary_data);
-                            } else {
-                                println!(
-                                    "Warning: Hash has unexpected length: {} bytes",
-                                    binary_data.len()
-                                );
-                            }
+            if let Some(xattr_hash_bytes) = xattr_get(file_path, "user.hai.hash")
+                && let Ok(xattr_hash_hex_str) = std::str::from_utf8(&xattr_hash_bytes)
+            {
+                match hex::decode(xattr_hash_hex_str) {
+                    Ok(binary_data) => {
+                        // Validate that it's the correct length for SHA-256 (32 bytes)
+                        if binary_data.len() == 32 {
+                            return Ok(binary_data);
+                        } else {
+                            println!(
+                                "Warning: Hash has unexpected length: {} bytes",
+                                binary_data.len()
+                            );
                         }
-                        Err(e) => {
-                            println!("Error decoding hex string: {}", e);
-                        }
+                    }
+                    Err(e) => {
+                        println!("Error decoding hex string: {}", e);
                     }
                 }
             }
@@ -661,7 +651,7 @@ async fn calculate_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error>
 // Helper function to convert hex string to bytes
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
     // Check if the hex string has valid length
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err("Hex string must have an even number of characters".to_string());
     }
 

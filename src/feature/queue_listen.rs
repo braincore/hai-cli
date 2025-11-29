@@ -91,8 +91,8 @@ pub async fn listen(address: &str, whitelisted_origin: Option<String>) {
                                         Message::Push(PushMessage { queue_name, cmds }) => {
                                             db::listen_queue_push(
                                                 &*db.lock().await,
-                                                &queue_name.as_ref().unwrap_or(&"".to_string()),
-                                                &cmds,
+                                                queue_name.as_ref().unwrap_or(&"".to_string()),
+                                                cmds,
                                             )
                                             .expect("Failed to push to queue");
                                         }

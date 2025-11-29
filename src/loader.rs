@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Cursor, Read};
 
 pub async fn resolve_image_b64(text: &String) -> Result<String, Box<dyn std::error::Error>> {
-    let image_b64_res = if text.starts_with("http://") || text.starts_with("https://") {
+    if text.starts_with("http://") || text.starts_with("https://") {
         let response = reqwest::get(text).await?;
 
         // Ensure that the request was successful.
@@ -31,8 +31,7 @@ pub async fn resolve_image_b64(text: &String) -> Result<String, Box<dyn std::err
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer)?;
         encode_image_bytes_to_png_base64(Bytes::from(buffer))
-    };
-    image_b64_res
+    }
 }
 
 pub fn encode_image_bytes_to_png_base64(

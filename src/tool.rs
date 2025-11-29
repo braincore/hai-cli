@@ -35,6 +35,7 @@ pub struct FnTool {
     pub name: Option<String>,
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug)]
 pub enum FnToolType {
     FnPy,

@@ -298,47 +298,45 @@ pub async fn send_to_openai(
                         if let Ok(tool_response) = serde_json::from_value::<ToolCallResponse>(
                             json_data["choices"][0]["delta"]["tool_calls"][0].clone(),
                         ) {
-                            if let Some(tool_id) = tool_response.id {
-                                if let Some(tool_name) = tool_response.function.name {
-                                    if !tool_calls.is_empty() {
-                                        println!();
-                                        println!();
-                                        println!("∥");
-                                        println!();
-                                    } else if !text_accumulator.printed_text.is_empty() {
-                                        // For cases where a tool-response follows a text-response, add
-                                        // a newline to make the output clearer.
-                                        // AFAICT, both responses will have index=0 set so delineating
-                                        // between the two that way isn't doable.
-                                        println!();
-                                    }
-                                    // Gemini returns an empty string as the
-                                    // tool ID which the Anthropic API is not
-                                    // happy with.
-                                    let tool_id = if tool_id.is_empty() {
-                                        "gemini-is-bad".to_string()
-                                    } else {
+                            if let Some(tool_id) = tool_response.id
+                                && let Some(tool_name) = tool_response.function.name
+                            {
+                                if !tool_calls.is_empty() {
+                                    println!();
+                                    println!();
+                                    println!("∥");
+                                    println!();
+                                } else if !text_accumulator.printed_text.is_empty() {
+                                    // For cases where a tool-response follows a text-response, add
+                                    // a newline to make the output clearer.
+                                    // AFAICT, both responses will have index=0 set so delineating
+                                    // between the two that way isn't doable.
+                                    println!();
+                                }
+                                // Gemini returns an empty string as the
+                                // tool ID which the Anthropic API is not
+                                // happy with.
+                                let tool_id = if tool_id.is_empty() {
+                                    "gemini-is-bad".to_string()
+                                } else {
+                                    tool_id
+                                };
+                                tool_calls.insert(
+                                    tool_response.index,
+                                    JsonObjectAccumulator::new(
+                                        tool_id.clone(),
+                                        tool_name,
+                                        tool_policy.and_then(|tp| {
+                                            tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
+                                        }),
+                                        masked_strings.clone(),
+                                    ),
+                                );
+                                if debug {
+                                    config::write_to_debug_log(format!(
+                                        "found: tool_id: {}\n",
                                         tool_id
-                                    };
-                                    tool_calls.insert(
-                                        tool_response.index,
-                                        JsonObjectAccumulator::new(
-                                            tool_id.clone(),
-                                            tool_name,
-                                            tool_policy.and_then(|tp| {
-                                                tool::get_tool_syntax_highlighter_lang_token(
-                                                    &tp.tool,
-                                                )
-                                            }),
-                                            masked_strings.clone(),
-                                        ),
-                                    );
-                                    if debug {
-                                        config::write_to_debug_log(format!(
-                                            "found: tool_id: {}\n",
-                                            tool_id
-                                        ))?;
-                                    }
+                                    ))?;
                                 }
                             }
                             if let Some(json_accumulator) = tool_calls.get_mut(&tool_response.index)

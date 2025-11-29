@@ -95,17 +95,17 @@ pub fn should_use_colors() -> bool {
     }
 
     // Check CLICOLOR_FORCE next (can force colors on)
-    if let Ok(force) = std::env::var("CLICOLOR_FORCE") {
-        if force == "1" {
-            return true;
-        }
+    if let Ok(force) = std::env::var("CLICOLOR_FORCE")
+        && force == "1"
+    {
+        return true;
     }
 
     // Then check CLICOLOR (can disable colors)
-    if let Ok(clicolor) = std::env::var("CLICOLOR") {
-        if clicolor == "0" {
-            return false;
-        }
+    if let Ok(clicolor) = std::env::var("CLICOLOR")
+        && clicolor == "0"
+    {
+        return false;
     }
 
     // Finally, fall back to terminal detection
@@ -223,6 +223,6 @@ pub fn print_multi_lang_syntax_highlighting(
     if let Some((r, g, b)) = background_color {
         sh_printer.set_background_color(*r, *g, *b, 255);
     };
-    sh_printer.acc(&markdown);
+    sh_printer.acc(markdown);
     sh_printer.end();
 }

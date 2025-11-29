@@ -435,10 +435,9 @@ pub fn purge_task_step_cache(conn: &rusqlite::Connection, task_name: &str) {
     .expect("Failed to delete rows");
 }
 
-///
-/// Listen Queue functions
-///
-use serde_json;
+//
+// Listen Queue functions
+//
 
 /// Push a command (as Vec<String>) to the listen_queue for a given queue_name.
 pub fn listen_queue_push(

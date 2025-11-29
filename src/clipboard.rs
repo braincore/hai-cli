@@ -6,15 +6,15 @@ use copypasta_ext::x11_fork::ClipboardContext as X11ForkClipboardContext;
 // This extension works.
 pub fn copy_to_clipboard(text: &str) -> bool {
     // X11Fork is faster than X11Bin, so prefer it
-    if let Ok(mut x11_fork_ctx) = X11ForkClipboardContext::new() {
-        if x11_fork_ctx.set_contents(text.trim().to_owned()).is_ok() {
-            return true;
-        }
+    if let Ok(mut x11_fork_ctx) = X11ForkClipboardContext::new()
+        && x11_fork_ctx.set_contents(text.trim().to_owned()).is_ok()
+    {
+        return true;
     }
-    if let Ok(mut x11_bin_ctx) = X11BinClipboardContext::new() {
-        if x11_bin_ctx.set_contents(text.trim().to_owned()).is_ok() {
-            return true;
-        };
+    if let Ok(mut x11_bin_ctx) = X11BinClipboardContext::new()
+        && x11_bin_ctx.set_contents(text.trim().to_owned()).is_ok()
+    {
+        return true;
     }
     false
 }

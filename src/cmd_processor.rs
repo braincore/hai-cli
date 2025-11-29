@@ -329,10 +329,10 @@ pub async fn process_cmd(
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, ..)) = session.html_output.as_ref() {
-                if !task_mode || !*is_task_step {
-                    session.html_output = None;
-                }
+            if let Some((_, is_task_step, ..)) = session.html_output.as_ref()
+                && (!task_mode || !*is_task_step)
+            {
+                session.html_output = None;
             }
             session
                 .ai_defined_fns
@@ -356,10 +356,10 @@ pub async fn process_cmd(
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, ..)) = session.html_output.as_ref() {
-                if !task_mode || !*is_task_step {
-                    session.html_output = None;
-                }
+            if let Some((_, is_task_step, ..)) = session.html_output.as_ref()
+                && (!task_mode || !*is_task_step)
+            {
+                session.html_output = None;
             }
             session
                 .ai_defined_fns
@@ -521,22 +521,22 @@ pub async fn process_cmd(
                 }
                 // Because it's from the cache, the value is not yet on the screen.
                 println!("{}", shell_exec_output);
-            } else if *cache {
-                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
-                    db::set_task_step_cache(
-                        &*db.lock().await,
-                        session
-                            .account
-                            .as_ref()
-                            .map(|a| a.username.as_str())
-                            .unwrap_or(""),
-                        task_fqn,
-                        task_key.as_deref(),
-                        step_index,
-                        raw_user_input,
-                        &shell_exec_output,
-                    )
-                }
+            } else if *cache
+                && let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature
+            {
+                db::set_task_step_cache(
+                    &*db.lock().await,
+                    session
+                        .account
+                        .as_ref()
+                        .map(|a| a.username.as_str())
+                        .unwrap_or(""),
+                    task_fqn,
+                    task_key.as_deref(),
+                    step_index,
+                    raw_user_input,
+                    &shell_exec_output,
+                )
             }
             session_history_add_user_cmd_and_reply_entries(
                 command,
@@ -605,22 +605,22 @@ pub async fn process_cmd(
                 } else {
                     println!("{}", answer);
                 }
-            } else if *cache {
-                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
-                    db::set_task_step_cache(
-                        &*db.lock().await,
-                        session
-                            .account
-                            .as_ref()
-                            .map(|a| a.username.as_str())
-                            .unwrap_or(""),
-                        task_fqn,
-                        task_key.as_deref(),
-                        step_index,
-                        raw_user_input,
-                        &answer,
-                    )
-                }
+            } else if *cache
+                && let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature
+            {
+                db::set_task_step_cache(
+                    &*db.lock().await,
+                    session
+                        .account
+                        .as_ref()
+                        .map(|a| a.username.as_str())
+                        .unwrap_or(""),
+                    task_fqn,
+                    task_key.as_deref(),
+                    step_index,
+                    raw_user_input,
+                    &answer,
+                )
             }
             if *secret {
                 // Since it was written as a secret, we assume it shouldn't be
@@ -726,7 +726,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Forget(cmd::ForgetCmd { n }) => {
-            let mut n = n.clone();
+            let mut n = *n;
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -758,7 +758,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Keep(cmd::KeepCmd { bottom, top }) => {
-            let mut bottom = bottom.clone();
+            let mut bottom = *bottom;
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -1089,7 +1089,7 @@ pub async fn process_cmd(
                             let comparison_op = &caps[2];
                             let task_dependency_version = &caps[3];
                             let task_dependency_semver = if let Ok(task_dependency_semver) =
-                                semver::Version::parse(&task_dependency_version)
+                                semver::Version::parse(task_dependency_version)
                             {
                                 task_dependency_semver
                             } else {
@@ -1373,7 +1373,7 @@ pub async fn process_cmd(
             };
             db::forget_task_step_cache(
                 &*db.lock().await,
-                &session
+                session
                     .account
                     .as_ref()
                     .map(|account| account.username.as_str())
@@ -1928,29 +1928,28 @@ pub async fn process_cmd(
                     url: Some(metadata_url),
                     ..
                 }) = revision.metadata.as_ref()
+                    && let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await
                 {
-                    if let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await {
-                        let contents = String::from_utf8_lossy(&contents_bin);
-                        println!("Metadata: {}", &contents);
-                        session_history_add_user_text_entry(
-                            &contents,
-                            session,
-                            bpe_tokenizer,
-                            (is_task_mode_step, LogEntryRetentionPolicy::None),
-                        );
-                    }
+                    let contents = String::from_utf8_lossy(&contents_bin);
+                    println!("Metadata: {}", &contents);
+                    session_history_add_user_text_entry(
+                        &contents,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
                 }
-                if let Some(data_url) = revision.asset.url.as_ref() {
-                    if let Some(contents_bin) = asset_editor::get_asset_raw(data_url).await {
-                        let contents = String::from_utf8_lossy(&contents_bin);
-                        println!("{}", &contents);
-                        session_history_add_user_text_entry(
-                            &contents,
-                            session,
-                            bpe_tokenizer,
-                            (is_task_mode_step, LogEntryRetentionPolicy::None),
-                        );
-                    }
+                if let Some(data_url) = revision.asset.url.as_ref()
+                    && let Some(contents_bin) = asset_editor::get_asset_raw(data_url).await
+                {
+                    let contents = String::from_utf8_lossy(&contents_bin);
+                    println!("{}", &contents);
+                    session_history_add_user_text_entry(
+                        &contents,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
                 }
                 println!();
             }
@@ -2114,19 +2113,18 @@ pub async fn process_cmd(
                         {
                             Ok(iter_res) => {
                                 for revision in iter_res.revisions {
-                                    if let Some(data_url) = revision.asset.url.as_ref() {
-                                        if let Some(contents_bin) =
+                                    if let Some(data_url) = revision.asset.url.as_ref()
+                                        && let Some(contents_bin) =
                                             asset_editor::get_asset_raw(data_url).await
-                                        {
-                                            let contents = String::from_utf8_lossy(&contents_bin);
-                                            println!("{}", &contents);
-                                            session_history_add_user_text_entry(
-                                                &contents,
-                                                session,
-                                                bpe_tokenizer,
-                                                (is_task_mode_step, LogEntryRetentionPolicy::None),
-                                            );
-                                        }
+                                    {
+                                        let contents = String::from_utf8_lossy(&contents_bin);
+                                        println!("{}", &contents);
+                                        session_history_add_user_text_entry(
+                                            &contents,
+                                            session,
+                                            bpe_tokenizer,
+                                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                                        );
                                     }
                                 }
                                 iter_res.next.expect("missing cursor").cursor
@@ -3523,11 +3521,11 @@ lesson (e.g. "understanding").\n\n{}"#,
                         bpe_tokenizer,
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
-                    if let Some(account) = &session.account {
-                        if account.username == *username {
-                            println!();
-                            println!("To set a name or bio, run: `/task hai/account-update`");
-                        }
+                    if let Some(account) = &session.account
+                        && account.username == *username
+                    {
+                        println!();
+                        println!("To set a name or bio, run: `/task hai/account-update`");
                     }
                 }
                 Err(e) => {
@@ -3662,7 +3660,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         cmd::Cmd::QueuePop(cmd::QueuePopCmd { queue_name }) => {
             let cmds = db::listen_queue_pop(
                 &mut *db.lock().await,
-                &queue_name.as_ref().unwrap_or(&"".to_string()),
+                queue_name.as_ref().unwrap_or(&"".to_string()),
             )
             .expect("failed to pop from queue");
             if let Some(cmds) = cmds {

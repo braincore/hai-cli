@@ -77,7 +77,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     // which are parameters to the ai_model like `reasoning_effort`
     // e.g. "gpt-4,reasoning=high,verbosity=low"
     let mut opts: Vec<&str> = ai_model.split(',').collect();
-    let model_name = opts.get(0)?.replace("-", "").replace(".", "");
+    let model_name = opts.first()?.replace("-", "").replace(".", "");
     opts.remove(0);
     match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
@@ -145,68 +145,68 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "llamacpp" => Some(AiModel::LlamaCpp(LlamaCppModel::Other("n/a".to_string()))),
         _ => {
             let openai_regex = Regex::new(r"^openai/(\S+)$").unwrap();
-            if let Some(captures) = openai_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::OpenAi(OpenAiModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = openai_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::OpenAi(OpenAiModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             let anthropic_regex = Regex::new(r"^anthropic/(\S+)$").unwrap();
-            if let Some(captures) = anthropic_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::Anthropic(AnthropicModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = anthropic_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::Anthropic(AnthropicModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             // The model is for display purposes only. llama.cpp server ignores
             // the model parameter.
             let llama_cpp_regex = Regex::new(r"^llamacpp/(\S+)$").unwrap();
-            if let Some(captures) = llama_cpp_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::LlamaCpp(LlamaCppModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = llama_cpp_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::LlamaCpp(LlamaCppModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             let ollama_regex = Regex::new(r"^ollama/(\S+)$").unwrap();
-            if let Some(captures) = ollama_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::Ollama(OllamaModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = ollama_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::Ollama(OllamaModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             let google_regex = Regex::new(r"^google/(\S+)$").unwrap();
-            if let Some(captures) = google_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::Google(GoogleModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = google_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::Google(GoogleModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             let deepseek_regex = Regex::new(r"^deepseek/(\S+)$").unwrap();
-            if let Some(captures) = deepseek_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::DeepSeek(DeepSeekModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = deepseek_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::DeepSeek(DeepSeekModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             let xai_regex = Regex::new(r"^xai/(\S+)$").unwrap();
-            if let Some(captures) = xai_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::Xai(XaiModel::Other(submodel.as_str().to_string())));
-                }
+            if let Some(captures) = xai_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::Xai(XaiModel::Other(submodel.as_str().to_string())));
             }
             let void_regex = Regex::new(r"^void/(\S+)$").unwrap();
-            if let Some(captures) = void_regex.captures(ai_model) {
-                if let Some(submodel) = captures.get(1) {
-                    return Some(AiModel::Void(VoidModel::Other(
-                        submodel.as_str().to_string(),
-                    )));
-                }
+            if let Some(captures) = void_regex.captures(ai_model)
+                && let Some(submodel) = captures.get(1)
+            {
+                return Some(AiModel::Void(VoidModel::Other(
+                    submodel.as_str().to_string(),
+                )));
             }
             None
         }
@@ -266,10 +266,7 @@ pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
             Some(k) => k,
             None => continue,
         };
-        let value = match kv.next() {
-            Some(v) => v,
-            None => "true",
-        };
+        let value = kv.next().unwrap_or("true");
         match key {
             "t" | "thinking" => {
                 match value {
