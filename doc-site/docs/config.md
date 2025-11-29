@@ -13,7 +13,7 @@ once.
 ### Default AI model
 
 ```toml
-default_ai_model = "gpt-4.1"
+default_ai_model = "gpt-5.1-chat"
 ```
 
 The `/ai-default` command is a REPL-command that updates this key-value.

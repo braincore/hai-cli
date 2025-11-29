@@ -97,12 +97,19 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt41mini" | "41mini" | "41m" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Mini)),
         "gpt41nano" | "41nano" | "41n" => Some(AiModel::OpenAi(OpenAiModel::Gpt41Nano)),
         "gpt5" | "g5" | "5" => Some(AiModel::OpenAi(OpenAiModel::Gpt5(parse_gpt5_opts(opts)))),
+        "gpt5chat" | "g5chat" | "g5c" | "5chat" | "5c" => {
+            Some(AiModel::OpenAi(OpenAiModel::Gpt5Chat))
+        }
         "gpt5mini" | "g5mini" | "g5m" | "5m" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Mini(
             parse_gpt5_opts(opts),
         ))),
         "gpt5nano" | "g5nano" | "g5n" | "5n" => Some(AiModel::OpenAi(OpenAiModel::Gpt5Nano(
             parse_gpt5_opts(opts),
         ))),
+        "gpt51" | "g51" | "51" => Some(AiModel::OpenAi(OpenAiModel::Gpt51(parse_gpt5_opts(opts)))),
+        "gpt51chat" | "g51chat" | "g51c" | "51chat" | "51c" => {
+            Some(AiModel::OpenAi(OpenAiModel::Gpt51Chat))
+        }
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
         "gptoss" | "oss" => Some(AiModel::Ollama(OllamaModel::GptOss20b)),
@@ -315,7 +322,7 @@ pub fn read_config_as_string(
         if !path.exists() {
             let default_config = r#"
 # The default AI model to use.
-#default_ai_model = "gpt-4.1"
+#default_ai_model = "gpt-5.1-chat"
 
 # The default AI model in incognito mode.
 #default_incognito_ai_model = "gpt-oss:20b"
@@ -510,8 +517,11 @@ pub enum OpenAiModel {
     Gpt41Mini,
     Gpt41Nano,
     Gpt5(Gpt5Options),
+    Gpt5Chat,
     Gpt5Mini(Gpt5Options),
     Gpt5Nano(Gpt5Options),
+    Gpt51(Gpt5Options),
+    Gpt51Chat,
     Gpt4o,
     Gpt4oMini,
     O1,
@@ -580,8 +590,11 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OpenAiModel::Gpt41Mini => "gpt-4.1-mini-2025-04-14",
             OpenAiModel::Gpt41Nano => "gpt-4.1-nano-2025-04-14",
             OpenAiModel::Gpt5(_) => "gpt-5-2025-08-07",
+            OpenAiModel::Gpt5Chat => "gpt-5-chat-latest",
             OpenAiModel::Gpt5Mini(_) => "gpt-5-mini-2025-08-07",
             OpenAiModel::Gpt5Nano(_) => "gpt-5-nano-2025-08-07",
+            OpenAiModel::Gpt51(_) => "gpt-5.1-2025-11-13",
+            OpenAiModel::Gpt51Chat => "gpt-5.1-chat-latest",
             OpenAiModel::Gpt4o => "gpt-4o-2024-11-20",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini-2024-07-18",
             OpenAiModel::O1 => "o1-2024-12-17",
@@ -653,8 +666,11 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             OpenAiModel::Gpt41Mini => "gpt-4.1-mini".to_string(),
             OpenAiModel::Gpt41Nano => "gpt-4.1-nano".to_string(),
             OpenAiModel::Gpt5(opts) => format!("gpt-5{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt5Chat => "gpt-5-chat".to_string(),
             OpenAiModel::Gpt5Mini(opts) => format!("gpt-5-mini{}", get_gpt5_opts_display(opts)),
             OpenAiModel::Gpt5Nano(opts) => format!("gpt-5-nano{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt51(opts) => format!("gpt-5.1{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt51Chat => "gpt-5.1-chat".to_string(),
             OpenAiModel::Gpt4o => "gpt-4o".to_string(),
             OpenAiModel::Gpt4oMini => "gpt-4o-mini".to_string(),
             OpenAiModel::O1 => "o1".to_string(),
@@ -840,8 +856,11 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | OpenAiModel::Gpt41Mini
                 | OpenAiModel::Gpt41Nano
                 | OpenAiModel::Gpt5(_)
+                | OpenAiModel::Gpt5Chat
                 | OpenAiModel::Gpt5Mini(_)
                 | OpenAiModel::Gpt5Nano(_)
+                | OpenAiModel::Gpt51(_)
+                | OpenAiModel::Gpt51Chat
                 | OpenAiModel::Gpt4o
                 | OpenAiModel::Gpt4oMini
                 | OpenAiModel::O1
@@ -900,7 +919,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::Gpt41 => Some((2000, 8000)),
             OpenAiModel::Gpt41Mini => Some((400, 1600)),
             OpenAiModel::Gpt41Nano => Some((100, 400)),
-            OpenAiModel::Gpt5(_) => Some((1250, 10000)),
+            OpenAiModel::Gpt5(_)
+            | OpenAiModel::Gpt5Chat
+            | OpenAiModel::Gpt51(_)
+            | OpenAiModel::Gpt51Chat => Some((1250, 10000)),
             OpenAiModel::Gpt5Mini(_) => Some((250, 2000)),
             OpenAiModel::Gpt5Nano(_) => Some((50, 400)),
             OpenAiModel::Gpt4o => Some((2500, 10000)),
@@ -1211,7 +1233,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     if let Some(ai_model) = default_ai_model {
         ai_model
     } else if get_openai_api_key(cfg).is_some() {
-        AiModel::OpenAi(OpenAiModel::Gpt41)
+        AiModel::OpenAi(OpenAiModel::Gpt51Chat)
     } else if get_anthropic_api_key(cfg).is_some() {
         AiModel::Anthropic(AnthropicModel::Sonnet45(false))
     } else if get_deepseek_api_key(cfg).is_some() {
@@ -1223,7 +1245,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else {
         // Do not default to a llama.cpp or ollama model since there are too
         // many options and it is not clear which one to use.
-        AiModel::OpenAi(OpenAiModel::Gpt41)
+        AiModel::OpenAi(OpenAiModel::Gpt51Chat)
     }
 }
 
