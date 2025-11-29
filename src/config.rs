@@ -902,10 +902,8 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
         },
         AiModel::Google(model) => match model {
             GoogleModel::Gemini3Pro => Some((2000, 12000)),
-            GoogleModel::Gemini25Flash => Some((150, 600)),
-            // NOTE: gemini-2.5-pro is currently free because it's experimental.
-            // It's currently set to the price of gemini-1.5-pro.
-            GoogleModel::Gemini25Pro => Some((1250, 5000)),
+            GoogleModel::Gemini25Flash => Some((300, 2500)),
+            GoogleModel::Gemini25Pro => Some((1250, 10000)),
             GoogleModel::Gemini20Flash => Some((100, 400)),
             GoogleModel::Gemini15Flash => Some((75, 300)),
             GoogleModel::Gemini15Flash8B => Some((38, 150)),
