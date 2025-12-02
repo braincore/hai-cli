@@ -688,7 +688,9 @@ fn get_tool_re() -> &'static Regex {
 
 fn get_ai_def_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| Regex::new(r"^f([0-9]+|_[A-Za-z]+|'(?:\\'|[^'])*')?( |$)").unwrap())
+    TOOL_RE.get_or_init(|| {
+        Regex::new(r"^f([0-9]+|_[A-Za-z]+(?:_[A-Za-z]+)*|'(?:\\'|[^'])*')?( |$)").unwrap()
+    })
 }
 
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
