@@ -10,9 +10,13 @@ use crate::{line_editor, term_color};
 
 pub fn print_image_to_term(encoded_image: &String) -> Result<(), Box<dyn std::error::Error>> {
     let use_pretty_images = std::env::var_os("HAI_NO_PRETTY_IMAGES").is_none();
+    let image_height = std::env::var("HAI_IMAGE_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(20);
 
     let viuer_cfg = viuer::Config {
-        height: Some(20),
+        height: Some(image_height),
         absolute_offset: false,
         use_iterm: use_pretty_images,
         use_kitty: use_pretty_images,
