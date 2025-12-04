@@ -1,5 +1,4 @@
 /// This is an AI Provider exclusively for testing.
-use std::collections::HashSet;
 use std::error::Error;
 
 use crate::ai_provider::util::TextAccumulator;
@@ -7,7 +6,7 @@ use crate::chat;
 
 pub async fn send_to_void(
     model: &str,
-    masked_strings: &HashSet<String>,
+    masked_strings: &Vec<String>,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
 

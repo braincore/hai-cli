@@ -1,6 +1,6 @@
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +25,7 @@ pub async fn send_to_ollama(
     shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
-    masked_strings: &HashSet<String>,
+    masked_strings: &Vec<String>,
     debug: bool,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();

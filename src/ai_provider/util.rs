@@ -1,6 +1,5 @@
 use jaq_interpret::{Ctx, FilterT, ParseCtx, RcIter, Val};
 use serde_json::Value;
-use std::collections::HashSet;
 use std::io::{self, Write};
 use two_face::re_exports::syntect::easy::HighlightLines;
 use two_face::re_exports::syntect::highlighting::Style;
@@ -46,7 +45,7 @@ pub struct TextAccumulator<'a> {
 }
 
 impl TextAccumulator<'_> {
-    pub fn new(masked_strings: HashSet<String>) -> Self {
+    pub fn new(masked_strings: Vec<String>) -> Self {
         TextAccumulator {
             printer: MaskedPrinter::new(masked_strings),
             printed_text: String::new(),
@@ -75,11 +74,11 @@ pub struct MaskedPrinter<'a> {
     sh_printer: SyntaxHighlighterPrinter<'a>,
     buffer: String,
     masked_buffer: String,
-    masked_strings: HashSet<String>,
+    masked_strings: Vec<String>,
 }
 
 impl MaskedPrinter<'_> {
-    pub fn new(masked_strings: HashSet<String>) -> Self {
+    pub fn new(masked_strings: Vec<String>) -> Self {
         MaskedPrinter {
             sh_printer: SyntaxHighlighterPrinter::new(false),
             buffer: String::new(),
@@ -476,7 +475,7 @@ pub struct MaskedJsonStringPrinter<'a> {
     /// and the print cursor advanced as if output was being printed.
     mute: bool,
     buffer: String,
-    masked_strings_ordered: Vec<String>,
+    masked_strings: Vec<String>,
     /// The offset into buffer that has been printed to screen
     buffer_print_cursor: usize,
 
@@ -489,14 +488,14 @@ pub struct MaskedJsonStringPrinter<'a> {
 }
 
 impl<'a> MaskedJsonStringPrinter<'a> {
-    pub fn new(mute: bool, masked_strings: HashSet<String>) -> MaskedJsonStringPrinter<'a> {
+    pub fn new(mute: bool, masked_strings: Vec<String>) -> MaskedJsonStringPrinter<'a> {
         // Sort by length descending in case a mask is a left-aligned subset of another.
-        let mut masked_strings_ordered: Vec<String> = masked_strings.clone().into_iter().collect();
-        masked_strings_ordered.sort_by_key(|b| std::cmp::Reverse(b.len()));
+        //let mut masked_strings_ordered: Vec<String> = masked_strings.clone().into_iter().collect();
+        //masked_strings_ordered.sort_by_key(|b| std::cmp::Reverse(b.len()));
         MaskedJsonStringPrinter {
             mute,
             buffer: String::new(),
-            masked_strings_ordered,
+            masked_strings,
             buffer_print_cursor: 0,
             printed_text: String::new(),
             unmasked_printed_text: String::new(),
@@ -586,7 +585,7 @@ impl<'a> MaskedJsonStringPrinter<'a> {
         // printable since it may contain the beginning of text that must be
         // masked.
         //
-        for masked_string in &self.masked_strings_ordered {
+        for masked_string in &self.masked_strings {
             if decoded_next_chunk.contains(masked_string) {
                 let mask: String = "*".repeat(masked_string.len());
                 masked_decoded_next_chunk = masked_decoded_next_chunk.replace(masked_string, &mask);
@@ -683,7 +682,7 @@ pub struct JsonObjectAccumulator<'a> {
     pub printed_text: String,
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
-    masked_strings: HashSet<String>,
+    masked_strings: Vec<String>,
     cur_printer: Option<Printer<'a>>,
     key_search_start_index: usize,
     first_unmuted_key_found: bool,
@@ -695,7 +694,7 @@ impl<'a> JsonObjectAccumulator<'a> {
         id: String,
         name: String,
         sh_lang_token: Option<String>,
-        masked_strings: HashSet<String>,
+        masked_strings: Vec<String>,
     ) -> JsonObjectAccumulator<'a> {
         JsonObjectAccumulator {
             tool_id: id,
@@ -880,12 +879,12 @@ pub struct JsonArrayAccumulator<'a> {
     pub printed_text: String,
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
-    masked_strings: HashSet<String>,
+    masked_strings: Vec<String>,
     cur_printer: Option<MaskedJsonStringPrinter<'a>>,
 }
 
 impl<'a> JsonArrayAccumulator<'a> {
-    pub fn new(masked_strings: HashSet<String>) -> JsonArrayAccumulator<'a> {
+    pub fn new(masked_strings: Vec<String>) -> JsonArrayAccumulator<'a> {
         JsonArrayAccumulator {
             buffer: String::new(),
             printed_text: String::new(),
@@ -983,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_json_array_acc_basic() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1);
@@ -994,7 +993,7 @@ mod tests {
         assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
 
         // Test with masks
-        let masked_strings = HashSet::from_iter(vec!["ear".to_string()]);
+        let masked_strings = vec!["ear".to_string()];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1);
@@ -1005,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_json_array_acc_odd_spacing() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = "[    \n   \"mango\"     , \n     \"pear\"      ]    ";
         accumulator.acc(input1);
@@ -1015,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_json_array_acc_many_pieces() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["#;
         let input2 = r#""mang"#;
@@ -1036,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_basic() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1052,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_many_pieces() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1075,7 +1074,7 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_odd_spacing() {
-        let masked_strings = HashSet::from_iter(vec!["secret".to_string()]);
+        let masked_strings = vec!["secret".to_string()];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1091,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_with_array() {
-        let masked_strings = HashSet::from_iter(vec!["secret".to_string()]);
+        let masked_strings = vec!["secret".to_string()];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1105,7 +1104,7 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_multikey() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1122,7 +1121,7 @@ mod tests {
         assert!(serde_json::from_str::<Value>(&accumulator.buffer).is_ok());
 
         // Test more parts
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1143,7 +1142,7 @@ mod tests {
         assert!(serde_json::from_str::<Value>(&accumulator.buffer).is_ok());
 
         // Test muted special key _lang_tag
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
@@ -1155,7 +1154,7 @@ mod tests {
 
     #[test]
     fn test_basic_masking() {
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello world\"");
@@ -1167,7 +1166,7 @@ mod tests {
 
     #[test]
     fn test_multiple_masked_strings() {
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string(), "world".to_string()]);
+        let masked_strings = vec!["hello".to_string(), "world".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello world\"");
@@ -1179,7 +1178,7 @@ mod tests {
 
     #[test]
     fn test_json_string_encoding() {
-        let masked_strings = HashSet::from_iter(vec![]);
+        let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello \\\"world\"");
@@ -1191,7 +1190,7 @@ mod tests {
 
     #[test]
     fn test_partial_string_accumulation() {
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result1 = printer.acc("\"hel");
@@ -1210,7 +1209,7 @@ mod tests {
         // Test with lots of remaining text
         //
 
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result1 = printer.acc("\"hel");
@@ -1228,7 +1227,7 @@ mod tests {
         //
         // Test all done in one
         //
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result1 = printer.acc("\"hel\", ");
@@ -1240,13 +1239,13 @@ mod tests {
         //
         // Test empty
         //
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
         let result1 = printer.acc("\"\", ");
         assert_eq!(result1.printed_text_chunk, "");
         assert_eq!(result1.remaining, Some(", ".to_string()));
 
-        let masked_strings = HashSet::from_iter(vec!["hello".to_string()]);
+        let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
         let result1 = printer.acc("\"\"");
         assert_eq!(result1.printed_text_chunk, "");
@@ -1255,7 +1254,7 @@ mod tests {
 
     #[test]
     fn test_partial_string_accumulation_escaping() {
-        let masked_strings = HashSet::from_iter(vec![]);
+        let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result1 = printer.acc("\"hello\\");
@@ -1269,7 +1268,8 @@ mod tests {
 
     #[test]
     fn test_overlapping_masked_strings() {
-        let masked_strings = HashSet::from_iter(vec!["hell".to_string(), "hello".to_string()]);
+        // Manually maintain the longest-first order
+        let masked_strings = vec!["hello".to_string(), "hell".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello there\"");
@@ -1281,7 +1281,7 @@ mod tests {
 
     #[test]
     fn test_no_masked_strings() {
-        let masked_strings = HashSet::new();
+        let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello world\"");
@@ -1291,7 +1291,7 @@ mod tests {
 
     #[test]
     fn test_multiple_occurrences() {
-        let masked_strings = HashSet::from_iter(vec!["test".to_string()]);
+        let masked_strings = vec!["test".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"test test test\"");
@@ -1302,7 +1302,7 @@ mod tests {
 
     #[test]
     fn test_case_sensitivity() {
-        let masked_strings = HashSet::from_iter(vec!["Hello".to_string()]);
+        let masked_strings = vec!["Hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
         let result = printer.acc("\"hello HELLO Hello\"");

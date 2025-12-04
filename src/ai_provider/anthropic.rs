@@ -101,7 +101,7 @@ pub async fn send_to_anthropic(
     shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
-    masked_strings: &HashSet<String>,
+    masked_strings: &Vec<String>,
     debug: bool,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     // Prepare messages in Anthropic format

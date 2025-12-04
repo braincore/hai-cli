@@ -2,7 +2,7 @@ use colored::*;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -60,7 +60,7 @@ pub async fn send_to_openai(
     shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
-    masked_strings: &HashSet<String>,
+    masked_strings: &Vec<String>,
     debug: bool,
     reasoning_effort: &Option<OpenAiReasoningEffort>,
     verbosity: &Option<OpenAiVerbosity>,

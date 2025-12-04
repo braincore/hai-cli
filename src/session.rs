@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -85,9 +85,10 @@ pub struct SessionState {
     /// The shell to use for the !sh tool.
     pub shell: String,
     /// These are outputs that should be masked due to sensitivity, which means
-    /// they were acquired by user input with secret=true. These are not
-    /// cleared even across conversations.
-    pub masked_strings: HashSet<String>,
+    /// they were acquired by user input with secret=true. They are sorted by
+    /// length descending in case a mask is a left-aligned substring of
+    /// another. NOTE: These are not cleared even across conversations.
+    pub masked_strings: Vec<String>,
     pub mask_secrets: bool,
     /// Information about logged-in account
     pub account: Option<db::Account>,
@@ -133,6 +134,20 @@ impl SessionState {
         }
         self.input_tokens = input_tokens;
         self.input_loaded_tokens = input_loaded_tokens;
+    }
+
+    /// Adds a new masked string to the session.
+    ///
+    /// Use this to maintain the invariant that masked strings are sorted by
+    /// length in descending order.
+    pub fn add_masked_string(&mut self, s: &str) {
+        let masked_string = s.to_string();
+        if !self.masked_strings.contains(&masked_string) {
+            self.masked_strings.push(masked_string);
+            // Sort to maintain invariant that longer strings are first.
+            self.masked_strings
+                .sort_by_key(|b| std::cmp::Reverse(b.len()));
+        }
     }
 }
 

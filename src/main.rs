@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use line_editor::LineEditor;
 use reedline::{self, Signal};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::error::Error;
 use std::io::Read;
@@ -520,7 +520,7 @@ async fn repl(
         history: vec![],
         editor: default_editor,
         shell: default_shell,
-        masked_strings: HashSet::new(),
+        masked_strings: vec![],
         mask_secrets: false,
         account: account.clone(),
         incognito,
@@ -653,6 +653,12 @@ async fn repl(
             );
         }
 
+        let masked_strings = if session.mask_secrets {
+            session.masked_strings.clone()
+        } else {
+            Vec::new()
+        };
+
         //
         // REPL Read
         // - Either reads from a queue of waiting cmds or from user input.
@@ -663,20 +669,21 @@ async fn repl(
                     println!();
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
-                print_step(&step_badge, &cmd_info.input);
+
+                print_step(&step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::ListenQueue(queue_name, index) = &cmd_info.source {
                 let step_badge = if let Some(queue_name) = queue_name {
                     format!("queue/{}[{}]:", queue_name, index)
                 } else {
                     format!("queue[{}]:", index)
                 };
-                print_step(&step_badge, &cmd_info.input);
+                print_step(&step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 let step_badge = format!("!hai-tool[{}]:", index);
-                print_step(&step_badge, &cmd_info.input);
+                print_step(&step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
                 let step_badge = format!("bye[{}]:", index);
-                print_step(&step_badge, &cmd_info.input);
+                print_step(&step_badge, &cmd_info.input, &masked_strings);
             }
             cmd_info
         } else {
@@ -895,12 +902,6 @@ async fn repl(
         println!();
         println!("{}", "↓↓↓".truecolor(128, 128, 128));
         println!();
-
-        let masked_strings = if session.mask_secrets {
-            session.masked_strings.clone()
-        } else {
-            HashSet::<String>::new()
-        };
 
         //
         // Prompt AI
@@ -1331,7 +1332,13 @@ fn cleanup(session: &SessionState) {
 
 /// Prints step (a REPL command from a source such as a task-step, bye-step, or
 /// hai-tool-step) with appropriate syntax highlighting and accent color.
-fn print_step(step_badge: &str, input: &str) {
+fn print_step(step_badge: &str, input: &str, masked_strings: &Vec<String>) {
+    let mut masked_input = input.to_string();
+    for masked_string in masked_strings {
+        let mask = "*".repeat(masked_string.len());
+        masked_input = masked_input.replace(masked_string, &mask);
+    }
+
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
         print!("{} ", step_badge.black().on_white());
         let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
@@ -1348,10 +1355,10 @@ fn print_step(step_badge: &str, input: &str) {
         } else {
             None
         };
-        term_color::print_multi_lang_syntax_highlighting(input, &color);
+        term_color::print_multi_lang_syntax_highlighting(&masked_input, &color);
         println!();
     } else {
-        println!("{} {}", step_badge.black().on_white(), input);
+        println!("{} {}", step_badge.black().on_white(), &masked_input);
     }
 }
 
@@ -1404,7 +1411,7 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
 pub async fn prompt_ai(
     msg_history: &[chat::Message],
     tool_policy: &Option<tool::ToolPolicy>,
-    masked_strings: &HashSet<String>,
+    masked_strings: &Vec<String>,
     session: &mut SessionState,
     cfg: &config::Config,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,

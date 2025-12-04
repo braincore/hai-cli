@@ -625,7 +625,7 @@ pub async fn process_cmd(
             if *secret {
                 // Since it was written as a secret, we assume it shouldn't be
                 // printed on the screen.
-                session.masked_strings.insert(answer.clone());
+                session.add_masked_string(&answer);
             }
             session_history_add_user_text_entry(
                 question,
@@ -2992,7 +2992,7 @@ pub async fn process_cmd(
                                     tool_call.id.clone(),
                                     tool_name.clone(),
                                     crate::ai_provider::tool_schema::get_syntax_highlighter_token_from_tool_name(&tool_name),
-                                    HashSet::new(),
+                                    vec![],
                                 );
                                 json_obj_acc.acc(&tool_call.function.arguments);
                                 json_obj_acc.end();
@@ -4048,7 +4048,7 @@ async fn prompt_ai_simple(
     let res = crate::prompt_ai(
         &msg_history,
         &None,
-        &HashSet::new(),
+        &Vec::new(),
         session,
         cfg,
         ctrlc_handler,
