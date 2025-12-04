@@ -21,7 +21,10 @@ pub fn print_image_to_term(encoded_image: &String) -> Result<(), Box<dyn std::er
         use_iterm: use_pretty_images,
         use_kitty: use_pretty_images,
         use_sixel: use_pretty_images,
-        truecolor: term_color::should_use_colors(),
+        truecolor: matches!(
+            term_color::terminal_color_capability(),
+            Some(term_color::ColorCapability::TrueColor)
+        ),
         ..Default::default()
     };
 

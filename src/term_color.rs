@@ -88,7 +88,7 @@ pub fn as_terminal_escaped(
     combined_style.paint(text).to_string()
 }
 
-pub fn should_use_colors() -> bool {
+fn should_use_colors() -> bool {
     // Check NO_COLOR first (highest priority for disabling)
     if std::env::var_os("NO_COLOR").is_some() {
         return false;
