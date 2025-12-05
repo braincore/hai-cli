@@ -1723,7 +1723,6 @@ pub async fn process_cmd(
                 }
             };
 
-            let folders = asset_iter_res.collapsed_prefixes.clone();
             let mut printed_folders = HashSet::new();
 
             let mut asset_list_output = vec![];
@@ -1742,12 +1741,13 @@ pub async fn process_cmd(
                             continue;
                         }
                         seen.insert(entry.name.clone());
-                        let line = if let Some(folder) = folders
+                        let line = if let Some(folder) = asset_iter_res
+                            .collapsed_prefixes
                             .iter()
                             .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
                         {
                             if !printed_folders.contains(folder) {
-                                printed_folders.insert(folder);
+                                printed_folders.insert(folder.clone());
                                 Some(print_folder(folder))
                             } else {
                                 None
@@ -1781,12 +1781,13 @@ pub async fn process_cmd(
                 entries.extend_from_slice(&asset_iter_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
                 for entry in &entries {
-                    let line = if let Some(folder) = folders
+                    let line = if let Some(folder) = asset_iter_res
+                        .collapsed_prefixes
                         .iter()
                         .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
                     {
                         if !printed_folders.contains(folder) {
-                            printed_folders.insert(folder);
+                            printed_folders.insert(folder.clone());
                             Some(print_folder(folder))
                         } else {
                             None
