@@ -74,6 +74,7 @@ delimited keys or key-values following the model name:
 |------------|-------------------|-------------------------------------------------------------|
 | GPT-5      | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | GPT-5      | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
+| Gemini-3   | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | Sonnet-3.7 | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Sonnet-4.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Opus-4.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
@@ -84,6 +85,7 @@ Examples:
 /ai gpt-5,reasoning=low,verbosity=medium
 /ai gpt-5,r=l,v=m
 /ai gpt-5,r=h
+/ai flash3,r=h
 /ai sonnet,thinking
 /ai sonnet,t
 ```

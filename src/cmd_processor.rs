@@ -3644,8 +3644,16 @@ lesson (e.g. "understanding").\n\n{}"#,
                     config::AiModel::OpenAi(config::OpenAiModel::Gpt4oMini),
                     config::AiModel::OpenAi(config::OpenAiModel::O3),
                     config::AiModel::OpenAi(config::OpenAiModel::O4Mini),
-                    config::AiModel::Google(config::GoogleModel::Gemini3Flash),
-                    config::AiModel::Google(config::GoogleModel::Gemini3Pro),
+                    config::AiModel::Google(config::GoogleModel::Gemini3Flash(
+                        config::GeminiOptions {
+                            thinking_level: None,
+                        },
+                    )),
+                    config::AiModel::Google(config::GoogleModel::Gemini3Pro(
+                        config::GeminiOptions {
+                            thinking_level: None,
+                        },
+                    )),
                     config::AiModel::Anthropic(config::AnthropicModel::Sonnet45(false)),
                     config::AiModel::Anthropic(config::AnthropicModel::Opus41(false)),
                     config::AiModel::Anthropic(config::AnthropicModel::Haiku35),

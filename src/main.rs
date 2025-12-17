@@ -1432,6 +1432,9 @@ pub async fn prompt_ai(
                     | config::OpenAiModel::Gpt5Mini(opts)
                     | config::OpenAiModel::Gpt5Nano(opts),
                 ) => &opts.reasoning_effort,
+                config::AiModel::Google(
+                    config::GoogleModel::Gemini3Flash(opts) | config::GoogleModel::Gemini3Pro(opts),
+                ) => &opts.thinking_level,
                 _ => &None,
             };
             let openai_verbosity = match &session.ai {

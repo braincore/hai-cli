@@ -83,14 +83,16 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
-        "flash" | "flash3" | "geminiflash" | "gemini3flash" => {
-            Some(AiModel::Google(GoogleModel::Gemini3Flash))
-        }
+        "flash" | "flash3" | "geminiflash" | "gemini3flash" => Some(AiModel::Google(
+            GoogleModel::Gemini3Flash(parse_gemini_opts(opts)),
+        )),
         "flash25" | "gemini25flash" => Some(AiModel::Google(GoogleModel::Gemini25Flash)),
         "flash20" | "gemini20flash" => Some(AiModel::Google(GoogleModel::Gemini20Flash)),
         "flash15" | "gemini15flash" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
         "flash158b" | "gemini15flash8b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
-        "gemini3pro" => Some(AiModel::Google(GoogleModel::Gemini3Pro)),
+        "gemini3pro" => Some(AiModel::Google(GoogleModel::Gemini3Pro(parse_gemini_opts(
+            opts,
+        )))),
         "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
         "gemma3" | "gemma" => Some(AiModel::Ollama(OllamaModel::Gemma3)),
@@ -265,6 +267,39 @@ pub fn parse_gpt5_opts(opts: Vec<&str>) -> Gpt5Options {
         reasoning_effort,
         verbosity,
     }
+}
+
+pub fn parse_gemini_opts(opts: Vec<&str>) -> GeminiOptions {
+    let mut thinking_level = None;
+    for opt in opts {
+        let mut kv = opt.split('=');
+        let key = match kv.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let value = match kv.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        match key {
+            "r" | "reasoning" => {
+                thinking_level = match value {
+                    "min" | "minimal" => Some(OpenAiReasoningEffort::Minimal),
+                    "l" | "low" => Some(OpenAiReasoningEffort::Low),
+                    "m" | "medium" => Some(OpenAiReasoningEffort::Medium),
+                    "h" | "high" => Some(OpenAiReasoningEffort::High),
+                    _ => {
+                        println!("ignoring unknown reasoning effort: {}", value);
+                        continue;
+                    }
+                };
+            }
+            _ => {
+                println!("ignoring unknown option: {}", key);
+            }
+        }
+    }
+    GeminiOptions { thinking_level }
 }
 
 pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
@@ -465,9 +500,14 @@ pub enum DeepSeekModel {
 }
 
 #[derive(Debug)]
+pub struct GeminiOptions {
+    pub thinking_level: Option<OpenAiReasoningEffort>,
+}
+
+#[derive(Debug)]
 pub enum GoogleModel {
-    Gemini3Flash,
-    Gemini3Pro,
+    Gemini3Flash(GeminiOptions),
+    Gemini3Pro(GeminiOptions),
     Gemini25Flash,
     Gemini25Pro,
     Gemini20Flash,
@@ -567,8 +607,8 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini3Flash => "gemini-3-flash-preview",
-            GoogleModel::Gemini3Pro => "gemini-3-pro-preview",
+            GoogleModel::Gemini3Flash(_) => "gemini-3-flash-preview",
+            GoogleModel::Gemini3Pro(_) => "gemini-3-pro-preview",
             GoogleModel::Gemini25Flash => "gemini-2.5-flash",
             GoogleModel::Gemini25Pro => "gemini-2.5-pro",
             GoogleModel::Gemini20Flash => "gemini-2.0-flash",
@@ -644,8 +684,12 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             DeepSeekModel::Other(name) => name.clone(),
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini3Flash => "gemini-3-flash".to_string(),
-            GoogleModel::Gemini3Pro => "gemini-3-pro".to_string(),
+            GoogleModel::Gemini3Flash(opts) => {
+                format!("gemini-3-flash{}", get_gemini_opts_display(opts))
+            }
+            GoogleModel::Gemini3Pro(opts) => {
+                format!("gemini-3-pro{}", get_gemini_opts_display(opts))
+            }
             GoogleModel::Gemini25Flash => "gemini-2.5-flash".to_string(),
             GoogleModel::Gemini25Pro => "gemini-2.5-pro".to_string(),
             GoogleModel::Gemini20Flash => "flash-2.0".to_string(),
@@ -720,6 +764,24 @@ pub fn get_gpt5_opts_display(opts: &Gpt5Options) -> String {
         parts.push(format!("v={}", v_str));
     }
 
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(","))
+    }
+}
+
+pub fn get_gemini_opts_display(opts: &GeminiOptions) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref r) = opts.thinking_level {
+        let r_str = match r {
+            OpenAiReasoningEffort::Minimal => "min",
+            OpenAiReasoningEffort::Low => "l",
+            OpenAiReasoningEffort::Medium => "m",
+            OpenAiReasoningEffort::High => "h",
+        };
+        parts.push(format!("r={}", r_str));
+    }
     if parts.is_empty() {
         String::new()
     } else {
@@ -832,8 +894,8 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         ),
         AiModel::Google(model) => matches!(
             model,
-            GoogleModel::Gemini3Flash
-                | GoogleModel::Gemini3Pro
+            GoogleModel::Gemini3Flash(_)
+                | GoogleModel::Gemini3Pro(_)
                 | GoogleModel::Gemini25Flash
                 | GoogleModel::Gemini25Pro
                 | GoogleModel::Gemini20Flash
@@ -894,8 +956,8 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             DeepSeekModel::Other(_) => None,
         },
         AiModel::Google(model) => match model {
-            GoogleModel::Gemini3Flash => Some((500, 3000)),
-            GoogleModel::Gemini3Pro => Some((2000, 12000)),
+            GoogleModel::Gemini3Flash(_) => Some((500, 3000)),
+            GoogleModel::Gemini3Pro(_) => Some((2000, 12000)),
             GoogleModel::Gemini25Flash => Some((300, 2500)),
             GoogleModel::Gemini25Pro => Some((1250, 10000)),
             GoogleModel::Gemini20Flash => Some((100, 400)),
@@ -1231,7 +1293,9 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
     } else if get_google_api_key(cfg).is_some() {
-        AiModel::Google(GoogleModel::Gemini3Flash)
+        AiModel::Google(GoogleModel::Gemini3Flash(GeminiOptions {
+            thinking_level: None,
+        }))
     } else if get_xai_api_key(cfg).is_some() {
         AiModel::Xai(XaiModel::Grok4)
     } else {
