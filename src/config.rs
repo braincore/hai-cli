@@ -83,9 +83,10 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
         "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
-        "flash" | "flash25" | "geminiflash" | "gemini25flash" => {
-            Some(AiModel::Google(GoogleModel::Gemini25Flash))
+        "flash" | "flash3" | "geminiflash" | "gemini3flash" => {
+            Some(AiModel::Google(GoogleModel::Gemini3Flash))
         }
+        "flash25" | "gemini25flash" => Some(AiModel::Google(GoogleModel::Gemini25Flash)),
         "flash20" | "gemini20flash" => Some(AiModel::Google(GoogleModel::Gemini20Flash)),
         "flash15" | "gemini15flash" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
         "flash158b" | "gemini15flash8b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
@@ -465,6 +466,7 @@ pub enum DeepSeekModel {
 
 #[derive(Debug)]
 pub enum GoogleModel {
+    Gemini3Flash,
     Gemini3Pro,
     Gemini25Flash,
     Gemini25Pro,
@@ -565,6 +567,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
+            GoogleModel::Gemini3Flash => "gemini-3-flash-preview",
             GoogleModel::Gemini3Pro => "gemini-3-pro-preview",
             GoogleModel::Gemini25Flash => "gemini-2.5-flash",
             GoogleModel::Gemini25Pro => "gemini-2.5-pro",
@@ -641,6 +644,7 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             DeepSeekModel::Other(name) => name.clone(),
         },
         AiModel::Google(model) => match model {
+            GoogleModel::Gemini3Flash => "gemini-3-flash".to_string(),
             GoogleModel::Gemini3Pro => "gemini-3-pro".to_string(),
             GoogleModel::Gemini25Flash => "gemini-2.5-flash".to_string(),
             GoogleModel::Gemini25Pro => "gemini-2.5-pro".to_string(),
@@ -750,21 +754,9 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
                 tool: true,
             },
         },
-        AiModel::Google(model) => match model {
-            GoogleModel::Gemini3Pro
-            | GoogleModel::Gemini25Flash
-            | GoogleModel::Gemini25Pro
-            | GoogleModel::Gemini20Flash
-            | GoogleModel::Gemini15Flash
-            | GoogleModel::Gemini15Flash8B
-            | GoogleModel::Gemini15Pro => AiModelCapability {
-                image: true,
-                tool: true,
-            },
-            GoogleModel::Other(_) => AiModelCapability {
-                image: false,
-                tool: false,
-            },
+        AiModel::Google(_) => AiModelCapability {
+            image: true,
+            tool: true,
         },
         AiModel::LlamaCpp(model) => match model {
             LlamaCppModel::Other(_) => AiModelCapability {
@@ -840,7 +832,8 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         ),
         AiModel::Google(model) => matches!(
             model,
-            GoogleModel::Gemini3Pro
+            GoogleModel::Gemini3Flash
+                | GoogleModel::Gemini3Pro
                 | GoogleModel::Gemini25Flash
                 | GoogleModel::Gemini25Pro
                 | GoogleModel::Gemini20Flash
@@ -901,6 +894,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             DeepSeekModel::Other(_) => None,
         },
         AiModel::Google(model) => match model {
+            GoogleModel::Gemini3Flash => Some((500, 3000)),
             GoogleModel::Gemini3Pro => Some((2000, 12000)),
             GoogleModel::Gemini25Flash => Some((300, 2500)),
             GoogleModel::Gemini25Pro => Some((1250, 10000)),
@@ -1237,7 +1231,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
     } else if get_google_api_key(cfg).is_some() {
-        AiModel::Google(GoogleModel::Gemini25Flash)
+        AiModel::Google(GoogleModel::Gemini3Flash)
     } else if get_xai_api_key(cfg).is_some() {
         AiModel::Xai(XaiModel::Grok4)
     } else {
