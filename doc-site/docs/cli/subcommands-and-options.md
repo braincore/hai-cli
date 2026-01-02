@@ -23,6 +23,18 @@ To override the default LLM model for an invocation of `hai`, use `-m`:
 hai -m <model>
 ```
 
+This option is especially helpful when creating command aliases. For example,
+I use `hai1` and `hai2` to start `hai` with different models depending on what
+I'm doing.
+
+```bash
+# Use GPT‑5.1 Chat for general prompts
+alias hai1='hai -m gpt-51-chat'
+
+# Use Sonnet-4.5 for coding prompts
+alias hai2='hai -m sonnet45'
+```
+
 ## Task mode
 
 To immediately drop a user into task-mode:
