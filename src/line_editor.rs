@@ -997,6 +997,7 @@ impl CmdAndFileCompleter {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
                 AssetEntryListArg {
                     prefix: Some(expanded_asset_prefix),
+                    limit: 100,
                 },
             ))
         });
@@ -1004,8 +1005,28 @@ impl CmdAndFileCompleter {
             Ok(res) => {
                 let mut completions = Vec::new();
                 let mut sorted_entries = res.entries;
+                let collapsed_prefixes = res.collapsed_prefixes.clone();
+                let mut collapsed_idx = 0;
                 sorted_entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
                 for entry in sorted_entries {
+                    // Return collapsed prefixes that come before this entry
+                    while collapsed_idx < collapsed_prefixes.len()
+                        && collapsed_prefixes[collapsed_idx] < entry.name
+                    {
+                        completions.push(Suggestion {
+                            value: collapsed_prefixes[collapsed_idx].clone(),
+                            description: None,
+                            style: None,
+                            extra: None,
+                            // Replace entirety of existing contents
+                            span: Span {
+                                start: 0,
+                                end: asset_prefix.len(),
+                            },
+                            append_whitespace: false,
+                        });
+                        collapsed_idx += 1;
+                    }
                     completions.push(Suggestion {
                         value: entry.name,
                         description: None,
@@ -1018,6 +1039,22 @@ impl CmdAndFileCompleter {
                         },
                         append_whitespace: true,
                     });
+                }
+                // Return any remaining collapsed prefixes that come after all entries
+                while collapsed_idx < collapsed_prefixes.len() {
+                    completions.push(Suggestion {
+                        value: collapsed_prefixes[collapsed_idx].clone(),
+                        description: None,
+                        style: None,
+                        extra: None,
+                        // Replace entirety of existing contents
+                        span: Span {
+                            start: 0,
+                            end: asset_prefix.len(),
+                        },
+                        append_whitespace: false,
+                    });
+                    collapsed_idx += 1;
                 }
                 completions
             }

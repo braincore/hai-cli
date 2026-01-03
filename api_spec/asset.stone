@@ -179,11 +179,41 @@ route entry/list(AssetEntryListArg, AssetEntryListResult, AssetEntryListError)
 
 struct AssetEntryListArg
     prefix String?
+    limit UInt32 = 100
+        "The maximum number of entries to return at once. For internal reasons,
+        fewer than `limit` may be returned."
 
 struct AssetEntryListResult
     entries List(AssetEntry)
+    cursor String(min_length=1)
+    has_more Boolean
+    collapsed_prefixes List(String)
+        "In lexicographic (byte-order) sorting."
 
 union AssetEntryListError
+    empty
+        "If a pool has never had an asset, this is returned since pools are
+        created lazily."
+    no_permission
+
+# --
+
+route entry/list/next(AssetEntryListNextArg, AssetEntryListResult, AssetEntryListNextError)
+    "List up to 100 entries. Not recommended for general usage but handy for
+    auto-completion where completeness isn't crticial."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetEntryListNextArg
+    cursor String(min_length=1)
+        "Use the cursor from :field:`AssetEntryListResult.cursor`."
+    limit UInt32 = 100
+        "The maximum number of entries to return at once. For internal reasons,
+        fewer than `limit` may be returned."
+
+union AssetEntryListNextError
+    bad_cursor
     no_permission
 
 # --
@@ -206,7 +236,7 @@ struct AssetEntryIterResult
     cursor String(min_length=1)
     has_more Boolean
     collapsed_prefixes List(String)
-
+        "In lexicographic (byte-order) sorting."
 
 union AssetEntryIterError
     empty

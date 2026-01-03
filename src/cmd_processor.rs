@@ -2,7 +2,7 @@ use colored::*;
 use glob::glob;
 use num_format::{Locale, ToFormattedString};
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -1698,12 +1698,12 @@ pub async fn process_cmd(
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
             let prefix = expand_pub_asset_name(prefix, &session.account);
             use crate::api::types::asset::{
-                AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg,
+                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg,
             };
             let api_client = mk_api_client(Some(session));
             let mut entries = vec![];
-            let mut asset_iter_res = match api_client
-                .asset_entry_iter(AssetEntryIterArg {
+            let mut asset_list_res = match api_client
+                .asset_entry_list(AssetEntryListArg {
                     prefix: Some(prefix),
                     limit: 200,
                 })
@@ -1712,7 +1712,7 @@ pub async fn process_cmd(
                 Ok(res) => res,
                 Err(e) => {
                     match e {
-                        api::client::RequestError::Route(AssetEntryIterError::Empty) => {
+                        api::client::RequestError::Route(AssetEntryListError::Empty) => {
                             eprintln!("[empty]");
                         }
                         _ => {
@@ -1723,48 +1723,33 @@ pub async fn process_cmd(
                 }
             };
 
-            let mut printed_folders = HashSet::new();
-
             let mut asset_list_output = vec![];
-            if asset_iter_res.has_more {
-                println!("[Listing assets unsorted due to size]");
-                let mut seen = HashSet::new();
+            let collapsed_prefixes = asset_list_res.collapsed_prefixes.clone();
+            let mut collapsed_idx = 0;
+
+            if asset_list_res.has_more {
+                println!("[Listing assets in lexicographic (byte-order) due to size]");
                 loop {
-                    entries.extend_from_slice(&asset_iter_res.entries);
-                    for entry in &asset_iter_res.entries {
-                        if entry.op == AssetEntryOp::Delete {
-                            continue;
-                        }
-                        if seen.contains(&entry.name) {
-                            // In case an entry is modified during iteration
-                            // (e.g. asset edited; metadata added)
-                            continue;
-                        }
-                        seen.insert(entry.name.clone());
-                        let line = if let Some(folder) = asset_iter_res
-                            .collapsed_prefixes
-                            .iter()
-                            .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
+                    entries.extend_from_slice(&asset_list_res.entries);
+                    for entry in &asset_list_res.entries {
+                        // Print all collapsed prefixes that come before this entry
+                        while collapsed_idx < collapsed_prefixes.len()
+                            && collapsed_prefixes[collapsed_idx] < entry.name
                         {
-                            if !printed_folders.contains(folder) {
-                                printed_folders.insert(folder.clone());
-                                Some(print_folder(folder))
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(print_asset_entry(entry))
-                        };
-                        if let Some(line) = line {
-                            asset_list_output.push(line);
+                            asset_list_output
+                                .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                            collapsed_idx += 1;
                         }
+
+                        asset_list_output.push(print_asset_entry(entry));
                     }
-                    if !asset_iter_res.has_more {
+
+                    if !asset_list_res.has_more {
                         break;
                     }
-                    asset_iter_res = match api_client
-                        .asset_entry_iter_next(AssetEntryIterNextArg {
-                            cursor: asset_iter_res.cursor,
+                    asset_list_res = match api_client
+                        .asset_entry_list_next(AssetEntryListNextArg {
+                            cursor: asset_list_res.cursor,
                             limit: 200,
                         })
                         .await
@@ -1778,28 +1763,27 @@ pub async fn process_cmd(
                 }
             } else {
                 // If all entries are fetched in one-go, sort them.
-                entries.extend_from_slice(&asset_iter_res.entries);
+                entries.extend_from_slice(&asset_list_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
-                for entry in &entries {
-                    let line = if let Some(folder) = asset_iter_res
-                        .collapsed_prefixes
-                        .iter()
-                        .find(|folder_prefix| entry.name.starts_with(*folder_prefix))
+                for entry in &asset_list_res.entries {
+                    // Print all collapsed prefixes that come before this entry
+                    while collapsed_idx < collapsed_prefixes.len()
+                        && collapsed_prefixes[collapsed_idx] < entry.name
                     {
-                        if !printed_folders.contains(folder) {
-                            printed_folders.insert(folder.clone());
-                            Some(print_folder(folder))
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some(print_asset_entry(entry))
-                    };
-                    if let Some(line) = line {
-                        asset_list_output.push(line);
+                        asset_list_output.push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                        collapsed_idx += 1;
                     }
+
+                    asset_list_output.push(print_asset_entry(entry));
                 }
             }
+
+            // Print any remaining collapsed prefixes that come after all entries
+            while collapsed_idx < collapsed_prefixes.len() {
+                asset_list_output.push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                collapsed_idx += 1;
+            }
+
             let asset_list_output = asset_list_output.join("\n");
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
