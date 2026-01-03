@@ -133,10 +133,13 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
             parse_anthropic_opts(opts),
         ))),
         "opus4thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus4(true))),
-        "opus" | "opus41" => Some(AiModel::Anthropic(AnthropicModel::Opus41(
+        "opus41" => Some(AiModel::Anthropic(AnthropicModel::Opus41(
             parse_anthropic_opts(opts),
         ))),
         "opus41thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus41(true))),
+        "opus" | "opus45" => Some(AiModel::Anthropic(AnthropicModel::Opus45(
+            parse_anthropic_opts(opts),
+        ))),
         "sonnet" | "sonnet45" => Some(AiModel::Anthropic(AnthropicModel::Sonnet45(
             parse_anthropic_opts(opts),
         ))),
@@ -485,6 +488,7 @@ pub enum AnthropicModel {
     Haiku35,
     Opus4(bool),  // If true, enables thinking
     Opus41(bool), // If true, enables thinking
+    Opus45(bool), // If true, enables thinking
     Sonnet35,
     Sonnet37(bool), // If true, enables thinking
     Sonnet4(bool),  // If true, enables thinking
@@ -595,6 +599,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Haiku35 => "claude-3-5-haiku-20241022",
             AnthropicModel::Opus4(_) => "claude-opus-4-20250514",
             AnthropicModel::Opus41(_) => "claude-opus-4-1-20250805",
+            AnthropicModel::Opus45(_) => "claude-opus-4-5-20251101",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
@@ -669,6 +674,8 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Opus4(true) => "opus-4(t)".to_string(),
             AnthropicModel::Opus41(false) => "opus-4.1".to_string(),
             AnthropicModel::Opus41(true) => "opus-4.1(t)".to_string(),
+            AnthropicModel::Opus45(false) => "opus-4.5".to_string(),
+            AnthropicModel::Opus45(true) => "opus-4.5(t)".to_string(),
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
             AnthropicModel::Sonnet37(true) => "sonnet-3.7(t)".to_string(),
@@ -882,6 +889,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 AnthropicModel::Haiku35
                     | AnthropicModel::Opus4(_)
                     | AnthropicModel::Opus41(_)
+                    | AnthropicModel::Opus45(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
@@ -944,6 +952,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Haiku35 => Some((800, 4000)),
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
+            AnthropicModel::Opus45(_) => Some((5000, 25000)),
             AnthropicModel::Sonnet35
             | AnthropicModel::Sonnet37(_)
             | AnthropicModel::Sonnet4(_)

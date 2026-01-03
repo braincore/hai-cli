@@ -408,6 +408,7 @@ async fn repl(
         "opus4",
         "opus4-thinking",
         "opus41",
+        "opus45",
         "sonnet",
         "sonnet35",
         "sonnet37",
@@ -1541,6 +1542,8 @@ pub async fn prompt_ai(
                 };
             let use_thinking = match anthropic_model {
                 config::AnthropicModel::Opus4(use_thinking)
+                | config::AnthropicModel::Opus41(use_thinking)
+                | config::AnthropicModel::Opus45(use_thinking)
                 | config::AnthropicModel::Sonnet37(use_thinking)
                 | config::AnthropicModel::Sonnet4(use_thinking)
                 | config::AnthropicModel::Sonnet45(use_thinking) => *use_thinking,
