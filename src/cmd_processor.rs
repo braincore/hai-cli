@@ -3854,7 +3854,8 @@ pub async fn shell_exec_with_asset_substitution(
     shell: &str,
     cmd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    match asset_editor::prepare_assets(api_client, cmd).await {
+    // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
+    match asset_editor::prepare_assets(api_client, cmd, 4).await {
         Ok((updated_cmd, asset_map, output_assets)) => {
             let res = shell_exec(shell, &updated_cmd).await;
             for output_asset in output_assets {

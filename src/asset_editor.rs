@@ -729,17 +729,21 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
     Ok(matching_assets)
 }
 
+use futures::future::join_all;
+use tempfile;
+use tokio::sync::Semaphore;
+
 /// Prepares @assets in shell commands and handles redirections.
 ///
 /// This function:
 /// 1. Identifies all @asset references in the command (including glob patterns)
 /// 2. Expands glob patterns (e.g., @data/*.jpg) to matching assets
-/// 3. Downloads input assets to temporary files on the local machine
+/// 3. Downloads input assets to temporary files on the local machine (in parallel)
 /// 4. Creates appropriate temporary files for output assets
 /// 5. Handles append operations (>>) by downloading existing assets first
 /// 6. Rewrites the shell command to use the local file paths
 ///
-/// # Returns
+/// Returns:
 /// * A tuple containing:
 ///   - The modified command with @assets replaced by file paths
 ///   - A map of asset names to their temporary files and paths
@@ -747,6 +751,7 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
 pub async fn prepare_assets(
     api_client: &HaiClient,
     cmd: &str,
+    max_concurrent_downloads: usize,
 ) -> Result<
     (
         String,
@@ -761,10 +766,9 @@ pub async fn prepare_assets(
 
     let mut append_assets = HashSet::new();
     let mut output_assets = HashSet::new();
-    let mut asset_map = HashMap::new();
 
-    // Original @asset reference (including @) and the replacement string.
-    let mut replacements = Vec::new();
+    // Original @asset reference (including @) and the replacement info.
+    let mut replacements: Vec<(String, String, bool)> = Vec::new();
 
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
@@ -792,7 +796,13 @@ pub async fn prepare_assets(
     // Track which glob patterns we've already expanded
     let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
 
-    // Process all assets
+    // Collect all assets that need to be downloaded
+    // (asset_name, needs_download)
+    let mut assets_to_process: Vec<(String, bool)> = Vec::new();
+    // Track which assets we've already seen
+    let mut seen_assets: HashSet<String> = HashSet::new();
+
+    // First pass: collect all assets and determine which need downloading
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
         let asset_path = cap[1].to_string();
@@ -807,56 +817,135 @@ pub async fn prepare_assets(
             // Expand the glob
             let matched_assets = expand_glob(api_client, &asset_path).await?;
 
-            // Download each matched asset
-            let mut expanded_paths = Vec::new();
+            // Queue each matched asset for download
             for matched_asset in &matched_assets {
-                if !asset_map.contains_key(matched_asset) {
-                    let (temp_file, temp_file_path) =
-                        download_asset_to_temp(api_client, matched_asset).await?;
-                    expanded_paths.push(temp_file_path.to_string_lossy().to_string());
-                    asset_map.insert(matched_asset.clone(), (temp_file, temp_file_path));
-                } else {
-                    let (_, path) = asset_map.get(matched_asset).unwrap();
-                    expanded_paths.push(path.to_string_lossy().to_string());
+                if !seen_assets.contains(matched_asset) {
+                    seen_assets.insert(matched_asset.clone());
+                    // Glob-matched assets are always inputs, so they need download
+                    assets_to_process.push((matched_asset.clone(), true));
                 }
             }
 
-            // Store the expansion for replacement
-            let replacement = expanded_paths.join(" ");
-            replacements.push((full_match, replacement));
-            expanded_globs.insert(asset_path, matched_assets);
+            expanded_globs.insert(asset_path.clone(), matched_assets);
+            // We'll handle the replacement after downloads complete
+            replacements.push((full_match, asset_path.clone(), true)); // true = is glob
         } else {
             // Regular asset (non-glob)
+            if !seen_assets.contains(&asset_path) {
+                seen_assets.insert(asset_path.clone());
 
-            // Skip if we've already processed this asset
-            if asset_map.contains_key(&asset_path) {
-                continue;
-            }
-
-            // For append assets (>>), we need to download them first
-            // For output assets with (>), we can just create an empty file
-            // For input assets, download them
-            let (temp_file, temp_file_path) =
-                if output_assets.contains(&asset_path) && !append_assets.contains(&asset_path) {
+                // Determine if this asset needs downloading
+                let needs_download = if output_assets.contains(&asset_path)
+                    && !append_assets.contains(&asset_path)
+                {
                     // Simple output with > (overwrite), just create empty file
-                    create_empty_temp_file(&asset_path, None)?
+                    false
                 } else {
                     // Either an input asset or an append asset (>>), download it
-                    download_asset_to_temp(api_client, &asset_path).await?
+                    true
                 };
 
-            replacements.push((full_match, temp_file_path.to_string_lossy().to_string()));
+                assets_to_process.push((asset_path.clone(), needs_download));
+            }
 
-            // Store the mapping
-            asset_map.insert(asset_path.clone(), (temp_file, temp_file_path));
+            replacements.push((full_match, asset_path.clone(), false)); // false = not glob
+        }
+    }
+
+    // Prepare download tasks
+    struct DownloadTask {
+        asset_name: String,
+        needs_download: bool,
+    }
+
+    let download_tasks: Vec<DownloadTask> = assets_to_process
+        .into_iter()
+        .map(|(asset_name, needs_download)| DownloadTask {
+            asset_name,
+            needs_download,
+        })
+        .collect();
+
+    // Create a semaphore for limiting concurrent downloads
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
+    let api_client = Arc::new(api_client.clone());
+
+    // Spawn download tasks
+    let mut handles = Vec::new();
+
+    for task in download_tasks {
+        let sem_clone = Arc::clone(&semaphore);
+        let api_client_clone = Arc::clone(&api_client);
+        let asset_name = task.asset_name.clone();
+        let needs_download = task.needs_download;
+
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire().await.unwrap();
+
+            let result = if needs_download {
+                download_asset_to_temp(&api_client_clone, &asset_name).await
+            } else {
+                // Simple output with > (overwrite), just create empty file
+                create_empty_temp_file(&asset_name, None)
+            };
+
+            (asset_name, result)
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all downloads to complete
+    let results = join_all(handles).await;
+
+    // Process results and build asset_map
+    let mut asset_map: HashMap<String, (tempfile::NamedTempFile, PathBuf)> = HashMap::new();
+
+    for result in results {
+        match result {
+            Ok((asset_name, Ok((temp_file, temp_file_path)))) => {
+                asset_map.insert(asset_name, (temp_file, temp_file_path));
+            }
+            Ok((asset_name, Err(e))) => {
+                return Err(format!("Failed to process asset '{}': {}", asset_name, e));
+            }
+            Err(e) => {
+                return Err(format!("Download task panicked: {}", e));
+            }
+        }
+    }
+
+    // Build final replacements with actual paths
+    let mut final_replacements: Vec<(String, String)> = Vec::new();
+
+    for (full_match, asset_path, is_glob) in replacements {
+        if is_glob {
+            // Get the expanded assets for this glob
+            if let Some(matched_assets) = expanded_globs.get(&asset_path) {
+                let expanded_paths: Vec<String> = matched_assets
+                    .iter()
+                    .filter_map(|matched_asset| {
+                        asset_map
+                            .get(matched_asset)
+                            .map(|(_, path)| path.to_string_lossy().to_string())
+                    })
+                    .collect();
+                let replacement = expanded_paths.join(" ");
+                final_replacements.push((full_match, replacement));
+            }
+        } else {
+            // Regular asset
+            if let Some((_, path)) = asset_map.get(&asset_path) {
+                final_replacements.push((full_match, path.to_string_lossy().to_string()));
+            }
         }
     }
 
     // Perform replacements of @asset with temp files from longest first to
     // avoid collisions with assets whose names are subsets of one another.
-    replacements.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+    final_replacements.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
     let mut modified_cmd = cmd.to_string();
-    for (pattern, replacement) in replacements {
+    for (pattern, replacement) in final_replacements {
         modified_cmd = modified_cmd.replace(&pattern, &replacement);
     }
 
