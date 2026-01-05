@@ -644,29 +644,106 @@ pub async fn asset_metadata_set_key(
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use glob::Pattern;
+
+/// Checks if an asset path contains glob characters
+fn is_glob_pattern(path: &str) -> bool {
+    path.contains('*') || path.contains('?') || path.contains('[')
+}
+
+/// Extracts the prefix for API query and the full pattern for client-side filtering.
+/// e.g., "a/b/*.jpg" -> (prefix: "a/b/", pattern: "a/b/*.jpg")
+fn parse_glob_pattern(pattern: &str) -> (String, Pattern) {
+    // Find the first glob character
+    let first_glob_idx = pattern
+        .find(|c| c == '*' || c == '?' || c == '[')
+        .unwrap_or(pattern.len());
+
+    // Prefix is everything up to and including the last '/' before the glob
+    let prefix = if let Some(last_slash) = pattern[..first_glob_idx].rfind('/') {
+        pattern[..=last_slash].to_string()
+    } else {
+        String::new()
+    };
+
+    let compiled_pattern = Pattern::new(pattern).expect("Invalid glob pattern");
+
+    (prefix, compiled_pattern)
+}
+
+/// Expands a glob pattern by querying the API and filtering results.
+async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<String>, String> {
+    use crate::api::types::asset::{AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg};
+
+    let (prefix, pattern) = parse_glob_pattern(glob_pattern);
+
+    let mut matching_assets = Vec::new();
+
+    // Initial API call
+    let mut asset_list_res = api_client
+        .asset_entry_list(AssetEntryListArg {
+            prefix: if prefix.is_empty() {
+                None
+            } else {
+                Some(prefix)
+            },
+            limit: 200,
+        })
+        .await
+        .map_err(|e| {
+            if matches!(e, RequestError::Route(AssetEntryListError::Empty)) {
+                format!("No assets match glob pattern: {}", glob_pattern)
+            } else {
+                format!("Error listing assets for glob {}: {}", glob_pattern, e)
+            }
+        })?;
+
+    // Collect all matching entries
+    loop {
+        for entry in &asset_list_res.entries {
+            if pattern.matches(&entry.name) {
+                matching_assets.push(entry.name.clone());
+            }
+        }
+
+        if !asset_list_res.has_more {
+            break;
+        }
+
+        asset_list_res = api_client
+            .asset_entry_list_next(AssetEntryListNextArg {
+                cursor: asset_list_res.cursor,
+                limit: 200,
+            })
+            .await
+            .map_err(|e| format!("Error listing assets for glob {}: {}", glob_pattern, e))?;
+    }
+
+    if matching_assets.is_empty() {
+        return Err(format!("No assets match glob pattern: {}", glob_pattern));
+    }
+
+    // Sort for consistent ordering
+    matching_assets.sort_by(|a, b| human_sort::compare(a, b));
+
+    Ok(matching_assets)
+}
+
 /// Prepares @assets in shell commands and handles redirections.
 ///
 /// This function:
-/// 1. Identifies all @asset references in the command
-/// 2. Downloads input assets to temporary files on the local machine
-/// 3. Creates appropriate temporary files for output assets
-/// 4. Handles append operations (>>) by downloading existing assets first
-/// 5. Rewrites the shell command to use the local file paths
+/// 1. Identifies all @asset references in the command (including glob patterns)
+/// 2. Expands glob patterns (e.g., @data/*.jpg) to matching assets
+/// 3. Downloads input assets to temporary files on the local machine
+/// 4. Creates appropriate temporary files for output assets
+/// 5. Handles append operations (>>) by downloading existing assets first
+/// 6. Rewrites the shell command to use the local file paths
 ///
 /// # Returns
 /// * A tuple containing:
 ///   - The modified command with @assets replaced by file paths
 ///   - A map of asset names to their temporary files and paths
 ///   - A set of asset names that are used as outputs (via > or >>)
-///
-/// # Examples
-///
-/// ```
-/// // Original: !!cat @input > @output
-/// // Modified: !!cat /tmp/asset_123.txt > /tmp/asset_456.txt
-/// let (modified_cmd, asset_map, output_assets) = prepare_assets(&client, "!!cat @input > @output").await?;
-/// // output_assets contains "output"
-/// ```
 pub async fn prepare_assets(
     api_client: &HaiClient,
     cmd: &str,
@@ -679,55 +756,100 @@ pub async fn prepare_assets(
     String,
 > {
     let asset_regex = Regex::new(r"@([^\s]+)").expect("Invalid regex");
-
     let append_regex = Regex::new(r">>\s*@([^\s]+)").expect("Invalid regex");
     let output_regex = Regex::new(r"(?:>|>>)\s*@([^\s]+)").expect("Invalid regex");
 
     let mut append_assets = HashSet::new();
     let mut output_assets = HashSet::new();
-
     let mut asset_map = HashMap::new();
 
-    // Original @asset name and the temp file path it will be replaced by.
+    // Original @asset reference (including @) and the replacement string.
     let mut replacements = Vec::new();
 
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
         let output_asset = cap[1].to_string();
+        if is_glob_pattern(&output_asset) {
+            return Err(format!(
+                "Glob patterns are not allowed in output redirections: @{}",
+                output_asset
+            ));
+        }
         output_assets.insert(output_asset);
     }
 
     for cap in append_regex.captures_iter(cmd) {
         let append_asset = cap[1].to_string();
+        if is_glob_pattern(&append_asset) {
+            return Err(format!(
+                "Glob patterns are not allowed in append redirections: @{}",
+                append_asset
+            ));
+        }
         append_assets.insert(append_asset);
     }
+
+    // Track which glob patterns we've already expanded
+    let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
 
     // Process all assets
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
         let asset_path = cap[1].to_string();
 
-        // Skip if we've already processed this asset
-        if asset_map.contains_key(&asset_path) {
-            continue;
+        // Check if this is a glob pattern
+        if is_glob_pattern(&asset_path) {
+            // Skip if we've already expanded this glob
+            if expanded_globs.contains_key(&asset_path) {
+                continue;
+            }
+
+            // Expand the glob
+            let matched_assets = expand_glob(api_client, &asset_path).await?;
+
+            // Download each matched asset
+            let mut expanded_paths = Vec::new();
+            for matched_asset in &matched_assets {
+                if !asset_map.contains_key(matched_asset) {
+                    let (temp_file, temp_file_path) =
+                        download_asset_to_temp(api_client, matched_asset).await?;
+                    expanded_paths.push(temp_file_path.to_string_lossy().to_string());
+                    asset_map.insert(matched_asset.clone(), (temp_file, temp_file_path));
+                } else {
+                    let (_, path) = asset_map.get(matched_asset).unwrap();
+                    expanded_paths.push(path.to_string_lossy().to_string());
+                }
+            }
+
+            // Store the expansion for replacement
+            let replacement = expanded_paths.join(" ");
+            replacements.push((full_match, replacement));
+            expanded_globs.insert(asset_path, matched_assets);
+        } else {
+            // Regular asset (non-glob)
+
+            // Skip if we've already processed this asset
+            if asset_map.contains_key(&asset_path) {
+                continue;
+            }
+
+            // For append assets (>>), we need to download them first
+            // For output assets with (>), we can just create an empty file
+            // For input assets, download them
+            let (temp_file, temp_file_path) =
+                if output_assets.contains(&asset_path) && !append_assets.contains(&asset_path) {
+                    // Simple output with > (overwrite), just create empty file
+                    create_empty_temp_file(&asset_path, None)?
+                } else {
+                    // Either an input asset or an append asset (>>), download it
+                    download_asset_to_temp(api_client, &asset_path).await?
+                };
+
+            replacements.push((full_match, temp_file_path.to_string_lossy().to_string()));
+
+            // Store the mapping
+            asset_map.insert(asset_path.clone(), (temp_file, temp_file_path));
         }
-
-        // For append assets (>>), we need to download them first
-        // For output assets with (>), we can just create an empty file
-        // For input assets, download them
-        let (temp_file, temp_file_path) =
-            if output_assets.contains(&asset_path) && !append_assets.contains(&asset_path) {
-                // Simple output with > (overwrite), just create empty file
-                create_empty_temp_file(&asset_path, None)?
-            } else {
-                // Either an input asset or an append asset (>>), download it
-                download_asset_to_temp(api_client, &asset_path).await?
-            };
-
-        replacements.push((full_match, temp_file_path.to_string_lossy().to_string()));
-
-        // Store the mapping
-        asset_map.insert(asset_path.clone(), (temp_file, temp_file_path));
     }
 
     // Perform replacements of @asset with temp files from longest first to
@@ -774,19 +896,38 @@ pub fn create_empty_temp_file(
     asset_name: &str,
     rev_id: Option<&str>,
 ) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
-    // Create a temporary file copying the extension
-    let extension = Path::new(asset_name)
+    // Extract the file stem (name without extension) from the asset path
+    let path = Path::new(asset_name);
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
+
+    // Remove non-alphanumeric characters from file stem
+    let clean_stem: String = file_stem.chars().filter(|c| c.is_alphanumeric()).collect();
+    let clean_stem = if clean_stem.is_empty() {
+        "asset"
+    } else {
+        &clean_stem
+    };
+
+    // Get the extension
+    let extension = path
         .extension()
         .and_then(|ext| ext.to_str().map(|s| format!(".{}", s)))
         .unwrap_or_default();
-    let mut prefix = "asset_".to_string();
+
+    // Build the prefix: asset_<filename>_
+    let prefix = format!("asset_{}_", clean_stem);
+
+    // Build the suffix: _<rev_id><extension>
+    let mut suffix = String::new();
     if let Some(rev_id) = rev_id {
-        prefix.push_str(rev_id);
-        prefix.push('_');
+        suffix.push('_');
+        suffix.push_str(rev_id);
     }
+    suffix.push_str(&extension);
+
     let temp_file = tempfile::Builder::new()
         .prefix(&prefix)
-        .suffix(&extension)
+        .suffix(&suffix)
         .tempfile()
         .map_err(|e| format!("Failed to create temporary file: {}", e))?;
 

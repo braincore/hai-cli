@@ -215,6 +215,7 @@ will be transparently downloaded into a temporary file.
 equivalent to:
 [0] !!grep -A 2 v1.3.0 @/hai/changelog
 ```
+
 ```
 ## v1.3.0
 
@@ -233,10 +234,35 @@ uploaded as well.
 This processes a public asset from the `hai` account and saves a filtered
 version to the `changes-v1.3.0` private asset.
 
+### Glob Patterns
+
+Asset references support glob patterns (`*`, `?`, `[...]`) for matching multiple
+assets at once.
+
+```
+[0] !!cat @data/*.txt
+```
+
+This expands to all `.txt` files in the `data/` folder, downloading each to a
+temporary file.
+
+More examples:
+
+```
+[0] !!wc -l @logs/2024-*.log
+[0] !!cat @chapters/part_?.md > @full-book.md
+[0] !!grep "error" @logs/[0-9][0-9][0-9].log
+[0] !!grep -l "TODO" @hai-cli/**/*.rs
+```
+
+!!!warning "Glob Limitations"
+Glob patterns are only supported for input assets. Using a glob pattern
+with output redirections (`>` or `>>`) will result in an error.
+
 !!!warning "Limitations"
-    The implementation uses simple string substitution to replace `@asset`
-    markers with temporary files. Complex shell operations involving quotes or
-    escapes around asset references may not work as expected.
+The implementation uses simple string substitution to replace `@asset`
+markers with temporary files. Complex shell operations involving quotes or
+escapes around asset references may not work as expected.
 
 ## Write conflicts
 
