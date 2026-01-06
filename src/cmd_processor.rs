@@ -478,7 +478,7 @@ pub async fn process_cmd(
                         None
                     };
                     if let Some(cached_output) = cached_output {
-                        (cached_output, true)
+                        (Ok(cached_output), true)
                     } else {
                         // If we're initializing a task, it's critical that we ask the
                         // user for confirmation. Otherwise, a destructive command could
@@ -501,22 +501,26 @@ pub async fn process_cmd(
                                 &session.shell,
                                 command,
                             )
-                            .await
-                            .unwrap(),
+                            .await,
                             false,
                         )
                     }
                 } else {
                     (
                         shell_exec_with_asset_substitution(&api_client, &session.shell, command)
-                            .await
-                            .unwrap(),
+                            .await,
                         false,
                     )
                 };
-            println!();
-
             ctrlc_handler.remove_handler(shell_exec_handler_id);
+            let shell_exec_output = match shell_exec_output {
+                Ok(output) => output,
+                Err(e) => {
+                    eprintln!("error: shell exec failed: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            println!();
 
             if from_cache {
                 if let Some((ref task_fqn, _, _)) = task_step_signature {
@@ -1704,6 +1708,7 @@ pub async fn process_cmd(
                 AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg,
             };
             let api_client = mk_api_client(Some(session));
+
             let mut entries = vec![];
             let mut asset_list_res = match api_client
                 .asset_entry_list(AssetEntryListArg {
@@ -2635,8 +2640,8 @@ pub async fn process_cmd(
                 let (data_temp_file, data_temp_file_path) =
                     match asset_editor::create_empty_temp_file(&asset_name, None) {
                         Ok(res) => res,
-                        Err(e) => {
-                            eprintln!("error: failed to download: {}", e);
+                        Err(asset_editor::DownloadAssetError::DataFetchFailed) => {
+                            eprintln!("error: failed to download: {}", asset_name);
                             return ProcessCmdResult::Loop;
                         }
                     };
@@ -2660,8 +2665,8 @@ pub async fn process_cmd(
                     let (metadata_temp_file, metadata_temp_file_path) =
                         match asset_editor::create_empty_temp_file(&metadata_name, None) {
                             Ok(res) => res,
-                            Err(e) => {
-                                eprintln!("error: failed to download: {}", e);
+                            Err(asset_editor::DownloadAssetError::DataFetchFailed) => {
+                                eprintln!("error: failed to download: {}", metadata_name);
                                 return ProcessCmdResult::Loop;
                             }
                         };
@@ -3906,16 +3911,44 @@ pub async fn shell_exec_with_asset_substitution(
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
     match asset_editor::prepare_assets_from_cmd_as_temp_files(api_client, cmd, 4).await {
         Ok((updated_cmd, asset_map, output_assets)) => {
+            for (asset_name, temp_res) in &asset_map {
+                if let Err(e) = temp_res {
+                    let err_msg = match e {
+                        asset_editor::GetAssetError::BadName => {
+                            format!("bad name: {}", asset_name)
+                        }
+                        asset_editor::GetAssetError::DataFetchFailed => {
+                            format!("fetch failed: {}", asset_name)
+                        }
+                    };
+                    return Err(err_msg.into());
+                }
+            }
             let res = shell_exec(shell, &updated_cmd).await;
             for output_asset in output_assets {
-                let (temp_file, _temp_file_path) =
-                    asset_map.get(&output_asset).expect("missing asset");
+                let (temp_file, _temp_file_path) = match asset_map.get(&output_asset) {
+                    Some(Ok((temp_file, temp_file_path))) => (temp_file, temp_file_path),
+                    Some(Err(e)) => {
+                        let err_msg = match e {
+                            asset_editor::GetAssetError::BadName => {
+                                format!("bad name: {}", output_asset)
+                            }
+                            asset_editor::GetAssetError::DataFetchFailed => {
+                                format!("fetch failed: {}", output_asset)
+                            }
+                        };
+                        return Err(err_msg.into());
+                    }
+                    None => {
+                        let err_msg = format!("missing output asset mapping: {}", output_asset);
+                        return Err(err_msg.into());
+                    }
+                };
                 let asset_contents = match fs::read(temp_file) {
                     Ok(res) => res,
                     Err(e) => {
-                        let err_msg = format!("error: failed to read output file: {}", e);
-                        eprintln!("{}", err_msg);
-                        return Ok(err_msg);
+                        let err_msg = format!("failed to read output file: {}", e);
+                        return Err(err_msg.into());
                     }
                 };
                 use crate::api::types::asset::{AssetPutArg, PutConflictPolicy};
@@ -3929,15 +3962,16 @@ pub async fn shell_exec_with_asset_substitution(
                 {
                     Ok(_) => {}
                     Err(e) => {
-                        eprintln!("error: failed to put: {}", e);
+                        let err_msg = format!("failed to put: {}", e);
+                        return Err(err_msg.into());
                     }
                 }
             }
             res
         }
         Err(e) => {
-            eprintln!("failed to prepare assets: {}", e);
-            Ok(e)
+            let err_msg = format!("failed to prepare assets: {}", e);
+            Err(err_msg.into())
         }
     }
 }

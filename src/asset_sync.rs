@@ -14,6 +14,7 @@ use crate::api::{
         AssetEntryOp, AssetMetadataInfo, AssetRevision,
     },
 };
+use crate::asset_editor::DownloadAssetError;
 use crate::config;
 
 struct DownloadTask {
@@ -809,8 +810,8 @@ pub async fn download_revision_to_temp(
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!("error: failed to download: {}", e);
+                Err(DownloadAssetError::DataFetchFailed) => {
+                    eprintln!("error: failed to fetch: {}", asset_name);
                 }
             }
         }

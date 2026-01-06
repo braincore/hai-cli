@@ -55,7 +55,7 @@ num-format = "0.4.4"
 open = { version = "5.3.2", features = ["shellexecute-on-windows"] }
 reedline = "0.38.0"
 regex = "1.11.1"
-reqwest = { version = "0.12.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls", "stream"] }
 rpassword = "7.3.1"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 semver = "1.0.25"

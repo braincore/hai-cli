@@ -745,7 +745,10 @@ use futures::future::join_all;
 use tempfile;
 use tokio::sync::Semaphore;
 
-pub type AssetTempFileMap = HashMap<String, (tempfile::NamedTempFile, PathBuf)>;
+pub type AssetTempFileMap =
+    HashMap<String, Result<(tempfile::NamedTempFile, PathBuf), GetAssetError>>;
+pub type AssetTempFileDownloadMap =
+    HashMap<String, Result<(tempfile::NamedTempFile, PathBuf), DownloadAssetError>>;
 
 /// Prepares assets from a list of asset names/globs as temporary files.
 ///
@@ -778,7 +781,8 @@ pub async fn prepare_assets_from_names_as_temp_files(
 
     // Collect unique assets to process
     let mut seen_assets: HashSet<String> = HashSet::new();
-    let mut assets_to_process: Vec<(String, bool)> = Vec::new(); // (asset_name, needs_download)
+    let mut assets_to_process: Vec<(AssetEntry, bool)> = Vec::new(); // (asset_name, needs_download)
+    let mut asset_fetch_failures = Vec::new();
 
     for asset_ref in asset_names_or_globs {
         if is_glob_pattern(asset_ref) {
@@ -789,82 +793,99 @@ pub async fn prepare_assets_from_names_as_temp_files(
 
             // Expand the glob
             let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
-            let matched_assets = matched_asset_entries
-                .into_iter()
-                .map(|entry| entry.name)
-                .collect::<Vec<_>>();
 
             // Queue each matched asset for download
-            for matched_asset in &matched_assets {
-                if !seen_assets.contains(matched_asset) {
-                    seen_assets.insert(matched_asset.clone());
+            for matched_asset_entry in &matched_asset_entries {
+                if !seen_assets.contains(&matched_asset_entry.name) {
+                    seen_assets.insert(matched_asset_entry.name.clone());
                     // Glob-matched assets are always inputs, so they need download
-                    let needs_download = !skip_download.contains(matched_asset);
-                    assets_to_process.push((matched_asset.clone(), needs_download));
+                    let needs_download = !skip_download.contains(&matched_asset_entry.name);
+                    assets_to_process.push((matched_asset_entry.clone(), needs_download));
                 }
             }
 
-            expanded_globs.insert(asset_ref.clone(), matched_assets);
+            expanded_globs.insert(
+                asset_ref.clone(),
+                matched_asset_entries
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect::<Vec<_>>(),
+            );
         } else {
             // Regular asset (non-glob)
             if !seen_assets.contains(asset_ref) {
                 seen_assets.insert(asset_ref.clone());
                 let needs_download = !skip_download.contains(asset_ref);
-                assets_to_process.push((asset_ref.clone(), needs_download));
+                //assets_to_process.push((asset_ref.clone(), needs_download));
+                match get_asset_entry(api_client, asset_ref, false).await {
+                    Ok(get_res) => assets_to_process.push((get_res.entry, needs_download)),
+                    Err(e) => {
+                        asset_fetch_failures.push((asset_ref.clone(), e));
+                    }
+                };
             }
         }
     }
 
     // Download/create files in parallel
-    let asset_map =
-        download_assets_parallel(api_client, assets_to_process, max_concurrent_downloads).await?;
-
-    Ok((asset_map, expanded_globs))
+    let asset_map = download_assets_parallel(assets_to_process, max_concurrent_downloads).await?;
+    let mut asset_final_map = HashMap::new();
+    for (asset_ref, download_res) in asset_map {
+        asset_final_map.insert(
+            asset_ref,
+            download_res.map_err(|e| match e {
+                DownloadAssetError::DataFetchFailed => GetAssetError::DataFetchFailed,
+            }),
+        );
+    }
+    for (asset_ref, e) in asset_fetch_failures {
+        asset_final_map.insert(asset_ref, Err(e));
+    }
+    Ok((asset_final_map, expanded_globs))
 }
 
 /// Downloads or creates temp files for a list of assets in parallel.
 async fn download_assets_parallel(
-    api_client: &HaiClient,
-    assets_to_process: Vec<(String, bool)>, // (asset_name, needs_download)
+    assets_to_process: Vec<(AssetEntry, bool)>, // (asset_name, needs_download)
     max_concurrent_downloads: usize,
-) -> Result<AssetTempFileMap, String> {
+) -> Result<AssetTempFileDownloadMap, String> {
     let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
-    let api_client = Arc::new(api_client.clone());
 
     let mut handles = Vec::new();
 
-    for (asset_name, needs_download) in assets_to_process {
+    for (asset_entry, needs_download) in assets_to_process {
         let sem_clone = Arc::clone(&semaphore);
-        let api_client_clone = Arc::clone(&api_client);
 
-        let handle = tokio::spawn(async move {
-            let _permit = sem_clone.acquire().await.unwrap();
+        if let Some(data_url) = asset_entry.asset.url.as_ref() {
+            let asset_entry_name = asset_entry.name.clone();
+            let data_url_clone = data_url.clone();
 
-            let result = if needs_download {
-                download_asset_to_temp(&api_client_clone, &asset_name).await
-            } else {
-                create_empty_temp_file(&asset_name, None)
-            };
+            let handle = tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
 
-            (asset_name, result)
-        });
+                let result = if needs_download {
+                    download_asset_to_temp(&asset_entry_name, &data_url_clone).await
+                } else {
+                    create_empty_temp_file(&asset_entry.name, None)
+                };
 
-        handles.push(handle);
+                (asset_entry.name, result)
+            });
+
+            handles.push(handle);
+        }
     }
 
     // Wait for all downloads to complete
     let results = join_all(handles).await;
 
     // Process results and build asset_map
-    let mut asset_map: AssetTempFileMap = HashMap::new();
+    let mut asset_map: AssetTempFileDownloadMap = HashMap::new();
 
     for result in results {
         match result {
-            Ok((asset_name, Ok((temp_file, temp_file_path)))) => {
-                asset_map.insert(asset_name, (temp_file, temp_file_path));
-            }
-            Ok((asset_name, Err(e))) => {
-                return Err(format!("Failed to process asset '{}': {}", asset_name, e));
+            Ok((key, value)) => {
+                asset_map.insert(key, value);
             }
             Err(e) => {
                 return Err(format!("Download task panicked: {}", e));
@@ -972,9 +993,11 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
                 let expanded_paths: Vec<String> = matched_assets
                     .iter()
                     .filter_map(|matched_asset| {
-                        asset_map
-                            .get(matched_asset)
-                            .map(|(_, path)| path.to_string_lossy().to_string())
+                        asset_map.get(matched_asset).and_then(|res| {
+                            res.as_ref()
+                                .ok()
+                                .map(|(_, path)| path.to_string_lossy().to_string())
+                        })
                     })
                     .collect();
                 let replacement = expanded_paths.join(" ");
@@ -982,7 +1005,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
             }
         } else {
             // Regular asset
-            if let Some((_, path)) = asset_map.get(&asset_path) {
+            if let Some(Ok((_, path))) = asset_map.get(&asset_path) {
                 final_replacements.push((full_match, path.to_string_lossy().to_string()));
             }
         }
@@ -999,30 +1022,55 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     Ok((modified_cmd, asset_map, output_assets))
 }
 
+use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
+
 /// Download an asset to a temporary file
 ///
 /// NOTE: The NamedTempFile is returned. When it eventually goes out of scope,
 /// the temporary file will be removed.
 async fn download_asset_to_temp(
-    api_client: &HaiClient,
     asset_name: &str,
-) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
+    url: &str,
+) -> Result<(tempfile::NamedTempFile, PathBuf), DownloadAssetError> {
     let (temp_file, temp_file_path) = create_empty_temp_file(asset_name, None)?;
-    let (asset_contents, _) = match get_asset(api_client, asset_name, false).await {
-        Ok(contents) => contents,
+
+    let asset_get_resp = match reqwest::get(url).await {
+        Ok(resp) => resp,
         Err(e) => {
-            return Err(match e {
-                GetAssetError::BadName => format!("bad name: {}", asset_name),
-                GetAssetError::DataFetchFailed => format!("fetch failed: {}", asset_name),
-            });
+            eprintln!("error: {}", e);
+            return Err(DownloadAssetError::DataFetchFailed);
         }
     };
-    match fs::write(&temp_file_path, asset_contents) {
-        Ok(_) => {}
-        Err(e) => {
-            eprintln!("error: failed to save: {}", e);
-        }
+
+    if !asset_get_resp.status().is_success() {
+        eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
+        return Err(DownloadAssetError::DataFetchFailed);
     }
+
+    // Stream write to file
+    let mut file = tokio::fs::File::from_std(temp_file.reopen().map_err(|e| {
+        eprintln!("error: failed to reopen temp file: {}", e);
+        DownloadAssetError::DataFetchFailed
+    })?);
+
+    let mut stream = asset_get_resp.bytes_stream();
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| {
+            eprintln!("error: failed to read chunk: {}", e);
+            DownloadAssetError::DataFetchFailed
+        })?;
+        file.write_all(&chunk).await.map_err(|e| {
+            eprintln!("error: failed to write chunk: {}", e);
+            DownloadAssetError::DataFetchFailed
+        })?;
+    }
+
+    file.flush().await.map_err(|e| {
+        eprintln!("error: failed to flush file: {}", e);
+        DownloadAssetError::DataFetchFailed
+    })?;
+
     Ok((temp_file, temp_file_path))
 }
 
@@ -1030,7 +1078,7 @@ async fn download_asset_to_temp(
 pub fn create_empty_temp_file(
     asset_name: &str,
     rev_id: Option<&str>,
-) -> Result<(tempfile::NamedTempFile, PathBuf), String> {
+) -> Result<(tempfile::NamedTempFile, PathBuf), DownloadAssetError> {
     // Extract the file stem (name without extension) from the asset path
     let path = Path::new(asset_name);
     let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("asset");
@@ -1064,16 +1112,16 @@ pub fn create_empty_temp_file(
         .prefix(&prefix)
         .suffix(&suffix)
         .tempfile()
-        .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+        .map_err(|e| {
+            eprintln!("error: Failed to create temporary file: {}", e);
+            DownloadAssetError::DataFetchFailed
+        })?;
 
     // Get the path to the temporary file
     let temp_file_path = temp_file.path().to_path_buf();
 
     Ok((temp_file, temp_file_path))
 }
-
-// --
-
 pub type AssetFetchMap = HashMap<String, Result<Vec<u8>, GetAssetError>>;
 pub type AssetDownloadMap = HashMap<String, Result<Vec<u8>, DownloadAssetError>>;
 
