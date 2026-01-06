@@ -458,13 +458,13 @@ pub struct AssetSearchCmd {
 #[derive(Clone, Debug)]
 pub struct AssetLoadCmd {
     /// Name of the asset
-    pub asset_name: String,
+    pub asset_names: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct AssetViewCmd {
     /// Name of the asset
-    pub asset_name: String,
+    pub asset_names: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -870,6 +870,21 @@ fn parse_one_arg(s: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.into())
+    }
+}
+
+/// Split on whitespace and collect into Vec<String>
+fn parse_n_args(s: &str) -> Option<Vec<String>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(
+            trimmed
+                .split_whitespace()
+                .map(|part| part.to_string())
+                .collect(),
+        )
     }
 }
 
@@ -1568,10 +1583,10 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetLoad(AssetLoadCmd { asset_name })),
-                None => {
-                    eprintln!("Usage: /asset-load <name>");
+            match parse_n_args(remaining) {
+                Some(args) => Some(Cmd::AssetLoad(AssetLoadCmd { asset_names: args })),
+                _ => {
+                    eprintln!("Usage: /asset-load <name> [<name> ...]");
                     None
                 }
             }
@@ -1580,10 +1595,10 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetView(AssetViewCmd { asset_name })),
-                None => {
-                    eprintln!("Usage: /asset-view <name>");
+            match parse_n_args(remaining) {
+                Some(args) => Some(Cmd::AssetView(AssetViewCmd { asset_names: args })),
+                _ => {
+                    eprintln!("Usage: /asset-view <name> [<name> ...]");
                     None
                 }
             }

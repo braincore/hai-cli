@@ -40,7 +40,7 @@ To use another editor:
 To load an asset into a conversation, use:
 
 ```
-/asset-load <name>
+/asset-load <name> [<name> ...]
 ```
 
 !!!tip "Tab complete for asset names"
@@ -49,11 +49,15 @@ To load an asset into a conversation, use:
 To load an asset and print its contents in the repl, use:
 
 ```
-/asset-view <name>
+/asset-view <name> [<name> ...]
 ```
 
 Similar local files loaded with `/load`, loaded assets are retained after a
 `/reset`.
+
+Asset names support glob patterns (`*`, `?`, `[...]`) for matching multiple
+assets at once.
+
 
 ## Temporary local copy of asset
 

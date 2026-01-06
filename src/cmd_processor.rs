@@ -399,7 +399,10 @@ pub async fn process_cmd(
                 if message.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
                     // Don't print entire files loaded as they flood the terminal.
                     if let chat::MessageContent::Text { text } = &message.message.content[0] {
-                        println!("message: /load: {}", text.split_once("\n").unwrap().0);
+                        println!(
+                            "message: /load: {}",
+                            text.split_once("\n").unwrap_or((text, "")).0
+                        );
                     } else if let chat::MessageContent::ImageUrl { image_url } =
                         &message.message.content[0]
                     {
@@ -1825,42 +1828,70 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetLoad(cmd::AssetLoadCmd { asset_name })
-        | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_name }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+        cmd::Cmd::AssetLoad(cmd::AssetLoadCmd { asset_names })
+        | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_names }) => {
+            let asset_names = asset_names
+                .iter()
+                .map(|name| expand_pub_asset_name(name, &session.account))
+                .collect::<Vec<_>>();
             let api_client = mk_api_client(Some(session));
-            let asset_contents =
-                match asset_editor::get_asset_as_text(&api_client, &asset_name, false).await {
-                    Ok(contents) => contents,
-                    Err(asset_editor::GetAssetError::BadName) => {
-                        let err_msg = format!("error: asset not found: {}", asset_name);
-                        eprintln!("{}", err_msg);
-                        session_history_add_user_cmd_and_reply_entries(
-                            raw_user_input,
-                            &err_msg,
-                            session,
-                            bpe_tokenizer,
-                            (is_task_mode_step, LogEntryRetentionPolicy::None),
-                        );
-                        return ProcessCmdResult::Loop;
-                    }
-                    Err(_) => return ProcessCmdResult::Loop,
-                };
-            let asset_contents_with_delimeters = format!(
-                "{}\n<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
-                raw_user_input, asset_name, asset_contents, asset_name,
-            );
 
-            let asset_token_count = session_history_add_user_text_entry(
-                &asset_contents_with_delimeters,
-                session,
-                bpe_tokenizer,
-                (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
-            );
-            if matches!(cmd, cmd::Cmd::AssetLoad(_)) {
-                println!("Loaded: {} ({} tokens)", asset_name, asset_token_count);
-            } else {
-                println!("{}", asset_contents);
+            match asset_editor::fetch_assets_from_names_in_memory(&api_client, &asset_names, 4)
+                .await
+            {
+                Ok((asset_map, _)) => {
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                    );
+                    for (asset_name, fetch_res) in &asset_map {
+                        match fetch_res {
+                            Ok(asset_contents) => match String::from_utf8(asset_contents.clone()) {
+                                Ok(asset_contents_string) => {
+                                    let asset_contents_with_delimeters = format!(
+                                        "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
+                                        asset_name, asset_contents_string, asset_name,
+                                    );
+
+                                    let asset_token_count = session_history_add_user_text_entry(
+                                        &asset_contents_with_delimeters,
+                                        session,
+                                        bpe_tokenizer,
+                                        (
+                                            is_task_mode_step,
+                                            LogEntryRetentionPolicy::ConversationLoad,
+                                        ),
+                                    );
+                                    if matches!(cmd, cmd::Cmd::AssetLoad(_)) {
+                                        println!(
+                                            "Loaded: {} ({} tokens)",
+                                            asset_name, asset_token_count
+                                        );
+                                    } else {
+                                        println!("{}", asset_contents_string);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("error: {}: {}", asset_name, e);
+                                }
+                            },
+                            Err(e) => match e {
+                                asset_editor::GetAssetError::BadName => {
+                                    eprintln!("error: {}: asset not found", asset_name);
+                                }
+                                asset_editor::GetAssetError::DataFetchFailed => {
+                                    eprintln!("error: {}: fetch failed", asset_name);
+                                }
+                            },
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
             }
             ProcessCmdResult::Loop
         }
@@ -2898,9 +2929,27 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
                 let api_client = mk_api_client(Some(session));
-                match asset_editor::get_asset_as_text(&api_client, chat_log_name, false).await {
-                    Ok(contents) => contents,
-                    Err(_) => return ProcessCmdResult::Loop,
+                let get_asset_res =
+                    asset_editor::get_asset(&api_client, chat_log_name, false).await;
+                match get_asset_res {
+                    Ok((bytes, _)) => match String::from_utf8(bytes) {
+                        Ok(contents) => contents,
+                        Err(_) => {
+                            eprintln!("error: chat asset isn't valid UTF-8");
+                            return ProcessCmdResult::Loop;
+                        }
+                    },
+                    Err(e) => {
+                        match e {
+                            asset_editor::GetAssetError::BadName => {
+                                eprintln!("error: asset not found");
+                            }
+                            asset_editor::GetAssetError::DataFetchFailed => {
+                                eprintln!("error: failed to fetch asset data");
+                            }
+                        }
+                        return ProcessCmdResult::Loop;
+                    }
                 }
             } else {
                 let username = if let Some(account) = session.account.as_ref() {
@@ -3808,44 +3857,44 @@ Assets (Experimental):
 - Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
 
-/a /asset <name> [<editor>]  - Open asset in editor (create if does not exist)
-/asset-new <name>            - Create a new asset and open editor
-/asset-edit <name>           - Open existing asset in editor
-/ls /asset-list <prefix>     - List all assets with the given (optional) prefix
-/asset-search <query>        - Search for assets semantically
-/asset-load <name>           - Load asset into the conversation
-/asset-view <name>           - Prints asset contents and loads it into the conversation
-/asset-link <name>           - Prints link to asset (valid for 24hr) and loads it into the conversation
-/asset-revisions <name> [<n>]- Lists revisions of an asset one at a time, waiting for user input
-                               If `n` is set, displays `n` revisions without needing user input
+/a /asset <name> [<editor>]      - Open asset in editor (create if does not exist)
+/asset-new <name>                - Create a new asset and open editor
+/asset-edit <name>               - Open existing asset in editor
+/ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
+/asset-search <query>            - Search for assets semantically
+/asset-load <name> [<name> ...]  - Load asset(s) into the conversation
+/asset-view <name> [<name> ...]  - Print asset(s) contents and loads it into the conversation
+/asset-link <name>               - Prints link to asset (valid for 24hr) and loads it into the conversation
+/asset-revisions <name> [<n>]    - Lists revisions of an asset one at a time, waiting for user input
+                                   If `n` is set, displays `n` revisions without needing user input
 /asset-listen <name> [<cursor>]  - Blocks until a change to an asset. On a change, prints out
                                    information about the asset. If cursor is set, begins listening
                                    at that specific revision to ensure no changes are missed.
-/asset-acl <name> <ace>      - Changes ACL on an asset
-                               `ace` is formatted as `type:permission`
-                               type: allow, deny, default
-                               permission: read-data, read-revisions, push-data
-/asset-push <name>           - Push data into an asset. See pushed data w/ `/asset-revisions`
-/asset-import <n> <p>        - Imports <path> into asset with <name>
-/asset-export <n> <p>        - Exports asset with name to <path>
-/asset-temp <name> [<count>] - Exports asset to a temporary file.
-                               If `count` set, the latest `count` revisions are exported.
-/asset-remove <name>         - Removes an asset
-/asset-md-get <name>         - Get the metadata of an asset
-/asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object.
+/asset-acl <name> <ace>          - Changes ACL on an asset
+                                   `ace` is formatted as `type:permission`
+                                   type: allow, deny, default
+                                   permission: read-data, read-revisions, push-data
+/asset-push <name>               - Push data into an asset. See pushed data w/ `/asset-revisions`
+/asset-import <n> <p>            - Imports <path> into asset with <name>
+/asset-export <n> <p>            - Exports asset with name to <path>
+/asset-temp <name> [<count>]     - Exports asset to a temporary file.
+                                   If `count` set, the latest `count` revisions are exported.
+/asset-remove <name>             - Removes an asset
+/asset-md-get <name>             - Get the metadata of an asset
+/asset-md-set <name> <md>        - Set metadata for an asset. Must be a JSON object.
 /asset-md-set-key <name> <k> <v> - Set key to JSON value.
-/asset-md-del-key <name> <k> - Delete a key from an asset's metadata.
-/asset-folder-collapse <path> - Collapse the specified folder when listing its parent, so it
-                                appears as a single entry.
-/asset-folder-expand <path>  - Expand a previously collapsed folder, showing its contents in the
-                               parent listing.
-/asset-folder-list [<path>]  - List all collapsed folders, optionally filtered by the given path
-                               prefix.
+/asset-md-del-key <name> <k>     - Delete a key from an asset's metadata.
+/asset-folder-collapse <path>    - Collapse the specified folder when listing its parent, so it
+                                   appears as a single entry.
+/asset-folder-expand <path>      - Expand a previously collapsed folder, showing its contents in the
+                                   parent listing.
+/asset-folder-list [<path>]      - List all collapsed folders, optionally filtered by the given path
+                                   prefix.
 
-/chat-save [<asset_name>]    - Save the conversation as an asset
-                               If asset name omitted, name automatically generated
-/chat-resume [<asset_name>]  - Replaces current chat with chat saved to asset via `/chat-save`
-                               If asset name omitted, resumes last auto-saved chat"##;
+/chat-save [<asset_name>]        - Save the conversation as an asset
+                                   If asset name omitted, name automatically generated
+/chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`
+                                   If asset name omitted, resumes last auto-saved chat"##;
 
 // --
 
@@ -3855,7 +3904,7 @@ pub async fn shell_exec_with_asset_substitution(
     cmd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
-    match asset_editor::prepare_assets(api_client, cmd, 4).await {
+    match asset_editor::prepare_assets_from_cmd_as_temp_files(api_client, cmd, 4).await {
         Ok((updated_cmd, asset_map, output_assets)) => {
             let res = shell_exec(shell, &updated_cmd).await;
             for output_asset in output_assets {

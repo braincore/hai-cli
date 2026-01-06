@@ -351,11 +351,11 @@ Assets:
 /asset-new <name><NEWLINE><body> - Create/replace a `doc` asset. This is a MULTI-line command.
                            - Use a newline after `name` to write arbitrary multi-line content to the asset.
 
-/asset-list <prefix>    - List all assets with the given (optional) prefix
+/asset-list <prefix>    - List assets with the given (optional) prefix. Supports globs.
 /asset-search <query>   - Search for assets semantically
-/asset-load <name>      - Load asset into the conversation
-/asset-view <name>      - Prints asset contents and loads it into the conversation
-/asset-link <name>      - Prints link to asset (valid for 24hr) and loads it into the conversation
+/asset-load <name> [<name> ...]   - Load asset(s) into the conversation
+/asset-view <name> [<name> ...]   - Print asset(s) contents and loads into the conversation
+/asset-link <name>      - Prints link to asset (valid for 24hr) and loads into the conversation
 /asset-revisions <name> <count> - Lists <count> number of revisions of an asset
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
                                   information about the asset. If cursor is set, begins listening

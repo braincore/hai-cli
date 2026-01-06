@@ -393,7 +393,7 @@ fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
         .unwrap_or((line, ""));
     let cmd_length = cmd_word.len();
     let arg_index = if arg_prefix.is_empty() {
-        //if arg_prefix hasn't been specified yet, use the current cursor
+        // if arg_prefix hasn't been specified yet, use the current cursor
         line.len()
     } else {
         line[cmd_length..]
@@ -402,6 +402,48 @@ fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
             .unwrap_or(0)
     };
     (cmd_word, arg_prefix, arg_index)
+}
+
+/// # Arguments
+///
+/// - `line` - The input line to process.
+///
+/// # Returns
+/// (command word, ignored middle arguments, last argument prefix, last argument start index)
+fn split_cmd_and_last_arg(line: &str) -> (&str, &str, &str, usize) {
+    // Split command from all arguments
+    let (cmd_word, all_args) = line
+        .split_once(char::is_whitespace)
+        .map(|(cmd, args)| (cmd, args.trim_start()))
+        .unwrap_or((line, ""));
+
+    if all_args.is_empty() {
+        // No arguments at all
+        return (cmd_word, "", "", line.len());
+    }
+
+    // Find the last argument by finding the last whitespace sequence
+    let last_arg_start = all_args.rfind(char::is_whitespace).map(|i| {
+        // Skip past the whitespace to get to the actual arg
+        let after_space = &all_args[i..];
+        let trimmed = after_space.trim_start();
+        all_args.len() - trimmed.len()
+    });
+
+    match last_arg_start {
+        Some(idx) if idx > 0 => {
+            let middle_args = all_args[..idx].trim_end();
+            let last_arg = all_args[idx..].trim_start();
+            // Calculate absolute index in original line
+            let abs_index = line.len() - last_arg.len();
+            (cmd_word, middle_args, last_arg, abs_index)
+        }
+        _ => {
+            // Only one argument (no middle args)
+            let abs_index = line.len() - all_args.len();
+            (cmd_word, "", all_args, abs_index)
+        }
+    }
 }
 
 /// Parses the input string into a vector of token indices, where each token is
@@ -583,8 +625,6 @@ impl Completer for CmdAndFileCompleter {
             } else if line.starts_with("/asset ")
                 || line.starts_with("/a ")
                 || line.starts_with("/asset-edit ")
-                || line.starts_with("/asset-load ")
-                || line.starts_with("/asset-view ")
                 || line.starts_with("/asset-temp ")
                 || line.starts_with("/asset-push ")
                 || line.starts_with("/asset-link ")
@@ -597,6 +637,21 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/chat-resume ")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "completer init: {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
+                        line,
+                        cmd_word,
+                        arg_index,
+                        arg_prefix,
+                        line.find(arg_prefix).unwrap()
+                    ));
+                }
+                let mut completions = self.asset_completer(arg_prefix);
+                realign_suggestions(&mut completions, arg_index, self.debug);
+                (completions, true)
+            } else if line.starts_with("/asset-load ") || line.starts_with("/asset-view ") {
+                let (cmd_word, _ignored_args, arg_prefix, arg_index) = split_cmd_and_last_arg(line);
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
                         "completer init: {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",

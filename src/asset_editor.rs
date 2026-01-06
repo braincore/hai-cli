@@ -412,7 +412,6 @@ pub async fn worker_update_asset(
 pub enum GetAssetError {
     BadName,
     DataFetchFailed,
-    NotText,
 }
 
 /// If returns None, responsible for printing error msg.
@@ -423,7 +422,12 @@ pub async fn get_asset(
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
     if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        let data_contents = download_asset(data_url).await?;
+        let data_contents = match download_asset(data_url).await {
+            Ok(contents) => contents,
+            Err(DownloadAssetError::DataFetchFailed) => {
+                return Err(GetAssetError::DataFetchFailed);
+            }
+        };
         Ok((data_contents, asset_get_res.entry))
     } else {
         Err(GetAssetError::BadName)
@@ -465,23 +469,27 @@ pub async fn get_asset_entry(
     }
 }
 
-pub async fn download_asset(url: &str) -> Result<Vec<u8>, GetAssetError> {
+pub enum DownloadAssetError {
+    DataFetchFailed,
+}
+
+pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
     let asset_get_resp = match reqwest::get(url).await {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("error: {}", e);
-            return Err(GetAssetError::DataFetchFailed);
+            return Err(DownloadAssetError::DataFetchFailed);
         }
     };
     if !asset_get_resp.status().is_success() {
         eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
-        return Err(GetAssetError::DataFetchFailed);
+        return Err(DownloadAssetError::DataFetchFailed);
     }
     match asset_get_resp.bytes().await {
         Ok(contents) => Ok(contents.to_vec()),
         Err(e) => {
             eprintln!("error: failed to fetch asset: {}", e);
-            Err(GetAssetError::DataFetchFailed)
+            Err(DownloadAssetError::DataFetchFailed)
         }
     }
 }
@@ -496,7 +504,13 @@ pub async fn get_asset_and_metadata(
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
     let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        download_asset(data_url).await?
+        match download_asset(data_url).await {
+            Ok(contents) => contents,
+            Err(DownloadAssetError::DataFetchFailed) => {
+                eprintln!("error: failed to fetch asset data");
+                return Err(GetAssetError::DataFetchFailed);
+            }
+        }
     } else {
         return Err(GetAssetError::BadName);
     };
@@ -505,7 +519,13 @@ pub async fn get_asset_and_metadata(
         ..
     }) = asset_get_res.entry.metadata.as_ref()
     {
-        Some(download_asset(metadata_url).await?)
+        Some(match download_asset(metadata_url).await {
+            Ok(contents) => contents,
+            Err(DownloadAssetError::DataFetchFailed) => {
+                eprintln!("error: failed to fetch asset metadata");
+                return Err(GetAssetError::DataFetchFailed);
+            }
+        })
     } else {
         None
     };
@@ -513,17 +533,6 @@ pub async fn get_asset_and_metadata(
 }
 
 // --
-
-/// If returns None, responsible for printing error msg.
-pub async fn get_asset_as_text(
-    api_client: &HaiClient,
-    asset_name: &str,
-    bad_name_ok: bool,
-) -> Result<String, GetAssetError> {
-    let asset_content = get_asset(api_client, asset_name, bad_name_ok).await;
-    asset_content
-        .and_then(|(bytes, _)| String::from_utf8(bytes).map_err(|_e| GetAssetError::NotText))
-}
 
 pub async fn get_asset_raw(data_url: &str) -> Option<Vec<u8>> {
     let asset_get_resp = match reqwest::get(data_url).await {
@@ -672,7 +681,10 @@ fn parse_glob_pattern(pattern: &str) -> (String, Pattern) {
 }
 
 /// Expands a glob pattern by querying the API and filtering results.
-async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<String>, String> {
+async fn expand_glob(
+    api_client: &HaiClient,
+    glob_pattern: &str,
+) -> Result<Vec<AssetEntry>, String> {
     use crate::api::types::asset::{AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg};
 
     let (prefix, pattern) = parse_glob_pattern(glob_pattern);
@@ -692,9 +704,9 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
         .await
         .map_err(|e| {
             if matches!(e, RequestError::Route(AssetEntryListError::Empty)) {
-                format!("No assets match glob pattern: {}", glob_pattern)
+                format!("no assets match glob pattern: {}", glob_pattern)
             } else {
-                format!("Error listing assets for glob {}: {}", glob_pattern, e)
+                format!("cannot list assets for glob {}: {}", glob_pattern, e)
             }
         })?;
 
@@ -702,7 +714,7 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
     loop {
         for entry in &asset_list_res.entries {
             if pattern.matches(&entry.name) {
-                matching_assets.push(entry.name.clone());
+                matching_assets.push(entry.clone());
             }
         }
 
@@ -716,15 +728,15 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
                 limit: 200,
             })
             .await
-            .map_err(|e| format!("Error listing assets for glob {}: {}", glob_pattern, e))?;
+            .map_err(|e| format!("cannot list assets for glob {}: {}", glob_pattern, e))?;
     }
 
     if matching_assets.is_empty() {
-        return Err(format!("No assets match glob pattern: {}", glob_pattern));
+        return Err(format!("no assets match glob pattern: {}", glob_pattern));
     }
 
     // Sort for consistent ordering
-    matching_assets.sort_by(|a, b| human_sort::compare(a, b));
+    matching_assets.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
 
     Ok(matching_assets)
 }
@@ -732,6 +744,136 @@ async fn expand_glob(api_client: &HaiClient, glob_pattern: &str) -> Result<Vec<S
 use futures::future::join_all;
 use tempfile;
 use tokio::sync::Semaphore;
+
+pub type AssetTempFileMap = HashMap<String, (tempfile::NamedTempFile, PathBuf)>;
+
+/// Prepares assets from a list of asset names/globs as temporary files.
+///
+/// This function:
+/// 1. Expands any glob patterns in the input list
+/// 2. Downloads all matching assets to temporary files in parallel
+/// 3. Returns a map of asset names to their temporary files
+///
+/// # Arguments
+/// * `api_client` - The API client for fetching assets
+/// * `asset_names_or_globs` - A slice of asset names or glob patterns (without @ prefix)
+/// * `max_concurrent_downloads` - Maximum number of concurrent downloads
+/// * `skip_download` - Optional set of asset names to create as empty files instead of downloading
+///
+/// # Returns
+/// A tuple containing:
+/// - A map of asset names to their (NamedTempFile, PathBuf) tuples
+/// - A map of glob patterns to their expanded asset names (for callers that need this info)
+pub async fn prepare_assets_from_names_as_temp_files(
+    api_client: &HaiClient,
+    asset_names_or_globs: &[String],
+    max_concurrent_downloads: usize,
+    skip_download: Option<&HashSet<String>>,
+) -> Result<(AssetTempFileMap, HashMap<String, Vec<String>>), String> {
+    let empty_set = HashSet::new();
+    let skip_download = skip_download.unwrap_or(&empty_set);
+
+    // Track expanded globs for caller reference
+    let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Collect unique assets to process
+    let mut seen_assets: HashSet<String> = HashSet::new();
+    let mut assets_to_process: Vec<(String, bool)> = Vec::new(); // (asset_name, needs_download)
+
+    for asset_ref in asset_names_or_globs {
+        if is_glob_pattern(asset_ref) {
+            // Skip if we've already expanded this glob
+            if expanded_globs.contains_key(asset_ref) {
+                continue;
+            }
+
+            // Expand the glob
+            let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
+            let matched_assets = matched_asset_entries
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>();
+
+            // Queue each matched asset for download
+            for matched_asset in &matched_assets {
+                if !seen_assets.contains(matched_asset) {
+                    seen_assets.insert(matched_asset.clone());
+                    // Glob-matched assets are always inputs, so they need download
+                    let needs_download = !skip_download.contains(matched_asset);
+                    assets_to_process.push((matched_asset.clone(), needs_download));
+                }
+            }
+
+            expanded_globs.insert(asset_ref.clone(), matched_assets);
+        } else {
+            // Regular asset (non-glob)
+            if !seen_assets.contains(asset_ref) {
+                seen_assets.insert(asset_ref.clone());
+                let needs_download = !skip_download.contains(asset_ref);
+                assets_to_process.push((asset_ref.clone(), needs_download));
+            }
+        }
+    }
+
+    // Download/create files in parallel
+    let asset_map =
+        download_assets_parallel(api_client, assets_to_process, max_concurrent_downloads).await?;
+
+    Ok((asset_map, expanded_globs))
+}
+
+/// Downloads or creates temp files for a list of assets in parallel.
+async fn download_assets_parallel(
+    api_client: &HaiClient,
+    assets_to_process: Vec<(String, bool)>, // (asset_name, needs_download)
+    max_concurrent_downloads: usize,
+) -> Result<AssetTempFileMap, String> {
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
+    let api_client = Arc::new(api_client.clone());
+
+    let mut handles = Vec::new();
+
+    for (asset_name, needs_download) in assets_to_process {
+        let sem_clone = Arc::clone(&semaphore);
+        let api_client_clone = Arc::clone(&api_client);
+
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire().await.unwrap();
+
+            let result = if needs_download {
+                download_asset_to_temp(&api_client_clone, &asset_name).await
+            } else {
+                create_empty_temp_file(&asset_name, None)
+            };
+
+            (asset_name, result)
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all downloads to complete
+    let results = join_all(handles).await;
+
+    // Process results and build asset_map
+    let mut asset_map: AssetTempFileMap = HashMap::new();
+
+    for result in results {
+        match result {
+            Ok((asset_name, Ok((temp_file, temp_file_path)))) => {
+                asset_map.insert(asset_name, (temp_file, temp_file_path));
+            }
+            Ok((asset_name, Err(e))) => {
+                return Err(format!("Failed to process asset '{}': {}", asset_name, e));
+            }
+            Err(e) => {
+                return Err(format!("Download task panicked: {}", e));
+            }
+        }
+    }
+
+    Ok(asset_map)
+}
 
 /// Prepares @assets in shell commands and handles redirections.
 ///
@@ -748,18 +890,11 @@ use tokio::sync::Semaphore;
 ///   - The modified command with @assets replaced by file paths
 ///   - A map of asset names to their temporary files and paths
 ///   - A set of asset names that are used as outputs (via > or >>)
-pub async fn prepare_assets(
+pub async fn prepare_assets_from_cmd_as_temp_files(
     api_client: &HaiClient,
     cmd: &str,
     max_concurrent_downloads: usize,
-) -> Result<
-    (
-        String,
-        HashMap<String, (tempfile::NamedTempFile, PathBuf)>,
-        HashSet<String>,
-    ),
-    String,
-> {
+) -> Result<(String, AssetTempFileMap, HashSet<String>), String> {
     let asset_regex = Regex::new(r"@([^\s]+)").expect("Invalid regex");
     let append_regex = Regex::new(r">>\s*@([^\s]+)").expect("Invalid regex");
     let output_regex = Regex::new(r"(?:>|>>)\s*@([^\s]+)").expect("Invalid regex");
@@ -768,6 +903,7 @@ pub async fn prepare_assets(
     let mut output_assets = HashSet::new();
 
     // Original @asset reference (including @) and the replacement info.
+    // (full_match, asset_path, is_glob)
     let mut replacements: Vec<(String, String, bool)> = Vec::new();
 
     // First identify output assets and append assets
@@ -793,127 +929,38 @@ pub async fn prepare_assets(
         append_assets.insert(append_asset);
     }
 
-    // Track which glob patterns we've already expanded
-    let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
+    // Collect all asset references from the command
+    let mut asset_refs: Vec<String> = Vec::new();
+    let mut seen_refs: HashSet<String> = HashSet::new();
 
-    // Collect all assets that need to be downloaded
-    // (asset_name, needs_download)
-    let mut assets_to_process: Vec<(String, bool)> = Vec::new();
-    // Track which assets we've already seen
-    let mut seen_assets: HashSet<String> = HashSet::new();
-
-    // First pass: collect all assets and determine which need downloading
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
         let asset_path = cap[1].to_string();
+        let is_glob = is_glob_pattern(&asset_path);
 
-        // Check if this is a glob pattern
-        if is_glob_pattern(&asset_path) {
-            // Skip if we've already expanded this glob
-            if expanded_globs.contains_key(&asset_path) {
-                continue;
-            }
-
-            // Expand the glob
-            let matched_assets = expand_glob(api_client, &asset_path).await?;
-
-            // Queue each matched asset for download
-            for matched_asset in &matched_assets {
-                if !seen_assets.contains(matched_asset) {
-                    seen_assets.insert(matched_asset.clone());
-                    // Glob-matched assets are always inputs, so they need download
-                    assets_to_process.push((matched_asset.clone(), true));
-                }
-            }
-
-            expanded_globs.insert(asset_path.clone(), matched_assets);
-            // We'll handle the replacement after downloads complete
-            replacements.push((full_match, asset_path.clone(), true)); // true = is glob
-        } else {
-            // Regular asset (non-glob)
-            if !seen_assets.contains(&asset_path) {
-                seen_assets.insert(asset_path.clone());
-
-                // Determine if this asset needs downloading
-                let needs_download = if output_assets.contains(&asset_path)
-                    && !append_assets.contains(&asset_path)
-                {
-                    // Simple output with > (overwrite), just create empty file
-                    false
-                } else {
-                    // Either an input asset or an append asset (>>), download it
-                    true
-                };
-
-                assets_to_process.push((asset_path.clone(), needs_download));
-            }
-
-            replacements.push((full_match, asset_path.clone(), false)); // false = not glob
+        if !seen_refs.contains(&asset_path) {
+            seen_refs.insert(asset_path.clone());
+            asset_refs.push(asset_path.clone());
         }
+
+        replacements.push((full_match, asset_path, is_glob));
     }
 
-    // Prepare download tasks
-    struct DownloadTask {
-        asset_name: String,
-        needs_download: bool,
-    }
-
-    let download_tasks: Vec<DownloadTask> = assets_to_process
-        .into_iter()
-        .map(|(asset_name, needs_download)| DownloadTask {
-            asset_name,
-            needs_download,
-        })
+    // Determine which assets should skip download (output-only assets with >)
+    let skip_download: HashSet<String> = output_assets
+        .iter()
+        .filter(|asset| !append_assets.contains(*asset))
+        .cloned()
         .collect();
 
-    // Create a semaphore for limiting concurrent downloads
-    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
-    let api_client = Arc::new(api_client.clone());
-
-    // Spawn download tasks
-    let mut handles = Vec::new();
-
-    for task in download_tasks {
-        let sem_clone = Arc::clone(&semaphore);
-        let api_client_clone = Arc::clone(&api_client);
-        let asset_name = task.asset_name.clone();
-        let needs_download = task.needs_download;
-
-        let handle = tokio::spawn(async move {
-            let _permit = sem_clone.acquire().await.unwrap();
-
-            let result = if needs_download {
-                download_asset_to_temp(&api_client_clone, &asset_name).await
-            } else {
-                // Simple output with > (overwrite), just create empty file
-                create_empty_temp_file(&asset_name, None)
-            };
-
-            (asset_name, result)
-        });
-
-        handles.push(handle);
-    }
-
-    // Wait for all downloads to complete
-    let results = join_all(handles).await;
-
-    // Process results and build asset_map
-    let mut asset_map: HashMap<String, (tempfile::NamedTempFile, PathBuf)> = HashMap::new();
-
-    for result in results {
-        match result {
-            Ok((asset_name, Ok((temp_file, temp_file_path)))) => {
-                asset_map.insert(asset_name, (temp_file, temp_file_path));
-            }
-            Ok((asset_name, Err(e))) => {
-                return Err(format!("Failed to process asset '{}': {}", asset_name, e));
-            }
-            Err(e) => {
-                return Err(format!("Download task panicked: {}", e));
-            }
-        }
-    }
+    // Use the new function to prepare all assets
+    let (asset_map, expanded_globs) = prepare_assets_from_names_as_temp_files(
+        api_client,
+        &asset_refs,
+        max_concurrent_downloads,
+        Some(&skip_download),
+    )
+    .await?;
 
     // Build final replacements with actual paths
     let mut final_replacements: Vec<(String, String)> = Vec::new();
@@ -967,7 +1014,6 @@ async fn download_asset_to_temp(
             return Err(match e {
                 GetAssetError::BadName => format!("bad name: {}", asset_name),
                 GetAssetError::DataFetchFailed => format!("fetch failed: {}", asset_name),
-                _ => format!("unexpected error: {}", asset_name),
             });
         }
     };
@@ -1025,6 +1071,150 @@ pub fn create_empty_temp_file(
 
     Ok((temp_file, temp_file_path))
 }
+
+// --
+
+pub type AssetFetchMap = HashMap<String, Result<Vec<u8>, GetAssetError>>;
+pub type AssetDownloadMap = HashMap<String, Result<Vec<u8>, DownloadAssetError>>;
+
+/// Fetches assets from a list of asset names/globs, keeping contents in memory.
+///
+/// This function:
+/// 1. Expands any glob patterns in the input list
+/// 2. Downloads all matching assets in parallel
+/// 3. Returns a map of asset names to their contents as Vec<u8>
+///
+/// # Arguments
+/// * `api_client` - The API client for fetching assets
+/// * `asset_names_or_globs` - A slice of asset names or glob patterns (without @ prefix)
+/// * `max_concurrent_downloads` - Maximum number of concurrent downloads
+/// * `skip_download` - Optional set of asset names to create as empty Vec<u8> instead of downloading
+///
+/// # Returns
+/// A tuple containing:
+/// - A map of asset names to their contents as Vec<u8>
+/// - A map of glob patterns to their expanded asset names (for callers that need this info)
+pub async fn fetch_assets_from_names_in_memory(
+    api_client: &HaiClient,
+    asset_names_or_globs: &[String],
+    max_concurrent_downloads: usize,
+) -> Result<(AssetFetchMap, HashMap<String, Vec<String>>), String> {
+    // Track expanded globs for caller reference
+    let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Collect unique assets to process
+    let mut seen_assets: HashSet<String> = HashSet::new();
+    let mut assets_to_fetch: Vec<AssetEntry> = Vec::new();
+
+    let mut asset_fetch_failures = Vec::new();
+
+    for asset_ref in asset_names_or_globs {
+        if is_glob_pattern(asset_ref) {
+            // Skip if we've already expanded this glob
+            if expanded_globs.contains_key(asset_ref) {
+                continue;
+            }
+
+            // Expand the glob
+            let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
+
+            // Queue each matched asset for download
+            for matched_asset_entry in &matched_asset_entries {
+                if !seen_assets.contains(&matched_asset_entry.name) {
+                    seen_assets.insert(matched_asset_entry.name.clone());
+                    assets_to_fetch.push(matched_asset_entry.clone());
+                }
+            }
+
+            expanded_globs.insert(
+                asset_ref.clone(),
+                matched_asset_entries
+                    .iter()
+                    .map(|entry| entry.name.clone())
+                    .collect::<Vec<_>>(),
+            );
+        } else {
+            // Regular asset (non-glob)
+            if !seen_assets.contains(asset_ref) {
+                seen_assets.insert(asset_ref.clone());
+                match get_asset_entry(api_client, asset_ref, false).await {
+                    Ok(get_res) => assets_to_fetch.push(get_res.entry),
+                    Err(e) => {
+                        asset_fetch_failures.push((asset_ref.clone(), e));
+                    }
+                };
+            }
+        }
+    }
+
+    // Download assets in parallel
+    let asset_map =
+        download_assets_parallel_in_memory(&assets_to_fetch, max_concurrent_downloads).await?;
+    let mut asset_final_map = HashMap::new();
+    for (asset_ref, download_res) in asset_map {
+        asset_final_map.insert(
+            asset_ref,
+            download_res.map_err(|e| match e {
+                DownloadAssetError::DataFetchFailed => GetAssetError::DataFetchFailed,
+            }),
+        );
+    }
+    for (asset_ref, e) in asset_fetch_failures {
+        asset_final_map.insert(asset_ref, Err(e));
+    }
+
+    Ok((asset_final_map, expanded_globs))
+}
+
+/// Downloads assets in parallel, keeping contents in memory.
+async fn download_assets_parallel_in_memory(
+    asset_entries: &[AssetEntry],
+    max_concurrent_downloads: usize,
+) -> Result<AssetDownloadMap, String> {
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
+
+    let mut handles = Vec::new();
+
+    for asset_entry in asset_entries {
+        let sem_clone = Arc::clone(&semaphore);
+
+        if let Some(data_url) = asset_entry.asset.url.as_ref() {
+            let asset_entry_clone = asset_entry.clone();
+            let data_url_clone = data_url.clone();
+
+            let handle = tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+                (
+                    asset_entry_clone.name,
+                    download_asset(&data_url_clone).await,
+                )
+            });
+
+            handles.push(handle);
+        }
+    }
+
+    // Wait for all downloads to complete
+    let results = join_all(handles).await;
+
+    // Process results and build asset_map
+    let mut asset_map: AssetDownloadMap = HashMap::new();
+
+    for result in results {
+        match result {
+            Ok((key, value)) => {
+                asset_map.insert(key, value);
+            }
+            Err(e) => {
+                return Err(format!("Download task panicked: {}", e));
+            }
+        }
+    }
+
+    Ok(asset_map)
+}
+
+// --
 
 #[cfg(test)]
 mod tests {
