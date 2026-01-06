@@ -1704,6 +1704,12 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
             let prefix = expand_pub_asset_name(prefix, &session.account);
+            let (prefix, pattern) = if asset_editor::is_glob_pattern(&prefix) {
+                let (prefix, pattern) = asset_editor::parse_glob_pattern(&prefix);
+                (prefix, Some(pattern))
+            } else {
+                (prefix, None)
+            };
             use crate::api::types::asset::{
                 AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg,
             };
@@ -1744,12 +1750,26 @@ pub async fn process_cmd(
                         while collapsed_idx < collapsed_prefixes.len()
                             && collapsed_prefixes[collapsed_idx] < entry.name
                         {
-                            asset_list_output
-                                .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                            match pattern.as_ref() {
+                                None => {
+                                    asset_list_output
+                                        .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                                }
+                                Some(p) if p.matches(&collapsed_prefixes[collapsed_idx]) => {
+                                    asset_list_output
+                                        .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                                }
+                                _ => {}
+                            }
                             collapsed_idx += 1;
                         }
-
-                        asset_list_output.push(print_asset_entry(entry));
+                        match pattern.as_ref() {
+                            None => asset_list_output.push(print_asset_entry(entry)),
+                            Some(p) if p.matches(&entry.name) => {
+                                asset_list_output.push(print_asset_entry(entry))
+                            }
+                            _ => {}
+                        }
                     }
 
                     if !asset_list_res.has_more {
@@ -1778,11 +1798,26 @@ pub async fn process_cmd(
                     while collapsed_idx < collapsed_prefixes.len()
                         && collapsed_prefixes[collapsed_idx] < entry.name
                     {
-                        asset_list_output.push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                        match pattern.as_ref() {
+                            None => {
+                                asset_list_output
+                                    .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                            }
+                            Some(p) if p.matches(&collapsed_prefixes[collapsed_idx]) => {
+                                asset_list_output
+                                    .push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                            }
+                            _ => {}
+                        }
                         collapsed_idx += 1;
                     }
-
-                    asset_list_output.push(print_asset_entry(entry));
+                    match pattern.as_ref() {
+                        None => asset_list_output.push(print_asset_entry(entry)),
+                        Some(p) if p.matches(&entry.name) => {
+                            asset_list_output.push(print_asset_entry(entry))
+                        }
+                        _ => {}
+                    }
                 }
             }
 

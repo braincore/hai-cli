@@ -175,6 +175,14 @@ To list assets, use:
 Specifying a `prefix` filters the result set. The `prefix` can be arbitrary and
 does not need to be aligned with a folder segment.
 
+The `prefix` may include shell-style glob patterns (`*`, `?`, `[...]`, `**`).
+Patterns can include forward slashes to span folder-like segments. Examples:
+
+```
+/ls data/2025-*       # entries starting with data/2025-
+/ls logs/**/*.log     # all .log files anywhere under logs/
+```
+
 ## Public assets
 
 Public assets start with a forward slash followed by a username (`/<username>`):

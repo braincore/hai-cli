@@ -656,13 +656,13 @@ use std::path::{Path, PathBuf};
 use glob::Pattern;
 
 /// Checks if an asset path contains glob characters
-fn is_glob_pattern(path: &str) -> bool {
+pub fn is_glob_pattern(path: &str) -> bool {
     path.contains('*') || path.contains('?') || path.contains('[')
 }
 
 /// Extracts the prefix for API query and the full pattern for client-side filtering.
 /// e.g., "a/b/*.jpg" -> (prefix: "a/b/", pattern: "a/b/*.jpg")
-fn parse_glob_pattern(pattern: &str) -> (String, Pattern) {
+pub fn parse_glob_pattern(pattern: &str) -> (String, Pattern) {
     // Find the first glob character
     let first_glob_idx = pattern
         .find(|c| c == '*' || c == '?' || c == '[')
