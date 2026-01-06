@@ -1793,7 +1793,7 @@ pub async fn process_cmd(
                 // If all entries are fetched in one-go, sort them.
                 entries.extend_from_slice(&asset_list_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
-                for entry in &asset_list_res.entries {
+                for entry in &entries {
                     // Print all collapsed prefixes that come before this entry
                     while collapsed_idx < collapsed_prefixes.len()
                         && collapsed_prefixes[collapsed_idx] < entry.name
