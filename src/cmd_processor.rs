@@ -1563,21 +1563,56 @@ pub async fn process_cmd(
             let asset_entry_ref = asset_entry
                 .as_ref()
                 .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
-            let _ = asset_editor::edit_with_editor_api(
-                &api_client,
-                &session.shell,
-                &editor.clone().unwrap_or(session.editor.clone()),
-                &asset_contents,
-                &asset_name,
-                asset_entry_ref,
-                asset_entry
-                    .and_then(|entry| entry.metadata)
-                    .and_then(|md| md.content_type),
-                false,
-                update_asset_tx,
-                debug,
-            )
-            .await;
+            if let Some(editor) = editor
+                && editor.starts_with("@")
+            {
+                if !editor.starts_with("@/") {
+                    eprintln!("error: asset-as-editor must be a public asset");
+                    return ProcessCmdResult::Loop;
+                }
+                if !asset_name.starts_with("/") {
+                    eprintln!("error: asset must be public to use asset-as-editor");
+                    return ProcessCmdResult::Loop;
+                }
+                let asset_prog_name =
+                    expand_pub_asset_name(editor.trim_start_matches("@"), &session.account);
+                let asset_prog_public_url = if let Some(asset_prog_public_url) =
+                    asset_editor::get_public_asset_url(&asset_prog_name)
+                {
+                    asset_prog_public_url
+                } else {
+                    eprintln!("error: bad public asset-as-editor reference");
+                    return ProcessCmdResult::Loop;
+                };
+                let asset_public_url = if let Some(asset_public_url) =
+                    asset_editor::get_public_asset_url(&asset_name)
+                {
+                    asset_public_url
+                } else {
+                    eprintln!("error: bad public asset reference");
+                    return ProcessCmdResult::Loop;
+                };
+                let final_url = format!("{}?input={}", asset_prog_public_url, asset_public_url);
+                if let Err(e) = open::that_detached(final_url) {
+                    eprintln!("error: failed to open asset-as-editor in browser: {}", e);
+                }
+            } else {
+                let _ = asset_editor::edit_with_editor_api(
+                    &api_client,
+                    &session.shell,
+                    &editor.clone().unwrap_or(session.editor.clone()),
+                    &asset_contents,
+                    &asset_name,
+                    asset_entry_ref,
+                    asset_entry
+                        .and_then(|entry| entry.metadata)
+                        .and_then(|md| md.content_type),
+                    false,
+                    update_asset_tx,
+                    debug,
+                )
+                .await;
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetNew(cmd::AssetNewCmd {
