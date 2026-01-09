@@ -337,6 +337,7 @@ pub async fn process_cmd(
             session
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+            session.quick_index_vars.clear();
             if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -364,6 +365,7 @@ pub async fn process_cmd(
             session
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+            session.quick_index_vars.clear();
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
@@ -1549,7 +1551,9 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name =
+                resolve_quick_var(&asset_name, session).unwrap_or_else(|| asset_name.to_string());
+            let asset_name = expand_pub_asset_name(&asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
             let (asset_contents, asset_entry) =
                 match asset_editor::get_asset(&api_client, &asset_name, true)
@@ -1775,35 +1779,43 @@ pub async fn process_cmd(
             let mut asset_list_output = vec![];
             let collapsed_prefixes = asset_list_res.collapsed_prefixes.clone();
             let mut collapsed_idx = 0;
+            let mut quick_index = 0;
+            let mut new_quick_index_vars = vec![];
 
             if asset_list_res.has_more {
                 println!("[Listing assets in lexicographic (byte-order) due to size]");
                 loop {
                     entries.extend_from_slice(&asset_list_res.entries);
+                    let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
                     for entry in &asset_list_res.entries {
                         // Print all collapsed prefixes that come before this entry
                         while collapsed_idx < collapsed_prefixes.len()
                             && collapsed_prefixes[collapsed_idx] < entry.name
                         {
-                            match pattern.as_ref() {
-                                None => {
-                                    asset_list_output
-                                        .push(print_folder(&collapsed_prefixes[collapsed_idx]));
-                                }
-                                Some(p) if p.matches(&collapsed_prefixes[collapsed_idx]) => {
-                                    asset_list_output
-                                        .push(print_folder(&collapsed_prefixes[collapsed_idx]));
-                                }
-                                _ => {}
+                            let include_collapsed_prefix = match pattern.as_ref() {
+                                None => true,
+                                Some(p) => p.matches(&collapsed_prefixes[collapsed_idx]),
+                            };
+                            if include_collapsed_prefix {
+                                asset_list_output.push(print_folder(
+                                    &collapsed_prefixes[collapsed_idx],
+                                    Some((quick_index, digits)),
+                                ));
+                                new_quick_index_vars
+                                    .push(collapsed_prefixes[collapsed_idx].clone());
+                                quick_index += 1;
                             }
                             collapsed_idx += 1;
                         }
-                        match pattern.as_ref() {
-                            None => asset_list_output.push(print_asset_entry(entry)),
-                            Some(p) if p.matches(&entry.name) => {
-                                asset_list_output.push(print_asset_entry(entry))
-                            }
-                            _ => {}
+                        let include_entry = match pattern.as_ref() {
+                            None => true,
+                            Some(p) => p.matches(&entry.name),
+                        };
+                        if include_entry {
+                            asset_list_output
+                                .push(print_asset_entry(entry, Some((quick_index, digits))));
+                            new_quick_index_vars.push(entry.name.clone());
+                            quick_index += 1;
                         }
                     }
 
@@ -1828,37 +1840,48 @@ pub async fn process_cmd(
                 // If all entries are fetched in one-go, sort them.
                 entries.extend_from_slice(&asset_list_res.entries);
                 entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+                let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
                 for entry in &entries {
                     // Print all collapsed prefixes that come before this entry
                     while collapsed_idx < collapsed_prefixes.len()
                         && collapsed_prefixes[collapsed_idx] < entry.name
                     {
-                        match pattern.as_ref() {
-                            None => {
-                                asset_list_output
-                                    .push(print_folder(&collapsed_prefixes[collapsed_idx]));
-                            }
-                            Some(p) if p.matches(&collapsed_prefixes[collapsed_idx]) => {
-                                asset_list_output
-                                    .push(print_folder(&collapsed_prefixes[collapsed_idx]));
-                            }
-                            _ => {}
+                        let include_collapsed_prefix = match pattern.as_ref() {
+                            None => true,
+                            Some(p) => p.matches(&collapsed_prefixes[collapsed_idx]),
+                        };
+                        if include_collapsed_prefix {
+                            asset_list_output.push(print_folder(
+                                &collapsed_prefixes[collapsed_idx],
+                                Some((quick_index, digits)),
+                            ));
+                            new_quick_index_vars.push(collapsed_prefixes[collapsed_idx].clone());
+                            quick_index += 1;
                         }
                         collapsed_idx += 1;
                     }
-                    match pattern.as_ref() {
-                        None => asset_list_output.push(print_asset_entry(entry)),
-                        Some(p) if p.matches(&entry.name) => {
-                            asset_list_output.push(print_asset_entry(entry))
-                        }
-                        _ => {}
+                    let include_entry = match pattern.as_ref() {
+                        None => true,
+                        Some(p) => p.matches(&entry.name),
+                    };
+                    if include_entry {
+                        asset_list_output
+                            .push(print_asset_entry(entry, Some((quick_index, digits))));
+                        new_quick_index_vars.push(entry.name.clone());
+                        quick_index += 1;
                     }
                 }
             }
 
             // Print any remaining collapsed prefixes that come after all entries
+            let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
             while collapsed_idx < collapsed_prefixes.len() {
-                asset_list_output.push(print_folder(&collapsed_prefixes[collapsed_idx]));
+                asset_list_output.push(print_folder(
+                    &collapsed_prefixes[collapsed_idx],
+                    Some((quick_index, digits)),
+                ));
+                new_quick_index_vars.push(collapsed_prefixes[collapsed_idx].clone());
+                quick_index += 1;
                 collapsed_idx += 1;
             }
 
@@ -1870,6 +1893,13 @@ pub async fn process_cmd(
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
             );
+            session.quick_index_vars = new_quick_index_vars;
+            if quick_index > 0 {
+                println!();
+                println!(
+                    "Tip: /a /asset can refer to assets by index using $0, $1, etc. AI is blind to indices."
+                );
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetSearch(cmd::AssetSearchCmd { q }) => {
@@ -1889,9 +1919,14 @@ pub async fn process_cmd(
                 }
             };
             let mut asset_search_output = vec![];
+            let mut quick_index = 0;
+            let mut new_quick_index_vars = vec![];
+            let digits = count_digits(asset_search_res.semantic_matches.len() as u32);
             for entry in &asset_search_res.semantic_matches {
-                let line = print_asset_entry(entry);
+                let line = print_asset_entry(entry, Some((quick_index, digits)));
                 asset_search_output.push(line);
+                new_quick_index_vars.push(entry.name.clone());
+                quick_index += 1;
             }
             let asset_search_output = asset_search_output.join("\n");
             session_history_add_user_cmd_and_reply_entries(
@@ -1901,6 +1936,13 @@ pub async fn process_cmd(
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
             );
+            session.quick_index_vars = new_quick_index_vars;
+            if quick_index > 0 {
+                println!();
+                println!(
+                    "Tip: /a /asset can refer to assets by index using $0, $1, etc. AI is blind to indices."
+                );
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetLoad(cmd::AssetLoadCmd { asset_names })
@@ -3003,9 +3045,11 @@ pub async fn process_cmd(
                     eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                     return ProcessCmdResult::Loop;
                 }
+                let chat_log_name = resolve_quick_var(&chat_log_name, session)
+                    .unwrap_or_else(|| chat_log_name.to_string());
                 let api_client = mk_api_client(Some(session));
                 let get_asset_res =
-                    asset_editor::get_asset(&api_client, chat_log_name, false).await;
+                    asset_editor::get_asset(&api_client, &chat_log_name, false).await;
                 match get_asset_res {
                     Ok((bytes, _)) => match String::from_utf8(bytes) {
                         Ok(contents) => contents,
@@ -4152,7 +4196,10 @@ fn abbreviate_number(num: u64) -> String {
 
 use crate::api::types::asset::{AssetEntry, AssetEntryOp};
 
-fn print_asset_entry(entry: &AssetEntry) -> String {
+fn print_asset_entry(entry: &AssetEntry, index: Option<(u32, u32)>) -> String {
+    let index_str = index
+        .map(|(i, digits)| format!("{:>width$}. ", i, width = digits as usize))
+        .unwrap_or("".to_string());
     let symbol = if matches!(entry.op, AssetEntryOp::Push) {
         "📥"
     } else {
@@ -4165,14 +4212,26 @@ fn print_asset_entry(entry: &AssetEntry) -> String {
         .map(|md_title| format!(" [{}]", md_title))
         .unwrap_or("".to_string());
     let line = format!("{}{}{}", entry.name, symbol, title);
-    println!("{}", line);
+    let line_to_print = format!("{}{}", index_str, line);
+    println!("{}", line_to_print);
     line
 }
 
-fn print_folder(folder: &str) -> String {
+fn print_folder(folder: &str, index: Option<(u32, u32)>) -> String {
+    let index_str = index
+        .map(|(i, digits)| format!("{:>width$}. ", i, width = digits as usize))
+        .unwrap_or_else(|| "".to_string());
     let line = format!("{}📁", folder);
-    println!("{}", line);
+    let line_to_print = format!("{}{}", index_str, line);
+    println!("{}", line_to_print);
     line
+}
+
+fn count_digits(n: u32) -> u32 {
+    if n == 0 {
+        return 1;
+    }
+    ((n as f64).log10().floor() as u32) + 1
 }
 
 // --
@@ -4236,5 +4295,14 @@ pub fn expand_pub_asset_name(asset_name: &str, account: &Option<crate::db::Accou
         }
     } else {
         asset_name.to_string()
+    }
+}
+
+pub fn resolve_quick_var(asset_name: &str, session: &SessionState) -> Option<String> {
+    if asset_name.starts_with('$') {
+        let index = asset_name[1..].parse::<usize>().ok()?;
+        session.quick_index_vars.get(index).cloned()
+    } else {
+        None
     }
 }

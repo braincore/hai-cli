@@ -535,6 +535,7 @@ async fn repl(
         ai_defined_fns: HashMap::new(),
         add_msg_on_new_day: false,
         html_output: None,
+        quick_index_vars: vec![],
     };
 
     if let Some(account) = &account {

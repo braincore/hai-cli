@@ -116,6 +116,8 @@ pub struct SessionState {
         crate::feature::html_tool::Clients,
         CancellationToken,
     )>,
+    /// Quick index vars ($0...$N-1)
+    pub quick_index_vars: Vec<String>,
 }
 
 impl SessionState {
