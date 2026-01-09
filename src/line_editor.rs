@@ -1,14 +1,13 @@
 use chrono::{DateTime, Local};
-use crossterm::event::{KeyCode, KeyModifiers};
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::supports_keyboard_enhancement;
 use reedline::{
-    self, ColumnarMenu, Completer, EditCommand, FileBackedHistory, MenuBuilder, Prompt,
-    PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode, Reedline,
-    ReedlineEvent, ReedlineMenu, Span, Suggestion, Vi, default_vi_insert_keybindings,
-    default_vi_normal_keybindings,
+    self, ColumnarMenu, Completer, EditCommand, FileBackedHistory, KeyCode, KeyModifiers,
+    MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus,
+    PromptViMode, Reedline, ReedlineEvent, ReedlineMenu, Span, Suggestion, Vi,
+    default_vi_insert_keybindings, default_vi_normal_keybindings,
 };
 use regex::Regex;
 use std::borrow::Cow;
@@ -817,6 +816,7 @@ impl CmdAndFileCompleter {
                         end: prefix.len(),
                     },
                     append_whitespace: true,
+                    match_indices: None,
                 });
             }
         }
@@ -910,6 +910,7 @@ impl CmdAndFileCompleter {
                             end: _pos,
                         },
                         append_whitespace: !is_dir,
+                        match_indices: None,
                     });
                 }
             }
@@ -1027,6 +1028,7 @@ impl CmdAndFileCompleter {
                             end: path_prefix.len(),
                         },
                         append_whitespace: !is_dir,
+                        match_indices: None,
                     });
                 }
             }
@@ -1079,6 +1081,7 @@ impl CmdAndFileCompleter {
                                 end: asset_prefix.len(),
                             },
                             append_whitespace: false,
+                            match_indices: None,
                         });
                         collapsed_idx += 1;
                     }
@@ -1093,6 +1096,7 @@ impl CmdAndFileCompleter {
                             end: asset_prefix.len(),
                         },
                         append_whitespace: true,
+                        match_indices: None,
                     });
                 }
                 // Return any remaining collapsed prefixes that come after all entries
@@ -1108,6 +1112,7 @@ impl CmdAndFileCompleter {
                             end: asset_prefix.len(),
                         },
                         append_whitespace: false,
+                        match_indices: None,
                     });
                     collapsed_idx += 1;
                 }
