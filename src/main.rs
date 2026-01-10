@@ -395,6 +395,8 @@ async fn repl(
         "gpt-5-nano",
         "gpt-51",
         "gpt-51-chat",
+        "gpt-52",
+        "gpt-52-chat",
         "gpt-4o",
         "gpt-4o-mini",
         "gpt-oss",

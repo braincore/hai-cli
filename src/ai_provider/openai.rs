@@ -102,7 +102,10 @@ pub async fn send_to_openai(
         // Reasoning models & gpt-5 do not support temperature
         if !model.starts_with("o")
             && !model.starts_with("gpt-5-")
+            && !model.starts_with("gpt-5.1-")
             && !model.starts_with("gpt-5.1-chat")
+            && !model.starts_with("gpt-5.2-")
+            && !model.starts_with("gpt-5.2-chat")
         {
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
@@ -128,10 +131,12 @@ pub async fn send_to_openai(
         }
         if let Some(reasoning_effort) = reasoning_effort {
             let reasoning_effort_str = match reasoning_effort {
+                OpenAiReasoningEffort::None => "none",
                 OpenAiReasoningEffort::Minimal => "minimal",
                 OpenAiReasoningEffort::Low => "low",
                 OpenAiReasoningEffort::Medium => "medium",
                 OpenAiReasoningEffort::High => "high",
+                OpenAiReasoningEffort::Xhigh => "xhigh",
             };
             request_obj.insert("reasoning_effort".to_string(), json!(reasoning_effort_str));
         }

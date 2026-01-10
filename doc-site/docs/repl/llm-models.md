@@ -40,7 +40,7 @@ supports all the capabilities (images, tools) utilized in the conversation.
 
 | Provider   | Notable Models (Not Comprehensive)      |
 |------------|-----------------------------------------|
-| OpenAI     | gpt-5.1-chat (`g51c`), gpt-5.1 (`g51`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`), gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`) |
+| OpenAI     | gpt-5.2 (`g52`), gpt-5.2-chat (`g52c`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`), gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`) |
 |            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
 | Anthropic  | sonnet-4 (`sonnet`), sonnet-4-thinking (`sonnet-thinking`), opus-4 (`opus`), opus-4-thinking (`opus-thinking`), haiku-3.5 (`haiku`) |
 | Google     | gemini-3-pro (`gemini3pro`), gemini-3-flash (`flash3`), gemini-2.5-pro (`gemini25pro`) |
@@ -74,6 +74,7 @@ delimited keys or key-values following the model name:
 |------------|-------------------|-------------------------------------------------------------|
 | GPT-5      | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | GPT-5      | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
+| GPT-5.2    | `reasoning` (`r`) | GPT-5 reasoning options, `none` (`n`), `xhigh` (`xh`)       |
 | Gemini-3   | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | Sonnet-3.7 | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Sonnet-4.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
