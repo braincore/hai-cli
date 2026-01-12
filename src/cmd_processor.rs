@@ -329,9 +329,10 @@ pub async fn process_cmd(
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, ..)) = session.html_output.as_ref()
+            if let Some((_, is_task_step, _, _, cancel_token)) = session.html_output.as_ref()
                 && (!task_mode || !*is_task_step)
             {
+                cancel_token.cancel();
                 session.html_output = None;
             }
             session
@@ -357,9 +358,10 @@ pub async fn process_cmd(
             session
                 .temp_files
                 .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, ..)) = session.html_output.as_ref()
+            if let Some((_, is_task_step, _, _, cancel_token)) = session.html_output.as_ref()
                 && (!task_mode || !*is_task_step)
             {
+                cancel_token.cancel();
                 session.html_output = None;
             }
             session
