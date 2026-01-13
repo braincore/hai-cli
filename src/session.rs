@@ -118,6 +118,13 @@ pub struct SessionState {
     )>,
     /// Quick index vars ($0...$N-1)
     pub quick_index_vars: Vec<String>,
+    /// Websocket servers
+    pub gateways: Vec<(
+        bool, // is task step?
+        std::net::SocketAddr,
+        crate::feature::gateway::Clients,
+        CancellationToken,
+    )>,
 }
 
 impl SessionState {

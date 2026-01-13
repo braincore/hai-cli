@@ -536,6 +536,7 @@ async fn repl(
         add_msg_on_new_day: false,
         html_output: None,
         quick_index_vars: vec![],
+        gateways: vec![],
     };
 
     if let Some(account) = &account {

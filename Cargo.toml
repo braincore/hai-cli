@@ -53,6 +53,7 @@ notify = { version = "8.0.0", features = ["macos_fsevent"] }
 nu-ansi-term = "0.50.1"
 num-format = "0.4.4"
 open = { version = "5.3.2", features = ["shellexecute-on-windows"] }
+rand = "0.9.2"
 reedline = "0.44.0"
 regex = "1.11.1"
 reqwest = { version = "0.12.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls", "stream"] }
