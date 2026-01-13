@@ -335,6 +335,12 @@ pub async fn process_cmd(
                 cancel_token.cancel();
                 session.html_output = None;
             }
+            for (is_task_step, _ws_addr, _clients, cancel_token) in &session.gateways {
+                if !task_mode || !is_task_step {
+                    cancel_token.cancel();
+                }
+            }
+            session.gateways.clear();
             session
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
@@ -364,6 +370,12 @@ pub async fn process_cmd(
                 cancel_token.cancel();
                 session.html_output = None;
             }
+            for (is_task_step, _ws_addr, _clients, cancel_token) in &session.gateways {
+                if !task_mode || !is_task_step {
+                    cancel_token.cancel();
+                }
+            }
+            session.gateways.clear();
             session
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
@@ -1557,52 +1569,30 @@ pub async fn process_cmd(
                 resolve_quick_var(&asset_name, session).unwrap_or_else(|| asset_name.to_string());
             let asset_name = expand_pub_asset_name(&asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, asset_entry) =
-                match asset_editor::get_asset(&api_client, &asset_name, true)
-                    .await
-                    .map(|(ac, ae)| (ac, Some(ae)))
-                {
-                    Ok(contents) => contents,
-                    Err(asset_editor::GetAssetError::BadName) => (vec![], None),
-                    Err(_) => return ProcessCmdResult::Loop,
-                };
-            let asset_entry_ref = asset_entry
-                .as_ref()
-                .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
             if let Some(editor) = editor
-                && editor.starts_with("@")
+                && let Some(prog_asset_name) = editor.strip_prefix("@")
             {
-                if !editor.starts_with("@/") {
-                    eprintln!("error: asset-as-editor must be a public asset");
-                    return ProcessCmdResult::Loop;
-                }
-                if !asset_name.starts_with("/") {
-                    eprintln!("error: asset must be public to use asset-as-editor");
-                    return ProcessCmdResult::Loop;
-                }
-                let asset_prog_name =
-                    expand_pub_asset_name(editor.trim_start_matches("@"), &session.account);
-                let asset_prog_public_url = if let Some(asset_prog_public_url) =
-                    asset_editor::get_public_asset_url(&asset_prog_name)
-                {
-                    asset_prog_public_url
-                } else {
-                    eprintln!("error: bad public asset-as-editor reference");
-                    return ProcessCmdResult::Loop;
-                };
-                let asset_public_url = if let Some(asset_public_url) =
-                    asset_editor::get_public_asset_url(&asset_name)
-                {
-                    asset_public_url
-                } else {
-                    eprintln!("error: bad public asset reference");
-                    return ProcessCmdResult::Loop;
-                };
-                let final_url = format!("{}?input={}", asset_prog_public_url, asset_public_url);
-                if let Err(e) = open::that_detached(final_url) {
-                    eprintln!("error: failed to open asset-as-editor in browser: {}", e);
-                }
+                crate::feature::asset_app::launch_browser(
+                    session,
+                    &api_client,
+                    is_task_mode_step,
+                    prog_asset_name,
+                    &asset_name,
+                )
+                .await
             } else {
+                let (asset_contents, asset_entry) =
+                    match asset_editor::get_asset(&api_client, &asset_name, true)
+                        .await
+                        .map(|(ac, ae)| (ac, Some(ae)))
+                    {
+                        Ok(contents) => contents,
+                        Err(asset_editor::GetAssetError::BadName) => (vec![], None),
+                        Err(_) => return ProcessCmdResult::Loop,
+                    };
+                let asset_entry_ref = asset_entry
+                    .as_ref()
+                    .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
                 let _ = asset_editor::edit_with_editor_api(
                     &api_client,
                     &session.shell,
@@ -1618,8 +1608,8 @@ pub async fn process_cmd(
                     debug,
                 )
                 .await;
+                ProcessCmdResult::Loop
             }
-            ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetNew(cmd::AssetNewCmd {
             asset_name,

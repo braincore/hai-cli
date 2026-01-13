@@ -1265,7 +1265,9 @@ async fn download_assets_parallel_in_memory(
 // --
 
 pub fn get_public_asset_url(asset_name: &str) -> Option<String> {
-    let (username, asset_path) = if let Some(pos) = asset_name[1..].find('/') {
+    let (username, asset_path) = if asset_name.starts_with("/")
+        && let Some(pos) = asset_name[1..].find('/')
+    {
         asset_name.split_at(pos + 1)
     } else {
         return None;
