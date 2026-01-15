@@ -206,6 +206,25 @@ Any other user can view it with:
     public assets and lets you write task steps that are generic to the
     logged-in account.
 
+### Web access
+
+Public assets can be accessed via the web. The `public.txt` example above would
+be accessible at:
+
+```
+https://<username>.hai.dog/<path>
+```
+
+The asset is served with an HTTP `Content-Type` header set to the asset's
+`content_type` metadata key (if present). If the key is not set, the content
+type is inferred from the file extension. See [Metadata](#metadata) for details
+on the `content_type` key.
+
+The subdomain root (`https://<username>.hai.dog`) serves the first matching
+public asset found at the account root. The server checks for these names in
+this order: `index`, `index.html`, `README`, and `README.md` (e.g.
+`/<username>/index` or `/<username>/README.md`).
+
 ## Search
 
 Assets can be searched semantically based on their contents:
