@@ -28,11 +28,16 @@ I use `hai1` and `hai2` to start `hai` with different models depending on what
 I'm doing.
 
 ```bash
+# Appended to ~/.bashrc
+
 # Use GPT‑5.2 for general prompts
 alias hai1='hai -m gpt-52'
 
 # Use Sonnet-4.5 for coding prompts
 alias hai2='hai -m sonnet45'
+
+# Use Gemini-3-flash for experimenting
+alias hai3='hai -m flash3'
 ```
 
 ## Task mode
