@@ -22,7 +22,7 @@ WORKDIR /home/ubuntu
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install hai
-RUN curl -LsSf https://hai.superego.ai/hai-installer.sh | sh
+RUN curl -LsSf https://hai.dog/hai-installer.sh | sh
 
 # Login to hn_demo user
 RUN /home/ubuntu/.local/bin/hai login hn_demo $DEMO_PASS

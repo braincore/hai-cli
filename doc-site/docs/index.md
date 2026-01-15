@@ -42,7 +42,7 @@ A REPL for hackers using LLMs.
 ## Quickstart
 
 ```console
-$ curl -LsSf https://hai.superego.ai/hai-installer.sh | sh
+$ curl -LsSf https://hai.dog/hai-installer.sh | sh
 $ hai
 ```
 

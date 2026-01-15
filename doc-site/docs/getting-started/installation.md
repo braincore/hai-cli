@@ -5,7 +5,7 @@
 _Linux and macOS_
 
 ```console
-$ curl -LsSf https://hai.superego.ai/hai-installer.sh | sh
+$ curl -LsSf https://hai.dog/hai-installer.sh | sh
 ```
 
 ## Alt: Download binary

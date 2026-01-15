@@ -42,7 +42,7 @@ Or, you can dive in and rely on `hai -h` (CLI), `/help` (REPL), and
 ### Installer [Linux, macOS]
 
 ```
-curl -LsSf https://hai.superego.ai/hai-installer.sh | sh
+curl -LsSf https://hai.dog/hai-installer.sh | sh
 ```
 
 ### Alt: Download binary [Linux, macOS, Windows]

@@ -584,7 +584,7 @@ async fn repl(
             let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {
                 println!(
-                    "  - installer (from shell): `curl -LsSf https://hai.superego.ai/hai-installer.sh | sh`"
+                    "  - installer (from shell): `curl -LsSf https://hai.dog/hai-installer.sh | sh`"
                 );
             } else {
                 let asset_name =
