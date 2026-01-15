@@ -212,7 +212,7 @@ Public assets can be accessed via the web. The `public.txt` example above would
 be accessible at:
 
 ```
-https://<username>.hai.dog/<path>
+https://<username>.hai.dog/public.txt
 ```
 
 The asset is served with an HTTP `Content-Type` header set to the asset's
