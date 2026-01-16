@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 mod ai_provider;
 mod api;
+mod asset_async_writer;
 mod asset_cache;
 mod asset_editor;
 mod asset_sync;
@@ -304,8 +305,8 @@ async fn repl(
 
     // Use a channel to make asset updates async
     let (update_asset_tx, update_asset_rx) =
-        tokio::sync::mpsc::channel::<asset_editor::WorkerAssetMsg>(100);
-    tokio::spawn(asset_editor::worker_update_asset(
+        tokio::sync::mpsc::channel::<asset_async_writer::WorkerAssetMsg>(100);
+    tokio::spawn(asset_async_writer::worker_update_asset(
         asset_blob_cache.clone(),
         update_asset_rx,
         db.clone(),

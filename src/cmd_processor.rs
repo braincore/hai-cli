@@ -20,6 +20,7 @@ use crate::session::{
 };
 use crate::{
     api::{self, client::HaiClient},
+    asset_async_writer,
     asset_cache::AssetBlobCache,
     asset_editor, chat, clipboard, cmd, config, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
@@ -40,7 +41,7 @@ pub async fn process_cmd(
     cfg: &mut config::Config,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
-    update_asset_tx: tokio::sync::mpsc::Sender<asset_editor::WorkerAssetMsg>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     cmd: &cmd::Cmd,
@@ -64,6 +65,12 @@ pub async fn process_cmd(
 
     const ASSET_ACCOUNT_REQ_MSG: &str =
         "You must be logged-in to use assets. Try /account-login or /account-new";
+
+    // IMPORTANT: Because asset writes are committed asynchronously to make
+    // the REPL more responsive, it's important to flush remaining writes
+    // before processing follow up commands, otherwise, we lose read-after-
+    // write consistency.
+    asset_async_writer::flush_asset_updates(&update_asset_tx).await;
 
     match cmd {
         cmd::Cmd::Noop => ProcessCmdResult::Loop,
@@ -1637,8 +1644,8 @@ pub async fn process_cmd(
             let api_client = mk_api_client(Some(session));
             if let Some(contents) = contents {
                 let _ = update_asset_tx
-                    .send(asset_editor::WorkerAssetMsg::Update(
-                        asset_editor::WorkerAssetUpdate {
+                    .send(asset_async_writer::WorkerAssetMsg::Update(
+                        asset_async_writer::WorkerAssetUpdate {
                             asset_name,
                             asset_entry_ref: None,
                             new_contents: contents.clone().into_bytes(),
@@ -1716,8 +1723,8 @@ pub async fn process_cmd(
             let api_client = mk_api_client(Some(session));
             if let Some(contents) = contents {
                 let _ = update_asset_tx
-                    .send(asset_editor::WorkerAssetMsg::Update(
-                        asset_editor::WorkerAssetUpdate {
+                    .send(asset_async_writer::WorkerAssetMsg::Update(
+                        asset_async_writer::WorkerAssetUpdate {
                             asset_name,
                             asset_entry_ref: None,
                             new_contents: contents.clone().into_bytes(),
