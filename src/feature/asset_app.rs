@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
-use crate::asset_editor;
+use crate::asset_helper;
 use crate::cmd_processor::{ProcessCmdResult, expand_pub_asset_name};
 use crate::session::SessionState;
 
@@ -18,7 +18,7 @@ pub async fn launch_browser(
     let target_asset_name = expand_pub_asset_name(target_asset_name, &session.account);
 
     let asset_prog_url =
-        if let Some(asset_prog_url) = asset_editor::get_public_asset_url(&prog_asset_name) {
+        if let Some(asset_prog_url) = asset_helper::get_public_asset_url(&prog_asset_name) {
             asset_prog_url
         } else {
             // Prog-asset is private -> use temporary presigned url

@@ -22,7 +22,7 @@ use crate::{
     api::{self, client::HaiClient},
     asset_async_writer,
     asset_cache::AssetBlobCache,
-    asset_editor, chat, clipboard, cmd, config, ctrlc_handler,
+    asset_editor, asset_helper, asset_reader, chat, clipboard, cmd, config, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
     feature::{haivar, save_chat},
     loader, term, term_color, tool,
@@ -1591,7 +1591,7 @@ pub async fn process_cmd(
                 )
                 .await
             } else {
-                let (asset_contents, asset_entry) = match asset_editor::get_asset(
+                let (asset_contents, asset_entry) = match asset_reader::get_asset(
                     asset_blob_cache.clone(),
                     &api_client,
                     &asset_name,
@@ -1601,7 +1601,7 @@ pub async fn process_cmd(
                 .map(|(ac, ae)| (ac, Some(ae)))
                 {
                     Ok(contents) => contents,
-                    Err(asset_editor::GetAssetError::BadName) => (vec![], None),
+                    Err(asset_reader::GetAssetError::BadName) => (vec![], None),
                     Err(_) => return ProcessCmdResult::Loop,
                 };
                 let asset_entry_ref = asset_entry
@@ -1634,7 +1634,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
-            if asset_editor::get_invalid_asset_name_re().is_match(&asset_name) {
+            if asset_helper::get_invalid_asset_name_re().is_match(&asset_name) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
                 // user won't be aware that their new asset didn't save.
@@ -1679,7 +1679,7 @@ pub async fn process_cmd(
             }
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, asset_entry) = match asset_editor::get_asset(
+            let (asset_contents, asset_entry) = match asset_reader::get_asset(
                 asset_blob_cache.clone(),
                 &api_client,
                 &asset_name,
@@ -1753,8 +1753,8 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
             let prefix = expand_pub_asset_name(prefix, &session.account);
-            let (prefix, pattern) = if asset_editor::is_glob_pattern(&prefix) {
-                let (prefix, pattern) = asset_editor::parse_glob_pattern(&prefix);
+            let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
+                let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
                 (prefix, Some(pattern))
             } else {
                 (prefix, None)
@@ -1963,7 +1963,7 @@ pub async fn process_cmd(
                 .collect::<Vec<_>>();
             let api_client = mk_api_client(Some(session));
 
-            match asset_editor::fetch_assets_from_names_in_memory(
+            match asset_reader::fetch_assets_from_names_in_memory(
                 asset_blob_cache.clone(),
                 &api_client,
                 &asset_names,
@@ -2010,10 +2010,10 @@ pub async fn process_cmd(
                                 }
                             },
                             Err(e) => match e {
-                                asset_editor::GetAssetError::BadName => {
+                                asset_reader::GetAssetError::BadName => {
                                     eprintln!("error: {}: asset not found", asset_name);
                                 }
-                                asset_editor::GetAssetError::DataFetchFailed => {
+                                asset_reader::GetAssetError::DataFetchFailed => {
                                     eprintln!("error: {}: fetch failed", asset_name);
                                 }
                             },
@@ -2076,7 +2076,7 @@ pub async fn process_cmd(
                     url: Some(metadata_url),
                     ..
                 }) = revision.metadata.as_ref()
-                    && let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await
+                    && let Some(contents_bin) = asset_reader::get_asset_raw(metadata_url).await
                 {
                     let contents = String::from_utf8_lossy(&contents_bin);
                     println!("Metadata: {}", &contents);
@@ -2088,7 +2088,7 @@ pub async fn process_cmd(
                     );
                 }
                 if let Some(data_url) = revision.asset.url.as_ref()
-                    && let Some(contents_bin) = asset_editor::get_asset_raw(data_url).await
+                    && let Some(contents_bin) = asset_reader::get_asset_raw(data_url).await
                 {
                     let contents = String::from_utf8_lossy(&contents_bin);
                     println!("{}", &contents);
@@ -2263,7 +2263,7 @@ pub async fn process_cmd(
                                 for revision in iter_res.revisions {
                                     if let Some(data_url) = revision.asset.url.as_ref()
                                         && let Some(contents_bin) =
-                                            asset_editor::get_asset_raw(data_url).await
+                                            asset_reader::get_asset_raw(data_url).await
                                     {
                                         let contents = String::from_utf8_lossy(&contents_bin);
                                         println!("{}", &contents);
@@ -2583,7 +2583,7 @@ pub async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, _) = match asset_editor::get_asset(
+            let (asset_contents, _) = match asset_reader::get_asset(
                 asset_blob_cache.clone(),
                 &api_client,
                 &source_asset_name,
@@ -2763,7 +2763,7 @@ pub async fn process_cmd(
                 );
             } else {
                 let (data_contents, metadata_contents, _asset_entry) =
-                    match asset_editor::get_asset_and_metadata(
+                    match asset_reader::get_asset_and_metadata(
                         asset_blob_cache.clone(),
                         &api_client,
                         &asset_name,
@@ -2776,7 +2776,7 @@ pub async fn process_cmd(
                     };
 
                 let (data_temp_file, data_temp_file_path) =
-                    match asset_editor::create_empty_temp_file(&asset_name, None) {
+                    match asset_reader::create_empty_temp_file(&asset_name, None) {
                         Ok(res) => res,
                         Err(_e) => {
                             eprintln!("error: failed to download: {}", asset_name);
@@ -2801,7 +2801,7 @@ pub async fn process_cmd(
                 if let Some(metadata_contents) = metadata_contents {
                     let metadata_name = format!("{}.metadata", asset_name);
                     let (metadata_temp_file, metadata_temp_file_path) =
-                        match asset_editor::create_empty_temp_file(&metadata_name, None) {
+                        match asset_reader::create_empty_temp_file(&metadata_name, None) {
                             Ok(res) => res,
                             Err(_) => {
                                 eprintln!("error: failed to download: {}", metadata_name);
@@ -2888,7 +2888,7 @@ pub async fn process_cmd(
                         ..
                     }) = res.entry.metadata.as_ref()
                     {
-                        if let Some(contents_bin) = asset_editor::get_asset_raw(metadata_url).await
+                        if let Some(contents_bin) = asset_reader::get_asset_raw(metadata_url).await
                         {
                             let contents = String::from_utf8_lossy(&contents_bin);
                             let md_json = serde_json::from_str::<serde_json::Value>(&contents)
@@ -2966,9 +2966,14 @@ pub async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            if asset_editor::asset_metadata_set_key(&api_client, &asset_name, key, Some(value_json))
-                .await
-                .is_ok()
+            if asset_async_writer::asset_metadata_set_key(
+                &api_client,
+                &asset_name,
+                key,
+                Some(value_json),
+            )
+            .await
+            .is_ok()
             {
                 session_history_add_user_text_entry(
                     raw_user_input,
@@ -2986,7 +2991,7 @@ pub async fn process_cmd(
             }
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
-            if asset_editor::asset_metadata_set_key(&api_client, &asset_name, key, None)
+            if asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, key, None)
                 .await
                 .is_ok()
             {
@@ -3074,7 +3079,7 @@ pub async fn process_cmd(
                 let chat_log_name = resolve_quick_var(&chat_log_name, session)
                     .unwrap_or_else(|| chat_log_name.to_string());
                 let api_client = mk_api_client(Some(session));
-                let get_asset_res = asset_editor::get_asset(
+                let get_asset_res = asset_reader::get_asset(
                     asset_blob_cache.clone(),
                     &api_client,
                     &chat_log_name,
@@ -3091,10 +3096,10 @@ pub async fn process_cmd(
                     },
                     Err(e) => {
                         match e {
-                            asset_editor::GetAssetError::BadName => {
+                            asset_reader::GetAssetError::BadName => {
                                 eprintln!("error: asset not found");
                             }
-                            asset_editor::GetAssetError::DataFetchFailed => {
+                            asset_reader::GetAssetError::DataFetchFailed => {
                                 eprintln!("error: failed to fetch asset data");
                             }
                         }
@@ -3252,7 +3257,7 @@ lesson (e.g. "understanding").\n\n{}"#,
             {
                 Ok(_) => {
                     if let Some(chat_title) = chat_title {
-                        let _ = asset_editor::asset_metadata_set_key(
+                        let _ = asset_async_writer::asset_metadata_set_key(
                             &api_client,
                             &chat_log_asset_name,
                             "title",
@@ -4054,15 +4059,15 @@ pub async fn shell_exec_with_asset_substitution(
     cmd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
-    match asset_editor::prepare_assets_from_cmd_as_temp_files(api_client, cmd, 4).await {
+    match asset_reader::prepare_assets_from_cmd_as_temp_files(api_client, cmd, 4).await {
         Ok((updated_cmd, asset_map, output_assets)) => {
             for (asset_name, temp_res) in &asset_map {
                 if let Err(e) = temp_res {
                     let err_msg = match e {
-                        asset_editor::GetAssetError::BadName => {
+                        asset_reader::GetAssetError::BadName => {
                             format!("bad name: {}", asset_name)
                         }
-                        asset_editor::GetAssetError::DataFetchFailed => {
+                        asset_reader::GetAssetError::DataFetchFailed => {
                             format!("fetch failed: {}", asset_name)
                         }
                     };
@@ -4075,10 +4080,10 @@ pub async fn shell_exec_with_asset_substitution(
                     Some(Ok((temp_file, temp_file_path))) => (temp_file, temp_file_path),
                     Some(Err(e)) => {
                         let err_msg = match e {
-                            asset_editor::GetAssetError::BadName => {
+                            asset_reader::GetAssetError::BadName => {
                                 format!("bad name: {}", output_asset)
                             }
-                            asset_editor::GetAssetError::DataFetchFailed => {
+                            asset_reader::GetAssetError::DataFetchFailed => {
                                 format!("fetch failed: {}", output_asset)
                             }
                         };

@@ -3,11 +3,11 @@ use tokio::sync::Mutex;
 
 use crate::api::client::HaiClient;
 use crate::api::types::asset::{
-    AssetEntryOp, AssetPushArg, AssetPutArg, AssetReplaceArg, PutConflictPolicy,
-    ReplaceConflictPolicy,
+    AssetEntry, AssetEntryOp, AssetMetadataInfo, AssetPushArg, AssetPutArg, AssetReplaceArg,
+    PutConflictPolicy, ReplaceConflictPolicy,
 };
 use crate::asset_cache::AssetBlobCache;
-use crate::asset_editor::asset_metadata_set_key;
+use crate::asset_reader;
 
 #[derive(Debug)]
 pub enum WorkerAssetMsg {
@@ -262,4 +262,92 @@ pub async fn flush_asset_updates(update_asset_tx: &tokio::sync::mpsc::Sender<Wor
     let (tx, rx) = tokio::sync::oneshot::channel();
     let _ = update_asset_tx.send(WorkerAssetMsg::Flush(tx)).await;
     let _ = rx.await; // Wait for flush to complete
+}
+
+// --
+
+/// Sets the metadata field `key` to `value` for the asset.
+///
+/// This function is necessary because the API only supports setting the entire
+/// metadata object at once, rather than individual fields.
+///
+/// On error, prints reason.
+pub async fn asset_metadata_set_key(
+    api_client: &HaiClient,
+    asset_name: &str,
+    key: &str,
+    value: Option<serde_json::Value>,
+) -> Result<AssetEntry, ()> {
+    use crate::api::types::asset::AssetGetArg;
+    match api_client
+        .asset_get(AssetGetArg {
+            name: asset_name.to_string(),
+        })
+        .await
+    {
+        Ok(res) => {
+            let mut md_json = if let Some(AssetMetadataInfo {
+                url: Some(metadata_url),
+                ..
+            }) = res.entry.metadata.as_ref()
+            {
+                if let Some(contents_bin) = asset_reader::get_asset_raw(metadata_url).await {
+                    let contents = String::from_utf8_lossy(&contents_bin);
+                    serde_json::from_str::<serde_json::Value>(&contents)
+                        .expect("failed to parse metadata")
+                } else {
+                    return Err(());
+                }
+            } else {
+                serde_json::json!({})
+            };
+            // Check if the current value is the same as the target value
+            let needs_update = if let Some(map) = md_json.as_object() {
+                match (&value, map.get(key)) {
+                    (Some(target_value), Some(current_value)) => target_value != current_value,
+                    (None, None) => false,
+                    _ => true,
+                }
+            } else {
+                // If metadata is not a map, we'll need to update
+                value.is_some()
+            };
+            if !needs_update {
+                return Ok(res.entry);
+            }
+            if let Some(map) = md_json.as_object_mut() {
+                if let Some(value) = value {
+                    map.insert(key.to_string(), value);
+                } else {
+                    map.remove(key);
+                }
+            } else {
+                eprintln!("unexpected: metadata is not a map");
+                return Err(());
+            }
+            let md_contents =
+                serde_json::to_string(&md_json).expect("failed to serialize metadata");
+            use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+            // NOTE/FUTURE: Better to switch to reject conflict-policy and
+            // refetch the metadata on rejection.
+            match api_client
+                .asset_metadata_put(AssetMetadataPutArg {
+                    name: asset_name.to_owned(),
+                    data: md_contents,
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => Ok(res.entry),
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    Err(())
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            Err(())
+        }
+    }
 }

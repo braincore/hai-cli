@@ -767,7 +767,7 @@ pub async fn download_revision_to_temp(
         } else {
             // Drop lock before longer download operation
             drop(seen_revisions_map);
-            match crate::asset_editor::create_empty_temp_file(
+            match crate::asset_reader::create_empty_temp_file(
                 asset_name,
                 Some(&revision.asset.rev_id),
             ) {

@@ -19,6 +19,8 @@ mod api;
 mod asset_async_writer;
 mod asset_cache;
 mod asset_editor;
+mod asset_helper;
+mod asset_reader;
 mod asset_sync;
 mod chat;
 mod clipboard;
