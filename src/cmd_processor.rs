@@ -20,6 +20,7 @@ use crate::session::{
 };
 use crate::{
     api::{self, client::HaiClient},
+    asset_cache::AssetBlobCache,
     asset_editor, chat, clipboard, cmd, config, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
     feature::{haivar, save_chat},
@@ -38,6 +39,7 @@ pub async fn process_cmd(
     session: &mut SessionState,
     cfg: &mut config::Config,
     db: Arc<Mutex<rusqlite::Connection>>,
+    asset_blob_cache: Arc<AssetBlobCache>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_editor::WorkerAssetMsg>,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
@@ -1574,6 +1576,7 @@ pub async fn process_cmd(
             {
                 crate::feature::asset_app::launch_browser(
                     session,
+                    asset_blob_cache.clone(),
                     &api_client,
                     is_task_mode_step,
                     prog_asset_name,
@@ -1581,15 +1584,19 @@ pub async fn process_cmd(
                 )
                 .await
             } else {
-                let (asset_contents, asset_entry) =
-                    match asset_editor::get_asset(&api_client, &asset_name, true)
-                        .await
-                        .map(|(ac, ae)| (ac, Some(ae)))
-                    {
-                        Ok(contents) => contents,
-                        Err(asset_editor::GetAssetError::BadName) => (vec![], None),
-                        Err(_) => return ProcessCmdResult::Loop,
-                    };
+                let (asset_contents, asset_entry) = match asset_editor::get_asset(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &asset_name,
+                    true,
+                )
+                .await
+                .map(|(ac, ae)| (ac, Some(ae)))
+                {
+                    Ok(contents) => contents,
+                    Err(asset_editor::GetAssetError::BadName) => (vec![], None),
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
                 let asset_entry_ref = asset_entry
                     .as_ref()
                     .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
@@ -1665,14 +1672,18 @@ pub async fn process_cmd(
             }
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, asset_entry) =
-                match asset_editor::get_asset(&api_client, &asset_name, false)
-                    .await
-                    .map(|(ac, ae)| (ac, Some(ae)))
-                {
-                    Ok(asset_get_res) => asset_get_res,
-                    Err(_) => return ProcessCmdResult::Loop,
-                };
+            let (asset_contents, asset_entry) = match asset_editor::get_asset(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            .map(|(ac, ae)| (ac, Some(ae)))
+            {
+                Ok(asset_get_res) => asset_get_res,
+                Err(_) => return ProcessCmdResult::Loop,
+            };
             let asset_entry_ref = asset_entry
                 .as_ref()
                 .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
@@ -1945,8 +1956,13 @@ pub async fn process_cmd(
                 .collect::<Vec<_>>();
             let api_client = mk_api_client(Some(session));
 
-            match asset_editor::fetch_assets_from_names_in_memory(&api_client, &asset_names, 4)
-                .await
+            match asset_editor::fetch_assets_from_names_in_memory(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_names,
+                4,
+            )
+            .await
             {
                 Ok((asset_map, _)) => {
                     session_history_add_user_text_entry(
@@ -2560,11 +2576,17 @@ pub async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, _) =
-                match asset_editor::get_asset(&api_client, &source_asset_name, false).await {
-                    Ok(contents) => contents,
-                    Err(_) => return ProcessCmdResult::Loop,
-                };
+            let (asset_contents, _) = match asset_editor::get_asset(
+                asset_blob_cache.clone(),
+                &api_client,
+                &source_asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(contents) => contents,
+                Err(_) => return ProcessCmdResult::Loop,
+            };
             match fs::write(&target_file_path, asset_contents) {
                 Ok(_) => {}
                 Err(e) => {
@@ -2734,8 +2756,13 @@ pub async fn process_cmd(
                 );
             } else {
                 let (data_contents, metadata_contents, _asset_entry) =
-                    match asset_editor::get_asset_and_metadata(&api_client, &asset_name, false)
-                        .await
+                    match asset_editor::get_asset_and_metadata(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &asset_name,
+                        false,
+                    )
+                    .await
                     {
                         Ok(res) => res,
                         Err(_) => return ProcessCmdResult::Loop,
@@ -2744,7 +2771,7 @@ pub async fn process_cmd(
                 let (data_temp_file, data_temp_file_path) =
                     match asset_editor::create_empty_temp_file(&asset_name, None) {
                         Ok(res) => res,
-                        Err(asset_editor::DownloadAssetError::DataFetchFailed) => {
+                        Err(_e) => {
                             eprintln!("error: failed to download: {}", asset_name);
                             return ProcessCmdResult::Loop;
                         }
@@ -2769,7 +2796,7 @@ pub async fn process_cmd(
                     let (metadata_temp_file, metadata_temp_file_path) =
                         match asset_editor::create_empty_temp_file(&metadata_name, None) {
                             Ok(res) => res,
-                            Err(asset_editor::DownloadAssetError::DataFetchFailed) => {
+                            Err(_) => {
                                 eprintln!("error: failed to download: {}", metadata_name);
                                 return ProcessCmdResult::Loop;
                             }
@@ -3040,8 +3067,13 @@ pub async fn process_cmd(
                 let chat_log_name = resolve_quick_var(&chat_log_name, session)
                     .unwrap_or_else(|| chat_log_name.to_string());
                 let api_client = mk_api_client(Some(session));
-                let get_asset_res =
-                    asset_editor::get_asset(&api_client, &chat_log_name, false).await;
+                let get_asset_res = asset_editor::get_asset(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &chat_log_name,
+                    false,
+                )
+                .await;
                 match get_asset_res {
                     Ok((bytes, _)) => match String::from_utf8(bytes) {
                         Ok(contents) => contents,

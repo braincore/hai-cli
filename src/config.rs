@@ -20,6 +20,9 @@ pub struct Config {
     pub tool_confirm: bool,
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
+    /// Asset blob cache size in bytes (default: 1GB, 0 = disabled)
+    #[serde(default = "default_cache_size")]
+    pub asset_blob_cache_size: u64,
     pub openai: Option<OpenAiConfig>,
     pub anthropic: Option<AnthropicConfig>,
     pub llama_cpp: Option<LlamaCppConfig>,
@@ -33,6 +36,10 @@ pub struct Config {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_cache_size() -> u64 {
+    1024 * 1024 * 1024 // 1GB
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,6 +415,9 @@ pub fn read_config_as_string(
 # Setting this to `false` disables hai's only unprompted service request. This
 # may be of interest to the privacy conscious.
 #check_for_updates = true
+
+# Asset blob cache size in bytes (default: 1GB, 0 = disabled)
+#asset_blob_cache_size = 1073741824
 
 [openai]
 # Your OpenAI API key (required to use OpenAI models).
@@ -1391,4 +1401,20 @@ pub fn get_machine_os_arch() -> String {
         "unknown"
     };
     format!("{}-{}", os, arch)
+}
+
+// --
+
+pub fn mk_asset_blob_cache() -> Result<PathBuf, Box<dyn Error>> {
+    let path = get_asset_blob_cache_path();
+    if !path.exists() {
+        fs::create_dir_all(&path)?;
+    }
+    Ok(path)
+}
+
+pub fn get_asset_blob_cache_path() -> PathBuf {
+    let mut path = get_config_folder_path();
+    path.push("cache/asset-blob");
+    path
 }

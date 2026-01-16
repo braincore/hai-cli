@@ -5,6 +5,8 @@ use std::{fs, io};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::Sender;
 
+use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
+
 #[allow(clippy::too_many_arguments)]
 /// Function to edit with an editor and watch for changes to trigger a callback
 pub async fn edit_with_editor_api(
@@ -195,6 +197,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 pub async fn worker_update_asset(
+    asset_blob_cache: Arc<AssetBlobCache>,
     mut rx: tokio::sync::mpsc::Receiver<WorkerAssetMsg>,
     _db: Arc<Mutex<rusqlite::Connection>>,
     debug: bool,
@@ -245,7 +248,10 @@ pub async fn worker_update_asset(
                     }
                 }
 
-                let new_hash = Sha256::digest(&new_contents).to_vec();
+                let (new_hash_str, new_hash) = crate::asset_cache::compute_sha256(&new_contents);
+                let _ = asset_blob_cache
+                    .write_cache(&new_hash_str, &new_contents)
+                    .await;
                 // Check if the hash matches the last known hash
                 if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name)
                     && &new_hash == last_hash
@@ -416,15 +422,18 @@ pub enum GetAssetError {
 
 /// If returns None, responsible for printing error msg.
 pub async fn get_asset(
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        let data_contents = match download_asset(data_url).await {
+    if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
+        && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
+    {
+        let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
-            Err(DownloadAssetError::DataFetchFailed) => {
+            Err(_) => {
                 return Err(GetAssetError::DataFetchFailed);
             }
         };
@@ -469,44 +478,22 @@ pub async fn get_asset_entry(
     }
 }
 
-pub enum DownloadAssetError {
-    DataFetchFailed,
-}
-
-pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
-    let asset_get_resp = match reqwest::get(url).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return Err(DownloadAssetError::DataFetchFailed);
-        }
-    };
-    if !asset_get_resp.status().is_success() {
-        eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
-        return Err(DownloadAssetError::DataFetchFailed);
-    }
-    match asset_get_resp.bytes().await {
-        Ok(contents) => Ok(contents.to_vec()),
-        Err(e) => {
-            eprintln!("error: failed to fetch asset: {}", e);
-            Err(DownloadAssetError::DataFetchFailed)
-        }
-    }
-}
-
 // --
 
 /// If returns None, responsible for printing error msg.
 pub async fn get_asset_and_metadata(
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref() {
-        match download_asset(data_url).await {
+    let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
+        && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
+    {
+        match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
-            Err(DownloadAssetError::DataFetchFailed) => {
+            Err(_) => {
                 eprintln!("error: failed to fetch asset data");
                 return Err(GetAssetError::DataFetchFailed);
             }
@@ -516,16 +503,22 @@ pub async fn get_asset_and_metadata(
     };
     let metadata_contents = if let Some(AssetMetadataInfo {
         url: Some(metadata_url),
+        hash: Some(metadata_hash),
         ..
     }) = asset_get_res.entry.metadata.as_ref()
     {
-        Some(match download_asset(metadata_url).await {
-            Ok(contents) => contents,
-            Err(DownloadAssetError::DataFetchFailed) => {
-                eprintln!("error: failed to fetch asset metadata");
-                return Err(GetAssetError::DataFetchFailed);
-            }
-        })
+        Some(
+            match asset_blob_cache
+                .get_or_download(metadata_url, metadata_hash)
+                .await
+            {
+                Ok(contents) => contents,
+                Err(_) => {
+                    eprintln!("error: failed to fetch asset metadata");
+                    return Err(GetAssetError::DataFetchFailed);
+                }
+            },
+        )
     } else {
         None
     };
@@ -833,9 +826,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
     for (asset_ref, download_res) in asset_map {
         asset_final_map.insert(
             asset_ref,
-            download_res.map_err(|e| match e {
-                DownloadAssetError::DataFetchFailed => GetAssetError::DataFetchFailed,
-            }),
+            download_res.map_err(|_e| GetAssetError::DataFetchFailed),
         );
     }
     for (asset_ref, e) in asset_fetch_failures {
@@ -1143,6 +1134,7 @@ pub type AssetDownloadMap = HashMap<String, Result<Vec<u8>, DownloadAssetError>>
 /// - A map of asset names to their contents as Vec<u8>
 /// - A map of glob patterns to their expanded asset names (for callers that need this info)
 pub async fn fetch_assets_from_names_in_memory(
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_names_or_globs: &[String],
     max_concurrent_downloads: usize,
@@ -1196,15 +1188,17 @@ pub async fn fetch_assets_from_names_in_memory(
     }
 
     // Download assets in parallel
-    let asset_map =
-        download_assets_parallel_in_memory(&assets_to_fetch, max_concurrent_downloads).await?;
+    let asset_map = download_assets_parallel_in_memory(
+        asset_blob_cache.clone(),
+        &assets_to_fetch,
+        max_concurrent_downloads,
+    )
+    .await?;
     let mut asset_final_map = HashMap::new();
     for (asset_ref, download_res) in asset_map {
         asset_final_map.insert(
             asset_ref,
-            download_res.map_err(|e| match e {
-                DownloadAssetError::DataFetchFailed => GetAssetError::DataFetchFailed,
-            }),
+            download_res.map_err(|_e| GetAssetError::DataFetchFailed),
         );
     }
     for (asset_ref, e) in asset_fetch_failures {
@@ -1216,6 +1210,7 @@ pub async fn fetch_assets_from_names_in_memory(
 
 /// Downloads assets in parallel, keeping contents in memory.
 async fn download_assets_parallel_in_memory(
+    asset_blob_cache: Arc<AssetBlobCache>,
     asset_entries: &[AssetEntry],
     max_concurrent_downloads: usize,
 ) -> Result<AssetDownloadMap, String> {
@@ -1226,15 +1221,21 @@ async fn download_assets_parallel_in_memory(
     for asset_entry in asset_entries {
         let sem_clone = Arc::clone(&semaphore);
 
-        if let Some(data_url) = asset_entry.asset.url.as_ref() {
+        if let Some(data_url) = asset_entry.asset.url.as_ref()
+            && let Some(hash) = asset_entry.asset.hash.as_ref()
+        {
             let asset_entry_clone = asset_entry.clone();
             let data_url_clone = data_url.clone();
+            let hash_clone = hash.clone();
+            let asset_blob_cache_clone = asset_blob_cache.clone();
 
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 (
                     asset_entry_clone.name,
-                    download_asset(&data_url_clone).await,
+                    asset_blob_cache_clone
+                        .get_or_download(&data_url_clone, &hash_clone)
+                        .await,
                 )
             });
 

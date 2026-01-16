@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 mod ai_provider;
 mod api;
+mod asset_cache;
 mod asset_editor;
 mod asset_sync;
 mod chat;
@@ -291,10 +292,21 @@ async fn repl(
     };
     let db = Arc::new(Mutex::new(db::open_db()?));
 
+    let (asset_blob_path, disable_asset_cache) = match config::mk_asset_blob_cache() {
+        Ok(path) => (path, cfg.asset_blob_cache_size == 0),
+        Err(_e) => (config::get_asset_blob_cache_path(), true),
+    };
+    let asset_blob_cache = Arc::new(
+        asset_cache::AssetBlobCache::new(asset_blob_path, debug)
+            .with_cache_disabled(disable_asset_cache)
+            .with_max_size(cfg.asset_blob_cache_size),
+    );
+
     // Use a channel to make asset updates async
     let (update_asset_tx, update_asset_rx) =
         tokio::sync::mpsc::channel::<asset_editor::WorkerAssetMsg>(100);
     tokio::spawn(asset_editor::worker_update_asset(
+        asset_blob_cache.clone(),
         update_asset_rx,
         db.clone(),
         debug,
@@ -815,6 +827,7 @@ async fn repl(
             &mut session,
             &mut cfg,
             db.clone(),
+            asset_blob_cache.clone(),
             update_asset_tx.clone(),
             ctrlc_handler,
             bpe_tokenizer,

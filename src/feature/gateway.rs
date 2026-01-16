@@ -11,12 +11,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::api::client::HaiClient;
 use crate::api::types::asset;
+use crate::asset_cache::AssetBlobCache;
 
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
 pub type Clients = Arc<Mutex<std::collections::HashMap<ClientId, Client>>>;
 
 pub async fn launch_gateway(
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: HaiClient,
 ) -> std::io::Result<(SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
@@ -51,6 +53,8 @@ pub async fn launch_gateway(
 
     // Client ID counter
     let next_client_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+    let asset_blob_cache_cloned = asset_blob_cache.clone();
 
     tokio::spawn(async move {
         loop {
@@ -87,6 +91,7 @@ pub async fn launch_gateway(
                     let token_clone_inner = token_clone.clone();
                     let api_client_cloned = api_client.clone();
                     let client_id = next_client_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let asset_blob_cache_cloned_cloned = asset_blob_cache_cloned.clone();
 
                     tokio::spawn(async move {
                         // Wait for the first message which should contain the auth token
@@ -156,7 +161,7 @@ pub async fn launch_gateway(
                                 msg_option = ws_stream.next() => {
                                     match msg_option {
                                         Some(Ok(Message::Text(msg))) => {
-                                            handle_client_message(&api_client_cloned, &mut ws_sink, &msg).await;
+                                            handle_client_message(asset_blob_cache_cloned_cloned.clone(), &api_client_cloned, &mut ws_sink, &msg).await;
                                         }
                                         Some(Ok(Message::Binary(_data))) => {
                                             // No-op binary data for now as it's unexpected
@@ -333,6 +338,7 @@ async fn send_http_error<E: Serialize>(
 // --
 
 async fn handle_client_message(
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     ws_sink: &mut futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
@@ -364,8 +370,10 @@ async fn handle_client_message(
 
             match api_client.asset_get(asset_arg).await {
                 Ok(res) => {
-                    if let Some(data_url) = res.entry.asset.url.as_ref() {
-                        match crate::asset_editor::download_asset(data_url).await {
+                    if let Some(data_url) = res.entry.asset.url.as_ref()
+                        && let Some(hash) = res.entry.asset.hash.as_ref()
+                    {
+                        match asset_blob_cache.get_or_download(data_url, hash).await {
                             Ok(contents) => {
                                 let resp_ok: ClientMessageResponse<
                                     asset::AssetGetResult,
@@ -381,7 +389,7 @@ async fn handle_client_message(
                                     .await;
                                 let _ = ws_sink.send(Message::Binary(Bytes::from(contents))).await;
                             }
-                            Err(crate::asset_editor::DownloadAssetError::DataFetchFailed) => {
+                            Err(_) => {
                                 send_http_error::<asset::AssetGetError>(
                                     ws_sink,
                                     "Data fetch failed",

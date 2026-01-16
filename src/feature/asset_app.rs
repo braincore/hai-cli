@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use crate::api::client::HaiClient;
+use crate::asset_cache::AssetBlobCache;
 use crate::asset_editor;
 use crate::cmd_processor::{ProcessCmdResult, expand_pub_asset_name};
 use crate::session::SessionState;
 
 pub async fn launch_browser(
     session: &mut SessionState,
+    asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     is_task_mode_step: bool,
     prog_asset_name: &str,
@@ -41,7 +45,7 @@ pub async fn launch_browser(
         };
 
     if let Ok((ws_addr, clients, cancel_token, auth_token)) =
-        crate::feature::gateway::launch_gateway(api_client.clone()).await
+        crate::feature::gateway::launch_gateway(asset_blob_cache.clone(), api_client.clone()).await
     {
         let sep = if asset_prog_url.contains('?') {
             '&'

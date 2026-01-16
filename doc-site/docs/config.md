@@ -82,6 +82,23 @@ default_ai_temperature_to_absolute_zero = false
 
 Alternatively, you can use the `/temperature` command in the REPL.
 
+### Asset cache size
+
+Assets are cached locally to speed up repeated operations when there have been no
+server-side changes. The cache size is configured in bytes with the
+`asset_blob_cache_size` key. The default is 1 GiB. Set the value to `0` to
+disable the cache.
+
+```toml
+asset_blob_cache_size = 1073741824  # 1 GiB
+```
+
+!!!tip "When to disable"
+    Consider disabling the cache if:
+    
+    - You need to conserve local disk space
+    - You want to keep sensitive assets off your filesystem
+
 ## Environment Variables
 
 The following environment variables are recognized:
