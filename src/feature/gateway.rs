@@ -135,7 +135,9 @@ pub async fn launch_gateway(
 
                         // Send acknowledgment that auth succeeded
                         let _ = ws_sink
-                            .send(Message::Text(Utf8Bytes::from(&serde_json::to_string(&ClientMessageAuthResponse::Ok).unwrap())))
+                            .send(Message::Text(Utf8Bytes::from(&serde_json::to_string(&ClientMessageAuthResponse::Ok {
+                                version: env!("CARGO_PKG_VERSION").into(),
+                            }).unwrap())))
                             .await;
 
                         // Ping interval to keep connection alive
@@ -221,7 +223,7 @@ struct ClientMessageAuthRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessageAuthResponse {
-    Ok,
+    Ok { version: String },
     BadToken,
     BadRequest,
 }
