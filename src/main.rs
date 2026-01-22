@@ -27,6 +27,7 @@ mod clipboard;
 mod cmd;
 mod cmd_processor;
 mod config;
+mod crypt;
 mod ctrlc_handler;
 mod db;
 mod feature;
@@ -373,6 +374,10 @@ async fn repl(
         "/asset-folder-collapse",
         "/asset-folder-expand",
         "/asset-folder-list",
+        "/asset-crypt-setup",
+        "/asset-crypt-recover",
+        "/asset-encrypt",
+        "/asset-decrypt",
         "/email",
         "/fns",
         "/std",

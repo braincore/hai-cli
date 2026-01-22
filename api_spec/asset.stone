@@ -64,6 +64,10 @@ struct AssetMetadataInfo
     content_type String?
         "If the metadata specified a `content_type` key with value having fewer
         than 64-chars, this is a reproduction of it."
+    content_encrypted ContentEncryptedInfo?
+        "Set if the metadata specified an `encrypted` key."
+        struct
+            "Empty placeholder for future proofing."
 
 union AssetPutError
     bad_name
