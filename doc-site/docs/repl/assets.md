@@ -287,13 +287,13 @@ More examples:
 ```
 
 !!!warning "Glob Limitations"
-Glob patterns are only supported for input assets. Using a glob pattern
-with output redirections (`>` or `>>`) will result in an error.
+    Glob patterns are only supported for input assets. Using a glob pattern
+    with output redirections (`>` or `>>`) will result in an error.
 
 !!!warning "Limitations"
-The implementation uses simple string substitution to replace `@asset`
-markers with temporary files. Complex shell operations involving quotes or
-escapes around asset references may not work as expected.
+    The implementation uses simple string substitution to replace `@asset`
+    markers with temporary files. Complex shell operations involving quotes or
+    escapes around asset references may not work as expected.
 
 ## Write conflicts
 
@@ -320,9 +320,6 @@ Each asset can have a JSON object associated with it to store metadata:
 
 If the `title` metadata key is set, it's shown in `/asset-list` and
 `/asset-search` in `[]` brackets.
-
-!!!question "🙋 Help Wanted"
-    Interested in using metadata to make asset encryption the default way of life? All ideas welcome. Please reach out or open an issue.
 
 ## Asset Push & ACL
 
@@ -426,3 +423,38 @@ Each account gets 1GB of asset storage.
     removed, the total size of all of its revisions is removed from your quota.
 
 To increase your account's storage quota, see `/account-subscribe`.
+
+## End-to-end encryption
+
+!!!warning Experimental
+    The feature is stable but under active development.
+
+End-to-end lets you store assets with full confidence that only you have access
+to the data. Even a full compromise of hai's server-side asset storage does not
+change this.
+
+To use it:
+
+1. `/asset-crypt-setup` - set up an encryption key with password
+2. `/asset vault/<name>` - create private assets with the `vault/` prefix
+
+Commands that use encrypted assets will transparently decrypt and encrypt the
+data.
+
+When listing assets, the lock 🔒 symbol indicates that an asset is encrypted.
+
+!!!warning Asset name and metadata are unencrypted
+    Note that markdown documents have titles automatically extracted and added
+    to metadata under the `title` key. The advantage of this is that your
+    encrypted documents will still be searchable by their title.
+
+### Bleeding edge
+
+If you'd like to encrypt private assets outside of `vault`, use:
+
+```
+/asset-new(encrypt) <name>
+```
+
+The plan is to make encryption the default for all private assets once this
+feature graduates from experimental status.

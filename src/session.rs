@@ -9,6 +9,7 @@ use crate::{
     api::client::HaiClient,
     chat, cmd, config,
     db::{self, LogEntryRetentionPolicy},
+    feature::asset_keyring::AssetKeyring,
     tool,
 };
 
@@ -92,6 +93,8 @@ pub struct SessionState {
     pub mask_secrets: bool,
     /// Information about logged-in account
     pub account: Option<db::Account>,
+    /// Keyring for asset decryption
+    pub asset_keyring: Arc<Mutex<AssetKeyring>>,
     /// Whether the session is in incognito mode (history-less)
     pub incognito: bool,
     /// The last tool that was used (for ! shortcut)

@@ -2,8 +2,9 @@ use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};
@@ -12,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::api::client::HaiClient;
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
+use crate::{asset_reader, feature::asset_crypt};
 
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
@@ -19,6 +21,7 @@ pub type Clients = Arc<Mutex<std::collections::HashMap<ClientId, Client>>>;
 
 pub async fn launch_gateway(
     asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
 ) -> std::io::Result<(SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
@@ -60,7 +63,7 @@ pub async fn launch_gateway(
         loop {
             tokio::select! {
                 _ = cancel_token_child.cancelled() => {
-                    let mut clients_guard = clients_clone.lock().unwrap();
+                    let mut clients_guard = clients_clone.lock().await;
                     for (_id, client) in clients_guard.drain() {
                         drop(client);
                     }
@@ -92,6 +95,7 @@ pub async fn launch_gateway(
                     let api_client_cloned = api_client.clone();
                     let client_id = next_client_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let asset_blob_cache_cloned_cloned = asset_blob_cache_cloned.clone();
+                    let asset_keyring_cloned = asset_keyring.clone();
 
                     tokio::spawn(async move {
                         // Wait for the first message which should contain the auth token
@@ -129,7 +133,7 @@ pub async fn launch_gateway(
 
                         // Client is authenticated, create channel and add to clients list
                         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
-                        clients_clone_inner.lock().unwrap().insert(client_id, tx);
+                        clients_clone_inner.lock().await.insert(client_id, tx);
 
                         let (mut ws_sink, mut ws_stream) = ws_stream.split();
 
@@ -163,7 +167,7 @@ pub async fn launch_gateway(
                                 msg_option = ws_stream.next() => {
                                     match msg_option {
                                         Some(Ok(Message::Text(msg))) => {
-                                            handle_client_message(asset_blob_cache_cloned_cloned.clone(), &api_client_cloned, &mut ws_sink, &msg).await;
+                                            handle_client_message(asset_blob_cache_cloned_cloned.clone(), asset_keyring_cloned.clone(), &api_client_cloned, &mut ws_sink, &msg).await;
                                         }
                                         Some(Ok(Message::Binary(_data))) => {
                                             // No-op binary data for now as it's unexpected
@@ -203,7 +207,7 @@ pub async fn launch_gateway(
                         }
 
                         // Remove client from list on disconnect
-                        clients_clone_inner.lock().unwrap().remove(&client_id);
+                        clients_clone_inner.lock().await.remove(&client_id);
                     });
                 }
             }
@@ -341,6 +345,7 @@ async fn send_http_error<E: Serialize>(
 
 async fn handle_client_message(
     asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
     ws_sink: &mut futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
@@ -370,35 +375,56 @@ async fn handle_client_message(
                 }
             };
 
+            let (data_contents, md_contents, _asset_entry) =
+                match asset_reader::get_asset_and_metadata(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &asset_arg.name,
+                    false,
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_) => {
+                        send_http_error::<asset::AssetGetError>(ws_sink, "Data fetch failed").await;
+                        return;
+                    }
+                };
+            let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                &api_client,
+                &data_contents,
+                md_contents.as_deref(),
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to decrypt: {}", e);
+                    return;
+                }
+            };
             match api_client.asset_get(asset_arg).await {
                 Ok(res) => {
-                    if let Some(data_url) = res.entry.asset.url.as_ref()
-                        && let Some(hash) = res.entry.asset.hash.as_ref()
+                    if let Some(_data_url) = res.entry.asset.url.as_ref()
+                        && let Some(_hash) = res.entry.asset.hash.as_ref()
                     {
-                        match asset_blob_cache.get_or_download(data_url, hash).await {
-                            Ok(contents) => {
-                                let resp_ok: ClientMessageResponse<
-                                    asset::AssetGetResult,
-                                    asset::AssetGetError,
-                                > = ClientMessageResponse::Ok {
-                                    result: res,
-                                    payload_count: 1,
-                                };
-                                let json_string = serde_json::to_string(&resp_ok)
-                                    .expect("Failed to re-serialize response");
-                                let _ = ws_sink
-                                    .send(Message::Text(Utf8Bytes::from(&json_string)))
-                                    .await;
-                                let _ = ws_sink.send(Message::Binary(Bytes::from(contents))).await;
-                            }
-                            Err(_) => {
-                                send_http_error::<asset::AssetGetError>(
-                                    ws_sink,
-                                    "Data fetch failed",
-                                )
-                                .await;
-                            }
-                        }
+                        let resp_ok: ClientMessageResponse<
+                            asset::AssetGetResult,
+                            asset::AssetGetError,
+                        > = ClientMessageResponse::Ok {
+                            result: res,
+                            payload_count: 1,
+                        };
+                        let json_string = serde_json::to_string(&resp_ok)
+                            .expect("Failed to re-serialize response");
+                        let _ = ws_sink
+                            .send(Message::Text(Utf8Bytes::from(&json_string)))
+                            .await;
+                        let _ = ws_sink
+                            .send(Message::Binary(Bytes::from(decrypted_asset_contents)))
+                            .await;
                     } else {
                         // Asset with no contents
                         send_response::<_, asset::AssetGetError>(ws_sink, Ok(res), 0).await;

@@ -1,39 +1,32 @@
 use futures::future::join_all;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::fs::{File, create_dir_all};
-use tokio::io::AsyncWriteExt;
+use tokio::fs::create_dir_all;
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::{
     self,
     client::HaiClient,
     types::asset::{
-        AssetCreatedBy, AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg,
-        AssetEntryOp, AssetMetadataInfo, AssetRevision,
+        AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg, AssetEntryOp,
+        AssetInfo, AssetMetadataInfo, AssetRevision,
     },
 };
+use crate::asset_cache::AssetBlobCache;
+use crate::asset_reader;
 use crate::config;
-
-struct DownloadTask {
-    entry_name: String,
-    url: String,
-    task_type: DownloadTaskType,
-}
-
-enum DownloadTaskType {
-    Data,
-    Metadata,
-}
+use crate::crypt;
+use crate::feature::{asset_crypt, asset_keyring::AssetKeyring};
 
 /// Current limitations:
 /// - No cursor resumption
-/// - Does not sync asset metadata
 pub async fn sync_prefix(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
     prefix: &str,
     target_path: &str,
+    max_concurrent_downloads: Option<usize>,
     debug: bool,
 ) -> Result<(), ()> {
     //
@@ -112,7 +105,19 @@ pub async fn sync_prefix(
         };
     }
 
-    sync_entries(entries.clone(), &folder_prefix, target_path, debug).await
+    println!("Syncing {} entries...", entries.len());
+
+    let _ = sync_entries(
+        asset_blob_cache,
+        asset_keyring,
+        api_client,
+        AssetSyncSource::AssetEntry(entries.clone()),
+        Some((&folder_prefix, target_path)),
+        max_concurrent_downloads,
+        debug,
+    )
+    .await;
+    Ok(())
 }
 
 /// When catching up to latest changes in the sync index, fast-forwarding lets
@@ -134,401 +139,6 @@ fn fast_forward_entries(entries: Vec<AssetEntry>) -> Vec<AssetEntry> {
         .filter(|(index, entry)| last_indices.get(&entry.name) == Some(index))
         .map(|(_, entry)| entry)
         .collect()
-}
-
-async fn sync_entries(
-    entries: Vec<AssetEntry>,
-    folder_prefix: &str,
-    target_path: &str,
-    debug: bool,
-) -> Result<(), ()> {
-    let ff_entries = fast_forward_entries(entries);
-
-    // Prepare download tasks
-    let mut entry_with_tasks = vec![];
-
-    for entry in ff_entries {
-        // Trim the folder prefix from the entry name
-        let relative_path = match entry.name.strip_prefix(folder_prefix) {
-            Some(path) => path,
-            None => &entry.name, // If for some reason it doesn't have the prefix
-        };
-
-        // Construct the full target path for the data asset
-        let target_data_file_path = format!("{}/{}", target_path, relative_path);
-
-        if matches!(entry.op, AssetEntryOp::Delete) {
-            entry_with_tasks.push((entry, target_data_file_path, None));
-            continue;
-        }
-
-        let expected_data_hash = entry.asset.hash.clone().unwrap_or("".to_string());
-
-        // Check if file already exists and has the correct hash
-        let target_data_file = std::path::Path::new(&target_data_file_path);
-        let download_data = if target_data_file.exists() && !expected_data_hash.is_empty() {
-            match get_file_hash(&target_data_file_path).await {
-                Ok(data_file_hash) => {
-                    // Convert the expected hash from hex to bytes
-                    match hex_to_bytes(&expected_data_hash) {
-                        Ok(decoded_data_hash) => {
-                            if data_file_hash == decoded_data_hash {
-                                if debug {
-                                    let _ = config::write_to_debug_log(format!(
-                                        "Skipping (hash match): {}\n",
-                                        target_data_file_path
-                                    ));
-                                }
-                                false
-                            } else {
-                                if debug {
-                                    let _ = config::write_to_debug_log(format!(
-                                        "Hash mismatch, re-downloading: {}\n",
-                                        target_data_file_path
-                                    ));
-                                }
-                                true
-                            }
-                        }
-                        Err(e) => {
-                            if debug {
-                                let _ = config::write_to_debug_log(format!(
-                                    "warning: failed to decode hash for '{}': {}\n",
-                                    entry.name, e
-                                ));
-                            }
-                            true
-                        }
-                    }
-                }
-                Err(e) => {
-                    if debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "warning: failed to calculate hash for existing file '{}': {}\n",
-                            entry.name, e
-                        ));
-                    }
-                    true
-                }
-            }
-        } else {
-            true
-        };
-
-        let target_metadata_file_path = format!("{}/{}.metadata", target_path, relative_path);
-        let target_metadata_file = std::path::Path::new(&target_metadata_file_path);
-
-        let expected_metadata_hash = entry
-            .metadata
-            .as_ref()
-            .and_then(|md| md.hash.clone())
-            .unwrap_or("".to_string());
-
-        let download_metadata =
-            if target_metadata_file.exists() && !expected_metadata_hash.is_empty() {
-                match get_file_hash(&target_metadata_file_path).await {
-                    Ok(metadata_file_hash) => {
-                        // Convert the expected hash from hex to bytes
-                        match hex_to_bytes(&expected_metadata_hash) {
-                            Ok(decoded_metadata_hash) => {
-                                if metadata_file_hash == decoded_metadata_hash {
-                                    if debug {
-                                        let _ = config::write_to_debug_log(format!(
-                                            "Skipping (hash match): {}\n",
-                                            target_metadata_file_path
-                                        ));
-                                    }
-                                    false
-                                } else {
-                                    if debug {
-                                        let _ = config::write_to_debug_log(format!(
-                                            "Hash mismatch, re-downloading: {}\n",
-                                            target_metadata_file_path
-                                        ));
-                                    }
-                                    true
-                                }
-                            }
-                            Err(e) => {
-                                if debug {
-                                    let _ = config::write_to_debug_log(format!(
-                                        "warning: failed to decode hash for '{}' metadata: {}\n",
-                                        entry.name, e
-                                    ));
-                                }
-                                true
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if debug {
-                            let _ = config::write_to_debug_log(format!(
-                                "warning: failed to calculate hash for existing file '{}': {}\n",
-                                entry.name, e
-                            ));
-                        }
-                        true
-                    }
-                }
-            } else {
-                true
-            };
-
-        if !download_data && !download_metadata {
-            // Skip this entry if no download is needed
-            if debug {
-                let _ = config::write_to_debug_log(format!(
-                    "Skipping (no download needed): {}\n",
-                    target_data_file_path
-                ));
-            }
-            continue;
-        }
-
-        // Ensure the parent directory exists
-        let target_data_file = std::path::Path::new(&target_data_file_path);
-        if let Some(parent) = target_data_file.parent()
-            && !parent.exists()
-        {
-            match std::fs::create_dir_all(parent) {
-                Ok(_) => {
-                    if debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "Created directory: {}\n",
-                            parent.display()
-                        ));
-                    }
-                }
-                Err(e) => {
-                    eprintln!(
-                        "error: failed to create directory '{}': {}",
-                        parent.display(),
-                        e
-                    );
-                    continue; // Skip this file but continue with others
-                }
-            }
-        }
-
-        if download_data && let Some(data_url) = entry.asset.url.as_ref() {
-            let data_download_task = Some(DownloadTask {
-                entry_name: entry.name.clone(),
-                url: data_url.clone(),
-                task_type: DownloadTaskType::Data,
-            });
-            entry_with_tasks.push((entry.clone(), target_data_file_path, data_download_task));
-        }
-        if download_metadata
-            && let Some(metadata_info) = entry.metadata.as_ref()
-            && let Some(metadata_url) = metadata_info.url.as_ref()
-        {
-            let metadata_download_task = Some(DownloadTask {
-                entry_name: entry.name.clone(),
-                url: metadata_url.clone(),
-                task_type: DownloadTaskType::Metadata,
-            });
-            entry_with_tasks.push((entry, target_metadata_file_path, metadata_download_task));
-        }
-    }
-
-    let max_concurrent_downloads = 10;
-
-    println!(
-        "Starting {} downloads with max {} concurrent...",
-        entry_with_tasks.len(),
-        max_concurrent_downloads
-    );
-    if debug {
-        let _ = config::write_to_debug_log(format!(
-            "Starting {} downloads with max {} concurrent...\n",
-            entry_with_tasks.len(),
-            max_concurrent_downloads
-        ));
-    }
-
-    // Create a semaphore with max_concurrent_downloads
-    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
-    let mut handles = Vec::new();
-
-    for (entry, target_path, task) in entry_with_tasks {
-        if let Some(task) = task {
-            let entry_clone = entry.clone();
-            let entry_name = task.entry_name.clone();
-            let url = task.url.clone();
-            let target_path_clone = target_path.clone();
-            let sem_clone = Arc::clone(&semaphore);
-            let type_str = match task.task_type {
-                DownloadTaskType::Data => "data",
-                DownloadTaskType::Metadata => "metadata",
-            };
-
-            // Create a future that acquires a semaphore before downloading to
-            // cap the number of simultaneous downloads.
-            let handle = tokio::spawn(async move {
-                let _permit = sem_clone.acquire().await.unwrap();
-
-                println!(
-                    "Downloading: {} ({}) -> {}",
-                    entry_name, type_str, target_path_clone
-                );
-                if debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "Downloading: {} ({}) -> {}\n",
-                        entry_name, type_str, target_path_clone
-                    ));
-                }
-                let result = download_file(&url, &target_path_clone).await;
-                if result.is_ok() {
-                    if xattr_set(
-                        &target_path_clone,
-                        "user.hai.entry_id",
-                        &entry_clone.entry_id,
-                    )
-                    .is_err()
-                    {
-                        eprintln!("failed to set entry_id xattr");
-                    }
-                    if xattr_set(
-                        &target_path_clone,
-                        "user.hai.seq_id",
-                        &entry_clone.seq_id.to_string(),
-                    )
-                    .is_err()
-                    {
-                        eprintln!("failed to set seq_id xattr");
-                    }
-                    if matches!(task.task_type, DownloadTaskType::Data) {
-                        if xattr_set(
-                            &target_path_clone,
-                            "user.hai.rev_id",
-                            &entry_clone.asset.rev_id,
-                        )
-                        .is_err()
-                        {
-                            eprintln!("failed to set rev_id xattr");
-                        }
-                        if let Some(hash) = entry_clone.asset.hash.as_ref() {
-                            //
-                            // Write the file hash and the mtime of the file into
-                            // xattrs to make change detection easier.
-                            //
-                            let metadata = std::fs::metadata(&target_path_clone)
-                                .expect("failed to read file metadata");
-                            if let Ok(modified_time) = metadata.modified() {
-                                let mtime_ts = modified_time
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .expect("Time went backwards")
-                                    .as_secs();
-                                if xattr_set(
-                                    &target_path_clone,
-                                    "user.hai.hash_mtime",
-                                    &mtime_ts.to_string(),
-                                )
-                                .is_err()
-                                {
-                                    eprintln!("failed to set hash_mtime xattr");
-                                }
-                            }
-
-                            if xattr_set(&target_path_clone, "user.hai.hash", hash).is_err() {
-                                eprintln!("failed to set hash xattr");
-                            }
-                        }
-                    } else if matches!(task.task_type, DownloadTaskType::Metadata)
-                        && let Some(AssetMetadataInfo {
-                            hash: Some(hash),
-                            rev_id,
-                            ..
-                        }) = entry_clone.metadata
-                    {
-                        if xattr_set(&target_path_clone, "user.hai.is_metadata", "true").is_err() {
-                            eprintln!("failed to set is_metadata xattr");
-                        }
-                        if xattr_set(&target_path_clone, "user.hai.rev_id", &rev_id).is_err() {
-                            eprintln!("failed to set rev_id xattr");
-                        }
-                        //
-                        // Write the file hash and the mtime of the file into
-                        // xattrs to make change detection easier.
-                        //
-                        let metadata = std::fs::metadata(&target_path_clone)
-                            .expect("failed to read file metadata");
-                        if let Ok(modified_time) = metadata.modified() {
-                            let mtime_ts = modified_time
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .expect("Time went backwards")
-                                .as_secs();
-                            if xattr_set(
-                                &target_path_clone,
-                                "user.hai.hash_mtime",
-                                &mtime_ts.to_string(),
-                            )
-                            .is_err()
-                            {
-                                eprintln!("failed to set hash_mtime xattr");
-                            }
-                        }
-
-                        if xattr_set(&target_path_clone, "user.hai.hash", &hash).is_err() {
-                            eprintln!("failed to set hash xattr");
-                        }
-                    }
-                }
-                (entry_name, target_path_clone, result)
-            });
-
-            handles.push(handle);
-        } else if matches!(entry.op, AssetEntryOp::Delete) {
-            let entry_name = entry.name.clone();
-            let target_path_clone = target_path.clone();
-            let handle = tokio::spawn(async move {
-                if debug {
-                    let _ =
-                        config::write_to_debug_log(format!("Deleting: {}\n", target_path_clone));
-                }
-                let result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
-                    tokio::fs::remove_file(&target_path_clone)
-                        .await
-                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
-                (entry_name, target_path_clone, result)
-            });
-
-            handles.push(handle);
-        }
-    }
-
-    #[allow(clippy::type_complexity)]
-    // (entry name, target path, result)
-    let mut results: Vec<(
-        String,
-        String,
-        Result<(), Box<dyn std::error::Error + Send + Sync>>,
-    )> = Vec::new();
-
-    // Wait for all downloads to complete
-    for handle in join_all(handles).await {
-        // Unwrap the JoinHandle result to get the inner result
-        if let Ok(result) = handle {
-            results.push(result);
-        } else {
-            // Handle the case where the task panicked
-            eprintln!("A download task panicked");
-        }
-    }
-
-    // Process results in order
-    for result in results {
-        match result.2 {
-            Ok(_) => {
-                if debug {
-                    let _ = config::write_to_debug_log(format!("Saved: {}\n", result.1));
-                }
-            }
-            Err(e) => eprintln!("error: failed to download '{}': {}", result.0, e),
-        }
-    }
-
-    Ok(())
 }
 
 /// Extracts the folder prefix from a given prefix string.
@@ -558,28 +168,16 @@ fn get_folder_prefix(prefix: &str) -> String {
     }
 }
 
-/// Helper function to download a file directly to disk to minimize mem usage.
-pub async fn download_file(
-    url: &str,
-    path: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut response = reqwest::get(url).await?;
-    if !response.status().is_success() {
-        return Err(format!("Failed to download: HTTP status {}", response.status()).into());
-    }
-    let mut file = File::create(path).await?;
-    while let Some(chunk) = response.chunk().await? {
-        file.write_all(&chunk).await?;
-    }
-    Ok(())
-}
-
 // --
 
+/// Helper function to get file hash either from xattrs or calculating it.
+///
+/// Defaults to xattrs if present and the mtime matches since it doesn't
+/// require expensive hashing. However, this makes it potentially unreliable.
 async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
-    let metadata = std::fs::metadata(file_path).expect("failed to read file metadata");
-    if let Ok(modified_time) = metadata.modified() {
-        let mtime_ts = modified_time
+    let fs_metadata = std::fs::metadata(file_path)?;
+    if let Ok(fs_modified_time) = fs_metadata.modified() {
+        let mtime_ts = fs_modified_time
             .duration_since(std::time::UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs();
@@ -594,8 +192,6 @@ async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
                 None
             };
         if Some(mtime_ts) == xattr_mtime_ts {
-            // If the filesystem doesn't show any modifications since the file
-            // was tagged, use the hash set in xattrs.
             if let Some(xattr_hash_bytes) = xattr_get(file_path, "user.hai.hash")
                 && let Ok(xattr_hash_hex_str) = std::str::from_utf8(&xattr_hash_bytes)
             {
@@ -710,7 +306,6 @@ fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
 
 #[cfg(target_os = "windows")]
 fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
-    //use std::fs::{File, OpenOptions};
     use serde_json::{Map, Value};
     use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -746,81 +341,549 @@ fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
 
 // --
 
-pub async fn download_revision_to_temp(
-    asset_name: &str,
-    revision: &AssetRevision,
-    seen_revisions_map_mutex: Arc<Mutex<HashMap<String, std::path::PathBuf>>>,
-) -> (
-    Option<String>,
-    Option<(tempfile::NamedTempFile, std::path::PathBuf)>,
-) {
-    let mut msgs: Vec<String> = vec![];
-    let mut temp_file = None;
-    if let Some(data_url) = revision.asset.url.as_ref() {
-        let seen_revisions_map = seen_revisions_map_mutex.lock().await;
-        if let Some(existing_data_temp_file_path) = seen_revisions_map.get(&revision.asset.rev_id) {
-            msgs.push(format!(
-                "Data of '{}' copied to '{}'",
-                asset_name,
-                existing_data_temp_file_path.display()
-            ));
+struct AssetEntryDownloadTask {
+    source: AssetSourceMinimal,
+    final_path: Option<String>,
+}
+
+pub enum AssetSyncSource {
+    AssetEntry(Vec<AssetEntry>),
+    AssetRevision((String, Vec<AssetRevision>)), // (asset_name, revisions)
+}
+
+pub struct AssetSourceMinimal {
+    pub asset: AssetInfo,
+    pub asset_name: String,
+    pub op: AssetEntryOp,
+    pub metadata: Option<AssetMetadataInfo>,
+    pub iter_info: Option<(String, i64)>, // (entry_id, seq_id)
+}
+
+/// Syncs sources (asset-entries or revisions) to local system.
+///
+/// It's a bit bloated because it's designed to handle syncing down revisions
+/// of a single asset as well as syncing down all changes to a folder.
+///
+/// Features:
+/// - Uses asset blob cache to avoid re-downloading blobs
+/// - If `persist` set, checks if destination already up-to-date. If so, does
+///   not re-download.
+/// - If `persist` set, supports deletion operations.
+/// - Downloads in parallel.
+///
+/// # Returns
+///
+/// Only returns temp files if `persist` is None. When temp files go out of
+/// scope, they will be automatically removed.
+pub async fn sync_entries(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    sync_source: AssetSyncSource,
+    persist: Option<(&str, &str)>, // (folder_prefix, target_path)
+    max_concurrent_downloads: Option<usize>,
+    debug: bool,
+) -> Result<
+    Vec<(
+        AssetSourceMinimal,
+        Option<tempfile::NamedTempFile>,
+        Option<tempfile::NamedTempFile>,
+    )>,
+    (),
+> {
+    let max_concurrent_downloads = max_concurrent_downloads.unwrap_or(10);
+    let sources = match sync_source {
+        AssetSyncSource::AssetEntry(entries) => {
+            let ff_entries = fast_forward_entries(entries);
+            ff_entries
+                .into_iter()
+                .map(|entry| AssetSourceMinimal {
+                    asset: entry.asset,
+                    asset_name: entry.name,
+                    op: entry.op,
+                    metadata: entry.metadata,
+                    iter_info: Some((entry.entry_id, entry.seq_id)),
+                })
+                .collect::<Vec<AssetSourceMinimal>>()
+        }
+        AssetSyncSource::AssetRevision((asset_name, revisions)) => revisions
+            .into_iter()
+            .map(|rev| AssetSourceMinimal {
+                asset: rev.asset,
+                asset_name: asset_name.clone(),
+                op: rev.op,
+                metadata: rev.metadata,
+                iter_info: None,
+            })
+            .collect::<Vec<AssetSourceMinimal>>(),
+    };
+
+    let mut entries_to_delete = vec![];
+    let mut entries_with_dl_tasks = vec![];
+
+    for source in sources {
+        if matches!(source.op, AssetEntryOp::Delete) {
+            entries_to_delete.push(source);
+            continue;
+        }
+
+        let final_path = if let Some((folder_prefix, target_path)) = persist {
+            // Trim the folder prefix from the entry name
+            let relative_path = match source.asset_name.strip_prefix(folder_prefix) {
+                Some(path) => path,
+                None => &source.asset_name, // If for some reason it doesn't have the prefix
+            };
+
+            // Construct the full target path for the data asset
+            Some(format!("{}/{}", target_path, relative_path))
         } else {
-            // Drop lock before longer download operation
-            drop(seen_revisions_map);
-            match crate::asset_reader::create_empty_temp_file(
-                asset_name,
-                Some(&revision.asset.rev_id),
-            ) {
-                Ok((data_temp_file, data_temp_file_path)) => {
-                    match crate::asset_sync::download_file(
-                        data_url,
-                        &data_temp_file_path.to_string_lossy(),
+            None
+        };
+
+        entries_with_dl_tasks.push(AssetEntryDownloadTask { source, final_path });
+    }
+
+    // Create a semaphore with max_concurrent_downloads
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_downloads));
+    let mut handles = Vec::new();
+
+    for dl_task in entries_with_dl_tasks {
+        let asset_blob_cache_clone = asset_blob_cache.clone();
+        let asset_keyring_clone = asset_keyring.clone();
+        let api_client_clone = api_client.clone();
+        let sem_clone = Arc::clone(&semaphore);
+
+        // Create a future that acquires a semaphore before downloading to
+        // cap the number of simultaneous downloads.
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire().await.unwrap();
+
+            let asset_blob_cache = asset_blob_cache_clone.clone();
+            let asset_keyring = asset_keyring_clone;
+            let api_client = api_client_clone;
+
+            let source = dl_task.source;
+            let final_path = dl_task.final_path;
+            let metadata_final_path = final_path.as_ref().map(|p| format!("{}.metadata", p));
+
+            if matches!(source.op, AssetEntryOp::Delete)
+                && let Some(asset_final_path) = final_path.as_deref()
+            {
+                // Handle deletion when persisting
+                if debug {
+                    let _ = config::write_to_debug_log(format!("Deleting: {}\n", asset_final_path));
+                }
+                let _ = tokio::fs::remove_file(asset_final_path).await;
+                if let Some(metadata_final_path) = metadata_final_path.as_deref() {
+                    if debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "Deleting: {}\n",
+                            metadata_final_path
+                        ));
+                    }
+                    let _ = tokio::fs::remove_file(metadata_final_path).await;
+                }
+                return Ok((source, None, None));
+            }
+
+            let metadata_already_uptodate = if let Some(metadata_final_path) = &metadata_final_path
+                && let Some(metadata) = source.metadata.as_ref()
+                && let Some(metadata_hash) = metadata.hash.as_deref()
+            {
+                match get_file_hash(metadata_final_path).await {
+                    Ok(existing_hash) => {
+                        if let Ok(expected_hash) = hex_to_bytes(metadata_hash)
+                            && existing_hash == expected_hash
+                        {
+                            if debug {
+                                let _ = config::write_to_debug_log(format!(
+                                    "sync: metadata for {} already up to date at '{}'\n",
+                                    source.asset_name, metadata_final_path
+                                ));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Err(_) => {
+                        // Ignore error and proceed with recreating it
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            let metadata_existing_contents = if metadata_already_uptodate {
+                Some(
+                    tokio::fs::read(metadata_final_path.as_ref().unwrap())
+                        .await
+                        .expect("failed to read existing metadata file"),
+                )
+            } else {
+                None
+            };
+
+            let (metadata_contents_temp_file, metadata_contents) =
+                if let Some(metadata_existing_contents) = metadata_existing_contents {
+                    (None, Some(metadata_existing_contents))
+                } else if let Some(metadata) = source.metadata.as_ref()
+                    && let Some(metadata_url) = metadata.url.as_deref()
+                    && let Some(metadata_hash) = metadata.hash.as_deref()
+                {
+                    let metadata_contents_temp_file = asset_reader::create_empty_temp_file(
+                        &source.asset_name,
+                        Some(&metadata.rev_id),
+                        Some(".metadata"),
+                    )
+                    .expect("failed to create temp data file");
+                    let metadata_contents_temp_file = match asset_blob_cache
+                        .get_or_download_to_tempfile(
+                            &metadata_url,
+                            metadata_hash,
+                            metadata_contents_temp_file,
+                        )
+                        .await
+                    {
+                        Ok(temp_file) => temp_file,
+                        Err(e) => {
+                            eprintln!(
+                                "error: failed to download metadata for '{}': {}",
+                                source.asset_name, e
+                            );
+                            return Err(e);
+                        }
+                    };
+                    let metadata_contents_temp_path =
+                        metadata_contents_temp_file.path().to_path_buf();
+                    match tokio::fs::read(&metadata_contents_temp_path).await {
+                        Ok(metadata_contents) => {
+                            (Some(metadata_contents_temp_file), Some(metadata_contents))
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "error: failed to read metadata temp file for '{}': {}",
+                                source.asset_name, e
+                            );
+                            (None, None)
+                        }
+                    }
+                } else {
+                    (None, None)
+                };
+
+            let asset_already_uptodate = if let Some(final_path) = &final_path
+                && let Some(asset_hash) = source.asset.hash.as_deref()
+            {
+                match get_file_hash(final_path).await {
+                    Ok(existing_hash) => {
+                        if let Ok(expected_hash) = hex_to_bytes(asset_hash)
+                            && existing_hash == expected_hash
+                        {
+                            let _ = config::write_to_debug_log(format!(
+                                "sync: asset data for {} already up to date at '{}'\n",
+                                source.asset_name, final_path
+                            ));
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Err(_) => {
+                        // Ignore error and proceed with recreating it
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+
+            let data_contents_temp_file = if asset_already_uptodate {
+                None
+            } else if let Some(data_url) = source.asset.url.as_deref()
+                && let Some(data_hash) = source.asset.hash.as_deref()
+            {
+                let data_contents_temp_file = asset_reader::create_empty_temp_file(
+                    &source.asset_name,
+                    Some(&source.asset.rev_id),
+                    None,
+                )
+                .expect("failed to create temp data file");
+                let data_contents_temp_file = match asset_blob_cache
+                    .get_or_download_to_tempfile(&data_url, data_hash, data_contents_temp_file)
+                    .await
+                {
+                    Ok(temp_file) => temp_file,
+                    Err(e) => {
+                        eprintln!("error: failed to download '{}': {}", source.asset_name, e);
+                        return Err(e);
+                    }
+                };
+                Some(data_contents_temp_file)
+            } else {
+                None
+            };
+
+            let (decrypted_data_contents_temp_file, decrypted_hash) =
+                if let Some(data_contents_temp_file) = data_contents_temp_file.as_ref()
+                    && let Some(metadata_contents) = metadata_contents.as_deref()
+                    && let Some((enc_aes_key_hex, enc_key_id)) =
+                        asset_crypt::parse_metadata_for_encryption_info(&metadata_contents)
+                {
+                    let in_path = data_contents_temp_file.path();
+                    let decrypted_asset_contents_temp_file =
+                        asset_reader::create_empty_temp_file(&source.asset_name, None, None)
+                            .expect("failed to create temp data file");
+                    let decrypted_asset_contents_temp_path =
+                        decrypted_asset_contents_temp_file.path();
+
+                    match asset_crypt::get_symmetric_key_ez(
+                        asset_blob_cache,
+                        asset_keyring,
+                        &api_client,
+                        &enc_aes_key_hex,
+                        &enc_key_id,
                     )
                     .await
                     {
-                        Ok(_) => {
-                            msgs.push(format!(
-                                "Revision '{}' copied to '{}'",
-                                revision.asset.rev_id,
-                                data_temp_file_path.display()
-                            ));
-                            if let AssetCreatedBy::User(user) = &revision.asset.created_by {
-                                msgs.push(format!("    By: {}", user.username));
-                            }
-                            let action = match revision.op {
-                                AssetEntryOp::Add => "add",
-                                AssetEntryOp::Push => "push",
-                                AssetEntryOp::Delete => "delete",
-                                AssetEntryOp::Edit => "edit",
-                                AssetEntryOp::Fork => "fork",
-                                AssetEntryOp::Metadata => "metadata",
-                                AssetEntryOp::Other => "other",
-                            };
-                            msgs.push(format!("    Op: {}", action));
-
-                            temp_file = Some((data_temp_file, data_temp_file_path.clone()));
-                            let mut seen_revisions_map = seen_revisions_map_mutex.lock().await;
-                            seen_revisions_map
-                                .insert(revision.asset.rev_id.clone(), data_temp_file_path);
-                            drop(seen_revisions_map);
+                        Ok(sym_info) => {
+                            crypt::decrypt_file(
+                                in_path,
+                                decrypted_asset_contents_temp_path,
+                                &sym_info.aes_key,
+                            )
+                            .unwrap();
+                            let decrypted_hash = calculate_file_hash(
+                                &decrypted_asset_contents_temp_path.to_string_lossy(),
+                            )
+                            .await
+                            .ok();
+                            (Some(decrypted_asset_contents_temp_file), decrypted_hash)
                         }
-                        Err(_e) => {
-                            eprintln!("error: failed to download: {}", _e);
+                        Err(_) => {
+                            let _ = config::write_to_debug_log(format!(
+                                "sync: failed to get decryption key for {}\n",
+                                source.asset_name
+                            ));
+                            (None, None)
+                        }
+                    }
+                } else {
+                    (None, None)
+                };
+
+            let data_contents_temp_file =
+                if let Some(decrypted_file) = decrypted_data_contents_temp_file {
+                    Some(decrypted_file)
+                } else {
+                    data_contents_temp_file
+                };
+
+            if data_contents_temp_file.is_some() {
+                let data_contents_path = data_contents_temp_file
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .to_str()
+                    .unwrap();
+                asset_file_set_xattrs(&data_contents_path, &source);
+                asset_data_file_set_xattrs(&data_contents_path, &source, decrypted_hash.as_deref());
+            }
+
+            if metadata_contents_temp_file.is_some() {
+                let metadata_contents_path = metadata_contents_temp_file
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .to_str()
+                    .unwrap();
+                asset_file_set_xattrs(&metadata_contents_path, &source);
+                asset_metadata_file_set_xattrs(&metadata_contents_path, &source);
+            }
+
+            let data_contents_temp_file = if let Some(asset_final_path) = final_path.clone()
+                && let Some(data_contents_temp_file) = data_contents_temp_file
+            {
+                let target_data_file = std::path::Path::new(&asset_final_path);
+                if let Some(parent) = target_data_file.parent()
+                    && !parent.exists()
+                {
+                    match std::fs::create_dir_all(parent) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // Try to continue
                         }
                     }
                 }
-                Err(_) => {
-                    eprintln!("error: failed to fetch: {}", asset_name);
+                data_contents_temp_file
+                    .persist(&asset_final_path)
+                    .expect("failed to persist data file");
+                None
+            } else {
+                data_contents_temp_file
+            };
+
+            let metadata_contents_temp_file = if let Some(metadata_final_path) = metadata_final_path
+                && let Some(metadata_contents_temp_file) = metadata_contents_temp_file
+            {
+                let target_metadata_file = std::path::Path::new(&metadata_final_path);
+                if let Some(parent) = target_metadata_file.parent()
+                    && !parent.exists()
+                {
+                    match std::fs::create_dir_all(parent) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // Try to continue
+                        }
+                    }
                 }
+                metadata_contents_temp_file
+                    .persist(&metadata_final_path)
+                    .expect("failed to persist metadata file");
+                None
+            } else {
+                metadata_contents_temp_file
+            };
+
+            Ok((source, data_contents_temp_file, metadata_contents_temp_file))
+        });
+
+        handles.push(handle);
+    }
+
+    // Wait for all downloads to complete
+    let mut result = vec![];
+    for handle in join_all(handles).await {
+        // Unwrap the JoinHandle result to get the inner result
+        if let Ok(handle_result) = handle {
+            if let Ok((source, data_temp_file_opt, metadata_temp_file_opt)) = handle_result {
+                result.push((source, data_temp_file_opt, metadata_temp_file_opt));
+            }
+        } else {
+            // Handle the case where the task panicked
+            eprintln!("A download task panicked");
+        }
+    }
+
+    Ok(result)
+}
+
+/// Sets universal xattrs for an asset file.
+///
+/// All assets files (data or metadata) get:
+/// - user.hai.entry_id
+/// - user.hai.seq_id
+fn asset_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
+    if let Some((entry_id, seq_id)) = source.iter_info.as_ref() {
+        if xattr_set(&path, "user.hai.entry_id", &entry_id).is_err() {
+            eprintln!("failed to set entry_id xattr");
+        }
+        if xattr_set(&path, "user.hai.seq_id", &seq_id.to_string()).is_err() {
+            eprintln!("failed to set seq_id xattr");
+        }
+    }
+}
+
+/// Sets xattrs for asset data files (not metadata).
+///
+/// All data asset files get:
+/// - user.hai.rev_id
+/// - user.hai.hash_mtime (local file mtime when hash attached)
+/// - user.hai.hash
+/// - user.hai.decrypted
+///   - set to "true" if content was decrypted based on metadata.encrypted
+/// - user.hai.content_type
+fn asset_data_file_set_xattrs(
+    path: &str,
+    source: &AssetSourceMinimal,
+    decrypted_hash: Option<&[u8]>,
+) {
+    if xattr_set(&path, "user.hai.rev_id", &source.asset.rev_id).is_err() {
+        eprintln!("failed to set rev_id xattr");
+    }
+    if let Some(hash) = source.asset.hash.as_ref() {
+        //
+        // Write the file hash and the mtime of the file into
+        // xattrs to make change detection easier.
+        //
+        let metadata = std::fs::metadata(&path).expect("failed to read file metadata");
+        if let Ok(modified_time) = metadata.modified() {
+            let mtime_ts = modified_time
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+            if xattr_set(&path, "user.hai.hash_mtime", &mtime_ts.to_string()).is_err() {
+                eprintln!("failed to set hash_mtime xattr");
+            }
+        }
+
+        if xattr_set(&path, "user.hai.hash", hash).is_err() {
+            eprintln!("failed to set hash xattr");
+        }
+
+        if let Some(decrypted_hash) = decrypted_hash {
+            let decrypted_hash_hex = hex::encode(decrypted_hash);
+            if xattr_set(&path, "user.hai.decrypted_hash", &decrypted_hash_hex).is_err() {
+                eprintln!("failed to set decrypted_hash xattr");
             }
         }
     }
-    (
-        if !msgs.is_empty() {
-            Some(msgs.join("\n"))
-        } else {
-            None
-        },
-        temp_file,
-    )
+    if let Some(AssetMetadataInfo {
+        content_encrypted,
+        content_type,
+        ..
+    }) = source.metadata.as_ref()
+    {
+        if let Some(_content_encrypted) = content_encrypted {
+            if xattr_set(&path, "user.hai.decrypted", "true").is_err() {
+                eprintln!("failed to set decrypted xattr");
+            }
+        }
+        if let Some(content_type) = content_type {
+            if xattr_set(&path, "user.hai.content_type", content_type).is_err() {
+                eprintln!("failed to set content_type xattr");
+            }
+        }
+    }
+}
+
+/// Sets xattrs for asset metadata files.
+///
+/// All metadata asset files get:
+/// - user.hai.is_metadata
+/// - user.hai.rev_id
+/// - user.hai.hash_mtime (local file mtime when hash attached)
+/// - user.hai.hash
+fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
+    if let Some(AssetMetadataInfo {
+        rev_id,
+        hash: Some(hash),
+        ..
+    }) = source.metadata.as_ref()
+    {
+        if xattr_set(&path, "user.hai.is_metadata", "true").is_err() {
+            eprintln!("failed to set is_metadata xattr");
+        }
+        if xattr_set(&path, "user.hai.rev_id", &rev_id).is_err() {
+            eprintln!("failed to set rev_id xattr");
+        }
+        //
+        // Write the file hash and the mtime of the file into
+        // xattrs to make change detection easier.
+        //
+        let metadata = std::fs::metadata(&path).expect("failed to read file metadata");
+        if let Ok(modified_time) = metadata.modified() {
+            let mtime_ts = modified_time
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+            if xattr_set(&path, "user.hai.hash_mtime", &mtime_ts.to_string()).is_err() {
+                eprintln!("failed to set hash_mtime xattr");
+            }
+        }
+
+        if xattr_set(&path, "user.hai.hash", &hash).is_err() {
+            eprintln!("failed to set hash xattr");
+        }
+    }
 }

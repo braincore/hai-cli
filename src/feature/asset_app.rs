@@ -25,15 +25,29 @@ pub async fn launch_browser(
             use crate::api::types::asset::AssetGetArg;
             match api_client
                 .asset_get(AssetGetArg {
-                    name: prog_asset_name,
+                    name: prog_asset_name.clone(),
                 })
                 .await
             {
                 Ok(res) => {
-                    if let Some(data_url) = res.entry.asset.url {
+                    if res
+                        .entry
+                        .metadata
+                        .as_ref()
+                        .map_or(false, |md| md.content_encrypted.is_some())
+                    {
+                        eprintln!(
+                            "error: asset '{}' is encrypted; cannot launch in browser",
+                            prog_asset_name
+                        );
+                        return ProcessCmdResult::Loop;
+                    } else if let Some(data_url) = res.entry.asset.url {
                         data_url
                     } else {
-                        eprintln!("error: asset does not have link");
+                        eprintln!(
+                            "error: asset '{}' does not have a link; cannot launch in browser",
+                            prog_asset_name
+                        );
                         return ProcessCmdResult::Loop;
                     }
                 }
@@ -45,7 +59,12 @@ pub async fn launch_browser(
         };
 
     if let Ok((ws_addr, clients, cancel_token, auth_token)) =
-        crate::feature::gateway::launch_gateway(asset_blob_cache.clone(), api_client.clone()).await
+        crate::feature::gateway::launch_gateway(
+            asset_blob_cache.clone(),
+            session.asset_keyring.clone(),
+            api_client.clone(),
+        )
+        .await
     {
         let sep = if asset_prog_url.contains('?') {
             '&'

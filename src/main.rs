@@ -27,6 +27,7 @@ mod clipboard;
 mod cmd;
 mod cmd_processor;
 mod config;
+mod crypt;
 mod ctrlc_handler;
 mod db;
 mod feature;
@@ -37,6 +38,7 @@ mod term;
 mod term_color;
 mod tool;
 
+use feature::asset_keyring::AssetKeyring;
 use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
@@ -373,6 +375,8 @@ async fn repl(
         "/asset-folder-collapse",
         "/asset-folder-expand",
         "/asset-folder-list",
+        "/asset-crypt-setup",
+        "/asset-crypt-recover",
         "/email",
         "/fns",
         "/std",
@@ -542,6 +546,7 @@ async fn repl(
         masked_strings: vec![],
         mask_secrets: false,
         account: account.clone(),
+        asset_keyring: Arc::new(Mutex::new(AssetKeyring::new())),
         incognito,
         last_tool_cmd: None,
         tool_mode: None,
