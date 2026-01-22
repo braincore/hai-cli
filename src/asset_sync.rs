@@ -14,7 +14,10 @@ use crate::api::{
         AssetEntryOp, AssetMetadataInfo, AssetRevision,
     },
 };
+use crate::asset_cache;
 use crate::config;
+use crate::crypt;
+use crate::feature::{asset_crypt, asset_keyring};
 
 struct DownloadTask {
     entry_name: String,
@@ -377,7 +380,8 @@ async fn sync_entries(
                         entry_name, type_str, target_path_clone
                     ));
                 }
-                let result = download_file(&url, &target_path_clone).await;
+                // FIXME: Set dec_info
+                let result = download_file(&url, &target_path_clone, &None).await;
                 if result.is_ok() {
                     if xattr_set(
                         &target_path_clone,
@@ -558,19 +562,41 @@ fn get_folder_prefix(prefix: &str) -> String {
     }
 }
 
-/// Helper function to download a file directly to disk to minimize mem usage.
+/// Helper function to download a file.
+///
+/// Without decryption, it downloads directly to disk to minimize mem usage.
+/// If decryption required, buffers contents in memory.
 pub async fn download_file(
     url: &str,
     path: &str,
+    dec_info: &Option<asset_crypt::SymmetricKeyInfo>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut response = reqwest::get(url).await?;
     if !response.status().is_success() {
         return Err(format!("Failed to download: HTTP status {}", response.status()).into());
     }
-    let mut file = File::create(path).await?;
-    while let Some(chunk) = response.chunk().await? {
-        file.write_all(&chunk).await?;
+
+    match dec_info {
+        Some(info) => {
+            // Must download entire file for GCM decryption
+            let encrypted_bytes = response.bytes().await?;
+            let enc_content = crypt::EncryptedContent::from_bytes(&encrypted_bytes)
+                .map_err(|e| format!("Failed to parse encrypted content: {:?}", e))?;
+            let decrypted = crypt::decrypt_content(&enc_content, &info.aes_key)
+                .map_err(|e| format!("Decryption failed: {:?}", e))?;
+
+            let mut file = File::create(path).await?;
+            file.write_all(&decrypted).await?;
+        }
+        None => {
+            // Stream directly to disk (no decryption needed)
+            let mut file = File::create(path).await?;
+            while let Some(chunk) = response.chunk().await? {
+                file.write_all(&chunk).await?;
+            }
+        }
     }
+
     Ok(())
 }
 
@@ -747,6 +773,9 @@ fn xattr_set(file_path: &str, key: &str, value: &str) -> Result<(), ()> {
 // --
 
 pub async fn download_revision_to_temp(
+    asset_blob_cache: Arc<asset_cache::AssetBlobCache>,
+    asset_keyring: Arc<Mutex<asset_keyring::AssetKeyring>>,
+    api_client: &HaiClient,
     asset_name: &str,
     revision: &AssetRevision,
     seen_revisions_map_mutex: Arc<Mutex<HashMap<String, std::path::PathBuf>>>,
@@ -767,6 +796,46 @@ pub async fn download_revision_to_temp(
         } else {
             // Drop lock before longer download operation
             drop(seen_revisions_map);
+
+            let dec_info = if let Some(AssetMetadataInfo {
+                url: Some(metadata_url),
+                hash: Some(metadata_hash),
+                ..
+            }) = revision.metadata.as_ref()
+            {
+                match asset_blob_cache
+                    .get_or_download(metadata_url, metadata_hash)
+                    .await
+                {
+                    Ok(md_contents) => {
+                        match asset_crypt::get_per_file_symmetric_key_from_metadata_ez(
+                            asset_blob_cache.clone(),
+                            asset_keyring.clone(),
+                            api_client,
+                            &md_contents,
+                        )
+                        .await
+                        {
+                            Ok(res) => res,
+                            Err(e) => {
+                                eprintln!(
+                                    "error: failed to get decryption info for '{}': {}",
+                                    asset_name, e
+                                );
+                                return (None, None);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!("error: failed to fetch asset metadata");
+                        // FIXME: Handle this properly
+                        return (None, None);
+                    }
+                }
+            } else {
+                None
+            };
+
             match crate::asset_reader::create_empty_temp_file(
                 asset_name,
                 Some(&revision.asset.rev_id),
@@ -775,6 +844,7 @@ pub async fn download_revision_to_temp(
                     match crate::asset_sync::download_file(
                         data_url,
                         &data_temp_file_path.to_string_lossy(),
+                        &dec_info,
                     )
                     .await
                     {

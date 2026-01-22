@@ -2720,6 +2720,8 @@ pub struct AssetMetadataInfo {
     /// If the metadata specified a `content_type` key with value having fewer than 64-chars, this
     /// is a reproduction of it.
     pub content_type: Option<String>,
+    /// Set if the metadata specified an `encrypted` key.
+    pub content_encrypted: Option<ContentEncryptedInfo>,
 }
 
 impl AssetMetadataInfo {
@@ -2732,6 +2734,7 @@ impl AssetMetadataInfo {
             url: None,
             title: None,
             content_type: None,
+            content_encrypted: None,
         }
     }
 
@@ -2754,6 +2757,11 @@ impl AssetMetadataInfo {
         self.content_type = Some(value);
         self
     }
+
+    pub fn with_content_encrypted(mut self, value: ContentEncryptedInfo) -> Self {
+        self.content_encrypted = Some(value);
+        self
+    }
 }
 
 const ASSET_METADATA_INFO_FIELDS: &[&str] = &[
@@ -2764,6 +2772,7 @@ const ASSET_METADATA_INFO_FIELDS: &[&str] = &[
     "url",
     "title",
     "content_type",
+    "content_encrypted",
 ];
 impl AssetMetadataInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
@@ -2783,6 +2792,7 @@ impl AssetMetadataInfo {
         let mut field_url = None;
         let mut field_title = None;
         let mut field_content_type = None;
+        let mut field_content_encrypted = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2829,6 +2839,12 @@ impl AssetMetadataInfo {
                     }
                     field_content_type = Some(map.next_value()?);
                 }
+                "content_encrypted" => {
+                    if field_content_encrypted.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("content_encrypted"));
+                    }
+                    field_content_encrypted = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2847,6 +2863,7 @@ impl AssetMetadataInfo {
             url: field_url.and_then(Option::flatten),
             title: field_title.and_then(Option::flatten),
             content_type: field_content_type.and_then(Option::flatten),
+            content_encrypted: field_content_encrypted.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2870,6 +2887,9 @@ impl AssetMetadataInfo {
         }
         if let Some(val) = &self.content_type {
             s.serialize_field("content_type", val)?;
+        }
+        if let Some(val) = &self.content_encrypted {
+            s.serialize_field("content_encrypted", val)?;
         }
         Ok(())
     }
@@ -2901,7 +2921,7 @@ impl ::serde::ser::Serialize for AssetMetadataInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetMetadataInfo", 7)?;
+        let mut s = serializer.serialize_struct("AssetMetadataInfo", 8)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -6278,6 +6298,55 @@ impl ::serde::ser::Serialize for AssetRevisionIterResult {
         let mut s = serializer.serialize_struct("AssetRevisionIterResult", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
+    }
+}
+
+/// Empty placeholder for future proofing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct ContentEncryptedInfo {}
+
+const CONTENT_ENCRYPTED_INFO_FIELDS: &[&str] = &[];
+impl ContentEncryptedInfo {
+    // no _opt deserializer
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+    ) -> Result<ContentEncryptedInfo, V::Error> {
+        // ignore any fields found; none are presently recognized
+        super::eat_json_fields(&mut map)?;
+        Ok(ContentEncryptedInfo {})
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for ContentEncryptedInfo {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = ContentEncryptedInfo;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a ContentEncryptedInfo struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                ContentEncryptedInfo::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "ContentEncryptedInfo",
+            CONTENT_ENCRYPTED_INFO_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for ContentEncryptedInfo {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        serializer
+            .serialize_struct("ContentEncryptedInfo", 0)?
+            .end()
     }
 }
 

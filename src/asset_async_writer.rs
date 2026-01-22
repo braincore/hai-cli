@@ -1,3 +1,5 @@
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -8,6 +10,7 @@ use crate::api::types::asset::{
 };
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader;
+use crate::feature::asset_crypt;
 
 #[derive(Debug)]
 pub enum WorkerAssetMsg {
@@ -32,18 +35,15 @@ pub struct WorkerAssetUpdate {
     pub is_push: bool,
     pub api_client: HaiClient,
     pub one_shot: bool,
+    pub akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
 }
-
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-
 pub async fn worker_update_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     mut rx: tokio::sync::mpsc::Receiver<WorkerAssetMsg>,
     _db: Arc<Mutex<rusqlite::Connection>>,
     debug: bool,
 ) {
-    // asset_name -> (entry_id, asset_rev_id, content_sha256_hash)
+    // asset_name -> (entry_id, asset_rev_id, UNENCRYPTED_content_sha256_hash)
     let mut asset_bottom_map: HashMap<String, (String, String, Vec<u8>)> = HashMap::new();
     // Track errors because the editor sometimes swallows the errors so instead
     // we print them once the user has exited.
@@ -67,6 +67,7 @@ pub async fn worker_update_asset(
                 is_push,
                 api_client,
                 one_shot,
+                akm_info,
             }) => {
                 // Treat asset as markdown if it has .md extension or does not
                 // have an extension
@@ -90,9 +91,6 @@ pub async fn worker_update_asset(
                 }
 
                 let (new_hash_str, new_hash) = crate::asset_cache::compute_sha256(&new_contents);
-                let _ = asset_blob_cache
-                    .write_cache(&new_hash_str, &new_contents)
-                    .await;
                 // Check if the hash matches the last known hash
                 if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name)
                     && &new_hash == last_hash
@@ -105,7 +103,24 @@ pub async fn worker_update_asset(
                     }
                     continue;
                 }
-                if is_push {
+                let (new_hash_str, new_contents) = if let Some(akm_info) = akm_info.as_ref() {
+                    let enc_content = crate::feature::asset_crypt::encrypt_asset_with_aes_key(
+                        &akm_info.sym_key_info.aes_key,
+                        &new_contents,
+                    );
+                    (
+                        crate::asset_cache::compute_sha256(&enc_content).0,
+                        enc_content,
+                    )
+                } else {
+                    (new_hash_str, new_contents)
+                };
+                // NOTE: If encryption used, add encrypted version to blob cache
+                let _ = asset_blob_cache
+                    .write_cache(&new_hash_str, &new_contents)
+                    .await;
+
+                let _new_entry = if is_push {
                     match api_client
                         .asset_push(AssetPushArg {
                             name: asset_name.clone(),
@@ -120,6 +135,33 @@ pub async fn worker_update_asset(
                                     res
                                 ));
                             }
+                            // FIXME: This does not handle the case where the
+                            // encryption key is changed.
+                            if res
+                                .entry
+                                .metadata
+                                .as_ref()
+                                .map(|md| md.content_encrypted.is_none())
+                                .unwrap_or(true)
+                                && let Some(akm_info) = akm_info.as_ref()
+                            {
+                                // If this is the first time putting the
+                                // asset and it's encrypted, store the
+                                // encryption metadata.
+                                if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                                    &api_client,
+                                    &asset_name,
+                                    &akm_info,
+                                )
+                                .await
+                                {
+                                    eprintln!(
+                                        "error: failed to put asset encryption metadata: {}",
+                                        e
+                                    );
+                                }
+                            }
+                            Some(res.entry)
                         }
                         Err(e) => {
                             let error_msg = format!("error: failed to push asset: {}", e);
@@ -128,6 +170,7 @@ pub async fn worker_update_asset(
                                 .entry(asset_name.clone())
                                 .or_default()
                                 .push(error_msg);
+                            None
                         }
                     }
                 } else {
@@ -135,7 +178,7 @@ pub async fn worker_update_asset(
                         .get(&asset_name)
                         .cloned()
                         .or(asset_entry_ref.map(|(id, rev)| (id, rev, vec![])));
-                    if let Some((entry_id, rev_id, ..)) = bottom {
+                    let new_entry = if let Some((entry_id, rev_id, ..)) = bottom {
                         match api_client
                             .asset_replace(AssetReplaceArg {
                                 entry_id,
@@ -152,7 +195,7 @@ pub async fn worker_update_asset(
                                         res
                                     ));
                                 }
-                                if matches!(res.entry.op, AssetEntryOp::Fork) {
+                                if matches!(res.entry.op.clone(), AssetEntryOp::Fork) {
                                     // Since this isn't an error, it doesn't
                                     // need to printed immediately to the
                                     // terminal which tends to bork the UI of
@@ -171,9 +214,14 @@ pub async fn worker_update_asset(
                                     // Update the asset_bottom_map with new leaf node
                                     asset_bottom_map.insert(
                                         asset_name.clone(),
-                                        (res.entry.entry_id, res.entry.asset.rev_id, new_hash),
+                                        (
+                                            res.entry.entry_id.clone(),
+                                            res.entry.asset.rev_id.clone(),
+                                            new_hash,
+                                        ),
                                     );
                                 }
+                                Some(res.entry)
                             }
                             Err(e) => {
                                 let error_msg = format!("error: failed to replace asset: {}", e);
@@ -182,6 +230,7 @@ pub async fn worker_update_asset(
                                     .entry(asset_name.clone())
                                     .or_default()
                                     .push(error_msg);
+                                None
                             }
                         }
                     } else {
@@ -200,6 +249,33 @@ pub async fn worker_update_asset(
                                         res
                                     ));
                                 }
+                                // FIXME: This does not handle the case where the
+                                // encryption key is changed.
+                                if res
+                                    .entry
+                                    .metadata
+                                    .as_ref()
+                                    .map(|md| md.content_encrypted.is_none())
+                                    .unwrap_or(true)
+                                    && let Some(akm_info) = akm_info.as_ref()
+                                {
+                                    // If this is the first time putting the
+                                    // asset and it's encrypted, store the
+                                    // encryption metadata.
+                                    if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                                        &api_client,
+                                        &asset_name,
+                                        &akm_info,
+                                    )
+                                    .await
+                                    {
+                                        eprintln!(
+                                            "error: failed to put asset encryption metadata: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                                Some(res.entry)
                             }
                             Err(e) => {
                                 let error_msg = format!("error: failed to put asset: {}", e);
@@ -208,6 +284,7 @@ pub async fn worker_update_asset(
                                     .entry(asset_name.clone())
                                     .or_default()
                                     .push(error_msg);
+                                None
                             }
                         }
                     };
@@ -230,7 +307,8 @@ pub async fn worker_update_asset(
                             ),
                         );
                     }
-                }
+                    new_entry
+                };
             }
             WorkerAssetMsg::Done(asset_name) => {
                 if debug {

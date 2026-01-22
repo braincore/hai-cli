@@ -32,7 +32,8 @@ Or, you can dive in and rely on `hai -h` (CLI), `/help` (REPL), and
 - 🎨 Highlights syntax for markdown and code snippets.
 - 🖼 Render output to browser.
 - 💾 Auto-saves last conversation for easy resumption.
-- ☁ Store and share data on the cloud for easy access by AIs.
+- ☁ Store and share data on the cloud for easy access by AIs. Supports
+  selective end-to-end encryption.
 - 📧 Get emails from AI—send notifications or share data.
 - 🛠 Open source: Apache License 2.0
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
