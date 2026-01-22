@@ -134,6 +134,12 @@ pub enum Cmd {
     AssetFolderExpand(AssetFolderExpandCmd),
     /// List asset folder
     AssetFolderList(AssetFolderListCmd),
+    /// Setup asset enc/dec & signing keys
+    AssetCryptSetup,
+    /// Replace asset with encrypted version
+    AssetEncrypt(AssetEncryptCmd),
+    /// Replace encrypted asset with decrypted version
+    AssetDecrypt(AssetDecryptCmd),
     /// Resume a chat
     ChatResume(ChatResumeCmd),
     /// Save a chat
@@ -427,6 +433,7 @@ pub struct AssetNewCmd {
     /// Name of the asset (can include / for "foldering")
     pub asset_name: String,
     pub contents: Option<String>,
+    pub encrypt: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -609,6 +616,18 @@ pub struct AssetFolderExpandCmd {
 pub struct AssetFolderListCmd {
     /// Prefix of folders to list
     pub prefix: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetEncryptCmd {
+    /// Name of asset to encrypt
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetDecryptCmd {
+    /// Name of asset to decrypt
+    pub asset_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1513,14 +1532,21 @@ fn parse_command(
             }
         }
         "asset-new" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["encrypt"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("encrypt".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let encrypt = options.get("encrypt").map(|v| v == "true").unwrap_or(false);
             let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
             match parse_one_arg(&cmd_arg) {
                 Some(asset_name) => Some(Cmd::AssetNew(AssetNewCmd {
                     asset_name,
                     contents,
+                    encrypt,
                 })),
                 None => {
                     eprintln!("Usage: /asset-new <name> [<NEWLINE><body>]");
@@ -1877,6 +1903,16 @@ fn parse_command(
             Some(Cmd::AssetFolderList(AssetFolderListCmd {
                 prefix: parse_one_arg_catchall(remaining),
             }))
+        }
+        "asset-crypt-setup" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if parse_one_arg_catchall(remaining).is_some() {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::AssetCryptSetup)
         }
         "chat-resume" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

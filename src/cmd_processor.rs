@@ -22,9 +22,9 @@ use crate::{
     api::{self, client::HaiClient},
     asset_async_writer,
     asset_cache::AssetBlobCache,
-    asset_editor, asset_helper, asset_reader, chat, clipboard, cmd, config, ctrlc_handler,
+    asset_editor, asset_helper, asset_reader, chat, clipboard, cmd, config, crypt, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
-    feature::{haivar, save_chat},
+    feature::{asset_crypt, haivar, save_chat},
     loader, term, term_color, tool,
 };
 
@@ -1570,10 +1570,12 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Asset(cmd::AssetCmd { asset_name, editor }) => {
-            if session.account.is_none() {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
-            }
+            };
             let asset_name =
                 resolve_quick_var(&asset_name, session).unwrap_or_else(|| asset_name.to_string());
             let asset_name = expand_pub_asset_name(&asset_name, &session.account);
@@ -1591,18 +1593,68 @@ pub async fn process_cmd(
                 )
                 .await
             } else {
-                let (asset_contents, asset_entry) = match asset_reader::get_asset(
-                    asset_blob_cache.clone(),
-                    &api_client,
-                    &asset_name,
-                    true,
-                )
-                .await
-                .map(|(ac, ae)| (ac, Some(ae)))
+                let (asset_contents, md_contents, asset_entry) =
+                    match asset_reader::get_asset_and_metadata(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &asset_name,
+                        true,
+                    )
+                    .await
+                    .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
+                    {
+                        Ok(contents) => contents,
+                        Err(asset_reader::GetAssetError::BadName) => (vec![], None, None),
+                        Err(_) => return ProcessCmdResult::Loop,
+                    };
+                let (decrypted_asset_contents, enc_info) = if let Some(md_contents) = md_contents
+                    && let Some((enc_aes_key_hex, enc_key_id)) =
+                        asset_crypt::parse_metadata_for_encryption_info(&md_contents)
                 {
-                    Ok(contents) => contents,
-                    Err(asset_reader::GetAssetError::BadName) => (vec![], None),
-                    Err(_) => return ProcessCmdResult::Loop,
+                    match asset_crypt::get_per_file_symmetric_key_ez(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &enc_aes_key_hex,
+                        &enc_key_id,
+                    )
+                    .await
+                    {
+                        Ok(sym_info) => {
+                            let enc_key_info = match asset_crypt::get_encryption_key(
+                                asset_blob_cache.clone(),
+                                &api_client,
+                                &username,
+                                Some(&enc_key_id),
+                            )
+                            .await
+                            {
+                                Ok(Some(key)) => key,
+                                Ok(None) => {
+                                    eprintln!("error: encryption key {} not found", enc_key_id);
+                                    return ProcessCmdResult::Loop;
+                                }
+                                Err(e) => {
+                                    eprintln!("error: failed to get encryption key: {}", e);
+                                    return ProcessCmdResult::Loop;
+                                }
+                            };
+                            let enc_content =
+                                crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                            (
+                                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap(),
+                                Some(asset_crypt::mk_encrypt_key_per_file_info(
+                                    enc_key_info,
+                                    sym_info,
+                                )),
+                            )
+                        }
+                        Err(e) => {
+                            eprintln!("error: {}: failed to get encryption key: {}", asset_name, e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
+                } else {
+                    (asset_contents.clone(), None)
                 };
                 let asset_entry_ref = asset_entry
                     .as_ref()
@@ -1611,7 +1663,7 @@ pub async fn process_cmd(
                     &api_client,
                     &session.shell,
                     &editor.clone().unwrap_or(session.editor.clone()),
-                    &asset_contents,
+                    &decrypted_asset_contents,
                     &asset_name,
                     asset_entry_ref,
                     asset_entry
@@ -1619,6 +1671,7 @@ pub async fn process_cmd(
                         .and_then(|md| md.content_type),
                     false,
                     update_asset_tx,
+                    enc_info,
                     debug,
                 )
                 .await;
@@ -1628,11 +1681,14 @@ pub async fn process_cmd(
         cmd::Cmd::AssetNew(cmd::AssetNewCmd {
             asset_name,
             contents,
+            encrypt,
         }) => {
-            if session.account.is_none() {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
-            }
+            };
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
             if asset_helper::get_invalid_asset_name_re().is_match(&asset_name) {
                 // A client-side check is performed because interactive editors
@@ -1640,21 +1696,76 @@ pub async fn process_cmd(
                 // user won't be aware that their new asset didn't save.
                 eprintln!("error: invalid name");
                 return ProcessCmdResult::Loop;
+            } else if *encrypt && asset_name.starts_with("/") {
+                eprintln!("error: cannot create encrypted asset in the public pool");
+                return ProcessCmdResult::Loop;
             }
+            println!("encrypt?: {:?}", encrypt);
             let api_client = mk_api_client(Some(session));
+
+            let enc_key_info = if *encrypt {
+                match asset_crypt::get_encryption_key(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &username,
+                    None,
+                )
+                .await
+                {
+                    Ok(Some(key)) => Some(key),
+                    Ok(None) => {
+                        eprintln!(
+                            "error: no encryption key found; generate one with /asset-crypt-setup"
+                        );
+                        return ProcessCmdResult::Loop;
+                    }
+                    Err(e) => {
+                        eprintln!("error: failed to get encryption key: {}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                }
+            } else {
+                None
+            };
+            let enc_info = if let Some(enc_key_info) = &enc_key_info {
+                Some(asset_crypt::new_per_file_encryption_key(
+                    enc_key_info.clone(),
+                ))
+            } else {
+                None
+            };
+
             if let Some(contents) = contents {
                 let _ = update_asset_tx
                     .send(asset_async_writer::WorkerAssetMsg::Update(
                         asset_async_writer::WorkerAssetUpdate {
-                            asset_name,
+                            asset_name: asset_name.clone(),
                             asset_entry_ref: None,
                             new_contents: contents.clone().into_bytes(),
                             is_push: false,
-                            api_client,
+                            api_client: api_client.clone(),
                             one_shot: true,
+                            enc_info: enc_info.clone(),
                         },
                     ))
                     .await;
+
+                if let Some(enc_info) = enc_info {
+                    // Flush writes so that the above worker update is completed
+                    asset_async_writer::flush_asset_updates(&update_asset_tx).await;
+
+                    // FIXME: This commits metadata, but it should be done differently
+                    // in the future: via worker-aset-update and potentially atomically
+                    // with the asset write.
+                    asset_crypt::put_asset_encryption_metadata(
+                        &api_client,
+                        &asset_name,
+                        &enc_info.enc_aes_key,
+                        &enc_info.enc_key_info.enc_key_id,
+                    )
+                    .await
+                    .unwrap();
+                }
             } else {
                 let _ = asset_editor::edit_with_editor_api(
                     &api_client,
@@ -1666,6 +1777,7 @@ pub async fn process_cmd(
                     None,
                     false,
                     update_asset_tx,
+                    enc_info,
                     debug,
                 )
                 .await;
@@ -1673,23 +1785,76 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetEdit(cmd::AssetEditCmd { asset_name }) => {
-            if session.account.is_none() {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
-            }
+            };
             let asset_name = expand_pub_asset_name(asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, asset_entry) = match asset_reader::get_asset(
-                asset_blob_cache.clone(),
-                &api_client,
-                &asset_name,
-                false,
-            )
-            .await
-            .map(|(ac, ae)| (ac, Some(ae)))
+            // FIXME: Maybe only get `metadata` if future entry.metadata.encrypted bit is set
+            let (asset_contents, md_contents, asset_entry) =
+                match asset_reader::get_asset_and_metadata(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &asset_name,
+                    false,
+                )
+                .await
+                .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
+                {
+                    Ok(asset_get_res) => asset_get_res,
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
+            let (decrypted_asset_contents, enc_info) = if let Some(md_contents) = md_contents
+                && let Some((enc_aes_key_hex, enc_key_id)) =
+                    asset_crypt::parse_metadata_for_encryption_info(&md_contents)
             {
-                Ok(asset_get_res) => asset_get_res,
-                Err(_) => return ProcessCmdResult::Loop,
+                match asset_crypt::get_per_file_symmetric_key_ez(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &enc_aes_key_hex,
+                    &enc_key_id,
+                )
+                .await
+                {
+                    Ok(sym_info) => {
+                        let enc_key_info = match asset_crypt::get_encryption_key(
+                            asset_blob_cache.clone(),
+                            &api_client,
+                            &username,
+                            Some(&enc_key_id),
+                        )
+                        .await
+                        {
+                            Ok(Some(key)) => key,
+                            Ok(None) => {
+                                eprintln!("error: encryption key {} not found", enc_key_id);
+                                return ProcessCmdResult::Loop;
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to get encryption key: {}", e);
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+                        let enc_content =
+                            crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                        (
+                            crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap(),
+                            Some(asset_crypt::mk_encrypt_key_per_file_info(
+                                enc_key_info,
+                                sym_info,
+                            )),
+                        )
+                    }
+                    Err(e) => {
+                        eprintln!("error: {}: failed to get encryption key: {}", asset_name, e);
+                        return ProcessCmdResult::Loop;
+                    }
+                }
+            } else {
+                (asset_contents.clone(), None)
             };
             let asset_entry_ref = asset_entry
                 .as_ref()
@@ -1698,7 +1863,7 @@ pub async fn process_cmd(
                 &api_client,
                 &session.shell,
                 &session.editor,
-                &asset_contents,
+                &decrypted_asset_contents,
                 &asset_name,
                 asset_entry_ref,
                 asset_entry
@@ -1706,6 +1871,7 @@ pub async fn process_cmd(
                     .and_then(|md| md.content_type),
                 false,
                 update_asset_tx,
+                enc_info,
                 debug,
             )
             .await;
@@ -1731,6 +1897,7 @@ pub async fn process_cmd(
                             is_push: true,
                             api_client,
                             one_shot: true,
+                            enc_info: None, // FIXME: Add enc_info
                         },
                     ))
                     .await;
@@ -1745,6 +1912,7 @@ pub async fn process_cmd(
                     None,
                     true,
                     update_asset_tx,
+                    None, // FIXME: Add enc_info
                     debug,
                 )
                 .await;
@@ -1963,11 +2131,12 @@ pub async fn process_cmd(
                 .collect::<Vec<_>>();
             let api_client = mk_api_client(Some(session));
 
-            match asset_reader::fetch_assets_from_names_in_memory(
+            match asset_reader::fetch_assets_from_names_in_memory_extended(
                 asset_blob_cache.clone(),
                 &api_client,
                 &asset_names,
                 4,
+                true,
             )
             .await
             {
@@ -1979,44 +2148,83 @@ pub async fn process_cmd(
                         (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
                     );
                     for (asset_name, fetch_res) in &asset_map {
-                        match fetch_res {
-                            Ok(asset_contents) => match String::from_utf8(asset_contents.clone()) {
-                                Ok(asset_contents_string) => {
-                                    let asset_contents_with_delimeters = format!(
-                                        "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
-                                        asset_name, asset_contents_string, asset_name,
-                                    );
-
-                                    let asset_token_count = session_history_add_user_text_entry(
-                                        &asset_contents_with_delimeters,
-                                        session,
-                                        bpe_tokenizer,
-                                        (
-                                            is_task_mode_step,
-                                            LogEntryRetentionPolicy::ConversationLoad,
-                                        ),
-                                    );
-                                    if matches!(cmd, cmd::Cmd::AssetLoad(_)) {
-                                        println!(
-                                            "Loaded: {} ({} tokens)",
-                                            asset_name, asset_token_count
-                                        );
-                                    } else {
-                                        println!("{}", asset_contents_string);
+                        let decrypted_asset_contents = match fetch_res {
+                            Ok(asset_reader::AssetFetchResult {
+                                data: asset_contents,
+                                metadata: Some(md_contents),
+                            }) => {
+                                if let Some((enc_aes_key_hex, enc_key_id)) =
+                                    asset_crypt::parse_metadata_for_encryption_info(&md_contents)
+                                {
+                                    match asset_crypt::get_per_file_symmetric_key_ez(
+                                        asset_blob_cache.clone(),
+                                        &api_client,
+                                        &enc_aes_key_hex,
+                                        &enc_key_id,
+                                    )
+                                    .await
+                                    {
+                                        Ok(sym_info) => {
+                                            let enc_content =
+                                                crypt::EncryptedContent::from_bytes(asset_contents)
+                                                    .unwrap();
+                                            crypt::decrypt_content(&enc_content, &sym_info.aes_key)
+                                                .unwrap()
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "error: {}: failed to get encryption key: {}",
+                                                asset_name, e
+                                            );
+                                            return ProcessCmdResult::Loop;
+                                        }
                                     }
+                                } else {
+                                    asset_contents.clone()
                                 }
-                                Err(e) => {
-                                    eprintln!("error: {}: {}", asset_name, e);
+                            }
+                            Ok(asset_reader::AssetFetchResult {
+                                data: asset_contents,
+                                metadata: None,
+                            }) => asset_contents.clone(),
+                            Err(e) => {
+                                match e {
+                                    asset_reader::GetAssetError::BadName => {
+                                        eprintln!("error: {}: asset not found", asset_name);
+                                    }
+                                    asset_reader::GetAssetError::DataFetchFailed => {
+                                        eprintln!("error: {}: fetch failed", asset_name);
+                                    }
+                                };
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+
+                        match String::from_utf8(decrypted_asset_contents) {
+                            Ok(asset_contents_string) => {
+                                let asset_contents_with_delimeters = format!(
+                                    "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
+                                    asset_name, asset_contents_string, asset_name,
+                                );
+
+                                let asset_token_count = session_history_add_user_text_entry(
+                                    &asset_contents_with_delimeters,
+                                    session,
+                                    bpe_tokenizer,
+                                    (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                                );
+                                if matches!(cmd, cmd::Cmd::AssetLoad(_)) {
+                                    println!(
+                                        "Loaded: {} ({} tokens)",
+                                        asset_name, asset_token_count
+                                    );
+                                } else {
+                                    println!("{}", asset_contents_string);
                                 }
-                            },
-                            Err(e) => match e {
-                                asset_reader::GetAssetError::BadName => {
-                                    eprintln!("error: {}: asset not found", asset_name);
-                                }
-                                asset_reader::GetAssetError::DataFetchFailed => {
-                                    eprintln!("error: {}: fetch failed", asset_name);
-                                }
-                            },
+                            }
+                            Err(e) => {
+                                eprintln!("error: {}: {}", asset_name, e);
+                            }
                         }
                     }
                 }
@@ -2037,6 +2245,8 @@ pub async fn process_cmd(
             };
 
             async fn print_revision(
+                asset_blob_cache: Arc<AssetBlobCache>,
+                api_client: &HaiClient,
                 revision: &AssetRevision,
                 session: &mut SessionState,
                 bpe_tokenizer: &tiktoken_rs::CoreBPE,
@@ -2072,32 +2282,74 @@ pub async fn process_cmd(
                         }
                     }
                 );
-                if let Some(AssetMetadataInfo {
+                let md_contents = if let Some(AssetMetadataInfo {
                     url: Some(metadata_url),
                     ..
                 }) = revision.metadata.as_ref()
-                    && let Some(contents_bin) = asset_reader::get_asset_raw(metadata_url).await
+                    && let Some(md_contents_bin) = asset_reader::get_asset_raw(metadata_url).await
                 {
-                    let contents = String::from_utf8_lossy(&contents_bin);
-                    println!("Metadata: {}", &contents);
+                    let md_contents =
+                        std::str::from_utf8(&md_contents_bin).expect("invalid metadata");
+                    println!("Metadata: {}", md_contents);
                     session_history_add_user_text_entry(
-                        &contents,
+                        &md_contents,
                         session,
                         bpe_tokenizer,
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
-                }
+                    Some(md_contents_bin)
+                } else {
+                    None
+                };
                 if let Some(data_url) = revision.asset.url.as_ref()
                     && let Some(contents_bin) = asset_reader::get_asset_raw(data_url).await
                 {
-                    let contents = String::from_utf8_lossy(&contents_bin);
-                    println!("{}", &contents);
-                    session_history_add_user_text_entry(
-                        &contents,
-                        session,
-                        bpe_tokenizer,
-                        (is_task_mode_step, LogEntryRetentionPolicy::None),
-                    );
+                    let decrypted_asset_contents = if let Some(md_contents) = md_contents
+                        && let Some((enc_aes_key_hex, enc_key_id)) =
+                            asset_crypt::parse_metadata_for_encryption_info(&md_contents)
+                    {
+                        match asset_crypt::get_per_file_symmetric_key_ez(
+                            asset_blob_cache.clone(),
+                            &api_client,
+                            &enc_aes_key_hex,
+                            &enc_key_id,
+                        )
+                        .await
+                        {
+                            Ok(sym_info) => {
+                                let enc_content =
+                                    crypt::EncryptedContent::from_bytes(&contents_bin).unwrap();
+                                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
+                            }
+                            Err(e) => {
+                                eprintln!("error: failed to get encryption key: {}", e);
+                                return;
+                            }
+                        }
+                    } else {
+                        contents_bin.clone()
+                    };
+                    match std::str::from_utf8(&decrypted_asset_contents) {
+                        Ok(contents) => {
+                            println!("{}", contents);
+                            session_history_add_user_text_entry(
+                                contents,
+                                session,
+                                bpe_tokenizer,
+                                (is_task_mode_step, LogEntryRetentionPolicy::None),
+                            );
+                        }
+                        Err(_) => {
+                            let msg = format!("[binary data: {} bytes]", contents_bin.len());
+                            println!("{}", msg);
+                            session_history_add_user_text_entry(
+                                &msg,
+                                session,
+                                bpe_tokenizer,
+                                (is_task_mode_step, LogEntryRetentionPolicy::None),
+                            );
+                        }
+                    };
                 }
                 println!();
             }
@@ -2123,7 +2375,15 @@ pub async fn process_cmd(
                             }
                             remaining = Some(n - 1);
                         }
-                        print_revision(&revision, session, bpe_tokenizer, is_task_mode_step).await;
+                        print_revision(
+                            asset_blob_cache.clone(),
+                            &api_client,
+                            &revision,
+                            session,
+                            bpe_tokenizer,
+                            is_task_mode_step,
+                        )
+                        .await;
                     }
                     iter_res.next
                 }
@@ -2173,6 +2433,8 @@ pub async fn process_cmd(
                             println!();
                             for revision in iter_next_res.revisions {
                                 print_revision(
+                                    asset_blob_cache.clone(),
+                                    &api_client,
                                     &revision,
                                     session,
                                     bpe_tokenizer,
@@ -2583,18 +2845,33 @@ pub async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            let (asset_contents, _) = match asset_reader::get_asset(
+            let (data_contents, md_contents, _asset_entry) =
+                match asset_reader::get_asset_and_metadata(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &source_asset_name,
+                    false,
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
+            let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
                 asset_blob_cache.clone(),
                 &api_client,
-                &source_asset_name,
-                false,
+                &data_contents,
+                md_contents.as_deref(),
             )
             .await
             {
-                Ok(contents) => contents,
-                Err(_) => return ProcessCmdResult::Loop,
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to decrypt: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
             };
-            match fs::write(&target_file_path, asset_contents) {
+            match fs::write(&target_file_path, decrypted_asset_contents) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("error: failed to save: {}", e);
@@ -2658,6 +2935,8 @@ pub async fn process_cmd(
                     }
                     remaining -= 1;
 
+                    let asset_blob_cache_clone = asset_blob_cache.clone();
+                    let api_client_clone = api_client.clone();
                     let asset_name_clone = asset_name.clone();
                     let sem_clone = Arc::clone(&semaphore);
                     let seen_revisions_map_clone = seen_revisions_map.clone();
@@ -2665,6 +2944,8 @@ pub async fn process_cmd(
                     let handle = tokio::spawn(async move {
                         let _permit = sem_clone.acquire().await.unwrap();
                         crate::asset_sync::download_revision_to_temp(
+                            asset_blob_cache_clone,
+                            &api_client_clone,
                             &asset_name_clone,
                             &revision,
                             seen_revisions_map_clone,
@@ -2720,12 +3001,16 @@ pub async fn process_cmd(
                             }
                             remaining -= 1;
                             let asset_name_clone = asset_name.clone();
+                            let asset_blob_cache_clone = asset_blob_cache.clone();
+                            let api_client_clone = api_client.clone();
                             let sem_clone = Arc::clone(&semaphore);
                             let seen_revisions_map_clone = seen_revisions_map.clone();
 
                             let handle = tokio::spawn(async move {
                                 let _permit = sem_clone.acquire().await.unwrap();
                                 crate::asset_sync::download_revision_to_temp(
+                                    asset_blob_cache_clone,
+                                    &api_client_clone,
                                     &asset_name_clone,
                                     &revision,
                                     seen_revisions_map_clone,
@@ -2762,7 +3047,7 @@ pub async fn process_cmd(
                     (is_task_mode_step, LogEntryRetentionPolicy::None),
                 );
             } else {
-                let (data_contents, metadata_contents, _asset_entry) =
+                let (data_contents, md_contents, _asset_entry) =
                     match asset_reader::get_asset_and_metadata(
                         asset_blob_cache.clone(),
                         &api_client,
@@ -2774,6 +3059,20 @@ pub async fn process_cmd(
                         Ok(res) => res,
                         Err(_) => return ProcessCmdResult::Loop,
                     };
+                let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &data_contents,
+                    md_contents.as_deref(),
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: failed to decrypt: {}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
 
                 let (data_temp_file, data_temp_file_path) =
                     match asset_reader::create_empty_temp_file(&asset_name, None) {
@@ -2783,7 +3082,7 @@ pub async fn process_cmd(
                             return ProcessCmdResult::Loop;
                         }
                     };
-                match fs::write(&data_temp_file_path, data_contents) {
+                match fs::write(&data_temp_file_path, decrypted_asset_contents) {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("error: failed to save: {}", e);
@@ -2798,7 +3097,7 @@ pub async fn process_cmd(
                 );
                 println!("{}", msg);
                 msgs.push(msg);
-                if let Some(metadata_contents) = metadata_contents {
+                if let Some(md_contents) = md_contents {
                     let metadata_name = format!("{}.metadata", asset_name);
                     let (metadata_temp_file, metadata_temp_file_path) =
                         match asset_reader::create_empty_temp_file(&metadata_name, None) {
@@ -2808,7 +3107,7 @@ pub async fn process_cmd(
                                 return ProcessCmdResult::Loop;
                             }
                         };
-                    match fs::write(&metadata_temp_file_path, metadata_contents) {
+                    match fs::write(&metadata_temp_file_path, md_contents) {
                         Ok(_) => {}
                         Err(e) => {
                             eprintln!("error: failed to save: {}", e);
@@ -3068,6 +3367,124 @@ pub async fn process_cmd(
                     eprintln!("error: failed to list folders: {}", e);
                 }
             }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetCryptSetup => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            use crate::api::types::asset::{AssetGetArg, AssetGetError};
+            let api_client = mk_api_client(Some(session));
+
+            match crate::feature::asset_crypt::asset_crypt_setup(
+                asset_blob_cache.clone(),
+                api_client.clone(),
+                &username,
+            )
+            .await
+            {
+                Ok((enc_key_id, sign_key_id)) => {
+                    println!("Key setup complete.");
+                    println!("Encryption key ID: {}", enc_key_id);
+                    println!("Signing key ID:    {}", sign_key_id);
+                    println!("Please remember your password; it cannot be recovered if lost.");
+                }
+                Err(crate::feature::asset_crypt::CryptSetupError::Abort) => {
+                    eprintln!("error: aborting key setup");
+                    return ProcessCmdResult::Loop;
+                }
+                Err(crate::feature::asset_crypt::CryptSetupError::InvalidPassword) => {
+                    eprintln!("error: password cannot be empty");
+                    return ProcessCmdResult::Loop;
+                }
+                Err(crate::feature::asset_crypt::CryptSetupError::PasswordMismatch) => {
+                    eprintln!("error: passwords do not match");
+                    return ProcessCmdResult::Loop;
+                }
+                Err(crate::feature::asset_crypt::CryptSetupError::ServerAbort(e)) => {
+                    eprintln!("error: aborting key setup: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+                Err(crate::feature::asset_crypt::CryptSetupError::Other(e)) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            }
+
+            /*
+            let public_bundle = crate::crypt::PublicKeyBundle::from_bytes(&pub_bytes).unwrap();
+
+
+            let restored_keys = crate::crypt::KeyBundle::from_exported_protected(
+                &public_bundle,
+                &encrypted_secret,
+                &password,
+            )
+            .unwrap(); // Wrong password returns CryptoError::DecryptionFailed
+
+
+            // Print public keys (hex)
+            println!("=== Public Keys ===");
+            println!(
+                "Encryption public: {}",
+                hex::encode(restored_keys.encryption_public.as_bytes())
+            );
+            println!(
+                "Verifying key:     {}",
+                hex::encode(restored_keys.verifying_key.as_bytes())
+            );
+
+            // Print secret keys (hex) - careful in production!
+            println!("\n=== Secret Keys ===");
+            println!(
+                "Encryption secret: {}",
+                hex::encode(restored_keys.encryption_secret.as_bytes())
+            );
+            println!(
+                "Signing key:       {}",
+                hex::encode(restored_keys.signing_key.as_bytes())
+            );
+
+            // Print encrypted blob info
+            println!("\n=== Encrypted Bundle ===");
+            println!("Salt:       {}", hex::encode(encrypted_secret.salt));
+            println!("Nonce:      {}", hex::encode(encrypted_secret.nonce));
+            println!("Ciphertext: {}", hex::encode(&encrypted_secret.ciphertext));
+            println!("Total size: {} bytes", encrypted_secret.to_bytes().len());
+            */
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetEncrypt(cmd::AssetEncryptCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            use crate::api::types::asset::{AssetGetArg, AssetGetError};
+            let api_client = mk_api_client(Some(session));
+
+            // get asset & metadata of key asset `keys/enc.key`
+
+            // get the asset & metadata
+            // check that metadata doesn't suggest that it's already encrypted
+            //
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetDecrypt(cmd::AssetDecryptCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            use crate::api::types::asset::{AssetGetArg, AssetGetError};
+            let api_client = mk_api_client(Some(session));
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {

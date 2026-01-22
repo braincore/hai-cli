@@ -24,6 +24,7 @@ pub async fn edit_with_editor_api(
     asset_content_type: Option<String>,
     is_push: bool,
     tx: Sender<WorkerAssetMsg>,
+    enc_info: Option<crate::feature::asset_crypt::EncryptKeyPerFileInfo>,
     debug: bool,
 ) -> io::Result<Vec<u8>> {
     // Create a temporary file with an extension to assist editors that use the
@@ -53,12 +54,14 @@ pub async fn edit_with_editor_api(
         .map(|(a, b)| (a.to_string(), b.to_string()))
         .clone();
     let file_path_cloned = file_path.clone();
+    let enc_info_cloned = enc_info.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             let api_client = api_client_cloned.clone();
             let asset_name = asset_name_cloned.clone();
             let asset_entry_ref = asset_entry_ref_cloned.clone();
             let file_path = file_path_cloned.clone();
+            let enc_info = enc_info_cloned.clone();
             match res {
                 Ok(event) => {
                     if debug {
@@ -79,6 +82,7 @@ pub async fn edit_with_editor_api(
                             is_push,
                             api_client,
                             one_shot: false,
+                            enc_info,
                         });
                         let _ = tx.blocking_send(msg);
                     }
@@ -117,6 +121,7 @@ pub async fn edit_with_editor_api(
         is_push,
         api_client: api_client.clone(),
         one_shot: false,
+        enc_info,
     });
     let _ = tx_main.send(final_update_msg).await;
 
