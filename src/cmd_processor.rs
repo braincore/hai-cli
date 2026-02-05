@@ -1957,6 +1957,23 @@ pub async fn process_cmd(
                 }
             };
 
+            // NOTE(UX win): If there are no entries but there is exactly one
+            // collapsed prefix, it's likely that the user is trying to list
+            // the contents of that collapsed prefix. In this case,
+            // automatically list the contents of the collapsed prefix to save
+            // the user from having to re-type the command with the collapsed
+            // prefix.
+            if asset_list_res.entries.is_empty()
+                && asset_list_res.collapsed_prefixes.len() == 1
+                && let Some(collapsed_prefix) = asset_list_res.collapsed_prefixes.first()
+            {
+                session.cmd_queue.push_front(session::CmdInput {
+                    input: format!("/asset-list {}", collapsed_prefix),
+                    source: session::CmdSource::Internal,
+                });
+                return ProcessCmdResult::Loop;
+            }
+
             let mut asset_list_output = vec![];
             let collapsed_prefixes = asset_list_res.collapsed_prefixes.clone();
             let mut collapsed_idx = 0;
