@@ -189,6 +189,10 @@ The script should print important values to stdout."#
                         "type": "string",
                         "description": "Shell script. The script should print important values to stdout."
                     },
+                    "respond": {
+                        "type": "boolean",
+                        "description": "If true, you will see the output and can respond to the user based on the results. If false, just omit the key."
+                    }
                 },
                 "required": ["input"],
                 "additionalProperties": false,

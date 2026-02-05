@@ -1298,7 +1298,7 @@ async fn repl(
                         }
                     } else {
                         match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell).await {
-                            Ok(output_text) => output_text,
+                            Ok((output_text, _respond)) => output_text,
                             Err(e) => {
                                 let err_text = format!("error executing tool: {}", e);
                                 println!("{}", err_text);
