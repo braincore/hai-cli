@@ -776,7 +776,7 @@ async fn repl(
             && session.cmd_queue.is_empty()
             && let cmd::Cmd::Noop = cmd
         {
-            cleanup(&session);
+            wrapup_and_cleanup(&session, update_asset_tx).await;
             process::exit(0);
         }
 
@@ -849,7 +849,7 @@ async fn repl(
             cmd_processor::ProcessCmdResult::Break => break,
             cmd_processor::ProcessCmdResult::Loop => {
                 if exit_when_done && session.cmd_queue.is_empty() {
-                    cleanup(&session);
+                    wrapup_and_cleanup(&session, update_asset_tx).await;
                     process::exit(0);
                 };
                 continue;
@@ -1329,7 +1329,7 @@ async fn repl(
         }
 
         if exit_when_done && session.cmd_queue.is_empty() {
-            cleanup(&session);
+            wrapup_and_cleanup(&session, update_asset_tx).await;
             process::exit(0);
         };
 
@@ -1342,14 +1342,21 @@ async fn repl(
         feature::save_chat::save_chat_to_db(&session, db).await;
     }
 
-    cleanup(&session);
+    wrapup_and_cleanup(&session, update_asset_tx).await;
 
     Ok(())
 }
 
 // --
 
-fn cleanup(session: &SessionState) {
+async fn wrapup_and_cleanup(
+    session: &SessionState,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
+) {
+    // IMPORTANT: Because asset writes are committed asynchronously to make
+    // the REPL more responsive, it's important to flush remaining writes
+    // before exit. Otherwise, there may be lost data and/or corrupted assets.
+    asset_async_writer::flush_asset_updates(&update_asset_tx).await;
     if matches!(session.repl_mode, ReplMode::Task(_, _, _)) {
         term::window_title_reset();
     }
