@@ -667,6 +667,7 @@ enum Printer<'a> {
 }
 
 const LANG_TAG: &str = "_lang_tag";
+const CONTINUE_TAG: &str = "_continue";
 
 // FIXME: Remove tool_id
 pub struct JsonObjectAccumulator<'a> {
@@ -741,7 +742,8 @@ impl<'a> JsonObjectAccumulator<'a> {
                 {
                     self.cur_key_name =
                         Some(self.buffer[first_quote_index + 1..second_quote_index].to_string());
-                    let mute_kv = self.cur_key_name == Some(LANG_TAG.to_string());
+                    let mute_kv = self.cur_key_name == Some(LANG_TAG.to_string())
+                        || self.cur_key_name == Some(CONTINUE_TAG.to_string());
                     let third_quote_index = self
                         .buffer
                         .char_indices()
@@ -808,7 +810,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                         Some("cmds") | Some("input") | None => {
                             self.first_unmuted_key_found = true;
                         }
-                        Some(LANG_TAG) => {}
+                        Some(LANG_TAG) | Some(CONTINUE_TAG) => {}
                         Some(key_name) => {
                             self.first_unmuted_key_found = true;
                             let key_label = format!("{}:\n", key_name);

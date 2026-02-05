@@ -930,24 +930,26 @@ async fn repl(
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
         });
 
-        println!();
-        println!("{}", "↓↓↓".truecolor(128, 128, 128));
-        println!();
+        loop {
+            println!();
+            println!("{}", "↓↓↓".truecolor(128, 128, 128));
+            println!();
 
-        //
-        // Prompt AI
-        //
+            //
+            // Prompt AI
+            //
 
-        // Send full history to AI
-        let msg_history: Vec<chat::Message> = session
-            .history
-            .clone()
-            .into_iter()
-            .map(|log_entry| log_entry.message)
-            .collect();
+            // Send full history to AI
+            let msg_history: Vec<chat::Message> = session
+                .history
+                .clone()
+                .into_iter()
+                .map(|log_entry| log_entry.message)
+                .collect();
 
-        let (ai_responses, from_cache) =
-            if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
+            let (ai_responses, from_cache) = if let Some((ref task_fqn, ref task_key, step_index)) =
+                task_step_signature
+            {
                 let ai_responses_from_cache = if cache {
                     // An error deserializing is likely due to a change
                     // in format due to a version update. Assume that
@@ -1020,202 +1022,323 @@ async fn repl(
                 )
             };
 
-        if from_cache {
-            if let Some((ref task_fqn, _, _)) = task_step_signature {
-                println!("[Retrieved from cache; `/task-forget {task_fqn}` to prompt again]");
+            if from_cache {
+                if let Some((ref task_fqn, _, _)) = task_step_signature {
+                    println!("[Retrieved from cache; `/task-forget {task_fqn}` to prompt again]");
+                }
+                // Because it's from the cache, the response is not yet on the screen.
+                for ai_response in &ai_responses {
+                    match ai_response {
+                        chat::ChatCompletionResponse::Message { text } => {
+                            println!("{}", text);
+                        }
+                        chat::ChatCompletionResponse::Tool {
+                            tool_id,
+                            tool_name,
+                            arg,
+                            ..
+                        } => {
+                            // Since the tool response is saved raw in the history,
+                            // use the JsonObjectAccumulator to process and print
+                            // the response in the same user-friendly way as done
+                            // in the AI providers.
+                            let mut json_obj_acc = ai_provider::util::JsonObjectAccumulator::new(
+                                tool_id.clone(),
+                                tool_name.clone(),
+                                tool_schema::get_syntax_highlighter_token_from_tool_name(tool_name),
+                                masked_strings.clone(),
+                            );
+                            json_obj_acc.acc(arg);
+                            json_obj_acc.end();
+                        }
+                    };
+                }
+            } else if cache && let Some((task_fqn, task_key, step_index)) = &task_step_signature {
+                db::set_task_step_cache(
+                    &*db.lock().await,
+                    session
+                        .account
+                        .as_ref()
+                        .map(|a| a.username.as_str())
+                        .unwrap_or(""),
+                    task_fqn,
+                    task_key.as_deref(),
+                    *step_index,
+                    &prompt,
+                    &serde_json::to_string(&ai_responses).unwrap(),
+                )
             }
-            // Because it's from the cache, the response is not yet on the screen.
+
             for ai_response in &ai_responses {
+                //
+                // Bookkeeping
+                //
+
+                // Increment `input_tokens` b/c the AI output will be part of the next input
+                let tokens = match ai_response {
+                    chat::ChatCompletionResponse::Message { text } => {
+                        bpe_tokenizer.encode_with_special_tokens(text).len() as u32
+                    }
+                    chat::ChatCompletionResponse::Tool { arg, .. } => {
+                        bpe_tokenizer.encode_with_special_tokens(arg).len() as u32
+                    }
+                };
+                session.input_tokens += tokens;
+
+                // Append AI's response to history
                 match ai_response {
                     chat::ChatCompletionResponse::Message { text } => {
-                        println!("{}", text);
+                        session.history.push(db::LogEntry {
+                            uuid: Uuid::now_v7().to_string(),
+                            ts: chrono::Local::now(),
+                            message: chat::Message {
+                                role: chat::MessageRole::Assistant,
+                                content: vec![chat::MessageContent::Text { text: text.clone() }],
+                                tool_calls: None,
+                                tool_call_id: None,
+                            },
+                            tokens,
+                            retention_policy: (
+                                is_task_mode_step,
+                                db::LogEntryRetentionPolicy::None,
+                            ),
+                        });
                     }
                     chat::ChatCompletionResponse::Tool {
                         tool_id,
                         tool_name,
                         arg,
-                        ..
                     } => {
-                        // Since the tool response is saved raw in the history,
-                        // use the JsonObjectAccumulator to process and print
-                        // the response in the same user-friendly way as done
-                        // in the AI providers.
-                        let mut json_obj_acc = ai_provider::util::JsonObjectAccumulator::new(
-                            tool_id.clone(),
-                            tool_name.clone(),
-                            tool_schema::get_syntax_highlighter_token_from_tool_name(tool_name),
-                            masked_strings.clone(),
-                        );
-                        json_obj_acc.acc(arg);
-                        json_obj_acc.end();
+                        session.history.push(db::LogEntry {
+                            uuid: Uuid::now_v7().to_string(),
+                            ts: chrono::Local::now(),
+                            message: chat::Message {
+                                role: chat::MessageRole::Assistant,
+                                content: vec![],
+                                tool_calls: Some(vec![chat::ToolCall {
+                                    id: tool_id.clone(),
+                                    type_: "function".to_string(),
+                                    function: chat::Function {
+                                        name: tool_name.to_owned(),
+                                        arguments: arg.clone(),
+                                    },
+                                }]),
+                                tool_call_id: None,
+                            },
+                            tokens,
+                            retention_policy: (
+                                is_task_mode_step,
+                                db::LogEntryRetentionPolicy::None,
+                            ),
+                        });
                     }
-                };
+                }
             }
-        } else if cache && let Some((task_fqn, task_key, step_index)) = &task_step_signature {
-            db::set_task_step_cache(
-                &*db.lock().await,
-                session
-                    .account
-                    .as_ref()
-                    .map(|a| a.username.as_str())
-                    .unwrap_or(""),
-                task_fqn,
-                task_key.as_deref(),
-                *step_index,
-                &prompt,
-                &serde_json::to_string(&ai_responses).unwrap(),
-            )
-        }
 
-        for ai_response in &ai_responses {
             //
-            // Bookkeeping
+            // Execute optional tool
             //
-
-            // Increment `input_tokens` b/c the AI output will be part of the next input
-            let tokens = match ai_response {
-                chat::ChatCompletionResponse::Message { text } => {
-                    bpe_tokenizer.encode_with_special_tokens(text).len() as u32
-                }
-                chat::ChatCompletionResponse::Tool { arg, .. } => {
-                    bpe_tokenizer.encode_with_special_tokens(arg).len() as u32
-                }
-            };
-            session.input_tokens += tokens;
-
-            // Append AI's response to history
-            match ai_response {
-                chat::ChatCompletionResponse::Message { text } => {
-                    session.history.push(db::LogEntry {
-                        uuid: Uuid::now_v7().to_string(),
-                        ts: chrono::Local::now(),
-                        message: chat::Message {
-                            role: chat::MessageRole::Assistant,
-                            content: vec![chat::MessageContent::Text { text: text.clone() }],
-                            tool_calls: None,
-                            tool_call_id: None,
-                        },
-                        tokens,
-                        retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
-                    });
-                }
-                chat::ChatCompletionResponse::Tool {
+            //let mut atleast_one_ai_follow_up = false;
+            let mut ai_follow_up_requested = None;
+            for ai_response in &ai_responses {
+                if let chat::ChatCompletionResponse::Tool {
                     tool_id,
                     tool_name,
                     arg,
-                } => {
-                    session.history.push(db::LogEntry {
-                        uuid: Uuid::now_v7().to_string(),
-                        ts: chrono::Local::now(),
-                        message: chat::Message {
-                            role: chat::MessageRole::Assistant,
-                            content: vec![],
-                            tool_calls: Some(vec![chat::ToolCall {
-                                id: tool_id.clone(),
-                                type_: "function".to_string(),
-                                function: chat::Function {
-                                    name: tool_name.to_owned(),
-                                    arguments: arg.clone(),
-                                },
-                            }]),
-                            tool_call_id: None,
-                        },
-                        tokens,
-                        retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
-                    });
-                }
-            }
-        }
-
-        //
-        // Execute optional tool
-        //
-        for ai_response in &ai_responses {
-            if let chat::ChatCompletionResponse::Tool {
-                tool_id,
-                tool_name,
-                arg,
-            } = &ai_response
-            {
-                println!();
-                println!("{}", "⚙ ⚙ ⚙".white().on_black());
-                println!();
-
-                // The combined policy is a byproduct of pecularities in
-                // Anthropic's API. Once a tool is used once in a conversation,
-                // it can be used again by the AI and there's no way to disable
-                // it. The tool cannot be removed from tool-schemas either once
-                // it has appeared in the message history. This means that
-                // tool_policy could be None, but the AI will still respond
-                // with tool use. The "combined" policy accommodates the logic
-                // for these over-zealous recommendations. Unfortunately, this
-                // logic is still inadequate as the use of a tool that doesn't
-                // match the tool policy may be a poor approximation of the
-                // original one used (FIXME).
-                let inexact_tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
-                let tool_policy_combined = tool_policy.clone().or_else(|| {
-                    inexact_tool.map(|tool| tool::ToolPolicy {
-                        tool,
-                        user_confirmation: false,
-                        force_tool: false,
-                    })
-                });
-
-                // The tools that don't need user-confirmation are those that
-                // don't have destructive potential. !fn-py only assigns a
-                // function but does not execute it. !clip can be abused but
-                // it's more of a nuisance. Also, the prompting of the AI may
-                // still require user confirmation.
-                let tool_needs_user_confirmation = !matches!(
-                    tool_policy_combined,
-                    Some(tool::ToolPolicy {
-                        tool: tool::Tool::Fn(_) | tool::Tool::CopyToClipboard,
-                        ..
-                    })
-                );
-                // If the tool is a no-op, then it doesn't need user confirmation.
-                let tool_noops = match tool_policy_combined {
-                    Some(tool::ToolPolicy {
-                        tool: tool::Tool::HaiRepl,
-                        ..
-                    }) => {
-                        if let Ok(hai_repl_arg) = serde_json::from_str::<tool::ToolHaiReplArg>(arg)
-                        {
-                            hai_repl_arg.cmds.is_empty()
-                        } else {
-                            false
-                        }
-                    }
-                    Some(_) | None => false,
-                };
-
-                // The negation of the policy to require the AI to use a tool
-                // doubles as a way to require user confirmation.
-                let tool_policy_needs_user_confirmation = tool_policy_combined
-                    .clone()
-                    .map(|tp| tp.user_confirmation)
-                    .unwrap_or(false);
-
-                let user_confirmed_tool_execute = if !force_yes
-                    && !tool_noops
-                    && tool_needs_user_confirmation
-                    && (cfg.tool_confirm
-                        || tool_policy_needs_user_confirmation
-                        || task_step_requires_user_confirmation)
+                } = &ai_response
                 {
-                    let answer = term::ask_question_default_empty("Execute? y/[n]:", false);
-                    let answered_yes = answer.starts_with('y');
-                    if !answered_yes {
-                        let error_text = format!("USER CANCELLED TOOL: Execute? {}", answer);
+                    println!();
+                    println!("{}", "⚙ ⚙ ⚙".white().on_black());
+                    println!();
+
+                    // The combined policy is a byproduct of pecularities in
+                    // Anthropic's API. Once a tool is used once in a conversation,
+                    // it can be used again by the AI and there's no way to disable
+                    // it. The tool cannot be removed from tool-schemas either once
+                    // it has appeared in the message history. This means that
+                    // tool_policy could be None, but the AI will still respond
+                    // with tool use. The "combined" policy accommodates the logic
+                    // for these over-zealous recommendations. Unfortunately, this
+                    // logic is still inadequate as the use of a tool that doesn't
+                    // match the tool policy may be a poor approximation of the
+                    // original one used (FIXME).
+                    let inexact_tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
+                    let tool_policy_combined = tool_policy.clone().or_else(|| {
+                        inexact_tool.map(|tool| tool::ToolPolicy {
+                            tool,
+                            user_confirmation: false,
+                            force_tool: false,
+                        })
+                    });
+
+                    // The tools that don't need user-confirmation are those that
+                    // don't have destructive potential. !fn-py only assigns a
+                    // function but does not execute it. !clip can be abused but
+                    // it's more of a nuisance. Also, the prompting of the AI may
+                    // still require user confirmation.
+                    let tool_needs_user_confirmation = !matches!(
+                        tool_policy_combined,
+                        Some(tool::ToolPolicy {
+                            tool: tool::Tool::Fn(_) | tool::Tool::CopyToClipboard,
+                            ..
+                        })
+                    );
+                    // If the tool is a no-op, then it doesn't need user confirmation.
+                    let tool_noops = match tool_policy_combined {
+                        Some(tool::ToolPolicy {
+                            tool: tool::Tool::HaiRepl,
+                            ..
+                        }) => {
+                            if let Ok(hai_repl_arg) =
+                                serde_json::from_str::<tool::ToolHaiReplArg>(arg)
+                            {
+                                hai_repl_arg.cmds.is_empty()
+                            } else {
+                                false
+                            }
+                        }
+                        Some(_) | None => false,
+                    };
+
+                    // The negation of the policy to require the AI to use a tool
+                    // doubles as a way to require user confirmation.
+                    let tool_policy_needs_user_confirmation = tool_policy_combined
+                        .clone()
+                        .map(|tp| tp.user_confirmation)
+                        .unwrap_or(false);
+
+                    let user_confirmed_tool_execute = if !force_yes
+                        && !tool_noops
+                        && tool_needs_user_confirmation
+                        && (cfg.tool_confirm
+                            || tool_policy_needs_user_confirmation
+                            || task_step_requires_user_confirmation)
+                    {
+                        let answer = term::ask_question_default_empty("Execute? y/[n]:", false);
+                        let answered_yes = answer.starts_with('y');
+                        if !answered_yes {
+                            let error_text = format!("USER CANCELLED TOOL: Execute? {}", answer);
+                            let tokens =
+                                bpe_tokenizer.encode_with_special_tokens(&error_text).len() as u32;
+                            session.input_tokens += tokens;
+                            session.history.push(db::LogEntry {
+                                uuid: Uuid::now_v7().to_string(),
+                                ts: chrono::Local::now(),
+                                message: chat::Message {
+                                    role: chat::MessageRole::Tool,
+                                    content: vec![chat::MessageContent::Text { text: error_text }],
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_id.clone()),
+                                },
+                                tokens,
+                                retention_policy: (
+                                    is_task_mode_step,
+                                    db::LogEntryRetentionPolicy::None,
+                                ),
+                            });
+                        }
+                        answered_yes
+                    } else {
+                        true
+                    };
+
+                    if user_confirmed_tool_execute && let Some(ref tp) = tool_policy_combined {
+                        let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
+                            println!("Tool Interrupted");
+                        });
+                        let (output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl) {
+                            match tool::execute_hai_repl_tool(&tp.tool, arg, &mut session.cmd_queue)
+                            {
+                                Ok(output_text) => (output_text, None),
+                                Err(e) => {
+                                    let err_text = format!("error executing hai-repl tool: {}", e);
+                                    println!("{}", err_text);
+                                    (err_text, None)
+                                }
+                            }
+                        } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
+                            let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref() {
+                                // If name already in use, replaces.
+                                // This makes iteration easier.
+                                format!("f_{}", name)
+                            } else {
+                                // Get first free name
+                                let mut i = session.ai_defined_fns.len();
+                                loop {
+                                    let test_name = format!("f{}", i);
+                                    if !session.ai_defined_fns.contains_key(&test_name) {
+                                        break test_name;
+                                    }
+                                    i += 1;
+                                }
+                            };
+                            match tool::extract_ai_defined_fn_def(arg) {
+                                Ok(fn_def) => {
+                                    let ai_defined_fn = session::AiDefinedFn {
+                                        fn_def,
+                                        fn_tool: fn_tool.clone(),
+                                    };
+                                    session.ai_defined_fns.insert(
+                                        ai_defined_tool_name.clone(),
+                                        (ai_defined_fn, is_task_mode_step),
+                                    );
+                                    let output_text =
+                                        format!("Stored as command: /{}", ai_defined_tool_name);
+                                    println!("{}", output_text);
+                                    (output_text, None)
+                                }
+                                Err(e) => {
+                                    let err_text = format!("error extracting function: {}", e);
+                                    println!("{}", err_text);
+                                    (err_text, None)
+                                }
+                            }
+                        } else if matches!(tp.tool, tool::Tool::Html) {
+                            match feature::html_tool::execute_html_tool(
+                                &mut session,
+                                is_task_mode_step,
+                                arg,
+                            )
+                            .await
+                            {
+                                Ok(temp_file_path) => {
+                                    let output_text = format!("Updated {}", temp_file_path);
+                                    println!("{}", output_text);
+                                    (output_text, None)
+                                }
+                                Err(e) => {
+                                    let err_text = format!("error executing HTML tool: {}", e);
+                                    println!("{}", err_text);
+                                    (err_text, None)
+                                }
+                            }
+                        } else {
+                            match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell)
+                                .await
+                            {
+                                Ok((output_text, follow_up)) => (output_text, follow_up),
+                                Err(e) => {
+                                    let err_text = format!("error executing tool: {}", e);
+                                    println!("{}", err_text);
+                                    (err_text, None)
+                                }
+                            }
+                        };
+                        if ai_follow_up_requested.is_none() {
+                            ai_follow_up_requested = follow_up;
+                        }
+                        ctrlc_handler.remove_handler(tool_exec_handler_id);
+                        // Increment tokens because the tool output will be part of
+                        // the next message's input.
                         let tokens =
-                            bpe_tokenizer.encode_with_special_tokens(&error_text).len() as u32;
+                            bpe_tokenizer.encode_with_special_tokens(&output_text).len() as u32;
                         session.input_tokens += tokens;
                         session.history.push(db::LogEntry {
                             uuid: Uuid::now_v7().to_string(),
                             ts: chrono::Local::now(),
                             message: chat::Message {
                                 role: chat::MessageRole::Tool,
-                                content: vec![chat::MessageContent::Text { text: error_text }],
+                                content: vec![chat::MessageContent::Text { text: output_text }],
                                 tool_calls: None,
                                 tool_call_id: Some(tool_id.clone()),
                             },
@@ -1226,120 +1349,42 @@ async fn repl(
                             ),
                         });
                     }
-                    answered_yes
-                } else {
-                    true
-                };
-
-                if user_confirmed_tool_execute && let Some(ref tp) = tool_policy_combined {
-                    let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
-                        println!("Tool Interrupted");
-                    });
-                    let output_text = if matches!(tp.tool, tool::Tool::HaiRepl) {
-                        match tool::execute_hai_repl_tool(&tp.tool, arg, &mut session.cmd_queue) {
-                            Ok(output_text) => output_text,
-                            Err(e) => {
-                                let err_text = format!("error executing hai-repl tool: {}", e);
-                                println!("{}", err_text);
-                                err_text
-                            }
-                        }
-                    } else if let tool::Tool::Fn(fn_tool) = &tp.tool {
-                        let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref() {
-                            // If name already in use, replaces.
-                            // This makes iteration easier.
-                            format!("f_{}", name)
-                        } else {
-                            // Get first free name
-                            let mut i = session.ai_defined_fns.len();
-                            loop {
-                                let test_name = format!("f{}", i);
-                                if !session.ai_defined_fns.contains_key(&test_name) {
-                                    break test_name;
-                                }
-                                i += 1;
-                            }
-                        };
-                        match tool::extract_ai_defined_fn_def(arg) {
-                            Ok(fn_def) => {
-                                let ai_defined_fn = session::AiDefinedFn {
-                                    fn_def,
-                                    fn_tool: fn_tool.clone(),
-                                };
-                                session.ai_defined_fns.insert(
-                                    ai_defined_tool_name.clone(),
-                                    (ai_defined_fn, is_task_mode_step),
-                                );
-                                let output_text =
-                                    format!("Stored as command: /{}", ai_defined_tool_name);
-                                println!("{}", output_text);
-                                output_text
-                            }
-                            Err(e) => {
-                                let err_text = format!("error extracting function: {}", e);
-                                println!("{}", err_text);
-                                err_text
-                            }
-                        }
-                    } else if matches!(tp.tool, tool::Tool::Html) {
-                        match feature::html_tool::execute_html_tool(
-                            &mut session,
-                            is_task_mode_step,
-                            arg,
-                        )
-                        .await
-                        {
-                            Ok(temp_file_path) => {
-                                let output_text = format!("Updated {}", temp_file_path);
-                                println!("{}", output_text);
-                                output_text
-                            }
-                            Err(e) => {
-                                let err_text = format!("error executing HTML tool: {}", e);
-                                println!("{}", err_text);
-                                err_text
-                            }
-                        }
-                    } else {
-                        match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell).await {
-                            Ok(output_text) => output_text,
-                            Err(e) => {
-                                let err_text = format!("error executing tool: {}", e);
-                                println!("{}", err_text);
-                                err_text
-                            }
-                        }
-                    };
-                    ctrlc_handler.remove_handler(tool_exec_handler_id);
-                    // Increment tokens because the tool output will be part of
-                    // the next message's input.
-                    let tokens =
-                        bpe_tokenizer.encode_with_special_tokens(&output_text).len() as u32;
-                    session.input_tokens += tokens;
-                    session.history.push(db::LogEntry {
-                        uuid: Uuid::now_v7().to_string(),
-                        ts: chrono::Local::now(),
-                        message: chat::Message {
-                            role: chat::MessageRole::Tool,
-                            content: vec![chat::MessageContent::Text { text: output_text }],
-                            tool_calls: None,
-                            tool_call_id: Some(tool_id.clone()),
-                        },
-                        tokens,
-                        retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
-                    });
                 }
             }
+
+            if exit_when_done && session.cmd_queue.is_empty() {
+                wrapup_and_cleanup(&session, update_asset_tx).await;
+                process::exit(0);
+            };
+
+            println!();
+            println!("{}", "---".truecolor(128, 128, 128));
+            println!();
+            if let Some(follow_up) = ai_follow_up_requested {
+                println!("{}", follow_up);
+                let user_backwards_compat_follow_up_msg = "Go on";
+                let tokens = bpe_tokenizer
+                    .encode_with_special_tokens(&user_backwards_compat_follow_up_msg)
+                    .len() as u32;
+                session.input_tokens += tokens;
+                session.history.push(db::LogEntry {
+                    uuid: Uuid::now_v7().to_string(),
+                    ts: chrono::Local::now(),
+                    message: chat::Message {
+                        role: chat::MessageRole::User,
+                        content: vec![chat::MessageContent::Text {
+                            text: user_backwards_compat_follow_up_msg.to_string(),
+                        }],
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    tokens,
+                    retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                });
+            } else {
+                break;
+            }
         }
-
-        if exit_when_done && session.cmd_queue.is_empty() {
-            wrapup_and_cleanup(&session, update_asset_tx).await;
-            process::exit(0);
-        };
-
-        println!();
-        println!("{}", "---".truecolor(128, 128, 128));
-        println!();
     }
 
     if !exit_when_done {

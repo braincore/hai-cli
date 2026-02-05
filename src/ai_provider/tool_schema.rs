@@ -185,6 +185,10 @@ The script should print important values to stdout."#
             schema_key_name: {
                 "type": "object",
                 "properties": {
+                    "_continue": {
+                        "type": "string",
+                        "description": "Set this if the user's request requires you to interpret, analyze, or comment on the tool output; you will be able to respond after seeing the results before the user. Describe what you'll analyze."
+                    },
                     "input": {
                         "type": "string",
                         "description": "Shell script. The script should print important values to stdout."
@@ -192,6 +196,7 @@ The script should print important values to stdout."#
                 },
                 "required": ["input"],
                 "additionalProperties": false,
+                "description": "If set, provide the `_continue` property before the `input` property in your response."
             },
         }),
         Tool::ShellExecWithFile(cmd, ext) => json!({

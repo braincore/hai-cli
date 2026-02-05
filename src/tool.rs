@@ -137,25 +137,29 @@ pub struct ToolPolicy {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct ToolShellBasedArg {
     input: String,
+    _continue: Option<String>,
 }
 
 pub async fn execute_shell_based_tool(
     tool: &Tool,
     arg: &str,
     shell: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let input = serde_json::from_str::<ToolShellBasedArg>(arg)?.input;
-    Ok(match tool {
-        Tool::CopyToClipboard => copy_to_clipboard(&input)?,
-        Tool::ExecPythonScript => exec_python_script(&input).await?,
-        Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
-        Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
-        Tool::ShellExecWithFile(cmd, ext) => {
-            shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
-        }
-        Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
-        _ => "fatal: not a shell-based tool".to_string(),
-    })
+) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+    let ToolShellBasedArg { input, _continue } = serde_json::from_str::<ToolShellBasedArg>(arg)?;
+    Ok((
+        match tool {
+            Tool::CopyToClipboard => copy_to_clipboard(&input)?,
+            Tool::ExecPythonScript => exec_python_script(&input).await?,
+            Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
+            Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
+            Tool::ShellExecWithFile(cmd, ext) => {
+                shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
+            }
+            Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
+            _ => "fatal: not a shell-based tool".to_string(),
+        },
+        _continue,
+    ))
 }
 
 pub async fn execute_ai_defined_tool(
