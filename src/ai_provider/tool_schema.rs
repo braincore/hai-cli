@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 /// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.
 /// - shell: Allows AI to tailor the command especially since bash and
 ///   powershell are rather different.
-pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str) -> Value {
+pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str, agentic: bool) -> Value {
     let tool_name = get_tool_name(tool);
     let system = config::get_machine_os_arch();
-    match tool {
+    let mut schema = match tool {
         Tool::CopyToClipboard => json!({
             "name": tool_name,
             "description": "Copies the input to the system clipboard at the user's request.",
@@ -442,6 +442,49 @@ contents line 2
                 "additionalProperties": false,
             },
         }),
+    };
+    if agentic {
+        schema[schema_key_name]["properties"]["_continue"] = json!({
+            "type": "string",
+            "description": "Agentic. Set this if the user's request requires you to follow up on, analyze, or comment on the tool output; you will be able to respond after seeing the results before returning control to the user. Describe what you're doing next and remind yourself what the stop condition is."
+        });
+        let continue_note = "If set, provide the `_continue` property before the `input` property in your response.";
+        let new_description = schema[schema_key_name]
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map_or(continue_note.to_string(), |existing| {
+                format!("{} {}", existing, continue_note)
+            });
+
+        schema[schema_key_name]["description"] = json!(new_description);
+        if let Some(properties) = schema[schema_key_name]["properties"].as_object_mut() {
+            // This is a really important for UI/UX. Some models (e.g., Claude)
+            // tend to return keys in the order they are defined in the schema,
+            // so we want to coax the AI to return the `_continue` key first if
+            // it's present to improve the flow of the output: `_continue`
+            // explanation before tool invocation instructions.
+            reorder_with_key_first(properties, "_continue");
+        }
+    }
+    schema
+}
+
+/// Reorder the keys in the map so that `first_key` comes first, if it exists.
+///
+/// This is to coax the AI to return that key first since some models tend to
+/// return keys in the order they are defined in the schema.
+fn reorder_with_key_first(map: &mut serde_json::Map<String, Value>, first_key: &str) {
+    // Take ownership of the whole map, leaving an empty one
+    let mut old_map = std::mem::take(map);
+
+    // Insert _continue first (if it exists)
+    if let Some(first_val) = old_map.remove(first_key) {
+        map.insert(first_key.to_string(), first_val);
+    }
+
+    // Insert everything else
+    for (k, v) in old_map {
+        map.insert(k, v);
     }
 }
 

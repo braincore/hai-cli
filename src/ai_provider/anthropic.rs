@@ -164,7 +164,12 @@ pub async fn send_to_anthropic(
                 // since shell-cmd is not populated by get_tool_from_name()!
                 // WARN: There's a serious issue if the name isn't present
                 if let Some(tool) = get_tool_from_name(&tool_call.function.name) {
-                    tool_schemas.push(get_tool_schema(&tool, "input_schema", shell))
+                    tool_schemas.push(get_tool_schema(
+                        &tool,
+                        "input_schema",
+                        shell,
+                        tool_policy.map_or(false, |tp| tp.agentic),
+                    ));
                 }
             }
         }
@@ -172,7 +177,7 @@ pub async fn send_to_anthropic(
     let tool_choice = if let Some(tp) = tool_policy {
         let tool_name = get_tool_name(&tp.tool);
         if !tools_added.contains(tool_name) {
-            tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell))
+            tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell, tp.agentic))
         }
         if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))

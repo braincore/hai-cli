@@ -132,30 +132,37 @@ pub struct ToolPolicy {
     pub user_confirmation: bool,
     /// Whether the AI is required to use this tool
     pub force_tool: bool,
+    /// Whether the tool should give the option to continue responding after
+    /// tool execution
+    pub agentic: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct ToolShellBasedArg {
     input: String,
+    _continue: Option<String>,
 }
 
 pub async fn execute_shell_based_tool(
     tool: &Tool,
     arg: &str,
     shell: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let input = serde_json::from_str::<ToolShellBasedArg>(arg)?.input;
-    Ok(match tool {
-        Tool::CopyToClipboard => copy_to_clipboard(&input)?,
-        Tool::ExecPythonScript => exec_python_script(&input).await?,
-        Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
-        Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
-        Tool::ShellExecWithFile(cmd, ext) => {
-            shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
-        }
-        Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
-        _ => "fatal: not a shell-based tool".to_string(),
-    })
+) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+    let ToolShellBasedArg { input, _continue } = serde_json::from_str::<ToolShellBasedArg>(arg)?;
+    Ok((
+        match tool {
+            Tool::CopyToClipboard => copy_to_clipboard(&input)?,
+            Tool::ExecPythonScript => exec_python_script(&input).await?,
+            Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
+            Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
+            Tool::ShellExecWithFile(cmd, ext) => {
+                shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
+            }
+            Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
+            _ => "fatal: not a shell-based tool".to_string(),
+        },
+        _continue,
+    ))
 }
 
 pub async fn execute_ai_defined_tool(
@@ -203,6 +210,7 @@ if __name__ == "__main__":
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ToolHaiReplArg {
     pub cmds: Vec<String>,
+    pub _continue: Option<String>,
 }
 
 pub fn execute_hai_repl_tool(
@@ -210,17 +218,24 @@ pub fn execute_hai_repl_tool(
     arg: &str,
     cmd_queue: &mut VecDeque<session::CmdInput>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let cmds = serde_json::from_str::<ToolHaiReplArg>(arg)?.cmds;
-    let cmd_count = cmds.len();
+    let ToolHaiReplArg {
+        mut cmds,
+        _continue,
+    } = serde_json::from_str::<ToolHaiReplArg>(arg)?;
     Ok(match tool {
         Tool::HaiRepl => {
-            for (index, cmd) in cmds.into_iter().enumerate().rev() {
+            if cmds.last().map(|c| !c.starts_with("!hai")).unwrap_or(true)
+                && let Some(_continue) = &_continue
+            {
+                cmds.push(format!("!hai {}", _continue));
+            }
+            for (index, cmd) in cmds.iter().enumerate().rev() {
                 cmd_queue.push_front(session::CmdInput {
                     input: cmd.clone(),
                     source: session::CmdSource::HaiTool(index as u32),
                 });
             }
-            let output = format!("Pushed {} command(s) into queue", cmd_count);
+            let output = format!("Pushed {} command(s) into queue", cmds.len());
             println!("{}", output);
             output
         }

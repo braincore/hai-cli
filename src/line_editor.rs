@@ -146,6 +146,7 @@ pub struct EditorPrompt {
     pub input_tokens: u32,
     pub task_mode: Option<String>,
     pub incognito: bool,
+    pub agentic: bool,
     pub tool_mode: Option<String>,
     pub hai_router: HaiRouterState,
     pub is_dev: bool,
@@ -160,6 +161,7 @@ impl EditorPrompt {
             input_tokens: 0,
             task_mode: None,
             incognito: false,
+            agentic: false,
             tool_mode: None,
             hai_router: HaiRouterState::Off,
             is_dev: false,
@@ -187,6 +189,10 @@ impl EditorPrompt {
         self.incognito = incognito;
     }
 
+    pub fn set_agentic(&mut self, agentic: bool) {
+        self.agentic = agentic;
+    }
+
     pub fn set_tool_mode(&mut self, tool_mode: Option<String>) {
         self.tool_mode = tool_mode;
     }
@@ -208,6 +214,7 @@ impl Prompt for EditorPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
         let incognito_emoji = if self.incognito { "😎" } else { "" };
         let is_dev_emoji = if self.is_dev { "🔧" } else { "" };
+        let agentic_emoji = if self.agentic { "🤖" } else { "" };
         let task_name = self.task_mode.clone().unwrap_or("".into());
         let tool_mode = self
             .tool_mode
@@ -215,8 +222,8 @@ impl Prompt for EditorPrompt {
             .map(|v| format!(" {}", v))
             .unwrap_or("".into());
         Cow::Owned(format!(
-            "{}{}{}[{}]{}",
-            is_dev_emoji, incognito_emoji, task_name, self.index, tool_mode
+            "{}{}{}{}[{}]{}",
+            is_dev_emoji, incognito_emoji, agentic_emoji, task_name, self.index, tool_mode
         ))
     }
 

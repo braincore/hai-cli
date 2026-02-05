@@ -369,6 +369,32 @@ The Sun is enormously large compared to Earth. Here are the key measurements:
 - Sun's mass: approximately 1.989 × 10^30 kilograms
 ```
 
+## Agentic mode
+
+> Let the LLM cook.
+
+Agentic mode allows the LLM to loop autonomously, executing tools and analyzing
+results until it decides the task is complete.
+
+```
+/agentic on
+```
+
+When enabled, a 🤖 emoji appears in your prompt.
+
+The ability of agentic mode to produce quality results depends greatly on the
+model. You should experiment with various models, but `opus-4.5` is a good
+model to start with.
+
+### How it works
+
+Agentic mode gives LLMs the option to loop when invoking a tool such as `!sh`
+or `!hai`.
+
+Specifically with `!hai`, it's easier for LLMs to reason about than
+[!hai recursion](#hai-recursion). As an aside, if the LLM chooses to loop, it's
+implemented as adding a recursive `!hai` as the final command.
+
 ## Function tool `!fn-*`
 
 A drawback of `!py` and `!sh` is that there's no ability to re-use the code

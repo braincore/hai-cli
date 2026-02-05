@@ -49,7 +49,7 @@ pub async fn send_to_ollama(
     // Create JSON payload
     let mut tool_schemas = vec![];
     if let Some(tp) = tool_policy {
-        tool_schemas.push(get_tool_schema(&tp.tool, "parameters", shell))
+        tool_schemas.push(get_tool_schema(&tp.tool, "parameters", shell, tp.agentic))
     }
     let mut request_body = if tool_schemas.is_empty() {
         json!({

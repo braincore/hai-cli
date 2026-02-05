@@ -111,7 +111,7 @@ pub async fn send_to_openai(
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
         if let Some(tp) = tool_policy {
-            let tool_schemas = vec![get_tool_schema(&tp.tool, "parameters", shell)];
+            let tool_schemas = vec![get_tool_schema(&tp.tool, "parameters", shell, tp.agentic)];
             let tool_choice = if tp.force_tool { "required" } else { "auto" };
             // OpenAI has a wrapping over each tool schema.
             let function_wrappers: Vec<serde_json::Value> = tool_schemas

@@ -31,6 +31,8 @@ pub enum Cmd {
     SetMaskSecrets(SetMaskSecretsCmd),
     /// Set hai-router on/off
     HaiRouter(HaiRouterCmd),
+    /// Agentic mode on/off
+    Agentic(AgenticCmd),
     /// Get/set AI model temperature
     Temperature(TemperatureCmd),
     /// Executes a shell command
@@ -250,6 +252,11 @@ pub struct SetMaskSecretsCmd {
 
 #[derive(Clone, Debug)]
 pub struct HaiRouterCmd {
+    pub on: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgenticCmd {
     pub on: Option<bool>,
 }
 
@@ -1293,6 +1300,24 @@ fn parse_command(
                     }
                 }
                 None => Some(Cmd::HaiRouter(HaiRouterCmd { on: None })),
+            }
+        }
+        "agentic" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(arg) => {
+                    if arg != "on" && arg != "off" {
+                        eprintln!("Usage: /{cmd_name} <on|off>");
+                        None
+                    } else {
+                        Some(Cmd::Agentic(AgenticCmd {
+                            on: Some(arg == "on"),
+                        }))
+                    }
+                }
+                None => Some(Cmd::Agentic(AgenticCmd { on: None })),
             }
         }
         "temperature" => {

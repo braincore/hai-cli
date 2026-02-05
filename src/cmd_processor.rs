@@ -319,6 +319,17 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Agentic(cmd::AgenticCmd { on }) => {
+            if let Some(on) = on {
+                session.agentic = *on;
+            } else {
+                println!(
+                    "agentic mode: {}",
+                    if session.agentic { "on" } else { "off" }
+                );
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Temperature(cmd::TemperatureCmd { temperature }) => {
             if let Some(temperature) = temperature {
                 session.ai_temperature = Some(*temperature);
