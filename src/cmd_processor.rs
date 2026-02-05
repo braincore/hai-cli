@@ -1592,9 +1592,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name =
-                resolve_quick_var(&asset_name, session).unwrap_or_else(|| asset_name.to_string());
-            let asset_name = expand_pub_asset_name(&asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             if let Some(editor) = editor
                 && let Some(prog_asset_name) = editor.strip_prefix("@")
@@ -1716,7 +1714,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             if asset_helper::get_invalid_asset_name_re().is_match(&asset_name) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
@@ -1788,7 +1786,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             // NOTE: Possible improvement is to only fetch `metadata` if
             // `content_encrypted` is set.
@@ -1870,7 +1868,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                 asset_blob_cache.clone(),
@@ -1925,7 +1923,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
-            let prefix = expand_pub_asset_name(prefix, &session.account);
+            let prefix = resolve_asset_name(&prefix, session);
             let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
                 let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
                 (prefix, Some(pattern))
@@ -2132,7 +2130,7 @@ pub async fn process_cmd(
         | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_names }) => {
             let asset_names = asset_names
                 .iter()
-                .map(|name| expand_pub_asset_name(name, &session.account))
+                .map(|name| resolve_asset_name(&name, session))
                 .collect::<Vec<_>>();
             let api_client = mk_api_client(Some(session));
 
@@ -2242,7 +2240,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd { asset_name, count }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
 
             use crate::api::types::asset::{
@@ -2464,7 +2462,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetFollow(cmd::AssetFollowCmd { asset_name }) => {
             println!("WARN: /asset-follow is for debugging.");
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             use crate::api::types::asset::{
                 AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
             };
@@ -2561,7 +2559,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetListen(cmd::AssetListenCmd { asset_name, cursor }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             use crate::api::types::asset::{
                 AssetCreatedBy, AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
                 RevisionIterDirection,
@@ -2732,7 +2730,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetLink(cmd::AssetLinkCmd { asset_name }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetGetArg;
             let asset_data_url = match api_client.asset_get(AssetGetArg { name: asset_name }).await
@@ -2867,7 +2865,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let source_asset_name = expand_pub_asset_name(source_asset_name, &session.account);
+            let source_asset_name = resolve_asset_name(source_asset_name, session);
             // Special case if target is `.`
             let target_file_path = if target_file_path == "." {
                 match source_asset_name.rsplit('/').next() {
@@ -2946,7 +2944,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
 
             // Collect all messages to log at once
@@ -3120,7 +3118,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             let api_ace_type = match ace_type {
                 cmd::AssetAceType::Allow => AceType::Allow,
@@ -3154,7 +3152,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::{AssetGetArg, AssetMetadataInfo};
             match api_client.asset_get(AssetGetArg { name: asset_name }).await {
@@ -3199,7 +3197,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
             match api_client
@@ -3233,7 +3231,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let value_json = match serde_json::from_str::<serde_json::Value>(value) {
                 Ok(value_json) => value_json,
                 Err(e) => {
@@ -3265,7 +3263,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             if asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, key, None)
                 .await
@@ -4833,6 +4831,15 @@ pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::e
 }
 
 // --
+
+/// Resolves asset names in two ways:
+///
+/// 1. Expands public asset names (//) to explicitly include the username.
+/// 2. Resolves quick variables ($) to their values in the session.
+fn resolve_asset_name(asset_name: &str, session: &SessionState) -> String {
+    let expanded = expand_pub_asset_name(asset_name, &session.account);
+    resolve_quick_var(&expanded, session).unwrap_or(expanded)
+}
 
 /// If an asset-key begins with `//`, it is converted to the current logged-in
 /// user's public asset prefix: /<username>/<path>
