@@ -83,6 +83,7 @@ pub async fn edit_with_editor_api(
                             api_client,
                             one_shot: false,
                             akm_info,
+                            reply_channel: None,
                         });
                         let _ = tx.blocking_send(msg);
                     }
@@ -122,6 +123,7 @@ pub async fn edit_with_editor_api(
         api_client: api_client.clone(),
         one_shot: false,
         akm_info,
+        reply_channel: None,
     });
     let _ = tx_main.send(final_update_msg).await;
 

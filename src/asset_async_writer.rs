@@ -36,6 +36,7 @@ pub struct WorkerAssetUpdate {
     pub api_client: HaiClient,
     pub one_shot: bool,
     pub akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
+    pub reply_channel: Option<tokio::sync::oneshot::Sender<Option<AssetEntry>>>,
 }
 pub async fn worker_update_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -68,6 +69,7 @@ pub async fn worker_update_asset(
                 api_client,
                 one_shot,
                 akm_info,
+                reply_channel,
             }) => {
                 // Treat asset as markdown if it has .md extension or does not
                 // have an extension
@@ -121,7 +123,7 @@ pub async fn worker_update_asset(
                     .write_cache(&new_hash_str, &new_contents)
                     .await;
 
-                let _new_entry = if is_push {
+                let new_entry = if is_push {
                     match api_client
                         .asset_push(AssetPushArg {
                             name: asset_name.clone(),
@@ -306,6 +308,9 @@ pub async fn worker_update_asset(
                     }
                     new_entry
                 };
+                if let Some(reply_channel) = reply_channel {
+                    let _ = reply_channel.send(new_entry);
+                }
             }
             WorkerAssetMsg::Done(asset_name) => {
                 if debug {

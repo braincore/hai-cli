@@ -1601,6 +1601,8 @@ pub async fn process_cmd(
                     session,
                     asset_blob_cache.clone(),
                     &api_client,
+                    Some(&username),
+                    update_asset_tx.clone(),
                     is_task_mode_step,
                     prog_asset_name,
                     &asset_name,
@@ -1758,6 +1760,7 @@ pub async fn process_cmd(
                             api_client: api_client.clone(),
                             one_shot: true,
                             akm_info: akm_info.clone(),
+                            reply_channel: None,
                         },
                     ))
                     .await;
@@ -1901,6 +1904,7 @@ pub async fn process_cmd(
                             api_client,
                             one_shot: true,
                             akm_info,
+                            reply_channel: None,
                         },
                     ))
                     .await;
@@ -2868,6 +2872,7 @@ pub async fn process_cmd(
                         api_client: api_client.clone(),
                         one_shot: true,
                         akm_info: akm_info.clone(),
+                        reply_channel: None,
                     },
                 ))
                 .await;
@@ -4633,6 +4638,7 @@ pub async fn shell_exec_with_asset_substitution(
                             api_client: api_client.clone(),
                             one_shot: true,
                             akm_info: akm_info.clone(),
+                            reply_channel: None,
                         },
                     ))
                     .await;

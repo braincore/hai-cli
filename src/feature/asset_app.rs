@@ -10,6 +10,8 @@ pub async fn launch_browser(
     session: &mut SessionState,
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
+    username: Option<&str>,
+    update_asset_tx: tokio::sync::mpsc::Sender<crate::asset_async_writer::WorkerAssetMsg>,
     is_task_mode_step: bool,
     prog_asset_name: &str,
     target_asset_name: &str,
@@ -63,6 +65,8 @@ pub async fn launch_browser(
             asset_blob_cache.clone(),
             session.asset_keyring.clone(),
             api_client.clone(),
+            username,
+            update_asset_tx.clone(),
         )
         .await
     {

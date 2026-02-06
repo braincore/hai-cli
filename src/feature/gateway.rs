@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::api::client::HaiClient;
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
-use crate::{asset_reader, feature::asset_crypt};
+use crate::{asset_async_writer, asset_reader, feature::asset_crypt};
 
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
@@ -23,6 +23,8 @@ pub async fn launch_gateway(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    username: Option<&str>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> std::io::Result<(SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
     let token: String = (0..32)
@@ -53,6 +55,7 @@ pub async fn launch_gateway(
     let cancel_token = CancellationToken::new();
     let cancel_token_child = cancel_token.child_token();
     let token_clone = token.clone();
+    let username_clone = username.map(|s| s.to_string());
 
     // Client ID counter
     let next_client_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -93,6 +96,8 @@ pub async fn launch_gateway(
                     let clients_clone_inner = clients_clone.clone();
                     let token_clone_inner = token_clone.clone();
                     let api_client_cloned = api_client.clone();
+                    let username_clone_inner = username_clone.clone();
+                    let update_asset_rx_cloned = update_asset_tx.clone();
                     let client_id = next_client_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let asset_blob_cache_cloned_cloned = asset_blob_cache_cloned.clone();
                     let asset_keyring_cloned = asset_keyring.clone();
@@ -167,7 +172,7 @@ pub async fn launch_gateway(
                                 msg_option = ws_stream.next() => {
                                     match msg_option {
                                         Some(Ok(Message::Text(msg))) => {
-                                            handle_client_message(asset_blob_cache_cloned_cloned.clone(), asset_keyring_cloned.clone(), &api_client_cloned, &mut ws_sink, &msg).await;
+                                            handle_client_message(asset_blob_cache_cloned_cloned.clone(), asset_keyring_cloned.clone(), &api_client_cloned, username_clone_inner.as_deref(), update_asset_rx_cloned.clone(), &mut ws_sink, &msg).await;
                                         }
                                         Some(Ok(Message::Binary(_data))) => {
                                             // No-op binary data for now as it's unexpected
@@ -347,6 +352,8 @@ async fn handle_client_message(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    username: Option<&str>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     ws_sink: &mut futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
@@ -444,8 +451,53 @@ async fn handle_client_message(
                     return;
                 }
             };
-
-            send_response(ws_sink, api_client.asset_put(asset_arg).await, 0).await;
+            let akm_info = if let Some(username) = username {
+                match asset_crypt::choose_akm_for_asset_by_name(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client.clone(),
+                    &username,
+                    &asset_arg.name,
+                    false,
+                )
+                .await
+                {
+                    Ok(akm_info) => akm_info,
+                    Err(e) => {
+                        match e {
+                            asset_crypt::AkmSelectionError::Abort(msg) => {
+                                eprintln!("error: {}", msg);
+                            }
+                        }
+                        send_bad_request_error(ws_sink, "Decryption key error").await;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let _ = update_asset_tx
+                .send(asset_async_writer::WorkerAssetMsg::Update(
+                    asset_async_writer::WorkerAssetUpdate {
+                        asset_name: asset_arg.name.clone(),
+                        asset_entry_ref: None,
+                        new_contents: asset_arg.data.clone(),
+                        is_push: false,
+                        api_client: api_client.clone(),
+                        one_shot: true,
+                        akm_info: akm_info.clone(),
+                        reply_channel: Some(reply_tx),
+                    },
+                ))
+                .await;
+            if let Ok(Some(new_entry)) = reply_rx.await {
+                send_response::<asset::AssetEntry, asset::AssetPutError>(ws_sink, Ok(new_entry), 0)
+                    .await;
+                return;
+            } else {
+                send_bad_request_error(ws_sink, "Failed to update asset").await;
+            }
         }
         "asset/put_text" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
@@ -457,7 +509,53 @@ async fn handle_client_message(
                 }
             };
 
-            send_response(ws_sink, api_client.asset_put_text(asset_arg).await, 0).await;
+            let akm_info = if let Some(username) = username {
+                match asset_crypt::choose_akm_for_asset_by_name(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client.clone(),
+                    &username,
+                    &asset_arg.name,
+                    false,
+                )
+                .await
+                {
+                    Ok(akm_info) => akm_info,
+                    Err(e) => {
+                        match e {
+                            asset_crypt::AkmSelectionError::Abort(msg) => {
+                                eprintln!("error: {}", msg);
+                            }
+                        }
+                        send_bad_request_error(ws_sink, "Decryption key error").await;
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            let _ = update_asset_tx
+                .send(asset_async_writer::WorkerAssetMsg::Update(
+                    asset_async_writer::WorkerAssetUpdate {
+                        asset_name: asset_arg.name.clone(),
+                        asset_entry_ref: None,
+                        new_contents: asset_arg.data.into_bytes(),
+                        is_push: false,
+                        api_client: api_client.clone(),
+                        one_shot: true,
+                        akm_info: akm_info.clone(),
+                        reply_channel: Some(reply_tx),
+                    },
+                ))
+                .await;
+            if let Ok(Some(new_entry)) = reply_rx.await {
+                send_response::<asset::AssetEntry, asset::AssetPutError>(ws_sink, Ok(new_entry), 0)
+                    .await;
+                return;
+            } else {
+                send_bad_request_error(ws_sink, "Failed to update asset").await;
+            }
         }
         _other => {
             send_bad_request_error(ws_sink, "Unknown route").await;
