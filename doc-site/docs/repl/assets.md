@@ -448,6 +448,34 @@ When listing assets, the lock 🔒 symbol indicates that an asset is encrypted.
     to metadata under the `title` key. The advantage of this is that your
     encrypted documents will still be searchable by their title.
 
+## Unlocking keys
+
+By default, you're prompted for your encryption key password when accessing an
+encrypted asset. To unlock a key ahead of time, use:
+
+```
+/asset-crypt-unlock [<key_id>]
+```
+
+Omitting `<key_id>` unlocks your default key.
+
+### Password persistence
+
+If [`use_os_keyring`](../config.md#os-keyring) is enabled (default), passwords
+are stored in your OS keyring and persist between sessions. Otherwise, unlocked
+keys remain available only until the end of the current session.
+
+### Locking keys
+
+To lock a key and require the password again:
+
+```
+/asset-crypt-lock [<key_id>]
+```
+
+Omitting `<key_id>` locks all keys. This removes the password from memory (and
+the OS keyring if enabled).
+
 ### Bleeding edge
 
 If you'd like to encrypt private assets outside of `vault`, use:

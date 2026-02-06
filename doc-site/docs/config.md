@@ -82,6 +82,18 @@ default_ai_temperature_to_absolute_zero = false
 
 Alternatively, you can use the `/temperature` command in the REPL.
 
+### OS keyring
+
+By default, passwords for your asset encryption keys are stored in your OS
+keyring to persist between sessions:
+
+```toml
+use_os_keyring = true
+```
+
+Set this to `false` to disable OS keyring integration. You'll be prompted for
+passwords each session.
+
 ### Asset cache size
 
 Assets are cached locally to speed up repeated operations when there have been no

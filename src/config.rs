@@ -20,6 +20,8 @@ pub struct Config {
     pub tool_confirm: bool,
     #[serde(default = "default_true")]
     pub check_for_updates: bool,
+    #[serde(default = "default_true")]
+    pub use_os_keyring: bool,
     /// Asset blob cache size in bytes (default: 1GB, 0 = disabled)
     #[serde(default = "default_cache_size")]
     pub asset_blob_cache_size: u64,
@@ -415,6 +417,9 @@ pub fn read_config_as_string(
 # Setting this to `false` disables hai's only unprompted service request. This
 # may be of interest to the privacy conscious.
 #check_for_updates = true
+
+# Whether to use the OS keyring for storing asset encryption passwords (default: true)
+#use_os_keyring = true
 
 # Asset blob cache size in bytes (default: 1GB, 0 = disabled)
 #asset_blob_cache_size = 1073741824

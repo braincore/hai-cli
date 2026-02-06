@@ -136,6 +136,10 @@ pub enum Cmd {
     AssetFolderList(AssetFolderListCmd),
     /// Setup asset enc/dec & signing keys
     AssetCryptSetup,
+    /// Unlock encryption key
+    AssetCryptUnlock(AssetCryptUnlockCmd),
+    /// Lock encryption key
+    AssetCryptLock(AssetCryptLockCmd),
     /// Recover enc/dec & signing keys
     AssetCryptRecover(AssetCryptRecoverCmd),
     /// Resume a chat
@@ -618,6 +622,18 @@ pub struct AssetFolderListCmd {
 
 #[derive(Clone, Debug)]
 pub struct AssetCryptRecoverCmd {
+    /// Key ID
+    pub enc_key_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCryptUnlockCmd {
+    /// Key ID
+    pub enc_key_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCryptLockCmd {
     /// Key ID
     pub enc_key_id: Option<String>,
 }
@@ -1905,6 +1921,22 @@ fn parse_command(
                 return None;
             }
             Some(Cmd::AssetCryptSetup)
+        }
+        "asset-crypt-unlock" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AssetCryptUnlock(AssetCryptUnlockCmd {
+                enc_key_id: parse_one_arg_catchall(remaining),
+            }))
+        }
+        "asset-crypt-lock" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AssetCryptLock(AssetCryptLockCmd {
+                enc_key_id: parse_one_arg_catchall(remaining),
+            }))
         }
         "asset-crypt-recover" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

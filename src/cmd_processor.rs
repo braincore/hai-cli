@@ -3425,6 +3425,64 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetCryptUnlock(cmd::AssetCryptUnlockCmd { enc_key_id }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+
+            let api_client = mk_api_client(Some(session));
+
+            match asset_crypt::get_encryption_key(
+                asset_blob_cache.clone(),
+                &api_client,
+                &username,
+                enc_key_id.as_deref(),
+            )
+            .await
+            {
+                Ok(Some(key)) => {
+                    let mut asset_keyring_locked = session.asset_keyring.lock().await;
+                    match asset_keyring_locked
+                        .unlock_key(asset_blob_cache.clone(), &api_client, &key.enc_key_id)
+                        .await
+                    {
+                        Ok(()) => {
+                            println!("Key '{}' unlocked", key.enc_key_id);
+                        }
+                        Err(e) => {
+                            eprintln!("error: failed to unlock key: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    eprintln!("error: encryption key not found");
+                }
+                Err(e) => {
+                    eprintln!("error: failed to get encryption key: {}", e);
+                }
+            };
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetCryptLock(cmd::AssetCryptLockCmd { enc_key_id }) => {
+            let _username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+
+            let mut asset_keyring_locked = session.asset_keyring.lock().await;
+            if let Some(enc_key_id) = enc_key_id {
+                asset_keyring_locked.forget_key(&enc_key_id);
+            } else {
+                asset_keyring_locked.forget_all();
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetCryptRecover(cmd::AssetCryptRecoverCmd { enc_key_id }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
@@ -4538,6 +4596,8 @@ Assets (Experimental):
 /asset-folder-list [<path>]      - List all collapsed folders, optionally filtered by the given path
                                    prefix.
 /asset-crypt-setup               - Setup asset encryption for your account.
+/asset-crypt-lock [<key_id>]     - Lock an encryption key (requires password on next use)
+/asset-crypt-unlock [<key_id>]   - Unlock an encryption key (no password until locked)
 /asset-crypt-recover             - Recover asset encryption keys using your recovery code.
 
 /chat-save [<asset_name>]        - Save the conversation as an asset
