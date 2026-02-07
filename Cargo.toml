@@ -51,7 +51,7 @@ jaq-core = "1.2.1"
 jaq-interpret = "1.2.1"
 jaq-parse = "1.0.2"
 jaq-std = "1.2.1"
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }
 markdown = "1.0.0-alpha.23"
 mdast_util_to_markdown = "0.0.1"
 mime_guess = "2.0.5"
