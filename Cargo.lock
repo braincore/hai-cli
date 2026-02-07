@@ -1625,6 +1625,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "two-face",
+ "urlencoding",
  "uuid",
  "viuer",
  "which 8.0.0",

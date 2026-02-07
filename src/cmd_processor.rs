@@ -1607,7 +1607,8 @@ pub async fn process_cmd(
                     prog_asset_name,
                     &asset_name,
                 )
-                .await
+                .await;
+                ProcessCmdResult::Loop
             } else {
                 let (decrypted_asset_contents, asset_entry, akm_info) =
                     match asset_reader::get_asset_and_metadata(
