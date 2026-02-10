@@ -52,6 +52,29 @@ pub fn best_guess_temp_file_extension(
         .unwrap_or_default()
 }
 
+pub fn best_guess_content_type(
+    asset_name: &str,
+    asset_content_type: Option<&str>,
+    initial_content: &[u8],
+) -> String {
+    let content_type_from_asset_name = Path::new(asset_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| mime_guess::from_ext(ext).first_raw());
+    let content_type_from_asset_content_type = asset_content_type;
+    let content_type_from_initial_content =
+        if asset_content_type.is_none() && initial_content.starts_with(b"# ") {
+            Some("text/markdown")
+        } else {
+            None
+        };
+    content_type_from_asset_content_type
+        .or(content_type_from_asset_name)
+        .or(content_type_from_initial_content)
+        .unwrap_or(mime_guess::mime::APPLICATION_OCTET_STREAM.as_ref())
+        .to_string()
+}
+
 // --
 
 #[cfg(test)]

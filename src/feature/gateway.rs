@@ -725,7 +725,13 @@ async fn handle_http_request(
 
     // URL decode the path
     let asset_name = match urlencoding::decode(path) {
-        Ok(p) => p.into_owned(),
+        Ok(decoded_path) => {
+            // Support <asset_name>@<asset_app_name> format
+            match decoded_path.split_once('@') {
+                Some((_asset_name, asset_app_name)) => asset_app_name.to_string(),
+                None => decoded_path.to_string(),
+            }
+        }
         Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
     };
 
@@ -760,7 +766,7 @@ async fn handle_http_request(
     };
 
     let asset_content_type = asset_entry.metadata.and_then(|md| md.content_type.clone());
-    let content_type = crate::asset_helper::best_guess_temp_file_extension(
+    let content_type = crate::asset_helper::best_guess_content_type(
         &asset_name,
         asset_content_type.as_deref(),
         &decrypted_asset_contents,
