@@ -367,6 +367,7 @@ Assets:
 /asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
                               - If count specified, that number of revisions is exported.
 /asset-remove <name>    - Removes an asset
+/asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-md-get <name>    - Get the JSON-object metadata of an asset
 /asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object
 /asset-md-set-key <name> <k> <v> - Set key to JSON value

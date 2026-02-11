@@ -368,6 +368,7 @@ async fn repl(
         "/asset-listen",
         "/asset-acl",
         "/asset-remove",
+        "/asset-move",
         "/asset-md-get",
         "/asset-md-set",
         "/asset-md-set-key",

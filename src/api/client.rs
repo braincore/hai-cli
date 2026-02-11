@@ -282,6 +282,13 @@ impl HaiClient {
         self.mk_api_request::<_, _, _>("/asset/remove", &arg).await
     }
 
+    pub async fn asset_move(
+        &self,
+        arg: asset::AssetMoveArg,
+    ) -> Result<asset::AssetMoveResult, RequestError<asset::AssetMoveError>> {
+        self.mk_api_request::<_, _, _>("/asset/move", &arg).await
+    }
+
     pub async fn asset_metadata_put(
         &self,
         arg: asset::AssetMetadataPutArg,

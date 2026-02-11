@@ -86,6 +86,7 @@ union AssetEntryOp
     delete
     metadata
         "Metadata for asset was added, modified, or removed."
+    move
 
 # --
 
@@ -153,6 +154,28 @@ struct AssetRemoveResult
 union AssetRemoveError
     bad_name
     no_permission
+
+# --
+
+route move(AssetMoveArg, AssetMoveResult, AssetMoveError)
+    "Move an asset by changing its name.
+
+    Assets cannot be moved between asset pools."
+
+struct AssetMoveArg
+    source_name String(min_length=1)
+    target_name String(min_length=1)
+
+struct AssetMoveResult
+    entry AssetEntry
+
+union AssetMoveError
+    source_bad_name
+    no_permission
+    target_bad_name
+    target_name_conflict
+    asset_pool_mismatch
+        "Assets cannot be moved across asset pools."
 
 # --
 

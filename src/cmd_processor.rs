@@ -2303,6 +2303,9 @@ pub async fn process_cmd(
                         AssetEntryOp::Metadata => {
                             "metadata"
                         }
+                        AssetEntryOp::Move => {
+                            "move"
+                        }
                         AssetEntryOp::Other => {
                             "other"
                         }
@@ -2812,6 +2815,36 @@ pub async fn process_cmd(
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
             );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetMove(cmd::AssetMoveCmd {
+            source_asset_name,
+            dest_asset_name,
+        }) => {
+            let _username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let source_asset_name = expand_pub_asset_name(source_asset_name, &session.account);
+            let dest_asset_name = expand_pub_asset_name(dest_asset_name, &session.account);
+
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::AssetMoveArg;
+            match api_client
+                .asset_move(AssetMoveArg {
+                    source_name: source_asset_name,
+                    target_name: dest_asset_name,
+                })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetImport(cmd::AssetImportCmd {
@@ -4586,6 +4619,7 @@ Assets (Experimental):
 /asset-temp <name> [<count>]     - Exports asset to a temporary file.
                                    If `count` set, the latest `count` revisions are exported.
 /asset-remove <name>             - Removes an asset
+/asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-md-get <name>             - Get the metadata of an asset
 /asset-md-set <name> <md>        - Set metadata for an asset. Must be a JSON object.
 /asset-md-set-key <name> <k> <v> - Set key to JSON value.

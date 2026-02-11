@@ -1942,6 +1942,7 @@ pub enum AssetEntryOp {
     Delete,
     /// Metadata for asset was added, modified, or removed.
     Metadata,
+    Move,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -1969,13 +1970,16 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryOp {
                     "push" => AssetEntryOp::Push,
                     "delete" => AssetEntryOp::Delete,
                     "metadata" => AssetEntryOp::Metadata,
+                    "move" => AssetEntryOp::Move,
                     _ => AssetEntryOp::Other,
                 };
                 super::eat_json_fields(&mut map)?;
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["add", "fork", "edit", "push", "delete", "metadata", "other"];
+        const VARIANTS: &[&str] = &[
+            "add", "fork", "edit", "push", "delete", "metadata", "move", "other",
+        ];
         deserializer.deserialize_struct("AssetEntryOp", VARIANTS, EnumVisitor)
     }
 }
@@ -2019,6 +2023,12 @@ impl ::serde::ser::Serialize for AssetEntryOp {
                 // unit
                 let mut s = serializer.serialize_struct("AssetEntryOp", 1)?;
                 s.serialize_field(".tag", "metadata")?;
+                s.end()
+            }
+            AssetEntryOp::Move => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryOp", 1)?;
+                s.serialize_field(".tag", "move")?;
                 s.end()
             }
             AssetEntryOp::Other => Err(::serde::ser::Error::custom(
@@ -3158,6 +3168,305 @@ impl ::std::fmt::Display for AssetMetadataPutError {
             AssetMetadataPutError::BadMetadata => f.write_str("Metadata must be valid JSON."),
             _ => write!(f, "{:?}", *self),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetMoveArg {
+    pub source_name: String,
+    pub target_name: String,
+}
+
+impl AssetMoveArg {
+    pub fn new(source_name: String, target_name: String) -> Self {
+        AssetMoveArg {
+            source_name,
+            target_name,
+        }
+    }
+}
+
+const ASSET_MOVE_ARG_FIELDS: &[&str] = &["source_name", "target_name"];
+impl AssetMoveArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetMoveArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetMoveArg>, V::Error> {
+        let mut field_source_name = None;
+        let mut field_target_name = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "source_name" => {
+                    if field_source_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("source_name"));
+                    }
+                    field_source_name = Some(map.next_value()?);
+                }
+                "target_name" => {
+                    if field_target_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("target_name"));
+                    }
+                    field_target_name = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetMoveArg {
+            source_name: field_source_name
+                .ok_or_else(|| ::serde::de::Error::missing_field("source_name"))?,
+            target_name: field_target_name
+                .ok_or_else(|| ::serde::de::Error::missing_field("target_name"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("source_name", &self.source_name)?;
+        s.serialize_field("target_name", &self.target_name)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMoveArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetMoveArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMoveArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetMoveArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct("AssetMoveArg", ASSET_MOVE_ARG_FIELDS, StructVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMoveArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetMoveArg", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetMoveError {
+    SourceBadName,
+    NoPermission,
+    TargetBadName,
+    TargetNameConflict,
+    /// Assets cannot be moved across asset pools.
+    AssetPoolMismatch,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetMoveError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMoveError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "source_bad_name" => AssetMoveError::SourceBadName,
+                    "no_permission" => AssetMoveError::NoPermission,
+                    "target_bad_name" => AssetMoveError::TargetBadName,
+                    "target_name_conflict" => AssetMoveError::TargetNameConflict,
+                    "asset_pool_mismatch" => AssetMoveError::AssetPoolMismatch,
+                    _ => AssetMoveError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "source_bad_name",
+            "no_permission",
+            "target_bad_name",
+            "target_name_conflict",
+            "asset_pool_mismatch",
+            "other",
+        ];
+        deserializer.deserialize_struct("AssetMoveError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMoveError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetMoveError::SourceBadName => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "source_bad_name")?;
+                s.end()
+            }
+            AssetMoveError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetMoveError::TargetBadName => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "target_bad_name")?;
+                s.end()
+            }
+            AssetMoveError::TargetNameConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "target_name_conflict")?;
+                s.end()
+            }
+            AssetMoveError::AssetPoolMismatch => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "asset_pool_mismatch")?;
+                s.end()
+            }
+            AssetMoveError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetMoveError {}
+
+impl ::std::fmt::Display for AssetMoveError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetMoveError::AssetPoolMismatch => {
+                f.write_str("Assets cannot be moved across asset pools.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetMoveResult {
+    pub entry: AssetEntry,
+}
+
+impl AssetMoveResult {
+    pub fn new(entry: AssetEntry) -> Self {
+        AssetMoveResult { entry }
+    }
+}
+
+const ASSET_MOVE_RESULT_FIELDS: &[&str] = &["entry"];
+impl AssetMoveResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetMoveResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetMoveResult>, V::Error> {
+        let mut field_entry = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry" => {
+                    if field_entry.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry"));
+                    }
+                    field_entry = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetMoveResult {
+            entry: field_entry.ok_or_else(|| ::serde::de::Error::missing_field("entry"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry", &self.entry)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetMoveResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetMoveResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetMoveResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetMoveResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct("AssetMoveResult", ASSET_MOVE_RESULT_FIELDS, StructVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetMoveResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetMoveResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
     }
 }
 
