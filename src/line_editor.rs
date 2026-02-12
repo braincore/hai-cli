@@ -649,7 +649,11 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, true)
-            } else if line.starts_with("/asset-load ") || line.starts_with("/asset-view ") {
+            } else if line.starts_with("/asset-load ")
+                || line.starts_with("/asset-view ")
+                || line.starts_with("/asset-move")
+                || line.starts_with("/asset-copy")
+            {
                 let (cmd_word, _ignored_args, arg_prefix, arg_index) = split_cmd_and_last_arg(line);
                 if self.debug {
                     let _ = config::write_to_debug_log(format!(
@@ -663,7 +667,7 @@ impl Completer for CmdAndFileCompleter {
                 }
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
-                (completions, true)
+                (completions, false)
             } else if line.starts_with("/exec ") || line.starts_with("!!") {
                 let (cur_token_id, cur_token, cur_token_offset) = get_current_token(line);
                 if cur_token_id == 1 {
