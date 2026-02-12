@@ -871,7 +871,7 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             },
             DeepSeekModel::DeepSeekReasoner => AiModelCapability {
                 image: false,
-                tool: false,
+                tool: true,
             },
             DeepSeekModel::Other(_) => AiModelCapability {
                 image: false,
