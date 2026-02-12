@@ -486,3 +486,21 @@ If you'd like to encrypt private assets outside of `vault`, use:
 
 The plan is to make encryption the default for all private assets once this
 feature graduates from experimental status.
+
+### Moves and copies
+
+Moving an asset will retain an assets encryption policy:
+
+```
+/asset-move vault/<src> <dst>
+```
+
+Since moves cannot cross asset-pools, an encrypted asset cannot be moved into
+your public asset tree.
+
+Copying an encrypted asset will retain its encryption only if the destination
+is in the vault:
+
+```
+/asset-copy vault/<src> vault/<dst>
+```
