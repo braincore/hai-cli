@@ -2758,7 +2758,11 @@ pub async fn process_cmd(
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetGetArg;
-            let asset_data_url = match api_client.asset_get(AssetGetArg { name: asset_name }).await
+            let asset_data_url = match api_client
+                .asset_get(AssetGetArg {
+                    name: asset_name.clone(),
+                })
+                .await
             {
                 Ok(res) => {
                     if res
@@ -2781,7 +2785,13 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
+            println!("Expiring link (24 hours):");
             println!("{}", asset_data_url);
+            if let Some(public_asset_url) = asset_helper::get_public_asset_url(&asset_name) {
+                println!();
+                println!("Permalink:");
+                println!("{}", public_asset_url);
+            }
             session_history_add_user_text_entry(
                 &asset_data_url,
                 session,
