@@ -216,7 +216,9 @@ async fn expand_glob(
     api_client: &HaiClient,
     glob_pattern: &str,
 ) -> Result<Vec<AssetEntry>, String> {
-    use crate::api::types::asset::{AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg};
+    use crate::api::types::asset::{
+        AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg, EntryListOrder,
+    };
 
     let (prefix, pattern) = parse_glob_pattern(glob_pattern);
 
@@ -231,6 +233,7 @@ async fn expand_glob(
                 Some(prefix)
             },
             limit: 200,
+            order: EntryListOrder::Asc,
         })
         .await
         .map_err(|e| {

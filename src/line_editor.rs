@@ -1053,12 +1053,13 @@ impl CmdAndFileCompleter {
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix =
             crate::cmd_processor::expand_pub_asset_name(asset_prefix, &self.account);
-        use crate::api::types::asset::AssetEntryListArg;
+        use crate::api::types::asset::{AssetEntryListArg, EntryListOrder};
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
                 AssetEntryListArg {
                     prefix: Some(expanded_asset_prefix),
                     limit: 100,
+                    order: EntryListOrder::Desc,
                 },
             ))
         });

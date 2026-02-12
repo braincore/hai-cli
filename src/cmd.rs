@@ -146,6 +146,8 @@ pub enum Cmd {
     AssetCryptLock(AssetCryptLockCmd),
     /// Recover enc/dec & signing keys
     AssetCryptRecover(AssetCryptRecoverCmd),
+    /// List chats and prompt for resumption
+    Chats,
     /// Resume a chat
     ChatResume(ChatResumeCmd),
     /// Save a chat
@@ -1991,6 +1993,16 @@ fn parse_command(
             Some(Cmd::AssetCryptRecover(AssetCryptRecoverCmd {
                 enc_key_id: parse_one_arg_catchall(remaining),
             }))
+        }
+        "chats" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if parse_one_arg_catchall(remaining).is_some() {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::Chats)
         }
         "chat-resume" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

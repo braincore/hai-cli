@@ -203,8 +203,14 @@ title is automatically generated and stored in the
 [asset metadata](./assets.md#metadata) for easier discovery. For example:
 
 ```
-[0] /ls
+[0] /ls chat/
 chat/2025-04-08-203003 [Public/Private Key Management for Encryption and Signing]
+```
+
+Resume a saved chat interactively (easiest):
+
+```
+/chats
 ```
 
 Resume a saved chat:

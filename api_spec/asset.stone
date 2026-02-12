@@ -209,6 +209,10 @@ struct AssetEntryListArg
     limit UInt32 = 100
         "The maximum number of entries to return at once. For internal reasons,
         fewer than `limit` may be returned."
+    order EntryListOrder = asc
+        union
+            asc
+            desc
 
 struct AssetEntryListResult
     entries List(AssetEntry)

@@ -390,6 +390,7 @@ async fn repl(
         "/account-logout",
         "/account-balance",
         "/account-subscribe",
+        "/chats",
         "/chat-save",
         "/chat-resume",
         "/whois",

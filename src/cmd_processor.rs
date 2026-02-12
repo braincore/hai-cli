@@ -1936,7 +1936,7 @@ pub async fn process_cmd(
                 (prefix, None)
             };
             use crate::api::types::asset::{
-                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg,
+                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg, EntryListOrder,
             };
             let api_client = mk_api_client(Some(session));
 
@@ -1945,6 +1945,7 @@ pub async fn process_cmd(
                 .asset_entry_list(AssetEntryListArg {
                     prefix: Some(prefix),
                     limit: 200,
+                    order: EntryListOrder::Asc,
                 })
                 .await
             {
@@ -3795,6 +3796,91 @@ pub async fn process_cmd(
             println!("╚══════════════════════════════════════════════════════════════╝");
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Chats => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+
+            use crate::api::types::asset::{
+                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg, EntryListOrder,
+            };
+            let mut asset_list_res = match api_client
+                .asset_entry_list(AssetEntryListArg {
+                    prefix: Some("chat/".to_string()),
+                    limit: 5,
+                    order: EntryListOrder::Desc,
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    match e {
+                        api::client::RequestError::Route(AssetEntryListError::Empty) => {
+                            eprintln!("[empty]");
+                        }
+                        _ => {
+                            eprintln!("error: {}", e);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            if asset_list_res.entries.is_empty() {
+                eprintln!("[no saved chats]");
+                return ProcessCmdResult::Loop;
+            }
+
+            loop {
+                for (index, entry) in asset_list_res.entries.iter().enumerate() {
+                    if let Some(title) = entry.metadata.as_ref().and_then(|md| md.title.clone()) {
+                        println!("{}. {} ({})", index, title, entry.name);
+                    } else {
+                        println!("{}. {}", index, entry.name);
+                    }
+                }
+                println!();
+                if let Some(answer) = term::ask_question_readline(
+                    "Chat to resume (Press Enter to load more; CTRL+C to stop):",
+                ) {
+                    match answer.trim().parse::<usize>() {
+                        Ok(i) if i < asset_list_res.entries.len() => {
+                            let asset_name = &asset_list_res.entries[i].name;
+                            session.cmd_queue.push_front(session::CmdInput {
+                                input: format!("/chat-resume {}", asset_name),
+                                source: session::CmdSource::Internal,
+                            });
+                        }
+                        _ => {
+                            // continue looping to load more entries
+                        }
+                    }
+                } else {
+                    // CTRL+C pressed, cancel input
+                    break;
+                }
+
+                if !asset_list_res.has_more {
+                    break;
+                }
+                asset_list_res = match api_client
+                    .asset_entry_list_next(AssetEntryListNextArg {
+                        cursor: asset_list_res.cursor,
+                        limit: 10,
+                    })
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: {}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
             let chat_log_contents = if let Some(chat_log_name) = chat_log_name {
                 if session.account.is_none() {
@@ -4777,6 +4863,7 @@ Assets (Experimental):
 /asset-crypt-unlock [<key_id>]   - Unlock an encryption key (no password until locked)
 /asset-crypt-recover             - Recover asset encryption keys using your recovery code.
 
+/chats                           - Interactive prompt to resume a recent conversation.
 /chat-save [<asset_name>]        - Save the conversation as an asset
                                    If asset name omitted, name automatically generated
 /chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`

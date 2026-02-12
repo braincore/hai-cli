@@ -1431,6 +1431,7 @@ pub struct AssetEntryListArg {
     /// The maximum number of entries to return at once. For internal reasons, fewer than `limit`
     /// may be returned.
     pub limit: u32,
+    pub order: EntryListOrder,
 }
 
 impl Default for AssetEntryListArg {
@@ -1438,6 +1439,7 @@ impl Default for AssetEntryListArg {
         AssetEntryListArg {
             prefix: None,
             limit: 100,
+            order: EntryListOrder::Asc,
         }
     }
 }
@@ -1452,9 +1454,14 @@ impl AssetEntryListArg {
         self.limit = value;
         self
     }
+
+    pub fn with_order(mut self, value: EntryListOrder) -> Self {
+        self.order = value;
+        self
+    }
 }
 
-const ASSET_ENTRY_LIST_ARG_FIELDS: &[&str] = &["prefix", "limit"];
+const ASSET_ENTRY_LIST_ARG_FIELDS: &[&str] = &["prefix", "limit", "order"];
 impl AssetEntryListArg {
     // no _opt deserializer
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
@@ -1462,6 +1469,7 @@ impl AssetEntryListArg {
     ) -> Result<AssetEntryListArg, V::Error> {
         let mut field_prefix = None;
         let mut field_limit = None;
+        let mut field_order = None;
         while let Some(key) = map.next_key::<&str>()? {
             match key {
                 "prefix" => {
@@ -1476,6 +1484,12 @@ impl AssetEntryListArg {
                     }
                     field_limit = Some(map.next_value()?);
                 }
+                "order" => {
+                    if field_order.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("order"));
+                    }
+                    field_order = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1485,6 +1499,7 @@ impl AssetEntryListArg {
         let result = AssetEntryListArg {
             prefix: field_prefix.and_then(Option::flatten),
             limit: field_limit.unwrap_or(100),
+            order: field_order.unwrap_or(EntryListOrder::Asc),
         };
         Ok(result)
     }
@@ -1499,6 +1514,9 @@ impl AssetEntryListArg {
         }
         if self.limit != 100 {
             s.serialize_field("limit", &self.limit)?;
+        }
+        if self.order != EntryListOrder::Asc {
+            s.serialize_field("order", &self.order)?;
         }
         Ok(())
     }
@@ -1530,7 +1548,7 @@ impl ::serde::ser::Serialize for AssetEntryListArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryListArg", 2)?;
+        let mut s = serializer.serialize_struct("AssetEntryListArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -6656,6 +6674,69 @@ impl ::serde::ser::Serialize for ContentEncryptedInfo {
         serializer
             .serialize_struct("ContentEncryptedInfo", 0)?
             .end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum EntryListOrder {
+    Asc,
+    Desc,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for EntryListOrder {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = EntryListOrder;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a EntryListOrder structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "asc" => EntryListOrder::Asc,
+                    "desc" => EntryListOrder::Desc,
+                    _ => EntryListOrder::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["asc", "desc", "other"];
+        deserializer.deserialize_struct("EntryListOrder", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for EntryListOrder {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            EntryListOrder::Asc => {
+                // unit
+                let mut s = serializer.serialize_struct("EntryListOrder", 1)?;
+                s.serialize_field(".tag", "asc")?;
+                s.end()
+            }
+            EntryListOrder::Desc => {
+                // unit
+                let mut s = serializer.serialize_struct("EntryListOrder", 1)?;
+                s.serialize_field(".tag", "desc")?;
+                s.end()
+            }
+            EntryListOrder::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
     }
 }
 
