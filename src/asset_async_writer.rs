@@ -431,3 +431,53 @@ pub async fn asset_metadata_set_key(
         }
     }
 }
+
+/// Merges source and target metadata objects.
+///
+/// - If there's no source_md, returns target_md.
+/// - If there's no target_md, returns source_md (excluding the "encrypted" key).
+/// - If both exist, combines target_md with source_md, where:
+///   - The "encrypted" key from source_md is always ignored.
+///   - target_md keys take priority in case of conflicts.
+///
+/// Returns the merged metadata, or None if both inputs are None.
+pub fn metadata_merge(
+    source_md: Option<serde_json::Value>,
+    target_md: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    println!(
+        "metadata_merge: source_md={:?}, target_md={:?}",
+        source_md, target_md
+    );
+    match (source_md, target_md) {
+        // No source, just use target
+        (None, target) => target,
+
+        // No target, use source but remove "encrypted" key
+        (Some(mut source), None) => {
+            if let Some(map) = source.as_object_mut() {
+                map.remove("encrypted");
+            }
+            Some(source)
+        }
+
+        // Both exist, merge them with target taking priority
+        (Some(source), Some(mut target)) => {
+            if let (Some(source_map), Some(target_map)) =
+                (source.as_object(), target.as_object_mut())
+            {
+                for (key, value) in source_map {
+                    // Skip "encrypted" key from source
+                    if key == "encrypted" {
+                        continue;
+                    }
+                    // Only insert if target doesn't already have this key
+                    if !target_map.contains_key(key) {
+                        target_map.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            Some(target)
+        }
+    }
+}

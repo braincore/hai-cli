@@ -105,6 +105,8 @@ pub enum Cmd {
     AssetRemove(AssetRemoveCmd),
     /// Move an asset
     AssetMove(AssetMoveCmd),
+    /// Copy an asset
+    AssetCopy(AssetCopyCmd),
     /// Show revisions of an asset
     AssetRevisions(AssetRevisionsCmd),
     /// Listen to changes to an asset
@@ -514,6 +516,12 @@ pub struct AssetRemoveCmd {
 
 #[derive(Clone, Debug)]
 pub struct AssetMoveCmd {
+    pub source_asset_name: String,
+    pub dest_asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCopyCmd {
     pub source_asset_name: String,
     pub dest_asset_name: String,
 }
@@ -1731,6 +1739,21 @@ fn parse_command(
                 })),
                 None => {
                     eprintln!("Usage: /asset-move <source_name> <dest_name>");
+                    None
+                }
+            }
+        }
+        "asset-copy" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg(remaining) {
+                Some((source_asset_name, dest_asset_name)) => Some(Cmd::AssetCopy(AssetCopyCmd {
+                    source_asset_name,
+                    dest_asset_name,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-copy <source_name> <dest_name>");
                     None
                 }
             }
