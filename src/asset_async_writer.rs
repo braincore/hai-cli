@@ -445,10 +445,6 @@ pub fn metadata_merge(
     source_md: Option<serde_json::Value>,
     target_md: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
-    println!(
-        "metadata_merge: source_md={:?}, target_md={:?}",
-        source_md, target_md
-    );
     match (source_md, target_md) {
         // No source, just use target
         (None, target) => target,
