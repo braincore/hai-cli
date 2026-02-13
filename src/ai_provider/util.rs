@@ -4,7 +4,9 @@ use std::io::{self, Write};
 use two_face::re_exports::syntect::easy::HighlightLines;
 use two_face::re_exports::syntect::highlighting::Style;
 
+use crate::printer::is_stdout_enabled;
 use crate::term_color;
+use crate::{print, println, write_if_enabled, writeln_if_enabled};
 
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
@@ -245,7 +247,9 @@ impl SyntaxHighlighterPrinter<'_> {
             } else {
                 self.buffer.push_str(next);
                 print!("{}", next);
-                io::stdout().flush().unwrap(); // Flush to skip line-buffer
+                if is_stdout_enabled() {
+                    io::stdout().flush().unwrap(); // Flush to skip line-buffer
+                }
                 return;
             };
 
@@ -273,8 +277,10 @@ impl SyntaxHighlighterPrinter<'_> {
                 false
             } else {
                 // Either finishing the current line or there was no highlighter set
-                let _ = writeln!(stdout, "{}", &lines[0]);
-                stdout.flush().unwrap();
+                let _ = writeln_if_enabled!(stdout, "{}", &lines[0]);
+                if is_stdout_enabled() {
+                    stdout.flush().unwrap();
+                }
                 self.highlighter.is_some()
             };
 
@@ -314,7 +320,9 @@ impl SyntaxHighlighterPrinter<'_> {
                     height
                 ));
 
-                crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
+                if is_stdout_enabled() {
+                    crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
+                }
 
                 let line_with_ending = format!("{}\n", full_first_line);
                 print_line_syntax_highlighted(
@@ -345,8 +353,10 @@ impl SyntaxHighlighterPrinter<'_> {
                         &middle_line_with_ending,
                     );
                 } else {
-                    let _ = write!(stdout, "{}", middle_line_with_ending);
-                    stdout.flush().unwrap();
+                    let _ = write_if_enabled!(stdout, "{}", middle_line_with_ending);
+                    if is_stdout_enabled() {
+                        stdout.flush().unwrap();
+                    }
                 }
                 self.highlighter_check_start(middle_line);
             }
@@ -368,8 +378,10 @@ impl SyntaxHighlighterPrinter<'_> {
                     last_line_partial,
                 );
             } else {
-                let _ = write!(stdout, "{}", last_line_partial);
-                stdout.flush().unwrap();
+                let _ = write_if_enabled!(stdout, "{}", last_line_partial);
+                if is_stdout_enabled() {
+                    stdout.flush().unwrap();
+                }
             }
             self.cur_line_partial = !last_line_partial.is_empty();
             self.buffer.push_str(last_line_partial);
@@ -386,8 +398,10 @@ impl SyntaxHighlighterPrinter<'_> {
         } else {
             self.cur_line_partial = true;
             self.buffer.push_str(next);
-            let _ = write!(stdout, "{}", next);
-            stdout.flush().unwrap(); // Flush to skip line-buffer
+            let _ = write_if_enabled!(stdout, "{}", next);
+            if is_stdout_enabled() {
+                stdout.flush().unwrap(); // Flush to skip line-buffer
+            }
         }
     }
 
@@ -422,10 +436,13 @@ impl SyntaxHighlighterPrinter<'_> {
             // WARN: In some terminals, MoveToPreviousLine(0) will
             // default to 1 which is undesirable so it's handled
             // separately.
-            if height > 0 {
-                crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height)).unwrap();
-            } else {
-                crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
+            if is_stdout_enabled() {
+                if height > 0 {
+                    crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height))
+                        .unwrap();
+                } else {
+                    crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
+                }
             }
 
             print_line_syntax_highlighted(
@@ -453,9 +470,13 @@ pub fn print_line_syntax_highlighted(
     for (style, text) in highlighted_parts {
         let escaped =
             term_color::as_terminal_escaped(style, text, color_capability, background_color);
-        crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
+        if is_stdout_enabled() {
+            crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
+        }
     }
-    stdout.flush().unwrap();
+    if is_stdout_enabled() {
+        stdout.flush().unwrap();
+    }
 }
 
 // --

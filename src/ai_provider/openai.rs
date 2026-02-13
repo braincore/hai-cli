@@ -11,6 +11,7 @@ use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nu
 use crate::chat;
 use crate::config::{self, OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
+use crate::println;
 use crate::tool;
 
 //

@@ -1,13 +1,11 @@
 # Run and exit
 
-To run commands and exit without entering the REPL interface, use:
+Use `bye` mode to run commands non-interactively and exit immediately, without
+entering the REPL interface:
 
 ```
 $ hai bye '<cmd1>' '<cmd2>' ...
 ```
-
-Multiple commands can be specified. All printouts go to the terminal and `hai`
-exits at the end.
 
 !!! Escaping commands
     Use single-quotes around each repl-command to minimize escaping issues.
@@ -19,7 +17,33 @@ Use `-` as a command to create a
 stdin. For example:
 
 ```
-cat meeting_notes.txt | hai bye - 'summary please'`
+$ cat meeting_notes.txt | hai bye - 'summary please'
+The following is a summary of the meeting on June 6th:
+...
+```
+
+## Use with UNIX pipes
+
+By default, only the final message from the LLM is printed. This is the most
+natural behavior for use with UNIX pipes:
+
+```
+$ echo "hello" | hai bye - "in japanese" | cat
+こんにちは (Konnichiwa)
+```
+
+To print the full set of messages you'd see in REPL mode, use the `-p` /
+`--print-all` flag:
+
+```
+$ echo "hello" | hai bye --print-all - "in japanese" | cat
+bye[0]: /prep hello
+
+bye[1]: in japanese
+
+↓↓↓
+
+「こんにちは、世界。」
 ```
 
 ## Set model and user for consistency

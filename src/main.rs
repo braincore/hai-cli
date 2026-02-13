@@ -33,6 +33,7 @@ mod db;
 mod feature;
 mod line_editor;
 mod loader;
+mod printer;
 mod session;
 mod term;
 mod term_color;
@@ -117,6 +118,10 @@ enum CliSubcommand {
         /// Automatically confirm any prompts
         #[arg(short = 'y', long = "yes")]
         yes: bool,
+
+        /// Print all interactions (default: only final LLM response for pipe-friendliness)
+        #[arg(short = 'p', long = "print-all")]
+        print_all: bool,
     },
     /// Setup websocket listener for API-based commands
     Listen {
@@ -167,10 +172,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     {
         crate::feature::queue_listen::listen(&address, whitelisted_origin).await;
     } else {
-        let (repl_mode, init_cmds, exit_when_done, force_yes) = if let Some(CliSubcommand::Bye {
-            cmds,
-            yes,
-        }) = args.subcommand
+        let (repl_mode, init_cmds, exit_when_done, force_yes, mute_all_but_final) = if let Some(
+            CliSubcommand::Bye {
+                cmds,
+                yes,
+                print_all,
+            },
+        ) =
+            args.subcommand
         {
             (
                     ReplMode::Normal,
@@ -198,6 +207,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .collect(),
                     true,
                     yes,
+                    !print_all,
                 )
         } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
             let account_login_cmd = if let Some(password) = password {
@@ -213,6 +223,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     source: session::CmdSource::Internal,
                 }],
                 true,
+                false,
                 false,
             )
         } else if let Some(CliSubcommand::Task {
@@ -254,9 +265,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }],
                 false,
                 false,
+                false,
             )
         } else {
-            (ReplMode::Normal, vec![], false, false)
+            (ReplMode::Normal, vec![], false, false, false)
         };
         repl(
             &config_path_override,
@@ -269,6 +281,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             init_cmds,
             exit_when_done,
             force_yes,
+            mute_all_but_final,
         )
         .await?;
     }
@@ -287,6 +300,7 @@ async fn repl(
     init_cmds: Vec<session::CmdInput>,
     exit_when_done: bool,
     force_yes: bool,
+    mute_all_but_final_ai_response: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut cfg = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
@@ -472,7 +486,11 @@ async fn repl(
     .map(|s| s.to_string())
     .collect();
 
-    let mut line_editor = LineEditor::new(incognito);
+    // Lazily initialize line editor.
+    // This is important because initialization prints control characters to
+    // the terminal which can be disruptive if stdout isn't a tty and there's
+    // no need to prompt the user (e.g. hai-bye mode).
+    let mut line_editor: Option<LineEditor> = None;
     let mut editor_prompt = line_editor::EditorPrompt::new();
 
     //
@@ -584,6 +602,10 @@ async fn repl(
         session.cmd_queue.push_back(init_cmd);
     }
 
+    if mute_all_but_final_ai_response {
+        crate::printer::disable_stdout();
+    }
+
     //
     // Welcome message (omitted in hai-bye mode)
     //
@@ -644,13 +666,15 @@ async fn repl(
                 .keys()
                 .map(|fn_name| format!("/{}", fn_name)),
         );
-        line_editor.set_line_completer(
-            debug,
-            autocomplete_repl_cmds,
-            autocomplete_repl_ai_models.clone(),
-            mk_api_client(Some(&session)),
-            session.account.clone(),
-        );
+        if let Some(line_editor) = &mut line_editor {
+            line_editor.set_line_completer(
+                debug,
+                autocomplete_repl_cmds,
+                autocomplete_repl_ai_models.clone(),
+                mk_api_client(Some(&session)),
+                session.account.clone(),
+            );
+        }
         //
         // Set editor prompt info for display purposes
         //
@@ -718,6 +742,7 @@ async fn repl(
             }
             cmd_info
         } else {
+            let line_editor = line_editor.get_or_insert_with(|| LineEditor::new(incognito));
             line_editor.pre_readline();
             let sig = line_editor.reedline.read_line(&editor_prompt);
             line_editor.post_readline();
@@ -934,6 +959,12 @@ async fn repl(
         println!();
         println!("{}", "↓↓↓".truecolor(128, 128, 128));
         println!();
+
+        if session.cmd_queue.is_empty() && mute_all_but_final_ai_response {
+            // Re-enable printing for the AI response if we're in hai-bye mode and
+            // we've printed all but the last command.
+            crate::printer::enable_stdout();
+        }
 
         //
         // Prompt AI

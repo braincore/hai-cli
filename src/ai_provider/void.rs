@@ -3,6 +3,7 @@ use std::error::Error;
 
 use crate::ai_provider::util::TextAccumulator;
 use crate::chat;
+use crate::println;
 
 pub async fn send_to_void(
     model: &str,
