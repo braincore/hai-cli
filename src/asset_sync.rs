@@ -16,7 +16,10 @@ use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader;
 use crate::config;
 use crate::crypt;
-use crate::feature::{asset_crypt, asset_keyring::AssetKeyring};
+use crate::feature::{
+    asset_crypt::{self, KeyRecipient},
+    asset_keyring::AssetKeyring,
+};
 
 /// Current limitations:
 /// - No cursor resumption
@@ -24,6 +27,7 @@ pub async fn sync_prefix(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
+    recipient: Option<KeyRecipient>,
     prefix: &str,
     target_path: &str,
     max_concurrent_downloads: Option<usize>,
@@ -111,6 +115,7 @@ pub async fn sync_prefix(
         asset_blob_cache,
         asset_keyring,
         api_client,
+        recipient,
         AssetSyncSource::AssetEntry(entries.clone()),
         Some((&folder_prefix, target_path)),
         max_concurrent_downloads,
@@ -379,6 +384,7 @@ pub async fn sync_entries(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
+    recipient: Option<KeyRecipient>,
     sync_source: AssetSyncSource,
     persist: Option<(&str, &str)>, // (folder_prefix, target_path)
     max_concurrent_downloads: Option<usize>,
@@ -451,6 +457,7 @@ pub async fn sync_entries(
         let asset_blob_cache_clone = asset_blob_cache.clone();
         let asset_keyring_clone = asset_keyring.clone();
         let api_client_clone = api_client.clone();
+        let recipient_clone = recipient.clone();
         let sem_clone = Arc::clone(&semaphore);
 
         // Create a future that acquires a semaphore before downloading to
@@ -461,6 +468,7 @@ pub async fn sync_entries(
             let asset_blob_cache = asset_blob_cache_clone.clone();
             let asset_keyring = asset_keyring_clone;
             let api_client = api_client_clone;
+            let recipient = recipient_clone;
 
             let source = dl_task.source;
             let final_path = dl_task.final_path;
@@ -627,8 +635,10 @@ pub async fn sync_entries(
             let (decrypted_data_contents_temp_file, decrypted_hash) =
                 if let Some(data_contents_temp_file) = data_contents_temp_file.as_ref()
                     && let Some(metadata_contents) = metadata_contents.as_deref()
-                    && let Some((enc_aes_key_hex, enc_key_id)) =
-                        asset_crypt::parse_metadata_for_encryption_info(&metadata_contents)
+                    && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
+                        &metadata_contents,
+                        recipient.as_ref(),
+                    )
                 {
                     let in_path = data_contents_temp_file.path();
                     let decrypted_asset_contents_temp_file =
@@ -641,8 +651,7 @@ pub async fn sync_entries(
                         asset_blob_cache,
                         asset_keyring,
                         &api_client,
-                        &enc_aes_key_hex,
-                        &enc_key_id,
+                        &rec_key_info,
                     )
                     .await
                     {

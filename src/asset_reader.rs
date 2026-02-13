@@ -12,7 +12,7 @@ use crate::api::types::asset::{
     AssetEntry, AssetGetArg, AssetGetError, AssetGetResult, AssetMetadataInfo,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
-use crate::feature::asset_keyring::AssetKeyring;
+use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
 
 // --
 
@@ -298,6 +298,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
+    recipient: Option<KeyRecipient>,
     asset_names_or_globs: &[String],
     max_concurrent_downloads: usize,
     skip_download: Option<&HashSet<String>>,
@@ -368,6 +369,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
         asset_blob_cache,
         asset_keyring,
         api_client,
+        recipient,
         crate::asset_sync::AssetSyncSource::AssetEntry(assets_to_download),
         None,
         Some(max_concurrent_downloads),
@@ -422,6 +424,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
+    recipient: Option<KeyRecipient>,
     cmd: &str,
     max_concurrent_downloads: usize,
 ) -> Result<(String, AssetTempFileMap, HashSet<String>), String> {
@@ -500,6 +503,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
         asset_blob_cache,
         asset_keyring,
         api_client,
+        recipient,
         &asset_refs,
         max_concurrent_downloads,
         Some(&output_only_assets),

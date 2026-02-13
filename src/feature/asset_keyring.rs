@@ -14,7 +14,7 @@ const KEYRING_SERVICE: &str = "hai-asset-keys";
 
 /// Unlocked private keys for decrypting per-file AES keys
 pub struct AssetKeyring {
-    /// Map of enc_key_id -> decrypted private key (X25519 secret)
+    /// Map of rec_key_id -> decrypted private key (X25519 secret)
     unlocked_keys: HashMap<String, Zeroizing<StaticSecret>>,
 
     /// Timestamp for auto-lock after idle timeout
@@ -69,12 +69,12 @@ impl AssetKeyring {
     }
 
     /// Store password in OS keyring
-    fn store_password_in_keyring(&self, enc_key_id: &str, password: &str) {
+    fn store_password_in_keyring(&self, rec_key_id: &str, password: &str) {
         if !self.keyring_available {
             return;
         }
 
-        match keyring::Entry::new(KEYRING_SERVICE, enc_key_id) {
+        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
             Ok(entry) => {
                 if let Err(e) = entry.set_password(password) {
                     eprintln!("error: failed to store password in keyring: {}", e);
@@ -87,12 +87,12 @@ impl AssetKeyring {
     }
 
     /// Retrieve password from OS keyring
-    fn get_password_from_keyring(&self, enc_key_id: &str) -> Option<Zeroizing<String>> {
+    fn get_password_from_keyring(&self, rec_key_id: &str) -> Option<Zeroizing<String>> {
         if !self.keyring_available {
             return None;
         }
 
-        match keyring::Entry::new(KEYRING_SERVICE, enc_key_id) {
+        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
             Ok(entry) => match entry.get_password() {
                 Ok(password) => Some(Zeroizing::new(password)),
                 Err(keyring::Error::NoEntry) => None,
@@ -109,12 +109,12 @@ impl AssetKeyring {
     }
 
     /// Delete password from OS keyring
-    fn delete_password_from_keyring(&self, enc_key_id: &str) {
+    fn delete_password_from_keyring(&self, rec_key_id: &str) {
         if !self.keyring_available {
             return;
         }
 
-        match keyring::Entry::new(KEYRING_SERVICE, enc_key_id) {
+        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
             Ok(entry) => {
                 if let Err(e) = entry.delete_credential() {
                     if !matches!(e, keyring::Error::NoEntry) {
@@ -133,29 +133,33 @@ impl AssetKeyring {
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
-        enc_key_id: &str,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
         // Fetch the encrypted private key
-        let dec_key =
-            asset_crypt::get_encrypted_decryption_key(asset_blob_cache, api_client, enc_key_id)
-                .await
-                .map_err(|e| {
-                    asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-                })?;
+        let dec_key = asset_crypt::get_encrypted_decryption_key(
+            asset_blob_cache,
+            api_client,
+            &rec_key_id_parts,
+        )
+        .await
+        .map_err(|e| {
+            asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+        })?;
         let dec_key = if let Some(dec_key) = dec_key {
             dec_key
         } else {
             return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
         };
 
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
         // Try to get password from OS keyring first
-        if let Some(stored_password) = self.get_password_from_keyring(enc_key_id) {
+        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
             // Verify the stored password works
             match crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()) {
                 Ok(secret) => {
                     // Stored password works!
                     self.unlocked_keys
-                        .insert(enc_key_id.to_string(), Zeroizing::new(secret));
+                        .insert(rec_key_id.to_string(), Zeroizing::new(secret));
                     self.last_used = std::time::Instant::now();
                     return Ok(());
                 }
@@ -163,16 +167,19 @@ impl AssetKeyring {
                     // Stored password is invalid, remove it and prompt for new one
                     println!(
                         "error: stored password for {} is invalid, prompting for new password",
-                        enc_key_id
+                        rec_key_id
                     );
-                    self.delete_password_from_keyring(enc_key_id);
+                    self.delete_password_from_keyring(&rec_key_id);
                 }
             }
         }
 
         // Prompt for password if we don't have a valid stored one
-        let password = term::ask_question(&format!("Unlock key {enc_key_id}:"), true)
-            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        let password = term::ask_question(
+            &format!("Unlock key {}:", rec_key_id_parts.enc_key_id),
+            true,
+        )
+        .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
         let password = Zeroizing::new(password);
 
         // Decrypt and store the private key
@@ -182,10 +189,10 @@ impl AssetKeyring {
             })?;
 
         // Store password in OS keyring for future use
-        self.store_password_in_keyring(enc_key_id, &password);
+        self.store_password_in_keyring(&rec_key_id, &password);
 
         self.unlocked_keys
-            .insert(enc_key_id.to_string(), Zeroizing::new(secret));
+            .insert(rec_key_id, Zeroizing::new(secret));
         self.last_used = std::time::Instant::now();
 
         Ok(())
@@ -196,20 +203,21 @@ impl AssetKeyring {
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
-        enc_key_id: &str,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<&StaticSecret, asset_crypt::AssetKeyMaterialDecryptionError> {
-        if !self.unlocked_keys.contains_key(enc_key_id) {
-            self.unlock_key(asset_blob_cache, api_client, enc_key_id)
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        if !self.unlocked_keys.contains_key(&rec_key_id) {
+            self.unlock_key(asset_blob_cache, api_client, &rec_key_id_parts)
                 .await?;
         }
 
         self.last_used = std::time::Instant::now();
-        Ok(self.unlocked_keys.get(enc_key_id).unwrap())
+        Ok(self.unlocked_keys.get(&rec_key_id).unwrap())
     }
 
     /// Lock (clear) a specific key from memory (keeps keyring entry)
-    pub fn lock_key(&mut self, enc_key_id: &str) {
-        self.unlocked_keys.remove(enc_key_id);
+    pub fn lock_key(&mut self, rec_key_id: &str) {
+        self.unlocked_keys.remove(rec_key_id);
     }
 
     /// Lock all keys from memory (keeps keyring entries)
@@ -218,9 +226,9 @@ impl AssetKeyring {
     }
 
     /// Lock and forget a specific key (removes from memory AND keyring)
-    pub fn forget_key(&mut self, enc_key_id: &str) {
-        self.unlocked_keys.remove(enc_key_id);
-        self.delete_password_from_keyring(enc_key_id);
+    pub fn forget_key(&mut self, rec_key_id: &str) {
+        self.unlocked_keys.remove(rec_key_id);
+        self.delete_password_from_keyring(rec_key_id);
     }
 
     /// Lock and forget all keys (removes from memory AND keyring)

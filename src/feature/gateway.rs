@@ -16,7 +16,10 @@ use crate::api::client::HaiClient;
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::GetAssetError;
-use crate::{asset_async_writer, asset_reader, feature::asset_crypt};
+use crate::{
+    asset_async_writer, asset_reader,
+    feature::asset_crypt::{self, KeyRecipient},
+};
 
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
@@ -443,6 +446,7 @@ async fn handle_connection(
             api_client,
             asset_blob_cache,
             asset_keyring,
+            username,
             cookie_set,
         )
         .await
@@ -503,7 +507,6 @@ async fn handle_websocket_connection(
     //
     // If not pre-authenticated via cookie, first message must be an auth message
     //
-    //if !pre_authenticated {
     match tokio::time::timeout(std::time::Duration::from_secs(10), ws_stream.next()).await {
         Ok(Some(Ok(Message::Text(msg)))) => {
             let auth_msg: ClientMessageAuthRequest = match serde_json::from_str(&msg) {
@@ -538,7 +541,6 @@ async fn handle_websocket_connection(
             return Ok(());
         }
     }
-    //}
 
     // Client is authenticated, create channel and add to clients list
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
@@ -638,6 +640,7 @@ async fn handle_http_connection(
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    username: Option<String>,
     cookie_set: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf_reader = BufReader::new(&mut stream);
@@ -656,6 +659,7 @@ async fn handle_http_connection(
         asset_blob_cache,
         asset_keyring,
         &api_client,
+        username,
         cookie_set,
     )
     .await;
@@ -674,6 +678,7 @@ async fn handle_http_request(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    username: Option<String>,
     cookie_set: Arc<AtomicBool>,
 ) -> HttpResponse {
     // Check token from multiple sources: cookie, bearer token, query param
@@ -753,6 +758,7 @@ async fn handle_http_request(
         asset_blob_cache.clone(),
         asset_keyring.clone(),
         &api_client,
+        username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
         &data_contents,
         md_contents.as_deref(),
     )
@@ -961,6 +967,7 @@ async fn handle_client_message(
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 &api_client,
+                username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
                 &data_contents,
                 md_contents.as_deref(),
             )
@@ -1011,30 +1018,29 @@ async fn handle_client_message(
                     return;
                 }
             };
-            let akm_info = if let Some(username) = username {
-                match asset_crypt::choose_akm_for_asset_by_name(
-                    asset_blob_cache.clone(),
-                    asset_keyring.clone(),
-                    api_client.clone(),
-                    &username,
-                    &asset_arg.name,
-                    false,
-                )
-                .await
-                {
-                    Ok(akm_info) => akm_info,
-                    Err(e) => {
-                        match e {
-                            asset_crypt::AkmSelectionError::Abort(msg) => {
-                                eprintln!("error: {}", msg);
-                            }
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                api_client.clone(),
+                username
+                    .as_ref()
+                    .map(|s| KeyRecipient::User(s.to_string()))
+                    .as_ref(),
+                &asset_arg.name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
                         }
-                        send_bad_request_error(ws_sink, "Decryption key error").await;
-                        None
                     }
+                    send_bad_request_error(ws_sink, "Decryption key error").await;
+                    None
                 }
-            } else {
-                None
             };
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             let _ = update_asset_tx
@@ -1069,30 +1075,29 @@ async fn handle_client_message(
                 }
             };
 
-            let akm_info = if let Some(username) = username {
-                match asset_crypt::choose_akm_for_asset_by_name(
-                    asset_blob_cache.clone(),
-                    asset_keyring.clone(),
-                    api_client.clone(),
-                    &username,
-                    &asset_arg.name,
-                    false,
-                )
-                .await
-                {
-                    Ok(akm_info) => akm_info,
-                    Err(e) => {
-                        match e {
-                            asset_crypt::AkmSelectionError::Abort(msg) => {
-                                eprintln!("error: {}", msg);
-                            }
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                api_client.clone(),
+                username
+                    .as_ref()
+                    .map(|s| KeyRecipient::User(s.to_string()))
+                    .as_ref(),
+                &asset_arg.name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
                         }
-                        send_bad_request_error(ws_sink, "Decryption key error").await;
-                        None
                     }
+                    send_bad_request_error(ws_sink, "Decryption key error").await;
+                    None
                 }
-            } else {
-                None
             };
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             let _ = update_asset_tx

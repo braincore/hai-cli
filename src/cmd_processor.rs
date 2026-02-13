@@ -24,7 +24,10 @@ use crate::{
     asset_editor, asset_helper, asset_reader, asset_sync, chat, clipboard, cmd, config, crypt,
     ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
-    feature::{asset_crypt, haivar, save_chat},
+    feature::{
+        asset_crypt::{self, KeyRecipient},
+        haivar, save_chat,
+    },
     loader, term, term_color, tool,
 };
 
@@ -1625,7 +1628,7 @@ pub async fn process_cmd(
                                 asset_blob_cache.clone(),
                                 session.asset_keyring.clone(),
                                 api_client.clone(),
-                                &username,
+                                Some(&KeyRecipient::User(username.clone())),
                                 md_contents.as_deref(),
                                 asset_name.starts_with("vault/"),
                             )
@@ -1663,7 +1666,7 @@ pub async fn process_cmd(
                                 asset_blob_cache.clone(),
                                 session.asset_keyring.clone(),
                                 api_client.clone(),
-                                &username,
+                                Some(&KeyRecipient::User(username.clone())),
                                 None,
                                 asset_name.starts_with("vault/"),
                             )
@@ -1733,7 +1736,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client.clone(),
-                &username,
+                Some(&KeyRecipient::User(username.clone())),
                 &asset_name,
                 *encrypt,
             )
@@ -1818,7 +1821,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client.clone(),
-                &username,
+                Some(&KeyRecipient::User(username.clone())),
                 md_contents.as_deref(),
                 false,
             )
@@ -1878,7 +1881,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client.clone(),
-                &username,
+                Some(&KeyRecipient::User(username.clone())),
                 &asset_name,
                 false,
             )
@@ -2182,15 +2185,21 @@ pub async fn process_cmd(
                                 data: asset_contents,
                                 metadata: Some(md_contents),
                             }) => {
-                                if let Some((enc_aes_key_hex, enc_key_id)) =
-                                    asset_crypt::parse_metadata_for_encryption_info(&md_contents)
+                                if let Some(rec_key_info) =
+                                    asset_crypt::parse_metadata_for_encryption_info(
+                                        &md_contents,
+                                        session
+                                            .account
+                                            .as_ref()
+                                            .map(|a| KeyRecipient::User(a.username.clone()))
+                                            .as_ref(),
+                                    )
                                 {
                                     match asset_crypt::get_symmetric_key_ez(
                                         asset_blob_cache.clone(),
                                         session.asset_keyring.clone(),
                                         &api_client,
-                                        &enc_aes_key_hex,
-                                        &enc_key_id,
+                                        &rec_key_info,
                                     )
                                     .await
                                     {
@@ -2338,15 +2347,19 @@ pub async fn process_cmd(
                     && let Some(contents_bin) = asset_reader::get_asset_raw(data_url).await
                 {
                     let decrypted_asset_contents = if let Some(md_contents) = md_contents
-                        && let Some((enc_aes_key_hex, enc_key_id)) =
-                            asset_crypt::parse_metadata_for_encryption_info(&md_contents)
-                    {
+                        && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
+                            &md_contents,
+                            session
+                                .account
+                                .as_ref()
+                                .map(|a| KeyRecipient::User(a.username.clone()))
+                                .as_ref(),
+                        ) {
                         match asset_crypt::get_symmetric_key_ez(
                             asset_blob_cache.clone(),
                             session.asset_keyring.clone(),
                             &api_client,
-                            &enc_aes_key_hex,
-                            &enc_key_id,
+                            &rec_key_info,
                         )
                         .await
                         {
@@ -2892,6 +2905,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
+                Some(&KeyRecipient::User(username.clone())),
                 &data_contents,
                 source_md_contents.as_deref(),
             )
@@ -2908,7 +2922,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client.clone(),
-                &username,
+                Some(&KeyRecipient::User(username.clone())),
                 &target_asset_name,
                 false,
             )
@@ -3024,7 +3038,7 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client.clone(),
-                &username,
+                Some(&KeyRecipient::User(username.clone())),
                 &target_asset_name,
                 false,
             )
@@ -3100,6 +3114,11 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| KeyRecipient::User(a.username.clone()))
+                    .as_ref(),
                 &data_contents,
                 md_contents.as_deref(),
             )
@@ -3136,6 +3155,10 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| KeyRecipient::User(a.username.clone())),
                 &prefix,
                 &target_path,
                 None,
@@ -3184,6 +3207,10 @@ pub async fn process_cmd(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| KeyRecipient::User(a.username.clone())),
                 asset_sync::AssetSyncSource::AssetRevision((
                     asset_name.clone(),
                     iter_res.revisions.clone(),
@@ -3250,6 +3277,10 @@ pub async fn process_cmd(
                         asset_blob_cache.clone(),
                         session.asset_keyring.clone(),
                         &api_client,
+                        session
+                            .account
+                            .as_ref()
+                            .map(|a| KeyRecipient::User(a.username.clone())),
                         asset_sync::AssetSyncSource::AssetRevision((
                             asset_name.clone(),
                             iter_next_res.revisions.clone(),
@@ -3617,15 +3648,19 @@ pub async fn process_cmd(
             match asset_crypt::get_encryption_key(
                 asset_blob_cache.clone(),
                 &api_client,
-                &username,
+                &asset_crypt::KeyRecipient::User(username),
                 enc_key_id.as_deref(),
             )
             .await
             {
                 Ok(Some(key)) => {
                     let mut asset_keyring_locked = session.asset_keyring.lock().await;
+                    let rec_key_id_parts = asset_crypt::RecipientKeyIdParts {
+                        recipient: key.recipient.clone(),
+                        enc_key_id: key.enc_key_id.clone(),
+                    };
                     match asset_keyring_locked
-                        .unlock_key(asset_blob_cache.clone(), &api_client, &key.enc_key_id)
+                        .unlock_key(asset_blob_cache.clone(), &api_client, &rec_key_id_parts)
                         .await
                     {
                         Ok(()) => {
@@ -4888,6 +4923,7 @@ pub async fn shell_exec_with_asset_substitution(
         asset_blob_cache.clone(),
         asset_keyring.clone(),
         api_client,
+        username.map(|u| KeyRecipient::User(u.to_string())),
         cmd,
         4,
     )
@@ -4917,7 +4953,7 @@ pub async fn shell_exec_with_asset_substitution(
                     asset_blob_cache.clone(),
                     asset_keyring.clone(),
                     api_client.clone(),
-                    &username,
+                    Some(&KeyRecipient::User(username.to_string())),
                     &output_asset,
                     false,
                 )

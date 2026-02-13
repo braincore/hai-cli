@@ -480,8 +480,67 @@ pub struct EncryptKeyInfo {
     /// private asset filesystem tree.
     pub enc_key_id: String,
 
-    #[allow(dead_code)]
-    pub username: String,
+    pub recipient: KeyRecipient,
+}
+
+#[derive(Clone, Debug)]
+/// Container for the information that gets stored as an object in the
+/// `encrypted.keys` field of an encrypted asset's metadata.
+pub struct RecipientKeyInfo {
+    /// The ID of the encryption key, which can be used for look up in their
+    /// private asset filesystem tree.
+    pub enc_key_id: String,
+
+    /// The AES key, encrypted with the recipient's public encryption key.
+    pub enc_aes_key_hex: String,
+
+    pub recipient: KeyRecipient,
+}
+
+impl RecipientKeyInfo {
+    pub fn recipient_key_id(&self) -> String {
+        match &self.recipient {
+            KeyRecipient::User(username) => format!("u:{}:{}", username, self.enc_key_id),
+        }
+    }
+
+    pub fn recipient_key_id_parts(&self) -> RecipientKeyIdParts {
+        RecipientKeyIdParts {
+            recipient: self.recipient.clone(),
+            enc_key_id: self.enc_key_id.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum KeyRecipient {
+    User(String), // username
+}
+
+impl KeyRecipient {
+    pub fn recipient_key_id_prefix(&self) -> String {
+        match &self {
+            KeyRecipient::User(username) => format!("u:{}:", username),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Container for the information that gets stored as a string in the
+/// `encrypted.keys[].recipient_key_id` field of an encrypted asset's metadata.
+pub struct RecipientKeyIdParts {
+    pub recipient: KeyRecipient,
+    pub enc_key_id: String,
+}
+
+impl RecipientKeyIdParts {
+    pub fn recipient_key_id(&self) -> String {
+        format!(
+            "{}{}",
+            self.recipient.recipient_key_id_prefix(),
+            self.enc_key_id
+        )
+    }
 }
 
 /// Retrieve the user's asset encryption key.
@@ -489,19 +548,25 @@ pub struct EncryptKeyInfo {
 /// # Arguments
 /// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
 /// * `api_client` - An instance of HaiClient to interact with the API.
+/// * `recipient` - The recipient for whom to retrieve the encryption key.
 /// * `key_id` - Optional key ID to specify a particular encryption key.
 ///
 pub async fn get_encryption_key(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
-    username: &str,
+    recipient: &KeyRecipient,
     key_id: Option<&str>,
 ) -> Result<Option<EncryptKeyInfo>, String> {
-    let key_path = if let Some(key_id) = key_id {
-        format!("/{username}/keys/enc_{key_id}.pub")
-    } else {
-        format!("/{username}/keys/enc.pub")
+    let (key_path, username) = match recipient {
+        KeyRecipient::User(username) => {
+            if let Some(key_id) = key_id {
+                (format!("/{username}/keys/enc_{key_id}.pub"), username)
+            } else {
+                (format!("/{username}/keys/enc.pub"), username)
+            }
+        }
     };
+
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
         Ok((key_contents, key_id, _md_contents, _entry)) => {
             let recipient_pub = PublicKey::from(<[u8; 32]>::try_from(&key_contents[..]).unwrap());
@@ -509,7 +574,7 @@ pub async fn get_encryption_key(
                 Ok(Some(EncryptKeyInfo {
                     enc_key: recipient_pub,
                     enc_key_id: key_id,
-                    username: username.to_string(),
+                    recipient: KeyRecipient::User(username.to_string()),
                 }))
             } else {
                 Err("key ID mismatch".to_string())
@@ -567,14 +632,17 @@ pub fn mk_asset_key_material_with_new_sym_key(enc_key_info: EncryptKeyInfo) -> A
 /// # Arguments
 /// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
 /// * `api_client` - An instance of HaiClient to interact with the API.
-/// * `key_id` - Optional key ID to specify a particular encryption key.
-///
+/// * `rec_key_id_parts` - The recipient key ID parts to identify which encryption key to retrieve.
 pub async fn get_encrypted_decryption_key(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
-    key_id: &str,
+    rec_key_id_parts: &RecipientKeyIdParts,
 ) -> Result<Option<crypt::EncryptedEncryptionKey>, String> {
-    let key_path = format!("keys/enc_{key_id}.key");
+    let key_path = match rec_key_id_parts.recipient {
+        KeyRecipient::User(_) => {
+            format!("keys/enc_{}.key", rec_key_id_parts.enc_key_id)
+        }
+    };
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
         Ok((key_contents, _key_id, _md_contents, _entry)) => Ok(Some(
             crypt::EncryptedEncryptionKey::from_bytes(&key_contents)
@@ -634,20 +702,30 @@ pub async fn get_key(
     }
 }
 
+pub fn recipient_key_info_to_key_entry_json(info: &RecipientKeyInfo) -> serde_json::Value {
+    serde_json::json!({
+        "encrypted_key": info.enc_aes_key_hex,
+        "recipient_key_id": info.recipient_key_id(),
+    })
+}
+
 pub async fn put_asset_encryption_metadata(
     api_client: &HaiClient,
     asset_name: &str,
     akm_info: &AssetKeyMaterial,
 ) -> Result<(), String> {
+    let recipient_key_info = RecipientKeyInfo {
+        enc_key_id: akm_info.enc_key_info.enc_key_id.clone(),
+        enc_aes_key_hex: akm_info.sym_key_info.enc_aes_key.clone(),
+        recipient: akm_info.enc_key_info.recipient.clone(),
+    };
+    let recipient_key_entry = recipient_key_info_to_key_entry_json(&recipient_key_info);
     let md_contents = serde_json::json!({
         "encrypted": {
             "algorithm": "AES-GCM",
             // NOTE: Use list in preparation for future with multiple
             // recipients.
-            "keys": [{
-                "encrypted_key": akm_info.sym_key_info.enc_aes_key,
-                "recipient_key_id": akm_info.enc_key_info.enc_key_id,
-            }]
+            "keys": [recipient_key_entry]
         },
     })
     .to_string();
@@ -665,19 +743,35 @@ pub async fn put_asset_encryption_metadata(
     }
 }
 
-pub fn parse_metadata_for_encryption_info(metadata: &[u8]) -> Option<(String, String)> {
+/// Parse the encryption information from the asset metadata, if it exists.
+///
+/// # Arguments
+/// * `metadata` - The raw bytes of the asset metadata to parse.
+/// * `username` - Optional username to match against the available recipient
+///   keys.
+pub fn parse_metadata_for_encryption_info(
+    metadata: &[u8],
+    recipient: Option<&KeyRecipient>,
+) -> Option<RecipientKeyInfo> {
+    // Quick exit if there's no recipient since it will never match a key.
+    let recipient = recipient?;
     let md_json =
         serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(metadata).to_string())
             .ok()?;
     let enc_info = md_json.get("encrypted")?;
-    let keys = enc_info.get("keys")?.as_array()?;
-    // NOTE: Given that all encrypted assets are in private asset trees,
-    // there's no need to check more than one entry nor to check the recipient.
-    // In the future, this will change.
-    let first_key = keys.get(0)?;
-    let enc_aes_key = first_key.get("encrypted_key")?.as_str()?.to_string();
-    let enc_key_id = first_key.get("recipient_key_id")?.as_str()?.to_string();
-    Some((enc_aes_key, enc_key_id))
+    let enc_keys = enc_info.get("keys")?.as_array()?;
+
+    let (enc_key_id, enc_aes_key_hex) = enc_keys.iter().find_map(|enc_key| {
+        let recipient_key_id = enc_key.get("recipient_key_id")?.as_str()?;
+        let enc_key_id = recipient_key_id.strip_prefix(&recipient.recipient_key_id_prefix())?;
+        let enc_aes_key_hex = enc_key.get("encrypted_key")?.as_str()?;
+        Some((enc_key_id.to_string(), enc_aes_key_hex.to_string()))
+    })?;
+    Some(RecipientKeyInfo {
+        enc_key_id,
+        enc_aes_key_hex,
+        recipient: recipient.clone(),
+    })
 }
 
 pub fn encrypt_asset_with_aes_key(aes_key: &crypt::AesKey, contents: &[u8]) -> Vec<u8> {
@@ -737,12 +831,15 @@ pub async fn get_symmetric_key_ez(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
-    enc_aes_key_hex: &str,
-    enc_key_id: &str,
+    rec_key_info: &RecipientKeyInfo,
 ) -> Result<SymmetricKeyInfo, AssetKeyMaterialDecryptionError> {
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let secret = match asset_keyring_locked
-        .get_or_unlock(asset_blob_cache, api_client, enc_key_id)
+        .get_or_unlock(
+            asset_blob_cache,
+            api_client,
+            &rec_key_info.recipient_key_id_parts(),
+        )
         .await
     {
         Ok(secret) => secret,
@@ -753,11 +850,11 @@ pub async fn get_symmetric_key_ez(
             ));
         }
     };
-    let enc_aes_key = crypt::EncryptedAesKey::from_hex(&enc_aes_key_hex).unwrap();
+    let enc_aes_key = crypt::EncryptedAesKey::from_hex(&rec_key_info.enc_aes_key_hex).unwrap();
     let aes_key = crypt::decrypt_aes_key(&enc_aes_key, &secret).unwrap();
     Ok(SymmetricKeyInfo {
         aes_key,
-        enc_aes_key: enc_aes_key_hex.to_string(),
+        enc_aes_key: rec_key_info.enc_aes_key_hex.to_string(),
     })
 }
 
@@ -767,25 +864,19 @@ pub async fn maybe_decrypt_asset_contents(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
+    recipient: Option<&KeyRecipient>,
     asset_contents: &[u8],
     md_contents: Option<&[u8]>,
 ) -> Result<Vec<u8>, AssetKeyMaterialDecryptionError> {
     if let Some(md_contents) = md_contents
-        && let Some((enc_aes_key_hex, enc_key_id)) =
-            parse_metadata_for_encryption_info(&md_contents)
+        && let Some(rec_key_info) = parse_metadata_for_encryption_info(&md_contents, recipient)
     {
-        get_symmetric_key_ez(
-            asset_blob_cache,
-            asset_keyring,
-            &api_client,
-            &enc_aes_key_hex,
-            &enc_key_id,
-        )
-        .await
-        .map(|sym_info| {
-            let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
-            crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
-        })
+        get_symmetric_key_ez(asset_blob_cache, asset_keyring, &api_client, &rec_key_info)
+            .await
+            .map(|sym_info| {
+                let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
+            })
     } else {
         Ok(asset_contents.to_vec())
     }
@@ -1036,20 +1127,20 @@ pub async fn choose_akm_for_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
-    username: &str,
+    recipient: Option<&KeyRecipient>,
     md_contents: Option<&[u8]>,
     generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
     if let Some(md_contents) = md_contents
-        && let Some((enc_aes_key_hex, enc_key_id)) =
-            parse_metadata_for_encryption_info(&md_contents)
+        && let Some(recipient) = recipient
+        && let Some(rec_key_info) =
+            parse_metadata_for_encryption_info(&md_contents, Some(recipient))
     {
         match get_symmetric_key_ez(
             asset_blob_cache.clone(),
             asset_keyring.clone(),
             &api_client,
-            &enc_aes_key_hex,
-            &enc_key_id,
+            &rec_key_info,
         )
         .await
         {
@@ -1057,8 +1148,8 @@ pub async fn choose_akm_for_asset(
                 let enc_key_info = match get_encryption_key(
                     asset_blob_cache.clone(),
                     &api_client,
-                    &username,
-                    Some(&enc_key_id),
+                    &recipient,
+                    Some(&rec_key_info.enc_key_id),
                 )
                 .await
                 {
@@ -1066,7 +1157,7 @@ pub async fn choose_akm_for_asset(
                     Ok(None) => {
                         return Err(AkmSelectionError::Abort(format!(
                             "encryption key {} not found",
-                            enc_key_id
+                            rec_key_info.enc_key_id
                         )));
                     }
                     Err(e) => {
@@ -1079,8 +1170,8 @@ pub async fn choose_akm_for_asset(
                 return Err(AkmSelectionError::Abort(format!("{}", e)));
             }
         }
-    } else if generate_akm_if_new {
-        match get_encryption_key(asset_blob_cache.clone(), &api_client, &username, None).await {
+    } else if generate_akm_if_new && let Some(recipient) = recipient {
+        match get_encryption_key(asset_blob_cache.clone(), &api_client, recipient, None).await {
             Ok(Some(enc_key_info)) => Ok(Some(mk_asset_key_material_with_new_sym_key(
                 enc_key_info.clone(),
             ))),
@@ -1102,7 +1193,7 @@ pub async fn choose_akm_for_asset_by_name(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
-    username: &str,
+    recipient: Option<&KeyRecipient>,
     asset_name: &str,
     force_generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
@@ -1131,7 +1222,7 @@ pub async fn choose_akm_for_asset_by_name(
         asset_blob_cache,
         asset_keyring,
         api_client,
-        username,
+        recipient,
         md_contents.as_deref(),
         generate_akm_if_new,
     )
