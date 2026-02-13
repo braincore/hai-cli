@@ -3890,6 +3890,7 @@ pub async fn process_cmd(
                                 input: format!("/chat-resume {}", asset_name),
                                 source: session::CmdSource::Internal,
                             });
+                            break;
                         }
                         _ => {
                             // continue looping to load more entries
