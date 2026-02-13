@@ -1269,7 +1269,11 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url, raw })),
                 None => {
-                    eprintln!("Usage: /load-url[.raw=false] <url>");
+                    eprintln!("Usage: /load-url <url>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
+                    );
                     None
                 }
             }
@@ -1380,7 +1384,11 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(command) => Some(Cmd::Exec(ExecCmd { command, cache })),
                 None => {
-                    eprintln!("Usage: /exec[.cache=false] <command>");
+                    eprintln!("Usage: /exec <command>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
@@ -1407,7 +1415,12 @@ fn parse_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: /ask-human[.secret=false][.cache=false] <question>");
+                    eprintln!("Usage: /ask-human <question>");
+                    eprintln!("Options:");
+                    eprintln!("  .secret=BOOL   Hide input from terminal (default: false)");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
@@ -1437,7 +1450,12 @@ fn parse_command(
                     trust,
                 })),
                 None => {
-                    eprintln!("Usage: /task[.key=\"<key>\"][.trust=false] <task_ref>");
+                    eprintln!("Usage: /task <task_ref>");
+                    eprintln!("Options:");
+                    eprintln!("  .key=STRING    Namespace the cache (default: none)");
+                    eprintln!(
+                        "  .trust=BOOL    Do not prompt for user confirmations (default: false)"
+                    );
                     None
                 }
             }
@@ -1655,7 +1673,9 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q, path })),
                 None => {
-                    eprintln!("Usage: /asset-search[.path=\"<path>\"] <query>");
+                    eprintln!("Usage: /asset-search <query>");
+                    eprintln!("Options:");
+                    eprintln!("  .path=STRING   Specify the asset-pool to search (default: none)");
                     None
                 }
             }
@@ -2216,7 +2236,11 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Prompt(PromptCmd { prompt, cache })),
                 None => {
-                    eprintln!("Usage: /prompt[.cache=false] <message>");
+                    eprintln!("Usage: /prompt <message>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
@@ -2394,7 +2418,11 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-py[.cache=false] <prompt: function to implement>");
+                    eprintln!("Usage: !fn-py <prompt: function to implement>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
@@ -2429,7 +2457,11 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-pyuv[.cache=false] <prompt: function to implement>");
+                    eprintln!("Usage: !fn-pyuv <prompt: function to implement>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
@@ -2464,7 +2496,11 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-sh[.cache=false] <prompt: function to implement>");
+                    eprintln!("Usage: !fn-sh <prompt: function to implement>");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
                     None
                 }
             }
