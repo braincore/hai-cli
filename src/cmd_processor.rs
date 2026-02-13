@@ -2106,13 +2106,16 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetSearch(cmd::AssetSearchCmd { q }) => {
+        cmd::Cmd::AssetSearch(cmd::AssetSearchCmd { q, path }) => {
+            let path = path
+                .as_ref()
+                .map(|p| expand_pub_asset_name(p, &session.account));
             use crate::api::types::asset::AssetEntrySearchArg;
             let api_client = mk_api_client(Some(session));
             let asset_search_res = match api_client
                 .asset_entry_search(AssetEntrySearchArg {
                     q: q.into(),
-                    asset_pool_path: None,
+                    asset_pool_path: path.clone(),
                 })
                 .await
             {

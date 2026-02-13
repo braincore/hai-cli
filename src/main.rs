@@ -244,7 +244,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let task_cmd = if options.is_empty() {
                 format!("/task {}", fixed_task_ref)
             } else {
-                format!("/task({}) {}", options.join(","), fixed_task_ref)
+                format!("/task.{} {}", options.join("."), fixed_task_ref)
             };
             (
                 ReplMode::Normal,

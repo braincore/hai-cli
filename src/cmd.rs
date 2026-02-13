@@ -468,6 +468,8 @@ pub struct AssetListCmd {
 pub struct AssetSearchCmd {
     /// The search string to use
     pub q: String,
+    /// Optional asset-pool path to search within
+    pub path: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -723,18 +725,19 @@ pub struct QueuePopCmd {
 
 fn get_cmd_re() -> &'static Regex {
     static CMD_RE: OnceLock<Regex> = OnceLock::new();
-    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!\?]?[a-z0-9-_]*)( |\(|$)").unwrap())
+    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!?]?[a-z0-9-_]*)(\.| |\(|$)").unwrap())
 }
 
 fn get_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?( |\?|\(|$)").unwrap())
+    TOOL_RE
+        .get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?(\.| |\?|\(|$)").unwrap())
 }
 
 fn get_ai_def_tool_re() -> &'static Regex {
     static TOOL_RE: OnceLock<Regex> = OnceLock::new();
     TOOL_RE.get_or_init(|| {
-        Regex::new(r"^f([0-9]+|_[A-Za-z]+(?:_[A-Za-z]+)*|'(?:\\'|[^'])*')?( |$)").unwrap()
+        Regex::new(r"^f([0-9]+|_[A-Za-z]+(?:_[A-Za-z]+)*|'(?:\\'|[^'])*')?(\.| |$)").unwrap()
     })
 }
 
@@ -777,7 +780,7 @@ pub fn parse_user_input(
         // Try parsing as a command
         let input = input.trim_end();
         let cmd_re = get_cmd_re();
-        let (mut remaining, cmd_name) = match cmd_re.captures(remaining) {
+        let (remaining, cmd_name) = match cmd_re.captures(remaining) {
             Some(captures) => {
                 if let Some(m) = captures.get(1) {
                     remaining = &input[m.end() + 1..];
@@ -798,17 +801,25 @@ pub fn parse_user_input(
                 }));
             }
         };
-        let options_re = Regex::new(r"(\([^\)]*\))?( |$)").unwrap();
-        let (remaining, options) = match options_re.captures(remaining) {
-            Some(captures) => {
-                if let Some(m) = captures.get(1) {
-                    remaining = &remaining[m.end()..];
-                    (remaining, parse_options(m.as_str()))
-                } else {
-                    (remaining, HashMap::new())
+        let (options, remaining) = if remaining.starts_with('.') {
+            parse_dot_options(remaining)
+        } else if remaining.starts_with('(') {
+            // Legacy parenthetical options syntax
+            let options_re = Regex::new(r"(\([^)]*\))?( |$)").unwrap();
+            match options_re.captures(remaining) {
+                Some(captures) => {
+                    if let Some(m) = captures.get(1) {
+                        let opts = parse_options(m.as_str());
+                        let rest = remaining[m.end()..].trim_start();
+                        (opts, rest)
+                    } else {
+                        (HashMap::new(), remaining)
+                    }
                 }
+                None => (HashMap::new(), remaining),
             }
-            None => (remaining, HashMap::new()),
+        } else {
+            (HashMap::new(), remaining)
         };
         parse_command(cmd_name, options.clone(), remaining, input)
     } else if let Some(mut remaining) = input.strip_prefix('!') {
@@ -854,17 +865,25 @@ pub fn parse_user_input(
         } else {
             true
         };
-        let options_re = Regex::new(r"(\([^\)]*\))?( |$)").unwrap();
-        let (remaining, options) = match options_re.captures(remaining) {
-            Some(captures) => {
-                if let Some(m) = captures.get(1) {
-                    remaining = &remaining[m.end()..];
-                    (remaining, parse_options(m.as_str()))
-                } else {
-                    (remaining, HashMap::new())
+        let (options, remaining) = if remaining.starts_with('.') {
+            parse_dot_options(remaining)
+        } else if remaining.starts_with('(') {
+            // Legacy parenthetical options syntax
+            let options_re = Regex::new(r"(\([^)]*\))?( |$)").unwrap();
+            match options_re.captures(remaining) {
+                Some(captures) => {
+                    if let Some(m) = captures.get(1) {
+                        let opts = parse_options(m.as_str());
+                        let rest = remaining[m.end()..].trim_start();
+                        (opts, rest)
+                    } else {
+                        (HashMap::new(), remaining)
+                    }
                 }
+                None => (HashMap::new(), remaining),
             }
-            None => (remaining, HashMap::new()),
+        } else {
+            (HashMap::new(), remaining)
         };
         parse_tool_command(
             tool_name.as_str(),
@@ -1250,7 +1269,7 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url, raw })),
                 None => {
-                    eprintln!("Usage: /load-url(raw=false) <url>");
+                    eprintln!("Usage: /load-url[.raw=false] <url>");
                     None
                 }
             }
@@ -1361,7 +1380,7 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(command) => Some(Cmd::Exec(ExecCmd { command, cache })),
                 None => {
-                    eprintln!("Usage: /exec(cache=false) <command>");
+                    eprintln!("Usage: /exec[.cache=false] <command>");
                     None
                 }
             }
@@ -1388,7 +1407,7 @@ fn parse_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: /ask-human(secret=false,cache=false) <question>");
+                    eprintln!("Usage: /ask-human[.secret=false][.cache=false] <question>");
                     None
                 }
             }
@@ -1418,7 +1437,7 @@ fn parse_command(
                     trust,
                 })),
                 None => {
-                    eprintln!("Usage: /task <task_ref>");
+                    eprintln!("Usage: /task[.key=\"<key>\"][.trust=false] <task_ref>");
                     None
                 }
             }
@@ -1620,13 +1639,23 @@ fn parse_command(
             }
         }
         "asset-search" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["path"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("path".to_string(), OptionType::String)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let path = options.get("path").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
             match parse_one_arg_catchall(remaining) {
-                Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q })),
+                Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q, path })),
                 None => {
-                    eprintln!("Usage: /asset-search <query>");
+                    eprintln!("Usage: /asset-search[.path=\"<path>\"] <query>");
                     None
                 }
             }
@@ -2187,7 +2216,7 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Prompt(PromptCmd { prompt, cache })),
                 None => {
-                    eprintln!("Usage: /prompt(cache=false) <message>");
+                    eprintln!("Usage: /prompt[.cache=false] <message>");
                     None
                 }
             }
@@ -2365,7 +2394,7 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-py(cache=false) <prompt: function to implement>");
+                    eprintln!("Usage: !fn-py[.cache=false] <prompt: function to implement>");
                     None
                 }
             }
@@ -2400,7 +2429,7 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-pyuv(cache=false) <prompt: function to implement>");
+                    eprintln!("Usage: !fn-pyuv[.cache=false] <prompt: function to implement>");
                     None
                 }
             }
@@ -2435,7 +2464,7 @@ fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-sh(cache=false) <prompt: function to implement>");
+                    eprintln!("Usage: !fn-sh[.cache=false] <prompt: function to implement>");
                     None
                 }
             }
@@ -2602,6 +2631,84 @@ fn parse_options(options_input: &str) -> HashMap<String, String> {
         }
     }
     options
+}
+
+/// Parse command options: /cmd.key1=value.key2.key3="quoted value"
+///
+/// If a key is specified without a value, the value is set to `true`.
+/// Supports quoted values containing dots.
+///
+/// # Arguments
+/// - `options_input` - The portion of the input after the command name, starting with `.`
+///   e.g., `.recursive.path="/ken/docs".limit=10`
+///
+/// # Returns
+/// - Tuple of (HashMap of options, remaining unparsed input after options)
+fn parse_dot_options(options_input: &str) -> (HashMap<String, String>, &str) {
+    let mut options = HashMap::new();
+
+    if !options_input.starts_with('.') {
+        return (options, options_input);
+    }
+
+    let mut chars = options_input.char_indices().peekable();
+    chars.next(); // consume initial '.'
+
+    let mut current_key = String::new();
+    let mut current_value = String::new();
+    let mut in_value = false;
+    let mut in_quotes = false;
+    let mut end_idx = options_input.len();
+
+    while let Some((idx, c)) = chars.next() {
+        match c {
+            ' ' if !in_quotes => {
+                end_idx = idx;
+                break;
+            }
+            '"' => {
+                in_quotes = !in_quotes;
+                if in_value {
+                    current_value.push(c);
+                }
+            }
+            '.' if !in_quotes => {
+                if !current_key.is_empty() {
+                    let value = if in_value {
+                        current_value.clone()
+                    } else {
+                        "true".to_string()
+                    };
+                    options.insert(current_key, value);
+                }
+                current_key = String::new();
+                current_value = String::new();
+                in_value = false;
+            }
+            '=' if !in_quotes && !in_value => {
+                in_value = true;
+            }
+            _ => {
+                if in_value {
+                    current_value.push(c);
+                } else {
+                    current_key.push(c);
+                }
+            }
+        }
+    }
+
+    if !current_key.is_empty() {
+        let value = if in_value {
+            current_value
+        } else {
+            "true".to_string()
+        };
+        options.insert(current_key, value);
+    }
+
+    let remaining = &options_input[end_idx..].trim_start();
+    (options, remaining)
 }
 
 /// Validates the options for a command.
@@ -2800,6 +2907,73 @@ mod tests {
                 assert!(cache);
             }
             _ => panic!("Failed to parse two args"),
+        }
+    }
+
+    #[test]
+    fn test_arguments_new() {
+        // Test one argument
+        let input = "/ask-human.secret=true agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(!cache);
+            }
+            _ => panic!("Failed to parse one args"),
+        }
+
+        // Test two arguments
+        let input = "/ask-human.secret=true.cache=true agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse two args"),
+        }
+
+        // Test two arguments shorthand
+        let input = "/ask-human.secret.cache agree?";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::AskHuman(AskHumanCmd {
+                question,
+                secret,
+                cache,
+            })) => {
+                assert_eq!(question, "agree?");
+                assert!(secret);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse two args"),
+        }
+
+        // Test string argument
+        let input = "/task.key=\"test\".trust user/task";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Task(TaskCmd {
+                task_ref,
+                key,
+                trust,
+            })) => {
+                assert_eq!(task_ref, "user/task");
+                assert_eq!(key, Some("test".to_string()));
+                assert!(trust);
+            }
+            _ => panic!("Failed to parse string arg"),
         }
     }
 
@@ -3211,6 +3385,50 @@ mod tests {
     #[test]
     fn test_tool_command_with_option() {
         let input = "!fn-py(cache=true) double a number";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool:
+                    tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnPy,
+                        name: None,
+                    }),
+                prompt,
+                user_confirmation,
+                force_tool,
+                cache,
+            })) => {
+                assert_eq!(prompt, "double a number");
+                assert!(!user_confirmation);
+                assert!(force_tool);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse !fn-py command properly"),
+        }
+
+        let input = "!fn-py.cache=true double a number";
+        let cmd = parse_user_input(input, None, None);
+        match cmd {
+            Some(Cmd::Tool(ToolCmd {
+                tool:
+                    tool::Tool::Fn(tool::FnTool {
+                        kind: tool::FnToolType::FnPy,
+                        name: None,
+                    }),
+                prompt,
+                user_confirmation,
+                force_tool,
+                cache,
+            })) => {
+                assert_eq!(prompt, "double a number");
+                assert!(!user_confirmation);
+                assert!(force_tool);
+                assert!(cache);
+            }
+            _ => panic!("Failed to parse !fn-py command properly"),
+        }
+
+        let input = "!fn-py.cache double a number";
         let cmd = parse_user_input(input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {

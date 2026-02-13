@@ -160,8 +160,8 @@ Run a specific version:
 
 ### Task cache
 
-Tasks can cache some of their steps: `/ask-human(cache)`, `/exec(cache)`,
-and `/prompt(cache)`. To purge this cache, try:
+Tasks can cache some of their steps: `/ask-human.cache`, `/exec.cache`,
+and `/prompt.cache`. To purge this cache, try:
 
 ```
 /task-purge <task-fully-qualified-name>
@@ -170,7 +170,7 @@ and `/prompt(cache)`. To purge this cache, try:
 To invoke a task with a non-default cache bucket, use the `key` option:
 
 ```
-/task(key="<cache_bucket>") <task-fully-qualified-name>
+/task.key="<cache_bucket>" <task-fully-qualified-name>
 ```
 
 This lets you run a single task with a different configuration per key.
@@ -179,7 +179,7 @@ This lets you run a single task with a different configuration per key.
 
 Some task steps require user confirmation because of the danger they pose (see
 [Security Warning](#security-warning)). To skip these confirmations, you can
-set the `trust` option: `/task(trust)`
+set the `trust` option: `/task.trust`
 
 ## Writing a task
 
@@ -272,13 +272,13 @@ There are some `hai`-repl commands that are specifically made for tasks:
 | Command | Description |
 |---------|-------------|
 | `/ask-human <prompt>` | Ask the user a question. |
-| `/ask-human(secret) <prompt>` | Ask a question; user's answer is treated as a secret and hidden. |
-| `/ask-human(cache) <prompt>` | Ask a question; previous answer is reused on rerun. Use `/task-forget` to reset. |
+| `/ask-human.secret <prompt>` | Ask a question; user's answer is treated as a secret and hidden. |
+| `/ask-human.cache <prompt>` | Ask a question; previous answer is reused on rerun. Use `/task-forget` to reset. |
 | `/set-mask-secrets on` | Mask AI output that includes secrets in the terminal. Useful for hiding sensitive info like API tokens. |
 | `/exec <cmd>` | Execute a command on the local machine. Always prompts the user for confirmation. |
-| `/exec(cache) <cmd>` | Execute a command; output is cached and reused on rerun. |
+| `/exec.cache <cmd>` | Execute a command; output is cached and reused on rerun. |
 | `/prompt <message>` | Explicitly prompt the AI with a message. |
-| `/prompt(cache) <message>` | Prompt the AI; cached output is reused on rerun to save time and cost. |
+| `/prompt.cache <message>` | Prompt the AI; cached output is reused on rerun to save time and cost. |
 | `/task-include <name|path>` | Run task steps without entering or exiting task-mode. Useful for including tasks within other tasks. |
 | `/ai <model>` | Set the AI model. In tasks, if the model isn't available, the current model remains unchanged. |
 | `/keep <bottom> [<top>]` | Forget messages to bound conversation size; useful for looping tasks. |

@@ -236,6 +236,25 @@ Assets can be searched semantically based on their contents:
 The search is powered by embeddings on the content and the `title` metadata key
 if it's set. The latter is especially important if the content is non-unicode.
 
+To search in a different asset pool (e.g. a public asset pool), use:
+
+```
+/asset-search.path="<asset-pool-path>"
+```
+
+Examples:
+
+```
+# Search the hai account's public assets for a changelog
+/asset-search.path="/hai" changelog
+
+# Your public assets
+/asset-search.path="/<username>" <query>
+
+# Your public assets using the "//" shorthand
+/asset-search.path="//" <query>
+```
+
 ## Usage with `/exec`
 
 When executing a shell command, use `@name` to reference an asset. The asset
