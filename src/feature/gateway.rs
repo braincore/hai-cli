@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
@@ -33,6 +33,7 @@ struct HttpRequest {
     query_params: std::collections::HashMap<String, String>,
     headers: std::collections::HashMap<String, String>,
     subdomain: Option<String>,
+    body: Vec<u8>,
 }
 
 impl HttpRequest {
@@ -74,12 +75,32 @@ impl HttpRequest {
         // Parse subdomain from Host header
         let subdomain = Self::parse_subdomain(headers.get("host"), base_domain);
 
+        // Read body if Content-Length is present
+        let body = if let Some(content_length) = headers.get("content-length") {
+            if let Ok(len) = content_length.parse::<usize>() {
+                // Limit body size to prevent memory exhaustion (e.g., 64MB)
+                const MAX_BODY_SIZE: usize = 64 * 1024 * 1024;
+                if len > MAX_BODY_SIZE {
+                    return None;
+                }
+
+                let mut body = vec![0u8; len];
+                stream.read_exact(&mut body).await.ok()?;
+                body
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
         Some(HttpRequest {
             method,
             path,
             query_params,
             headers,
             subdomain,
+            body,
         })
     }
 
@@ -447,6 +468,7 @@ async fn handle_connection(
             asset_blob_cache,
             asset_keyring,
             username,
+            update_asset_tx,
             cookie_set,
         )
         .await
@@ -641,6 +663,7 @@ async fn handle_http_connection(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     username: Option<String>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf_reader = BufReader::new(&mut stream);
@@ -660,6 +683,7 @@ async fn handle_http_connection(
         asset_keyring,
         &api_client,
         username,
+        update_asset_tx,
         cookie_set,
     )
     .await;
@@ -679,6 +703,7 @@ async fn handle_http_request(
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
     username: Option<String>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
 ) -> HttpResponse {
     // Check token from multiple sources: cookie, bearer token, query param
@@ -688,21 +713,22 @@ async fn handle_http_request(
 
     // Parse optional query params
     let rev_id: Option<String> = request.query_param("rev_id").map(|s| s.to_string());
-    let return_metadata: bool = request
+    let metadata_ref: bool = request
         .query_param("metadata")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let is_push: bool = request
+        .query_param("push")
         .map(|v| v == "1")
         .unwrap_or(false);
 
     let should_set_cookie = !cookie_set.load(std::sync::atomic::Ordering::SeqCst);
 
     let authenticated = if let Some(ct) = cookie_token {
-        // Cookie present - validate it
         ct == expected_token
     } else if let Some(bt) = bearer_token {
-        // Bearer token - validate, set cookie if first request
         bt == expected_token
     } else if let Some(qt) = query_token {
-        // Query param token - validate, set cookie if first request
         qt == expected_token
     } else {
         false
@@ -712,14 +738,8 @@ async fn handle_http_request(
         return HttpResponse::unauthorized();
     }
 
-    // Mark cookie as set (for future requests)
     if should_set_cookie {
         cookie_set.store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    // Only handle GET for now
-    if request.method != "GET" {
-        return HttpResponse::bad_request("Only GET supported");
     }
 
     // /~/ is the prefix for a user's private asset pool.
@@ -737,22 +757,84 @@ async fn handle_http_request(
 
     // URL decode the path
     let asset_name = match urlencoding::decode(path) {
-        Ok(decoded_path) => {
-            // Support <asset_name>@<asset_app_name> format
-            match decoded_path.split_once('@') {
-                Some((_asset_name, asset_app_name)) => asset_app_name.to_string(),
-                None => decoded_path.to_string(),
-            }
-        }
+        Ok(decoded_path) => match decoded_path.split_once('@') {
+            Some((_asset_name, asset_app_name)) => asset_app_name.to_string(),
+            None => decoded_path.to_string(),
+        },
         Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
     };
 
+    let mut response = match request.method.as_str() {
+        "GET" => {
+            if is_push {
+                return HttpResponse::bad_request("push parameter is not valid for GET requests");
+            }
+            handle_get(
+                &asset_name,
+                rev_id.as_deref(),
+                metadata_ref,
+                asset_blob_cache,
+                asset_keyring,
+                api_client,
+                username,
+            )
+            .await
+        }
+        "PUT" => {
+            if metadata_ref {
+                if is_push {
+                    return HttpResponse::bad_request(
+                        "push parameter is not valid when metadata=1",
+                    );
+                }
+                handle_put_metadata(
+                    &asset_name,
+                    &request.body,
+                    asset_blob_cache,
+                    asset_keyring,
+                    api_client.clone(),
+                    username,
+                )
+                .await
+            } else {
+                handle_put(
+                    &asset_name,
+                    &request.body,
+                    is_push,
+                    asset_blob_cache,
+                    asset_keyring,
+                    api_client.clone(),
+                    username,
+                    update_asset_tx,
+                )
+                .await
+            }
+        }
+        _ => HttpResponse::bad_request("Only GET and PUT supported"),
+    };
+
+    if should_set_cookie {
+        response = response.with_cookie(HttpResponse::auth_cookie(expected_token));
+    }
+
+    response
+}
+
+async fn handle_get(
+    asset_name: &str,
+    rev_id: Option<&str>,
+    return_metadata: bool,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: &HaiClient,
+    username: Option<String>,
+) -> HttpResponse {
     let (data_contents, md_contents, asset_revision) =
         match asset_reader::get_asset_and_metadata_revision(
             asset_blob_cache.clone(),
-            &api_client,
-            &asset_name,
-            rev_id.as_deref(),
+            api_client,
+            asset_name,
+            rev_id,
             !return_metadata,
         )
         .await
@@ -765,6 +847,7 @@ async fn handle_http_request(
                 return HttpResponse::bad_request("Invalid URL encoding");
             }
         };
+
     let (decrypted_contents, content_type) = if return_metadata {
         if let Some(md_contents) = md_contents {
             (md_contents, "application/json".to_string())
@@ -775,7 +858,7 @@ async fn handle_http_request(
         match asset_crypt::maybe_decrypt_asset_contents(
             asset_blob_cache.clone(),
             asset_keyring.clone(),
-            &api_client,
+            api_client,
             username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
             &data_contents,
             md_contents.as_deref(),
@@ -787,7 +870,7 @@ async fn handle_http_request(
                     .metadata
                     .and_then(|md| md.content_type.clone());
                 let content_type = crate::asset_helper::best_guess_content_type(
-                    &asset_name,
+                    asset_name,
                     asset_content_type.as_deref(),
                     &decrypted_asset_contents,
                 );
@@ -800,14 +883,102 @@ async fn handle_http_request(
         }
     };
 
-    let mut response = HttpResponse::ok(decrypted_contents, &content_type);
+    HttpResponse::ok(decrypted_contents, &content_type)
+}
 
-    // Set cookie on first authenticated request
-    if should_set_cookie {
-        response = response.with_cookie(HttpResponse::auth_cookie(expected_token));
+async fn handle_put(
+    asset_name: &str,
+    body: &[u8],
+    is_push: bool,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: HaiClient,
+    username: Option<String>,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
+) -> HttpResponse {
+    // Choose encryption key material for this asset
+    let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client.clone(),
+        username
+            .as_ref()
+            .map(|s| KeyRecipient::User(s.to_string()))
+            .as_ref(),
+        asset_name,
+        false,
+    )
+    .await
+    {
+        Ok(akm_info) => akm_info,
+        Err(e) => {
+            match e {
+                asset_crypt::AkmSelectionError::Abort(msg) => {
+                    eprintln!("error: {}", msg);
+                }
+            }
+            return HttpResponse::bad_request("Decryption key error");
+        }
+    };
+
+    // Send update to the async writer worker
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+
+    if let Err(e) = update_asset_tx
+        .send(asset_async_writer::WorkerAssetMsg::Update(
+            asset_async_writer::WorkerAssetUpdate {
+                asset_name: asset_name.to_string(),
+                asset_entry_ref: None,
+                new_contents: body.to_vec(),
+                is_push,
+                api_client: api_client.clone(),
+                one_shot: true,
+                akm_info,
+                reply_channel: Some(reply_tx),
+            },
+        ))
+        .await
+    {
+        eprintln!("error: failed to send to update worker: {}", e);
+        return HttpResponse::internal_error("Failed to process update");
     }
 
-    response
+    // Wait for the response
+    match reply_rx.await {
+        Ok(Some(new_entry)) => match serde_json::to_vec(&new_entry) {
+            Ok(json_bytes) => HttpResponse::ok(json_bytes, "application/json"),
+            Err(_) => HttpResponse::internal_error("Failed to serialize response"),
+        },
+        Ok(None) => HttpResponse::internal_error("Failed to update asset"),
+        Err(_) => HttpResponse::internal_error("Update worker did not respond"),
+    }
+}
+
+async fn handle_put_metadata(
+    asset_name: &str,
+    body: &[u8],
+    _asset_blob_cache: Arc<AssetBlobCache>,
+    _asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: HaiClient,
+    _username: Option<String>,
+) -> HttpResponse {
+    match api_client
+        .asset_metadata_put(asset::AssetMetadataPutArg {
+            name: asset_name.to_string(),
+            data: String::from_utf8_lossy(body).to_string(),
+            conflict_policy: asset::PutConflictPolicy::Override,
+        })
+        .await
+    {
+        Ok(res) => match serde_json::to_vec(&res) {
+            Ok(json_bytes) => HttpResponse::ok(json_bytes, "application/json"),
+            Err(_) => HttpResponse::internal_error("Failed to serialize response"),
+        },
+        Err(e) => {
+            eprintln!("error: metadata put failed: {}", e);
+            HttpResponse::internal_error("Failed to put metadata")
+        }
+    }
 }
 
 // --
