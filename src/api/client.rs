@@ -396,6 +396,14 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_revision_get(
+        &self,
+        arg: asset::AssetRevisionGetArg,
+    ) -> Result<asset::AssetRevisionGetResult, RequestError<asset::AssetRevisionGetError>> {
+        self.mk_api_request::<_, _, _>("/asset/revision/get", &arg)
+            .await
+    }
+
     pub async fn messaging_email_recipient_send(
         &self,
         arg: messaging::EmailRecipientSendArg,

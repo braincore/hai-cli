@@ -9,7 +9,8 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset::{
-    AssetEntry, AssetGetArg, AssetGetError, AssetGetResult, AssetMetadataInfo,
+    AssetEntry, AssetGetArg, AssetGetError, AssetGetResult, AssetMetadataInfo, AssetRevision,
+    AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
 use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
@@ -122,6 +123,95 @@ pub async fn get_asset_and_metadata(
         None
     };
     Ok((data_contents, metadata_contents, asset_get_res.entry))
+}
+
+pub enum GetRevisionError {
+    BadEntryRef,
+    BadRevId,
+    Deleted,
+    DataFetchFailed,
+}
+
+/// Fetches the asset data and metadata for a specific revision.
+///
+/// # Arguments
+/// * `asset_blob_cache` - Cache for downloading asset blobs
+/// * `api_client` - API client for fetching asset revision info
+/// * `asset_name` - Name of the asset to fetch
+/// * `rev_id` - Optional revision ID to fetch; if None, fetches latest revision
+/// * `only_fetch_metadata_if_necessary` - If true, only fetches metadata if
+///   the asset is encrypted.
+///
+/// # Returns
+/// If returns None, responsible for printing error msg.
+pub async fn get_asset_and_metadata_revision(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    asset_name: &str,
+    rev_id: Option<&str>,
+    only_fetch_metadata_if_necessary: bool,
+) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetRevision), GetRevisionError> {
+    let revision_get_res = match api_client
+        .asset_revision_get(AssetRevisionGetArg {
+            entry_ref: EntryRef::Name(asset_name.to_string()),
+            rev_id: rev_id.map(|s| s.to_string()),
+        })
+        .await
+    {
+        Ok(res) => Ok(res),
+        Err(e) => match e {
+            RequestError::BadRequest(_) | RequestError::Http(_) | RequestError::Unexpected(_) => {
+                Err(GetRevisionError::DataFetchFailed)
+            }
+            RequestError::Route(e) => match e {
+                AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
+                AssetRevisionGetError::NoPermission => Err(GetRevisionError::BadEntryRef),
+                AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
+                _ => Err(GetRevisionError::DataFetchFailed),
+            },
+        },
+    }?;
+
+    let data_contents = if let Some(data_url) = revision_get_res.revision.asset.url.as_ref()
+        && let Some(hash) = revision_get_res.revision.asset.hash.as_ref()
+    {
+        match asset_blob_cache.get_or_download(data_url, hash).await {
+            Ok(contents) => contents,
+            Err(_) => {
+                eprintln!("error: failed to fetch asset data");
+                return Err(GetRevisionError::DataFetchFailed);
+            }
+        }
+    } else {
+        return Err(GetRevisionError::Deleted);
+    };
+    let metadata_contents = if let Some(AssetMetadataInfo {
+        url: Some(metadata_url),
+        hash: Some(metadata_hash),
+        content_encrypted,
+        ..
+    }) = revision_get_res.revision.metadata.as_ref()
+    {
+        if content_encrypted.is_some() || !only_fetch_metadata_if_necessary {
+            Some(
+                match asset_blob_cache
+                    .get_or_download(metadata_url, metadata_hash)
+                    .await
+                {
+                    Ok(contents) => contents,
+                    Err(_) => {
+                        eprintln!("error: failed to fetch asset metadata");
+                        return Err(GetRevisionError::DataFetchFailed);
+                    }
+                },
+            )
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok((data_contents, metadata_contents, revision_get_res.revision))
 }
 
 // --

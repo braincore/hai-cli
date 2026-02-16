@@ -6122,6 +6122,291 @@ impl ::serde::ser::Serialize for AssetRevisionCursor {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetRevisionGetArg {
+    pub entry_ref: EntryRef,
+    pub rev_id: Option<String>,
+}
+
+impl AssetRevisionGetArg {
+    pub fn new(entry_ref: EntryRef) -> Self {
+        AssetRevisionGetArg {
+            entry_ref,
+            rev_id: None,
+        }
+    }
+
+    pub fn with_rev_id(mut self, value: String) -> Self {
+        self.rev_id = Some(value);
+        self
+    }
+}
+
+const ASSET_REVISION_GET_ARG_FIELDS: &[&str] = &["entry_ref", "rev_id"];
+impl AssetRevisionGetArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetRevisionGetArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetRevisionGetArg>, V::Error> {
+        let mut field_entry_ref = None;
+        let mut field_rev_id = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_ref" => {
+                    if field_entry_ref.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_ref"));
+                    }
+                    field_entry_ref = Some(map.next_value()?);
+                }
+                "rev_id" => {
+                    if field_rev_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("rev_id"));
+                    }
+                    field_rev_id = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetRevisionGetArg {
+            entry_ref: field_entry_ref
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_ref"))?,
+            rev_id: field_rev_id.and_then(Option::flatten),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_ref", &self.entry_ref)?;
+        if let Some(val) = &self.rev_id {
+            s.serialize_field("rev_id", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionGetArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetRevisionGetArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionGetArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetRevisionGetArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetRevisionGetArg",
+            ASSET_REVISION_GET_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionGetArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetRevisionGetArg", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetRevisionGetError {
+    BadEntryRef,
+    NoPermission,
+    BadRevId,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionGetError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetRevisionGetError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionGetError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_entry_ref" => AssetRevisionGetError::BadEntryRef,
+                    "no_permission" => AssetRevisionGetError::NoPermission,
+                    "bad_rev_id" => AssetRevisionGetError::BadRevId,
+                    _ => AssetRevisionGetError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_entry_ref", "no_permission", "bad_rev_id", "other"];
+        deserializer.deserialize_struct("AssetRevisionGetError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionGetError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetRevisionGetError::BadEntryRef => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionGetError", 1)?;
+                s.serialize_field(".tag", "bad_entry_ref")?;
+                s.end()
+            }
+            AssetRevisionGetError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionGetError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetRevisionGetError::BadRevId => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionGetError", 1)?;
+                s.serialize_field(".tag", "bad_rev_id")?;
+                s.end()
+            }
+            AssetRevisionGetError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetRevisionGetError {}
+
+impl ::std::fmt::Display for AssetRevisionGetError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetRevisionGetResult {
+    pub revision: AssetRevision,
+}
+
+impl AssetRevisionGetResult {
+    pub fn new(revision: AssetRevision) -> Self {
+        AssetRevisionGetResult { revision }
+    }
+}
+
+const ASSET_REVISION_GET_RESULT_FIELDS: &[&str] = &["revision"];
+impl AssetRevisionGetResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetRevisionGetResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetRevisionGetResult>, V::Error> {
+        let mut field_revision = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "revision" => {
+                    if field_revision.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("revision"));
+                    }
+                    field_revision = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetRevisionGetResult {
+            revision: field_revision
+                .ok_or_else(|| ::serde::de::Error::missing_field("revision"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("revision", &self.revision)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionGetResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetRevisionGetResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionGetResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetRevisionGetResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetRevisionGetResult",
+            ASSET_REVISION_GET_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionGetResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetRevisionGetResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetRevisionIterArg {
     pub entry_ref: EntryRef,
     pub limit: u32,

@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::api::client::HaiClient;
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
-use crate::asset_reader::GetAssetError;
+use crate::asset_reader::GetRevisionError;
 use crate::{
     asset_async_writer, asset_reader,
     feature::asset_crypt::{self, KeyRecipient},
@@ -686,6 +686,13 @@ async fn handle_http_request(
     let bearer_token = request.bearer_token();
     let query_token = request.query_param("token");
 
+    // Parse optional query params
+    let rev_id: Option<String> = request.query_param("rev_id").map(|s| s.to_string());
+    let return_metadata: bool = request
+        .query_param("metadata")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     let should_set_cookie = !cookie_set.load(std::sync::atomic::Ordering::SeqCst);
 
     let authenticated = if let Some(ct) = cookie_token {
@@ -740,45 +747,60 @@ async fn handle_http_request(
         Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
     };
 
-    let (data_contents, md_contents, asset_entry) = match asset_reader::get_asset_and_metadata(
-        asset_blob_cache.clone(),
-        &api_client,
-        &asset_name,
-        false,
-    )
-    .await
-    {
-        Ok(res) => res,
-        Err(GetAssetError::BadName) => return HttpResponse::not_found(),
-        Err(GetAssetError::DataFetchFailed) => {
-            return HttpResponse::bad_request("Invalid URL encoding");
+    let (data_contents, md_contents, asset_revision) =
+        match asset_reader::get_asset_and_metadata_revision(
+            asset_blob_cache.clone(),
+            &api_client,
+            &asset_name,
+            rev_id.as_deref(),
+            !return_metadata,
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
+            Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
+            Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
+            Err(GetRevisionError::DataFetchFailed) => {
+                return HttpResponse::bad_request("Invalid URL encoding");
+            }
+        };
+    let (decrypted_contents, content_type) = if return_metadata {
+        if let Some(md_contents) = md_contents {
+            (md_contents, "application/json".to_string())
+        } else {
+            return HttpResponse::bad_request("Asset does not have metadata");
         }
-    };
-    let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
-        asset_blob_cache.clone(),
-        asset_keyring.clone(),
-        &api_client,
-        username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
-        &data_contents,
-        md_contents.as_deref(),
-    )
-    .await
-    {
-        Ok(res) => res,
-        Err(e) => {
-            eprintln!("error: failed to decrypt: {}", e);
-            return HttpResponse::internal_error("Failed to decrypt asset");
+    } else {
+        match asset_crypt::maybe_decrypt_asset_contents(
+            asset_blob_cache.clone(),
+            asset_keyring.clone(),
+            &api_client,
+            username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
+            &data_contents,
+            md_contents.as_deref(),
+        )
+        .await
+        {
+            Ok(decrypted_asset_contents) => {
+                let asset_content_type = asset_revision
+                    .metadata
+                    .and_then(|md| md.content_type.clone());
+                let content_type = crate::asset_helper::best_guess_content_type(
+                    &asset_name,
+                    asset_content_type.as_deref(),
+                    &decrypted_asset_contents,
+                );
+                (decrypted_asset_contents, content_type)
+            }
+            Err(e) => {
+                eprintln!("error: failed to decrypt: {}", e);
+                return HttpResponse::internal_error("Failed to decrypt asset");
+            }
         }
     };
 
-    let asset_content_type = asset_entry.metadata.and_then(|md| md.content_type.clone());
-    let content_type = crate::asset_helper::best_guess_content_type(
-        &asset_name,
-        asset_content_type.as_deref(),
-        &decrypted_asset_contents,
-    );
-
-    let mut response = HttpResponse::ok(decrypted_asset_contents, &content_type);
+    let mut response = HttpResponse::ok(decrypted_contents, &content_type);
 
     // Set cookie on first authenticated request
     if should_set_cookie {
@@ -807,6 +829,9 @@ enum ClientMessageAuthResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ClientMessageRequest {
+    /// Always echo-ed back in the ClientMessageResponse so that client can
+    /// correlate responses to requests.
+    mid: String,
     route: String,
     arg: serde_json::Value,
 }
@@ -814,11 +839,26 @@ struct ClientMessageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessageResponse<T, U> {
-    Ok { result: T, payload_count: u32 },
-    RouteError { error: U },
-    BadRequestError { error: String },
-    HttpError { error: String },
-    UnexpectedError { error: String },
+    Ok {
+        mid: String,
+        result: T,
+        payload_count: u32,
+    },
+    RouteError {
+        mid: String,
+        error: U,
+    },
+    BadRequestError {
+        error: String,
+    },
+    HttpError {
+        mid: String,
+        error: String,
+    },
+    UnexpectedError {
+        mid: String,
+        error: String,
+    },
 }
 
 // --
@@ -830,20 +870,26 @@ async fn send_error_response<E: Serialize>(
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
     >,
+    mid: &str,
     error: crate::api::client::RequestError<E>,
 ) {
     let resp_err: ClientMessageResponse<(), E> = match error {
         crate::api::client::RequestError::Http(http_err) => ClientMessageResponse::HttpError {
+            mid: mid.to_string(),
             error: http_err.to_string(),
         },
-        crate::api::client::RequestError::Route(route_err) => {
-            ClientMessageResponse::RouteError { error: route_err }
-        }
+        crate::api::client::RequestError::Route(route_err) => ClientMessageResponse::RouteError {
+            mid: mid.to_string(),
+            error: route_err,
+        },
         crate::api::client::RequestError::BadRequest(msg) => {
             ClientMessageResponse::BadRequestError { error: msg }
         }
         crate::api::client::RequestError::Unexpected(msg) => {
-            ClientMessageResponse::UnexpectedError { error: msg }
+            ClientMessageResponse::UnexpectedError {
+                mid: mid.to_string(),
+                error: msg,
+            }
         }
     };
     let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
@@ -857,12 +903,14 @@ async fn send_response<T: Serialize, E: Serialize>(
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
     >,
+    mid: &str,
     result: Result<T, crate::api::client::RequestError<E>>,
     payload_count: u32,
 ) -> bool {
     match result {
         Ok(res) => {
             let resp_ok: ClientMessageResponse<T, E> = ClientMessageResponse::Ok {
+                mid: mid.to_string(),
                 result: res,
                 payload_count,
             };
@@ -874,7 +922,7 @@ async fn send_response<T: Serialize, E: Serialize>(
             true
         }
         Err(e) => {
-            send_error_response(ws_sink, e).await;
+            send_error_response(ws_sink, mid, e).await;
             false
         }
     }
@@ -901,9 +949,11 @@ async fn send_http_error<E: Serialize>(
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
     >,
+    mid: &str,
     error: &str,
 ) {
     let resp_err = ClientMessageResponse::<(), E>::HttpError {
+        mid: mid.to_string(),
         error: error.to_string(),
     };
     let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
@@ -935,7 +985,7 @@ async fn handle_client_message(
         }
     };
 
-    let ClientMessageRequest { route, arg } = client_msg;
+    let ClientMessageRequest { mid, route, arg } = client_msg;
 
     match route.as_str() {
         "asset/get" => {
@@ -959,7 +1009,8 @@ async fn handle_client_message(
                 {
                     Ok(res) => res,
                     Err(_) => {
-                        send_http_error::<asset::AssetGetError>(ws_sink, "Data fetch failed").await;
+                        send_http_error::<asset::AssetGetError>(ws_sink, &mid, "Data fetch failed")
+                            .await;
                         return;
                     }
                 };
@@ -988,6 +1039,7 @@ async fn handle_client_message(
                             asset::AssetGetResult,
                             asset::AssetGetError,
                         > = ClientMessageResponse::Ok {
+                            mid: mid.clone(),
                             result: res,
                             payload_count: 1,
                         };
@@ -1001,11 +1053,11 @@ async fn handle_client_message(
                             .await;
                     } else {
                         // Asset with no contents
-                        send_response::<_, asset::AssetGetError>(ws_sink, Ok(res), 0).await;
+                        send_response::<_, asset::AssetGetError>(ws_sink, &mid, Ok(res), 0).await;
                     }
                 }
                 Err(e) => {
-                    send_error_response(ws_sink, e).await;
+                    send_error_response(ws_sink, &mid, e).await;
                 }
             }
         }
@@ -1058,8 +1110,13 @@ async fn handle_client_message(
                 ))
                 .await;
             if let Ok(Some(new_entry)) = reply_rx.await {
-                send_response::<asset::AssetEntry, asset::AssetPutError>(ws_sink, Ok(new_entry), 0)
-                    .await;
+                send_response::<asset::AssetEntry, asset::AssetPutError>(
+                    ws_sink,
+                    &mid,
+                    Ok(new_entry),
+                    0,
+                )
+                .await;
                 return;
             } else {
                 send_bad_request_error(ws_sink, "Failed to update asset").await;
@@ -1115,8 +1172,13 @@ async fn handle_client_message(
                 ))
                 .await;
             if let Ok(Some(new_entry)) = reply_rx.await {
-                send_response::<asset::AssetEntry, asset::AssetPutError>(ws_sink, Ok(new_entry), 0)
-                    .await;
+                send_response::<asset::AssetEntry, asset::AssetPutError>(
+                    ws_sink,
+                    &mid,
+                    Ok(new_entry),
+                    0,
+                )
+                .await;
                 return;
             } else {
                 send_bad_request_error(ws_sink, "Failed to update asset").await;

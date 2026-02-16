@@ -372,6 +372,28 @@ union AssetRevisionIterNextError
 
 # --
 
+route revision/get(AssetRevisionGetArg, AssetRevisionGetResult, AssetRevisionGetError)
+    "Get a specific revision of an entry.
+
+    Unlike :route:`get`, this returns deleted assets."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetRevisionGetArg
+    entry_ref EntryRef
+    rev_id String?
+
+struct AssetRevisionGetResult
+    revision AssetRevision
+
+union AssetRevisionGetError
+    bad_entry_ref
+    no_permission
+    bad_rev_id
+
+# --
+
 route push(AssetPushArg, AssetPushResult, AssetPushError)
     "Push into an asset."
 
