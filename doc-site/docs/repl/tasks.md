@@ -241,15 +241,28 @@ When your task is ready to publish, run:
 /task-publish ./path/to/demo-task.toml
 ```
 
-The version must be greater than the latest currently in the repo.
-
 Anyone can run your task by using its fully-qualified name:
 
 ```
 /task <username>/demo-task
 ```
 
-### Using a task to make a task
+### Edit a task
+
+To edit one of your published tasks, use:
+
+```
+/task-edit <username>/<task-name>
+```
+
+This downloads the task to a temporary file which you can edit with your editor
+of choice before re-publishing.
+
+!!!tip Referencing local paths
+    To avoid ambiguity with tasks in the repo, when specifying a local file the
+    file path must begin with `./`, `/`, or `~`.
+
+### Using a task to write a task
 
 To have the AI help you write a task, use:
 

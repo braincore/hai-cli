@@ -75,6 +75,8 @@ pub enum Cmd {
     TaskFetch(TaskFetchCmd),
     /// Publishes a task to the repo
     TaskPublish(TaskPublishCmd),
+    /// Download a task to a temp filefor editing
+    TaskEdit(TaskEditCmd),
     /// Include task cmds in conversation without entering task-mode
     TaskInclude(TaskIncludeCmd),
     /// Search for tasks in the repo
@@ -393,6 +395,12 @@ pub struct TaskPurgeCmd {
 pub struct TaskPublishCmd {
     /// Path to local haitask file
     pub task_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskEditCmd {
+    /// Task fqn to download to a temp file for editing
+    pub task_fqn: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1508,6 +1516,18 @@ fn parse_command(
                 Some(task_path) => Some(Cmd::TaskPublish(TaskPublishCmd { task_path })),
                 None => {
                     eprintln!("Usage: /task-publish <task_path>");
+                    None
+                }
+            }
+        }
+        "task-edit" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(task_fqn) => Some(Cmd::TaskEdit(TaskEditCmd { task_fqn })),
+                None => {
+                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
                     None
                 }
             }

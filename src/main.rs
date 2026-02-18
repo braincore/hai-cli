@@ -345,6 +345,7 @@ async fn repl(
         "/task-end",
         "/task-update",
         "/task-publish",
+        "/task-edit",
         "/task-forget",
         "/task-purge",
         "/task-search",

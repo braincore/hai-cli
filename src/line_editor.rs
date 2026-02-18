@@ -559,6 +559,7 @@ impl Completer for CmdAndFileCompleter {
             } else if line.starts_with("/task ")
                 || line.starts_with("/t ")
                 || line.starts_with("/task-view ")
+                || line.starts_with("/task-edit ")
                 || line.starts_with("/task-purge ")
                 || line.starts_with("/task-forget ")
                 || line.starts_with("/task-fetch ")

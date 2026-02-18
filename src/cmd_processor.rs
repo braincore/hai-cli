@@ -1397,6 +1397,68 @@ pub async fn process_cmd(
 
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::TaskEdit(cmd::TaskEditCmd { task_fqn }) => {
+            let account = if let Some(ref account) = session.account {
+                account
+            } else {
+                eprintln!(
+                    "You must be logged-in to edit a task. Try /account-login or /account-new"
+                );
+                return ProcessCmdResult::Loop;
+            };
+            if config::is_valid_task_fqn(task_fqn).is_none() {
+                eprintln!(
+                    "invalid task fqn (fully-qualified name): format should be username/task-name"
+                );
+                return ProcessCmdResult::Loop;
+            };
+            let client = mk_api_client(Some(session));
+
+            let (username, task_name) = task_fqn
+                .split_once('/')
+                .expect("unexpected task fqn format");
+            if username != account.username {
+                eprintln!("error: you can only edit tasks under your own account");
+                return ProcessCmdResult::Loop;
+            }
+
+            let temp_file = match tempfile::Builder::new()
+                .prefix(&format!("{}_{}_", account.username, task_name))
+                .suffix(".toml")
+                .tempfile()
+            {
+                Ok(temp_file) => temp_file,
+                Err(e) => {
+                    eprintln!("error: Failed to create temporary file: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let temp_file_path = temp_file.path().to_string_lossy().into_owned();
+            session.temp_files.push((temp_file, is_task_mode_step));
+
+            use api::types::task::TaskGetArg;
+            match client
+                .task_get(TaskGetArg {
+                    task_fqn: task_fqn.to_owned(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    fs::write(&temp_file_path, res.config).unwrap_or_else(|e| {
+                        eprintln!("error: Failed to write to temporary file: {}", e);
+                    });
+                    println!("Task available for editing at: {}", temp_file_path);
+                    println!(
+                        "When finished, publish your changes with: /task-publish {}",
+                        temp_file_path
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::TaskForget(cmd::TaskForgetCmd { task_ref, key }) => {
             let task_name = if config::is_valid_task_fqn(task_ref).is_some() {
                 task_ref.clone()
@@ -4791,6 +4853,7 @@ const HELP_MSG: &str = r##"Available Commands:
 /task-end                    - End task mode (CTRL+D works too)
 /task-update <name>          - Update task to latest version
 /task-publish <path>         - Publish task to repo (requires /account-login)
+/task-edit <name>            - Edit task in the repo (requires /account-login)
 /task-forget <name>          - Forget all cached /ask-human answers
 /task-purge <name>           - Remove task from your machine
 /task-include <name|path>    - Include task commands in conversation without entering task mode
