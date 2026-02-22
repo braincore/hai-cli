@@ -43,6 +43,7 @@ nav:
     - Subcommands and options: cli/subcommands-and-options.md
     - Run and exit: cli/run-and-exit.md
     - Incognito: cli/incognito.md
+    - Using with vim: cli/using-with-vim.md
     - Websocket queue: cli/websocket-queue.md
   - Config: config.md
   - API: api.md
