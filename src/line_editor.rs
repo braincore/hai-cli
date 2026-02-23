@@ -565,44 +565,16 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/task-fetch ")
                 || line.starts_with("/task-update ")
             {
-                // This autocompletes to tasks that are fetched/cached on disk.
-                // We hide the toml extension to make the autocomplete not
-                // appear as if it's traversing a file tree.
                 let (cmd_word, arg_prefix) = line
                     .split_once(" ")
                     .expect("unexpected missing space-delimiter");
-                let mut task_cache_prefix = config::get_config_folder_path();
-                task_cache_prefix.push("cache/task");
-                let task_cache_prefix_offset =
-                    task_cache_prefix.to_string_lossy().to_string().len() + 1;
-                task_cache_prefix.push(arg_prefix);
                 let cmd_length = cmd_word.len();
-                let offset = cmp::max(0, line.len() - cmd_length + task_cache_prefix_offset);
-
-                let mut completions = self.file_completer(
-                    task_cache_prefix.to_string_lossy().as_ref(),
-                    offset,
-                    false,
-                );
-                completions.retain(|suggestion| {
-                    suggestion.value.ends_with("/") || suggestion.value.ends_with(".toml")
-                });
-                for suggestion in &mut completions {
-                    suggestion.value = suggestion.value[task_cache_prefix_offset..].to_string();
-                    if suggestion.value.ends_with(".toml") {
-                        suggestion.value =
-                            suggestion.value[..suggestion.value.len() - ".toml".len()].to_string();
-                    }
-                    suggestion.span.start += cmd_length;
-                    suggestion.span.end += cmd_length;
-                    suggestion.span.end -= task_cache_prefix_offset;
-                    if self.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "suggestion: value={} (span-start={}) (span-end={:?})\n",
-                            suggestion.value, suggestion.span.start, suggestion.span.end
-                        ));
-                    }
-                }
+                let arg_index = line[cmd_length..]
+                    .find(arg_prefix)
+                    .map(|i| i + cmd_length)
+                    .unwrap_or(0);
+                let completions =
+                    self.task_completer(line.len(), cmd_word.len(), arg_prefix, arg_index);
                 (completions, false)
             } else if line.starts_with("/ai ") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
@@ -1128,6 +1100,100 @@ impl CmdAndFileCompleter {
                 eprintln!("error: could not fetch list of matching assets: {}", e);
                 vec![]
             }
+        }
+    }
+
+    fn task_completer(
+        &self,
+        line_length: usize,
+        cmd_length: usize,
+        task_prefix: &str,
+        arg_index: usize,
+    ) -> Vec<Suggestion> {
+        if self.debug {
+            let _ = config::write_to_debug_log(format!(
+                "task_completer: line_length={} cmd_length={} task_prefix={} arg_index={}\n",
+                line_length, cmd_length, task_prefix, arg_index
+            ));
+        }
+        let mut completions = Vec::new();
+        if let Some((username, _task_name_prefix)) = task_prefix.split_once('/') {
+            use crate::api::types::account::AccountWhoisArg;
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.api_client.account_whois(
+                    AccountWhoisArg {
+                        username: username.to_string(),
+                    },
+                ))
+            });
+            match result {
+                Ok(res) => {
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "task_completer: username={} task_prefix={} tasks={:?}\n",
+                            username, task_prefix, res.tasks
+                        ));
+                    }
+                    let mut sorted_tasks = res.tasks;
+                    sorted_tasks.sort_by(|a, b| human_sort::compare(&a.task_fqn, &b.task_fqn));
+                    for task in sorted_tasks {
+                        if task.task_fqn.starts_with(task_prefix) {
+                            completions.push(Suggestion {
+                                value: task.task_fqn.clone(),
+                                description: None,
+                                style: None,
+                                extra: None,
+                                // Replace entirety of existing contents
+                                span: Span {
+                                    start: 0,
+                                    end: task_prefix.len(),
+                                },
+                                append_whitespace: true,
+                                match_indices: None,
+                            });
+                        }
+                    }
+                    realign_suggestions(&mut completions, arg_index, self.debug);
+                    completions
+                }
+                Err(e) => {
+                    eprintln!("error: could not fetch list of matching assets: {}", e);
+                    vec![]
+                }
+            }
+        } else {
+            // This autocompletes to tasks that are fetched/cached on disk.
+            // We hide the toml extension to make the autocomplete not
+            // appear as if it's traversing a file tree.
+            let mut task_cache_prefix = config::get_config_folder_path();
+            task_cache_prefix.push("cache/task");
+            let task_cache_prefix_offset =
+                task_cache_prefix.to_string_lossy().to_string().len() + 1;
+            task_cache_prefix.push(task_prefix);
+            let offset = cmp::max(0, line_length - cmd_length + task_cache_prefix_offset);
+
+            let mut completions =
+                self.file_completer(task_cache_prefix.to_string_lossy().as_ref(), offset, false);
+            completions.retain(|suggestion| {
+                suggestion.value.ends_with("/") || suggestion.value.ends_with(".toml")
+            });
+            for suggestion in &mut completions {
+                suggestion.value = suggestion.value[task_cache_prefix_offset..].to_string();
+                if suggestion.value.ends_with(".toml") {
+                    suggestion.value =
+                        suggestion.value[..suggestion.value.len() - ".toml".len()].to_string();
+                }
+                suggestion.span.start += cmd_length;
+                suggestion.span.end += cmd_length;
+                suggestion.span.end -= task_cache_prefix_offset;
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "suggestion: value={} (span-start={}) (span-end={:?})\n",
+                        suggestion.value, suggestion.span.start, suggestion.span.end
+                    ));
+                }
+            }
+            completions
         }
     }
 }
