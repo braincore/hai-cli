@@ -1670,7 +1670,7 @@ pub async fn process_cmd(
                     update_asset_tx.clone(),
                     is_task_mode_step,
                     prog_asset_name,
-                    &asset_name,
+                    Some(&asset_name),
                     debug,
                 )
                 .await;
@@ -3897,6 +3897,28 @@ pub async fn process_cmd(
             println!("╚══════════════════════════════════════════════════════════════╝");
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetApp(cmd::AssetAppCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                Some(account.username.clone())
+            } else {
+                None
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+            crate::feature::asset_app::launch_browser(
+                session,
+                asset_blob_cache.clone(),
+                &api_client,
+                username.as_deref(),
+                update_asset_tx.clone(),
+                is_task_mode_step,
+                &asset_name,
+                None,
+                debug,
+            )
+            .await;
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Chats => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
@@ -4965,6 +4987,8 @@ Assets (Experimental):
 /asset-crypt-lock [<key_id>]     - Lock an encryption key (requires password on next use)
 /asset-crypt-unlock [<key_id>]   - Unlock an encryption key (no password until locked)
 /asset-crypt-recover             - Recover asset encryption keys using your recovery code.
+
+/asset-app <asset_name>          - Open an asset as an app in the browser.
 
 /chats                           - Interactive prompt to resume a recent conversation.
 /chat-save [<asset_name>]        - Save the conversation as an asset

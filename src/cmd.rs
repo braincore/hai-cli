@@ -148,6 +148,8 @@ pub enum Cmd {
     AssetCryptLock(AssetCryptLockCmd),
     /// Recover enc/dec & signing keys
     AssetCryptRecover(AssetCryptRecoverCmd),
+    /// Launch an asset-based app in the browser
+    AssetApp(AssetAppCmd),
     /// List chats and prompt for resumption
     Chats,
     /// Resume a chat
@@ -664,6 +666,12 @@ pub struct AssetCryptUnlockCmd {
 pub struct AssetCryptLockCmd {
     /// Key ID
     pub enc_key_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAppCmd {
+    /// Name of the asset
+    pub asset_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2062,6 +2070,18 @@ fn parse_command(
             Some(Cmd::AssetCryptRecover(AssetCryptRecoverCmd {
                 enc_key_id: parse_one_arg_catchall(remaining),
             }))
+        }
+        "asset-app" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-app <asset_name>");
+                    None
+                }
+            }
         }
         "chats" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

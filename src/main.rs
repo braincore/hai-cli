@@ -396,6 +396,7 @@ async fn repl(
         "/asset-crypt-unlock",
         "/asset-crypt-setup",
         "/asset-crypt-recover",
+        "/asset-app",
         "/email",
         "/fns",
         "/std",

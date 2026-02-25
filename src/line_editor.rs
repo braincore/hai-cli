@@ -606,6 +606,7 @@ impl Completer for CmdAndFileCompleter {
                 || line.starts_with("/ls ")
                 || line.starts_with("/asset-md-get ")
                 || line.starts_with("/asset-listen ")
+                || line.starts_with("/asset-app ")
                 || line.starts_with("/chat-resume ")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);

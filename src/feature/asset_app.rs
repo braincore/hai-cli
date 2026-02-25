@@ -14,11 +14,11 @@ pub async fn launch_browser(
     update_asset_tx: tokio::sync::mpsc::Sender<crate::asset_async_writer::WorkerAssetMsg>,
     is_task_mode_step: bool,
     prog_asset_name: &str,
-    target_asset_name: &str,
+    target_asset_name: Option<&str>,
     debug: bool,
 ) {
     let prog_asset_name = expand_pub_asset_name(prog_asset_name, &session.account);
-    let target_asset_name = expand_pub_asset_name(target_asset_name, &session.account);
+    let target_asset_name = target_asset_name.map(|n| expand_pub_asset_name(n, &session.account));
 
     if let Ok((ws_addr, clients, cancel_token, auth_token)) =
         crate::feature::gateway::launch_gateway(
@@ -81,17 +81,23 @@ pub async fn launch_browser(
         };
 
         let gateway_localhost_addr = format!("localhost:{}", ws_addr.port());
-        let fragment = if asset_prog_from_localhost {
-            // In this case, a cookie will be set making the `token` fragment
-            // parameter unnecessary.
-            format!("#asset={}&s={}", target_asset_name, gateway_localhost_addr)
-        } else {
-            format!(
-                "#asset={}&s={}&token={}",
-                target_asset_name, gateway_localhost_addr, auth_token
-            )
-        };
-        let final_url = format!("{}{}", asset_prog_url, fragment);
+
+        let mut fragment_params: Vec<(&str, &str)> = Vec::new();
+        if let Some(ref target) = target_asset_name {
+            fragment_params.push(("asset", target));
+        }
+        fragment_params.push(("s", &gateway_localhost_addr));
+        if !asset_prog_from_localhost {
+            fragment_params.push(("token", &auth_token));
+        }
+
+        let fragment = fragment_params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("&");
+
+        let final_url = format!("{}#{}", asset_prog_url, fragment);
         println!("Opening asset-as-editor in browser: {}", final_url);
         if let Err(e) = open::that_detached(final_url) {
             eprintln!("error: failed to open asset-as-editor in browser: {}", e);
