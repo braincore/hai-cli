@@ -187,7 +187,7 @@ pub async fn send_to_anthropic(
     };
     let mut request_body = if tool_schemas.is_empty() {
         json!({
-            "max_tokens": 8192,
+            "max_tokens": 64000,
             "model": model,
             "temperature": temperature,
             "messages": messages,
@@ -195,7 +195,7 @@ pub async fn send_to_anthropic(
         })
     } else {
         json!({
-            "max_tokens": 8192,
+            "max_tokens": 64000,
             "model": model,
             "temperature": temperature,
             "messages": messages,
