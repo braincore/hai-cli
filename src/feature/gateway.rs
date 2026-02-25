@@ -526,41 +526,44 @@ async fn handle_websocket_connection(
         }
     };
 
-    //
-    // If not pre-authenticated via cookie, first message must be an auth message
-    //
-    match tokio::time::timeout(std::time::Duration::from_secs(10), ws_stream.next()).await {
-        Ok(Some(Ok(Message::Text(msg)))) => {
-            let auth_msg: ClientMessageAuthRequest = match serde_json::from_str(&msg) {
-                Ok(m) => m,
-                Err(_e) => {
+    if !pre_authenticated {
+        //
+        // If not pre-authenticated via cookie, first message must be an auth message
+        //
+        match tokio::time::timeout(std::time::Duration::from_secs(10), ws_stream.next()).await {
+            Ok(Some(Ok(Message::Text(msg)))) => {
+                let auth_msg: ClientMessageAuthRequest = match serde_json::from_str(&msg) {
+                    Ok(m) => m,
+                    Err(_e) => {
+                        let _ = ws_stream
+                            .send(Message::Text(Utf8Bytes::from(
+                                &serde_json::to_string(&ClientMessageAuthResponse::BadRequest)
+                                    .unwrap(),
+                            )))
+                            .await;
+                        let _ = ws_stream.close(None).await;
+                        return Ok(());
+                    }
+                };
+                if auth_msg.token != Some(token) {
                     let _ = ws_stream
                         .send(Message::Text(Utf8Bytes::from(
-                            &serde_json::to_string(&ClientMessageAuthResponse::BadRequest).unwrap(),
+                            &serde_json::to_string(&ClientMessageAuthResponse::BadToken).unwrap(),
                         )))
                         .await;
                     let _ = ws_stream.close(None).await;
                     return Ok(());
                 }
-            };
-            if auth_msg.token != Some(token) && !pre_authenticated {
+            }
+            _ => {
                 let _ = ws_stream
                     .send(Message::Text(Utf8Bytes::from(
-                        &serde_json::to_string(&ClientMessageAuthResponse::BadToken).unwrap(),
+                        &serde_json::to_string(&ClientMessageAuthResponse::BadRequest).unwrap(),
                     )))
                     .await;
                 let _ = ws_stream.close(None).await;
                 return Ok(());
             }
-        }
-        _ => {
-            let _ = ws_stream
-                .send(Message::Text(Utf8Bytes::from(
-                    &serde_json::to_string(&ClientMessageAuthResponse::BadRequest).unwrap(),
-                )))
-                .await;
-            let _ = ws_stream.close(None).await;
-            return Ok(());
         }
     }
 
@@ -852,7 +855,8 @@ async fn handle_get(
         if let Some(md_contents) = md_contents {
             (md_contents, "application/json".to_string())
         } else {
-            return HttpResponse::bad_request("Asset does not have metadata");
+            // Asset does not have metadata
+            return HttpResponse::not_found();
         }
     } else {
         match asset_crypt::maybe_decrypt_asset_contents(
@@ -1002,7 +1006,7 @@ enum ClientMessageAuthResponse {
 struct ClientMessageRequest {
     /// Always echo-ed back in the ClientMessageResponse so that client can
     /// correlate responses to requests.
-    mid: String,
+    mid: u64,
     route: String,
     arg: serde_json::Value,
 }
@@ -1010,26 +1014,11 @@ struct ClientMessageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessageResponse<T, U> {
-    Ok {
-        mid: String,
-        result: T,
-        payload_count: u32,
-    },
-    RouteError {
-        mid: String,
-        error: U,
-    },
-    BadRequestError {
-        error: String,
-    },
-    HttpError {
-        mid: String,
-        error: String,
-    },
-    UnexpectedError {
-        mid: String,
-        error: String,
-    },
+    Ok { mid: u64, result: T },
+    RouteError { mid: u64, error: U },
+    BadRequestError { error: String },
+    HttpError { mid: u64, error: String },
+    UnexpectedError { mid: u64, error: String },
 }
 
 // --
@@ -1041,16 +1030,16 @@ async fn send_error_response<E: Serialize>(
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
     >,
-    mid: &str,
+    mid: u64,
     error: crate::api::client::RequestError<E>,
 ) {
     let resp_err: ClientMessageResponse<(), E> = match error {
         crate::api::client::RequestError::Http(http_err) => ClientMessageResponse::HttpError {
-            mid: mid.to_string(),
+            mid: mid,
             error: http_err.to_string(),
         },
         crate::api::client::RequestError::Route(route_err) => ClientMessageResponse::RouteError {
-            mid: mid.to_string(),
+            mid: mid,
             error: route_err,
         },
         crate::api::client::RequestError::BadRequest(msg) => {
@@ -1058,7 +1047,7 @@ async fn send_error_response<E: Serialize>(
         }
         crate::api::client::RequestError::Unexpected(msg) => {
             ClientMessageResponse::UnexpectedError {
-                mid: mid.to_string(),
+                mid: mid,
                 error: msg,
             }
         }
@@ -1074,16 +1063,14 @@ async fn send_response<T: Serialize, E: Serialize>(
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
     >,
-    mid: &str,
+    mid: u64,
     result: Result<T, crate::api::client::RequestError<E>>,
-    payload_count: u32,
 ) -> bool {
     match result {
         Ok(res) => {
             let resp_ok: ClientMessageResponse<T, E> = ClientMessageResponse::Ok {
-                mid: mid.to_string(),
+                mid: mid,
                 result: res,
-                payload_count,
             };
             let json_string =
                 serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1107,24 +1094,6 @@ async fn send_bad_request_error(
     error: &str,
 ) {
     let resp_err = ClientMessageResponse::<(), String>::BadRequestError {
-        error: error.to_string(),
-    };
-    let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
-    let _ = ws_sink
-        .send(Message::Text(Utf8Bytes::from(&json_string)))
-        .await;
-}
-
-async fn send_http_error<E: Serialize>(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
-    mid: &str,
-    error: &str,
-) {
-    let resp_err = ClientMessageResponse::<(), E>::HttpError {
-        mid: mid.to_string(),
         error: error.to_string(),
     };
     let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
@@ -1164,80 +1133,323 @@ async fn handle_client_message(
             let asset_arg: asset::AssetGetArg = match serde_json::from_str(&arg.to_string()) {
                 Ok(arg) => arg,
                 Err(_e) => {
-                    send_bad_request_error(ws_sink, "Invalid argument for asset/get").await;
-                    return;
-                }
-            };
-
-            let (data_contents, md_contents, _asset_entry) =
-                match asset_reader::get_asset_and_metadata(
-                    asset_blob_cache.clone(),
-                    &api_client,
-                    &asset_arg.name,
-                    false,
-                )
-                .await
-                {
-                    Ok(res) => res,
-                    Err(_) => {
-                        send_http_error::<asset::AssetGetError>(ws_sink, &mid, "Data fetch failed")
-                            .await;
-                        return;
-                    }
-                };
-            let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
-                asset_blob_cache.clone(),
-                asset_keyring.clone(),
-                &api_client,
-                username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
-                &data_contents,
-                md_contents.as_deref(),
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("error: failed to decrypt: {}", e);
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
                     return;
                 }
             };
             match api_client.asset_get(asset_arg).await {
                 Ok(res) => {
-                    if let Some(_data_url) = res.entry.asset.url.as_ref()
-                        && let Some(_hash) = res.entry.asset.hash.as_ref()
-                    {
-                        let resp_ok: ClientMessageResponse<
-                            asset::AssetGetResult,
-                            asset::AssetGetError,
-                        > = ClientMessageResponse::Ok {
-                            mid: mid.clone(),
-                            result: res,
-                            payload_count: 1,
-                        };
-                        let json_string = serde_json::to_string(&resp_ok)
-                            .expect("Failed to re-serialize response");
-                        let _ = ws_sink
-                            .send(Message::Text(Utf8Bytes::from(&json_string)))
-                            .await;
-                        let _ = ws_sink
-                            .send(Message::Binary(Bytes::from(decrypted_asset_contents)))
-                            .await;
-                    } else {
-                        // Asset with no contents
-                        send_response::<_, asset::AssetGetError>(ws_sink, &mid, Ok(res), 0).await;
-                    }
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetGetResult,
+                        asset::AssetGetError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
                 }
                 Err(e) => {
-                    send_error_response(ws_sink, &mid, e).await;
+                    send_error_response(ws_sink, mid, e).await;
                 }
             }
+        }
+        "asset/entry/list" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let list_arg: asset::AssetEntryListArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match api_client.asset_entry_list(list_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetEntryListResult,
+                        asset::AssetEntryListError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/entry/list/next" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let list_arg: asset::AssetEntryListNextArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_entry_list_next(list_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetEntryListResult,
+                        asset::AssetEntryListNextError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/entry/search" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let search_arg: asset::AssetEntrySearchArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_entry_search(search_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetEntrySearchResult,
+                        asset::AssetEntrySearchError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/move" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let move_arg: asset::AssetMoveArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match api_client.asset_move(move_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetMoveResult,
+                        asset::AssetMoveError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/remove" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let remove_arg: asset::AssetRemoveArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match api_client.asset_remove(remove_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetRemoveResult,
+                        asset::AssetRemoveError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/revision/iter" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let rev_iter_arg: asset::AssetRevisionIterArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_revision_iter(rev_iter_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetRevisionIterResult,
+                        asset::AssetRevisionIterError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/revision/iter/next" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let rev_iter_next_arg: asset::AssetRevisionIterNextArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_revision_iter_next(rev_iter_next_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetRevisionIterResult,
+                        asset::AssetRevisionIterNextError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/revision/get" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let rev_get_arg: asset::AssetRevisionGetArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_revision_get(rev_get_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetRevisionGetResult,
+                        asset::AssetRevisionGetError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "account/whoami" => {
+            let json_string = format!(
+                r#"{{"type":"ok","mid":{},"result":{{"username":{}}}}}"#,
+                mid,
+                serde_json::to_string(&username).unwrap_or("null".to_string())
+            );
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
         }
         "asset/put" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let asset_arg: asset::AssetPutArg = match serde_json::from_str(&arg.to_string()) {
                 Ok(arg) => arg,
                 Err(_e) => {
-                    send_bad_request_error(ws_sink, "Invalid argument for asset/put").await;
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
                     return;
                 }
             };
@@ -1283,9 +1495,8 @@ async fn handle_client_message(
             if let Ok(Some(new_entry)) = reply_rx.await {
                 send_response::<asset::AssetEntry, asset::AssetPutError>(
                     ws_sink,
-                    &mid,
+                    mid,
                     Ok(new_entry),
-                    0,
                 )
                 .await;
                 return;
@@ -1298,7 +1509,11 @@ async fn handle_client_message(
             let asset_arg: asset::AssetPutTextArg = match serde_json::from_str(&arg.to_string()) {
                 Ok(arg) => arg,
                 Err(_e) => {
-                    send_bad_request_error(ws_sink, "Invalid argument for asset/put_text").await;
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
                     return;
                 }
             };
@@ -1345,9 +1560,8 @@ async fn handle_client_message(
             if let Ok(Some(new_entry)) = reply_rx.await {
                 send_response::<asset::AssetEntry, asset::AssetPutError>(
                     ws_sink,
-                    &mid,
+                    mid,
                     Ok(new_entry),
-                    0,
                 )
                 .await;
                 return;

@@ -1671,6 +1671,7 @@ pub async fn process_cmd(
                     is_task_mode_step,
                     prog_asset_name,
                     &asset_name,
+                    debug,
                 )
                 .await;
                 ProcessCmdResult::Loop
