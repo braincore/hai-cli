@@ -12,7 +12,7 @@ use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};
 use tokio_util::sync::CancellationToken;
 
-use crate::api::client::HaiClient;
+use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::GetRevisionError;
@@ -273,6 +273,16 @@ impl HttpResponse {
         Self {
             status: 500,
             status_text: "Internal Server Error",
+            content_type: "text/plain".into(),
+            body: msg.as_bytes().to_vec(),
+            set_cookie: None,
+        }
+    }
+
+    fn teapot(msg: &str) -> Self {
+        Self {
+            status: 418,
+            status_text: "I'm a teapot",
             content_type: "text/plain".into(),
             body: msg.as_bytes().to_vec(),
             set_cookie: None,
@@ -949,11 +959,59 @@ async fn handle_put(
 
     // Wait for the response
     match reply_rx.await {
-        Ok(Some(new_entry)) => match serde_json::to_vec(&new_entry) {
+        Ok(Ok(new_entry)) => match serde_json::to_vec(&new_entry) {
             Ok(json_bytes) => HttpResponse::ok(json_bytes, "application/json"),
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
-        Ok(None) => HttpResponse::internal_error("Failed to update asset"),
+        Ok(Err(e)) => {
+            eprintln!("error: failed to update asset: {:?}", e);
+            match e {
+                asset_async_writer::AssetSaveError::Put(RequestError::Route(
+                    asset::AssetPutError::NoPermission,
+                ))
+                | asset_async_writer::AssetSaveError::Replace(RequestError::Route(
+                    asset::AssetReplaceError::NoPermission,
+                ))
+                | asset_async_writer::AssetSaveError::Push(RequestError::Route(
+                    asset::AssetPushError::NoPermission,
+                )) => {
+                    return HttpResponse::unauthorized();
+                }
+                asset_async_writer::AssetSaveError::Put(RequestError::BadRequest(msg))
+                | asset_async_writer::AssetSaveError::Replace(RequestError::BadRequest(msg))
+                | asset_async_writer::AssetSaveError::Push(RequestError::BadRequest(msg)) => {
+                    return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
+                }
+                asset_async_writer::AssetSaveError::Put(RequestError::Http(http_err))
+                | asset_async_writer::AssetSaveError::Replace(RequestError::Http(http_err))
+                | asset_async_writer::AssetSaveError::Push(RequestError::Http(http_err)) => {
+                    return HttpResponse::internal_error(&format!("HTTP error: {}", http_err));
+                }
+                asset_async_writer::AssetSaveError::Put(RequestError::Unexpected(msg))
+                | asset_async_writer::AssetSaveError::Replace(RequestError::Unexpected(msg))
+                | asset_async_writer::AssetSaveError::Push(RequestError::Unexpected(msg)) => {
+                    return HttpResponse::internal_error(&format!("Unexpected error: {}", msg));
+                }
+                asset_async_writer::AssetSaveError::Put(RequestError::Route(route_err)) => {
+                    return HttpResponse::teapot(
+                        &serde_json::to_string(&route_err)
+                            .expect("unexpected failure to serialize"),
+                    );
+                }
+                asset_async_writer::AssetSaveError::Replace(RequestError::Route(route_err)) => {
+                    return HttpResponse::teapot(
+                        &serde_json::to_string(&route_err)
+                            .expect("unexpected failure to serialize"),
+                    );
+                }
+                asset_async_writer::AssetSaveError::Push(RequestError::Route(route_err)) => {
+                    return HttpResponse::teapot(
+                        &serde_json::to_string(&route_err)
+                            .expect("unexpected failure to serialize"),
+                    );
+                }
+            }
+        }
         Err(_) => HttpResponse::internal_error("Update worker did not respond"),
     }
 }
@@ -980,7 +1038,27 @@ async fn handle_put_metadata(
         },
         Err(e) => {
             eprintln!("error: metadata put failed: {}", e);
-            HttpResponse::internal_error("Failed to put metadata")
+            match e {
+                RequestError::BadRequest(msg) => {
+                    return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
+                }
+                RequestError::Http(http_err) => {
+                    return HttpResponse::internal_error(&format!("HTTP error: {}", http_err));
+                }
+                RequestError::Route(route_err) => match route_err {
+                    asset::AssetMetadataPutError::NoPermission => {
+                        return HttpResponse::unauthorized();
+                    }
+                    e => {
+                        return HttpResponse::teapot(
+                            &serde_json::to_string(&e).expect("unexpected failure to serialize"),
+                        );
+                    }
+                },
+                RequestError::Unexpected(msg) => {
+                    return HttpResponse::internal_error(&format!("Unexpected error: {}", msg));
+                }
+            }
         }
     }
 }
@@ -1031,26 +1109,22 @@ async fn send_error_response<E: Serialize>(
         Message,
     >,
     mid: u64,
-    error: crate::api::client::RequestError<E>,
+    error: RequestError<E>,
 ) {
     let resp_err: ClientMessageResponse<(), E> = match error {
-        crate::api::client::RequestError::Http(http_err) => ClientMessageResponse::HttpError {
+        RequestError::Http(http_err) => ClientMessageResponse::HttpError {
             mid: mid,
             error: http_err.to_string(),
         },
-        crate::api::client::RequestError::Route(route_err) => ClientMessageResponse::RouteError {
+        RequestError::Route(route_err) => ClientMessageResponse::RouteError {
             mid: mid,
             error: route_err,
         },
-        crate::api::client::RequestError::BadRequest(msg) => {
-            ClientMessageResponse::BadRequestError { error: msg }
-        }
-        crate::api::client::RequestError::Unexpected(msg) => {
-            ClientMessageResponse::UnexpectedError {
-                mid: mid,
-                error: msg,
-            }
-        }
+        RequestError::BadRequest(msg) => ClientMessageResponse::BadRequestError { error: msg },
+        RequestError::Unexpected(msg) => ClientMessageResponse::UnexpectedError {
+            mid: mid,
+            error: msg,
+        },
     };
     let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
     let _ = ws_sink
@@ -1064,7 +1138,7 @@ async fn send_response<T: Serialize, E: Serialize>(
         Message,
     >,
     mid: u64,
-    result: Result<T, crate::api::client::RequestError<E>>,
+    result: Result<T, RequestError<E>>,
 ) -> bool {
     match result {
         Ok(res) => {
@@ -1492,7 +1566,7 @@ async fn handle_client_message(
                     },
                 ))
                 .await;
-            if let Ok(Some(new_entry)) = reply_rx.await {
+            if let Ok(Ok(new_entry)) = reply_rx.await {
                 send_response::<asset::AssetEntry, asset::AssetPutError>(
                     ws_sink,
                     mid,
@@ -1557,7 +1631,7 @@ async fn handle_client_message(
                     },
                 ))
                 .await;
-            if let Ok(Some(new_entry)) = reply_rx.await {
+            if let Ok(Ok(new_entry)) = reply_rx.await {
                 send_response::<asset::AssetEntry, asset::AssetPutError>(
                     ws_sink,
                     mid,

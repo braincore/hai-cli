@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::api::client::HaiClient;
+use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset::{
-    AssetEntry, AssetEntryOp, AssetMetadataInfo, AssetPushArg, AssetPutArg, AssetReplaceArg,
-    PutConflictPolicy, ReplaceConflictPolicy,
+    AssetEntry, AssetEntryOp, AssetMetadataInfo, AssetPushArg, AssetPushError, AssetPutArg,
+    AssetPutError, AssetReplaceArg, AssetReplaceError, PutConflictPolicy, ReplaceConflictPolicy,
 };
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader;
@@ -36,8 +36,16 @@ pub struct WorkerAssetUpdate {
     pub api_client: HaiClient,
     pub one_shot: bool,
     pub akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
-    pub reply_channel: Option<tokio::sync::oneshot::Sender<Option<AssetEntry>>>,
+    pub reply_channel: Option<tokio::sync::oneshot::Sender<Result<AssetEntry, AssetSaveError>>>,
 }
+
+#[derive(Debug)]
+pub enum AssetSaveError {
+    Put(RequestError<AssetPutError>),
+    Replace(RequestError<AssetReplaceError>),
+    Push(RequestError<AssetPushError>),
+}
+
 pub async fn worker_update_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     mut rx: tokio::sync::mpsc::Receiver<WorkerAssetMsg>,
@@ -162,7 +170,7 @@ pub async fn worker_update_asset(
                                     );
                                 }
                             }
-                            Some(res.entry)
+                            Ok(res.entry)
                         }
                         Err(e) => {
                             let error_msg = format!("error: failed to push asset: {}", e);
@@ -171,7 +179,7 @@ pub async fn worker_update_asset(
                                 .entry(asset_name.clone())
                                 .or_default()
                                 .push(error_msg);
-                            None
+                            Err(AssetSaveError::Push(e))
                         }
                     }
                 } else {
@@ -222,7 +230,7 @@ pub async fn worker_update_asset(
                                         ),
                                     );
                                 }
-                                Some(res.entry)
+                                Ok(res.entry)
                             }
                             Err(e) => {
                                 let error_msg = format!("error: failed to replace asset: {}", e);
@@ -231,7 +239,7 @@ pub async fn worker_update_asset(
                                     .entry(asset_name.clone())
                                     .or_default()
                                     .push(error_msg);
-                                None
+                                Err(AssetSaveError::Replace(e))
                             }
                         }
                     } else {
@@ -274,7 +282,7 @@ pub async fn worker_update_asset(
                                         );
                                     }
                                 }
-                                Some(res.entry)
+                                Ok(res.entry)
                             }
                             Err(e) => {
                                 let error_msg = format!("error: failed to put asset: {}", e);
@@ -283,7 +291,7 @@ pub async fn worker_update_asset(
                                     .entry(asset_name.clone())
                                     .or_default()
                                     .push(error_msg);
-                                None
+                                Err(AssetSaveError::Put(e))
                             }
                         }
                     };
