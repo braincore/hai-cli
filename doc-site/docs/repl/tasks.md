@@ -295,7 +295,7 @@ There are some `hai`-repl commands that are specifically made for tasks:
 | `/task-include <name|path>` | Run task steps without entering or exiting task-mode. Useful for including tasks within other tasks. |
 | `/ai <model>` | Set the AI model. In tasks, if the model isn't available, the current model remains unchanged. |
 | `/keep <bottom> [<top>]` | Forget messages to bound conversation size; useful for looping tasks. |
-| `/pin(<accent>) <message>` | Add a message for the AI or user without prompting the AI for a response. Accent can be `danger`, `warn`, `info`, or `success`. |
+| `/pin.<accent> <message>` | Add a message for the AI or user without prompting the AI for a response. Accent can be `danger`, `warn`, `info`, or `success`. |
 
 ### Security warning
 
