@@ -661,55 +661,6 @@ async fn repl(
     // REPL Loop
     //
     loop {
-        let mut autocomplete_repl_cmds = default_autocomplete_repl_cmds.clone();
-        autocomplete_repl_cmds.extend(
-            session
-                .ai_defined_fns
-                .keys()
-                .map(|fn_name| format!("/{}", fn_name)),
-        );
-        if let Some(line_editor) = &mut line_editor {
-            line_editor.set_line_completer(
-                debug,
-                autocomplete_repl_cmds,
-                autocomplete_repl_ai_models.clone(),
-                mk_api_client(Some(&session)),
-                session.account.clone(),
-            );
-        }
-        //
-        // Set editor prompt info for display purposes
-        //
-        editor_prompt.set_index(session.history.len().try_into().unwrap());
-        editor_prompt.set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
-        editor_prompt.set_hai_router(session.use_hai_router.clone());
-        editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
-        if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
-            editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
-        } else {
-            editor_prompt.set_task_mode(None);
-        }
-        editor_prompt.set_tool_mode(session.tool_mode.clone().map(|tool_mode_cmd| {
-            tool::tool_to_cmd(
-                &tool_mode_cmd.tool,
-                tool_mode_cmd.user_confirmation,
-                tool_mode_cmd.force_tool,
-            )
-        }));
-
-        editor_prompt.set_incognito(incognito);
-        editor_prompt.set_is_dev(env::var("HAI_BASE_URL").is_ok());
-        if multiple_accounts {
-            // Show username if they have multiple accounts to help mitigate
-            // account-confusion mistakes.
-            editor_prompt.set_username(
-                session
-                    .account
-                    .as_ref()
-                    .map(|account| account.username.clone()),
-            );
-        }
-
         let masked_strings = if session.mask_secrets {
             session.masked_strings.clone()
         } else {
@@ -744,10 +695,58 @@ async fn repl(
             }
             cmd_info
         } else {
-            let line_editor = line_editor.get_or_insert_with(|| LineEditor::new(incognito));
-            line_editor.pre_readline();
-            let sig = line_editor.reedline.read_line(&editor_prompt);
-            line_editor.post_readline();
+            //
+            // Set editor prompt info for display purposes
+            //
+            editor_prompt.set_index(session.history.len().try_into().unwrap());
+            editor_prompt
+                .set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
+            editor_prompt.set_hai_router(session.use_hai_router.clone());
+            editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
+            if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
+                editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
+            } else {
+                editor_prompt.set_task_mode(None);
+            }
+            editor_prompt.set_tool_mode(session.tool_mode.clone().map(|tool_mode_cmd| {
+                tool::tool_to_cmd(
+                    &tool_mode_cmd.tool,
+                    tool_mode_cmd.user_confirmation,
+                    tool_mode_cmd.force_tool,
+                )
+            }));
+
+            editor_prompt.set_incognito(incognito);
+            editor_prompt.set_is_dev(env::var("HAI_BASE_URL").is_ok());
+            if multiple_accounts {
+                // Show username if they have multiple accounts to help mitigate
+                // account-confusion mistakes.
+                editor_prompt.set_username(
+                    session
+                        .account
+                        .as_ref()
+                        .map(|account| account.username.clone()),
+                );
+            }
+
+            let cur_line_editor = line_editor.get_or_insert_with(|| LineEditor::new(incognito));
+            let mut autocomplete_repl_cmds = default_autocomplete_repl_cmds.clone();
+            autocomplete_repl_cmds.extend(
+                session
+                    .ai_defined_fns
+                    .keys()
+                    .map(|fn_name| format!("/{}", fn_name)),
+            );
+            cur_line_editor.set_line_completer(
+                debug,
+                autocomplete_repl_cmds,
+                autocomplete_repl_ai_models.clone(),
+                mk_api_client(Some(&session)),
+                session.account.clone(),
+            );
+            cur_line_editor.pre_readline();
+            let sig = cur_line_editor.reedline.read_line(&editor_prompt);
+            cur_line_editor.post_readline();
             match sig {
                 // Maintain prefix whitespace as that's how a user can
                 // easily make an input guarantee to not match a command.
