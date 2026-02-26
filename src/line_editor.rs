@@ -1033,7 +1033,7 @@ impl CmdAndFileCompleter {
                 AssetEntryListArg {
                     prefix: Some(expanded_asset_prefix),
                     limit: 100,
-                    order: EntryListOrder::Desc,
+                    order: EntryListOrder::Asc,
                 },
             ))
         });
