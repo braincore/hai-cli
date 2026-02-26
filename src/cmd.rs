@@ -759,8 +759,10 @@ fn get_ai_def_tool_re() -> &'static Regex {
 
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
     static CMDS_WITH_MARKDOWN_BODY_RE: OnceLock<Regex> = OnceLock::new();
-    CMDS_WITH_MARKDOWN_BODY_RE
-        .get_or_init(|| Regex::new(r"^/(pin|prep|prompt|system-prompt)[\s(]").unwrap())
+    CMDS_WITH_MARKDOWN_BODY_RE.get_or_init(|| {
+        Regex::new(r"^/(pin|prep|prompt|system-prompt)(\.[a-z0-9-_]+|\([a-z0-9-_]+\))?(\s|$)")
+            .unwrap()
+    })
 }
 
 /// Parses user/task input.
