@@ -220,6 +220,19 @@ pub async fn send_to_anthropic(
     remove_nulls(&mut request_body);
 
     let jq_transforms = [
+        // System prompt transform: If the first message is a system message,
+        // extract text content into the `system` field and remove it from the
+        // messages array.
+        r#"
+        . as $root
+        | ($root.messages[0] | if .role == "system" then .content | map(select(.type == "text") | .text) | join("\n") else null end) as $sys
+        | if $sys then
+            .system = $sys
+            | .messages = .messages[1:]
+        else
+            .
+        end
+        "#,
         // Image transform
         r#"
         .messages[] |=
