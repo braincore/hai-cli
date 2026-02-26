@@ -204,6 +204,10 @@ impl HttpRequest {
         })
     }
 
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(&name.to_lowercase()).map(|s| s.as_str())
+    }
+
     fn bearer_token(&self) -> Option<&str> {
         self.headers
             .get("authorization")
@@ -226,6 +230,7 @@ struct HttpResponse {
     content_type: String,
     body: Vec<u8>,
     set_cookie: Option<String>,
+    additional_headers: Vec<(String, String)>,
 }
 
 impl HttpResponse {
@@ -236,6 +241,18 @@ impl HttpResponse {
             content_type: content_type.to_string(),
             body,
             set_cookie: None,
+            additional_headers: Vec::new(),
+        }
+    }
+
+    fn no_content() -> Self {
+        Self {
+            status: 204,
+            status_text: "No Content",
+            content_type: "text/plain".into(),
+            body: Vec::new(),
+            set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
@@ -246,6 +263,7 @@ impl HttpResponse {
             content_type: "text/plain".into(),
             body: b"Not Found".to_vec(),
             set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
@@ -256,6 +274,18 @@ impl HttpResponse {
             content_type: "text/plain".into(),
             body: b"Unauthorized".to_vec(),
             set_cookie: None,
+            additional_headers: Vec::new(),
+        }
+    }
+
+    fn forbidden() -> Self {
+        Self {
+            status: 403,
+            status_text: "Forbidden",
+            content_type: "text/plain".into(),
+            body: b"Forbidden".to_vec(),
+            set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
@@ -266,6 +296,7 @@ impl HttpResponse {
             content_type: "text/plain".into(),
             body: msg.as_bytes().to_vec(),
             set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
@@ -276,6 +307,7 @@ impl HttpResponse {
             content_type: "text/plain".into(),
             body: msg.as_bytes().to_vec(),
             set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
@@ -286,11 +318,18 @@ impl HttpResponse {
             content_type: "text/plain".into(),
             body: msg.as_bytes().to_vec(),
             set_cookie: None,
+            additional_headers: Vec::new(),
         }
     }
 
     fn with_cookie(mut self, cookie: String) -> Self {
         self.set_cookie = Some(cookie);
+        self
+    }
+
+    fn with_header(mut self, name: &str, value: &str) -> Self {
+        self.additional_headers
+            .push((name.to_string(), value.to_string()));
         self
     }
 
@@ -305,13 +344,20 @@ impl HttpResponse {
             None => String::new(),
         };
 
+        let additional_headers: String = self
+            .additional_headers
+            .iter()
+            .map(|(name, value)| format!("{}: {}\r\n", name, value))
+            .collect();
+
         let response = format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}{}Connection: close\r\n\r\n",
             self.status,
             self.status_text,
             self.content_type,
             self.body.len(),
             cookie_header,
+            additional_headers,
         );
         stream.write_all(response.as_bytes()).await?;
         stream.write_all(&self.body).await?;
@@ -719,6 +765,21 @@ async fn handle_http_request(
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
 ) -> HttpResponse {
+    // Check if origin is allowed for CORS
+    let origin = request.header("Origin");
+    let allowed_origin = origin.and_then(|o| {
+        if is_allowed_origin(o) {
+            Some(o.to_string())
+        } else {
+            None
+        }
+    });
+
+    // Handle OPTIONS preflight request
+    if request.method.as_str() == "OPTIONS" {
+        return build_cors_preflight_response(allowed_origin.as_deref());
+    }
+
     // Check token from multiple sources: cookie, bearer token, query param
     let cookie_token = request.cookie("hai_token");
     let bearer_token = request.bearer_token();
@@ -823,14 +884,54 @@ async fn handle_http_request(
                 .await
             }
         }
-        _ => HttpResponse::bad_request("Only GET and PUT supported"),
+        _ => HttpResponse::bad_request("Only GET, PUT, and OPTIONS supported"),
     };
+
+    // Add CORS headers to actual response if origin is allowed
+    if let Some(ref origin) = allowed_origin {
+        response = response
+            .with_header("Access-Control-Allow-Origin", origin)
+            .with_header("Access-Control-Allow-Credentials", "true");
+    }
 
     if should_set_cookie {
         response = response.with_cookie(HttpResponse::auth_cookie(expected_token));
     }
 
     response
+}
+
+/// Check if the origin is allowed for CORS
+fn is_allowed_origin(origin: &str) -> bool {
+    if origin == "https://hai.dog" {
+        return true;
+    }
+
+    // Check for *.hai.dog subdomains
+    if let Some(rest) = origin.strip_prefix("https://") {
+        if let Some(subdomain) = rest.strip_suffix(".hai.dog") {
+            // Ensure it's a valid subdomain (not empty, no slashes)
+            return !subdomain.is_empty() && !subdomain.contains('/');
+        }
+    }
+
+    false
+}
+
+/// Build CORS preflight response
+fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
+    match allowed_origin {
+        Some(origin) => HttpResponse::no_content()
+            .with_header("Access-Control-Allow-Origin", origin)
+            .with_header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
+            .with_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, Authorization",
+            )
+            .with_header("Access-Control-Allow-Credentials", "true")
+            .with_header("Access-Control-Max-Age", "86400"),
+        None => HttpResponse::forbidden(),
+    }
 }
 
 async fn handle_get(
