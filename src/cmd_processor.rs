@@ -1447,10 +1447,18 @@ pub async fn process_cmd(
                     fs::write(&temp_file_path, res.config).unwrap_or_else(|e| {
                         eprintln!("error: Failed to write to temporary file: {}", e);
                     });
-                    println!("Task available for editing at: {}", temp_file_path);
-                    println!(
-                        "When finished, publish your changes with: /task-publish {}",
-                        temp_file_path
+
+                    let task_edit_output = format!(
+                        "Task available for editing at: {}\nWhen finished, publish your changes with: /task-publish {}",
+                        temp_file_path, temp_file_path
+                    );
+                    println!("{}", task_edit_output);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &task_edit_output,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                 }
                 Err(e) => {
