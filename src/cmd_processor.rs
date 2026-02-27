@@ -2957,7 +2957,16 @@ pub async fn process_cmd(
             };
 
             let source_asset_name = resolve_asset_name(source_asset_name, session);
-            let target_asset_name = resolve_asset_name(dest_asset_name, session);
+            let mut target_asset_name = resolve_asset_name(dest_asset_name, session);
+
+            // If target ends with '/', append the filename from source
+            if target_asset_name.ends_with('/') {
+                let source_filename = source_asset_name
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&source_asset_name);
+                target_asset_name.push_str(source_filename);
+            }
 
             let api_client = mk_api_client(Some(session));
             let (data_contents, source_md_contents, _asset_entry) =
