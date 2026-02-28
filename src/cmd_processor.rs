@@ -868,7 +868,10 @@ pub async fn process_cmd(
 
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Load(cmd::LoadCmd { path }) => {
+        cmd::Cmd::Load(cmd::LoadCmd {
+            path,
+            show_line_numbers,
+        }) => {
             //
             // The purpose of loading is for the user to be able to easily
             // inject files into the system context.
@@ -912,9 +915,18 @@ pub async fn process_cmd(
                         }
                         if let Ok(file_contents) = std::str::from_utf8(&buffer) {
                             let mut file_contents_with_delimeters = format!(
-                                "<<<<<< BEGIN_FILE: {} >>>>>>\n{}\n<<<<<< END_FILE: {} >>>>>>",
+                                "<<<<<< BEGIN_FILE: {}{} >>>>>>\n{}\n<<<<<< END_FILE: {} >>>>>>",
                                 file_path.to_string_lossy(),
-                                file_contents,
+                                if *show_line_numbers {
+                                    " (with line numbers)"
+                                } else {
+                                    ""
+                                },
+                                if *show_line_numbers {
+                                    add_line_numbers(file_contents)
+                                } else {
+                                    file_contents.to_string()
+                                },
                                 file_path.to_string_lossy()
                             );
                             if first_file {
@@ -980,7 +992,11 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::LoadUrl(cmd::LoadUrlCmd { url, raw }) => {
+        cmd::Cmd::LoadUrl(cmd::LoadUrlCmd {
+            url,
+            raw,
+            show_line_numbers,
+        }) => {
             let http_response = match reqwest::Client::new()
                 .get(url)
                 .header("User-Agent", &format!("hai/{}", env!("CARGO_PKG_VERSION")))
@@ -1084,8 +1100,20 @@ pub async fn process_cmd(
                     };
 
                     let url_contents_with_delimiters = format!(
-                        "{}\n<<<<<< BEGIN_URL: {} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
-                        raw_user_input, url, contents, url,
+                        "{}\n<<<<<< BEGIN_URL: {}{} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
+                        raw_user_input,
+                        url,
+                        if *show_line_numbers {
+                            " (with line numbers)"
+                        } else {
+                            ""
+                        },
+                        if *show_line_numbers {
+                            add_line_numbers(&contents)
+                        } else {
+                            contents
+                        },
+                        url,
                     );
                     let token_count = session_history_add_user_text_entry(
                         &url_contents_with_delimiters,
@@ -2226,8 +2254,14 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetLoad(cmd::AssetLoadCmd { asset_names })
-        | cmd::Cmd::AssetView(cmd::AssetViewCmd { asset_names }) => {
+        cmd::Cmd::AssetLoad(cmd::AssetLoadCmd {
+            asset_names,
+            show_line_numbers,
+        })
+        | cmd::Cmd::AssetView(cmd::AssetViewCmd {
+            asset_names,
+            show_line_numbers,
+        }) => {
             let asset_names = asset_names
                 .iter()
                 .map(|name| resolve_asset_name(&name, session))
@@ -2313,8 +2347,19 @@ pub async fn process_cmd(
                         match String::from_utf8(decrypted_asset_contents) {
                             Ok(asset_contents_string) => {
                                 let asset_contents_with_delimeters = format!(
-                                    "<<<<<< BEGIN_ASSET: {} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
-                                    asset_name, asset_contents_string, asset_name,
+                                    "<<<<<< BEGIN_ASSET: {}{} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
+                                    asset_name,
+                                    if *show_line_numbers {
+                                        " (with line numbers)"
+                                    } else {
+                                        ""
+                                    },
+                                    if *show_line_numbers {
+                                        add_line_numbers(&asset_contents_string)
+                                    } else {
+                                        asset_contents_string.clone()
+                                    },
+                                    asset_name,
                                 );
 
                                 let asset_token_count = session_history_add_user_text_entry(
@@ -2329,7 +2374,14 @@ pub async fn process_cmd(
                                         asset_name, asset_token_count
                                     );
                                 } else {
-                                    println!("{}", asset_contents_string);
+                                    println!(
+                                        "{}",
+                                        if *show_line_numbers {
+                                            add_line_numbers(&asset_contents_string)
+                                        } else {
+                                            asset_contents_string.clone()
+                                        }
+                                    );
                                 }
                             }
                             Err(e) => {
@@ -5354,4 +5406,22 @@ pub fn resolve_quick_var(asset_name: &str, session: &SessionState) -> Option<Str
     } else {
         None
     }
+}
+
+// --
+
+/// Adds line numbers for better diffing/patching by LLMs.
+///
+/// Line numbers are right-aligned based on the total number of lines to ensure
+/// consistent formatting and separated by a vertical bar.
+fn add_line_numbers(file_contents: &str) -> String {
+    let lines: Vec<&str> = file_contents.lines().collect();
+    let width = lines.len().to_string().len();
+
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{:>width$} | {}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

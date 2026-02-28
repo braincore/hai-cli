@@ -270,6 +270,8 @@ pub struct SetVarCmd {
 pub struct LoadCmd {
     /// Path or glob pattern to load files from
     pub path: String,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +280,8 @@ pub struct LoadUrlCmd {
     pub url: String,
     /// Do not extract article and convert HTML to markdown
     pub raw: bool,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -486,12 +490,16 @@ pub struct AssetSearchCmd {
 pub struct AssetLoadCmd {
     /// Name of the asset
     pub asset_names: Vec<String>,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct AssetViewCmd {
     /// Name of the asset
     pub asset_names: Vec<String>,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1263,35 +1271,55 @@ fn parse_command(
             }
         }
         "load" | "l" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(path) => Some(Cmd::Load(LoadCmd { path })),
+                Some(path) => Some(Cmd::Load(LoadCmd {
+                    path,
+                    show_line_numbers: n,
+                })),
                 None => {
                     eprintln!("Usage: /load <glob path>");
+                    eprintln!("Options:");
+                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }
         }
         "load-url" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["raw"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["raw", "n"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("raw".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("raw".to_string(), OptionType::Bool),
+                ("n".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd { url, raw })),
+                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd {
+                    url,
+                    raw,
+                    show_line_numbers: n,
+                })),
                 None => {
                     eprintln!("Usage: /load-url <url>");
                     eprintln!("Options:");
                     eprintln!(
                         "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
                     );
+                    eprintln!("  .n=BOOL         Show line numbers (default: false)");
                     None
                 }
             }
@@ -1711,25 +1739,47 @@ fn parse_command(
             }
         }
         "asset-load" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetLoad(AssetLoadCmd { asset_names: args })),
+                Some(args) => Some(Cmd::AssetLoad(AssetLoadCmd {
+                    asset_names: args,
+                    show_line_numbers: n,
+                })),
                 _ => {
                     eprintln!("Usage: /asset-load <name> [<name> ...]");
+                    eprintln!("Options:");
+                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }
         }
         "asset-view" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetView(AssetViewCmd { asset_names: args })),
+                Some(args) => Some(Cmd::AssetView(AssetViewCmd {
+                    asset_names: args,
+                    show_line_numbers: n,
+                })),
                 _ => {
                     eprintln!("Usage: /asset-view <name> [<name> ...]");
+                    eprintln!("Options:");
+                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }

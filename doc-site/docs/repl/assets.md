@@ -58,6 +58,12 @@ Similar local files loaded with `/load`, loaded assets are retained after a
 Asset names support glob patterns (`*`, `?`, `[...]`) for matching multiple
 assets at once.
 
+To load an asset and have visible line numbers added (handy when asking the LLM
+to produce patches or refer to specific lines), use:
+
+```
+/load.n <path>
+```
 
 ## Temporary local copy of asset
 

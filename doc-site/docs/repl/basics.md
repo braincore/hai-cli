@@ -66,6 +66,13 @@ To load a file into the chat conversation, use:
 
 To be vigilant about token usage, check the token count on the status line.
 
+To load a file and have visible line numbers added (handy when asking the LLM
+to produce patches or refer to specific lines), use:
+
+```
+/load.n <path>
+```
+
 ## Load a URL
 
 To load a URL into the chat conversation, use:
@@ -81,7 +88,13 @@ HTML responses are automatically converted to markdown for significantly
 improved token efficiency. If this is undesirable, use:
 
 ```
-/load-url(raw) <url>
+/load-url.raw <url>
+```
+
+To have visible line numbers added to assist LLMs with patching, use:
+
+```
+/load-url.n <url>
 ```
 
 ## Execute program and load stdout/stderr
