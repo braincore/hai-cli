@@ -4939,6 +4939,8 @@ const HELP_MSG: &str = r##"Available Commands:
 
 /t /task <name|path>         - Enter task mode by loading task from repo (username/task-name) or file path
                                File path must start with `./`, `/`, or `~`
+                               .key=STRING   Namespace the cache (default: none)
+                               .trust=BOOL   Do not prompt for user confirmations (default: false)
 /task-search <query>         - Search for tasks in the repository
 /task-view <name|path>       - View a task without loading it from repo or file path
 /task-versions <name>        - List all versions of a task in the repository
@@ -4954,7 +4956,10 @@ const HELP_MSG: &str = r##"Available Commands:
 
 /l /load <glob path>         - Load files into the conversation (e.g., `/load src/**/*.py`)
                                Supports text files or PNG/JPG images
+                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /load-url <url>              - Load url into the conversation
+                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                               .raw=BOOL  Return raw content rather than extracting markdown (default: false)
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
                                @asset can be used in place of file paths. These assets will be
                                transparently downloaded. If specified as a shell output redirect
@@ -5022,8 +5027,11 @@ Assets (Experimental):
 /asset-edit <name>               - Open existing asset in editor
 /ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
 /asset-search <query>            - Search for assets semantically
+                                   .path=STRING   Specify the asset-pool to search (default: none)
 /asset-load <name> [<name> ...]  - Load asset(s) into the conversation
+                                   .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-view <name> [<name> ...]  - Print asset(s) contents and loads it into the conversation
+                                   .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-link <name>               - Prints link to asset (valid for 24hr) and loads it into the conversation
 /asset-revisions <name> [<n>]    - Lists revisions of an asset one at a time, waiting for user input
                                    If `n` is set, displays `n` revisions without needing user input
@@ -5063,7 +5071,13 @@ Assets (Experimental):
 /chat-save [<asset_name>]        - Save the conversation as an asset
                                    If asset name omitted, name automatically generated
 /chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`
-                                   If asset name omitted, resumes last auto-saved chat"##;
+                                   If asset name omitted, resumes last auto-saved chat
+
+Usage guideline for command options:
+
+/<cmd>.<opt>=<value>
+/<cmd>.<opt> (defaults option to true)
+/<cmd>.<opt1>.<opt2> (multi-option)"##;
 
 // --
 

@@ -270,7 +270,10 @@ of `cmds`.
 Available Commands:
 
 /prompt <prompt>      - Sends a message to the AI and gets a response
+                        .cache=BOOL    Cache the result for the next execution (default: false)
 /ask-human <question> - Prompt the user with a question and add their answer to the conversation.
+                        .secret=BOOL   Hide input from terminal (default: false)
+                        .cache=BOOL    Cache the result for the next execution (default: false)
 
 --
 
@@ -285,7 +288,10 @@ Available Commands:
 
 /load <glob path>     - Load files into the conversation (e.g., `/load src/**/*.py`)
                         Supports text files or PNG/JPG images
+                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /load-url <url>       - Load the URL into the conversation
+                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                        .raw=BOOL Return raw content rather than extracting markdown (default: false)
 /exec <cmd>           - Executes a shell command and adds the output to this conversation.
                         The <cmd> can be treated as a bash shell command. One deviation
                         is the use of `@name` where a file would typically be specified.
@@ -293,6 +299,7 @@ Available Commands:
                         by `name` which avoids the need to `/asset-import` them to the
                         local filesystem. Shell output redirection (>) to `@name` will
                         be uploaded to the `@name` asset avoiding `/asset-export`.
+                        .cache=BOOL  Cache the result for the next execution (default: false)
 /prep <msg>           - Add message to converation without prompting AI for response.
 /prep(<accent>) <msg> - Adds message with accent color: danger, warn, info, success
 /pin                  - Like /prep but the message is retained on /reset
@@ -324,12 +331,15 @@ Function Tools:
                         The function will take a single argument. The function will be given a name
                         `f<index>` where `index>` is a unique number which can be used to invoke it
                         as `/f<index>`.
+                        .cache=BOOL    Cache the result for the next execution (default: false)
 !fn-pyuv <prompt>     - Similar to `!fn-py` but `uv` is used allowing for the function to use
                         additional library dependencies via a script dependency comment section.
+                        .cache=BOOL    Cache the result for the next execution (default: false)
 !fn-sh <prompt>       - Ask AI to write a shell script that can be invoked with `/f<index>`.
                         The function will take a single argument. The function will be given a name
                         `f<index>` where `index>` is a unique number which can be used to invoke it
                         as `/f<index>`.
+                        .cache=BOOL    Cache the result for the next execution (default: false)
 /f<index> <arg>       - Invoke a AI-defined reusable function with the given index.
                         For Python, `arg` must be a Python expression that can be evaluated.
                         For shell, `arg` must be a shell value or expression.
@@ -353,8 +363,11 @@ Assets:
 
 /asset-list <prefix>    - List assets with the given (optional) prefix. Supports globs.
 /asset-search <query>   - Search for assets semantically
+                          .path=STRING   Specify the asset-pool to search (default: none)
 /asset-load <name> [<name> ...]   - Load asset(s) into the conversation
+                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-view <name> [<name> ...]   - Print asset(s) contents and loads into the conversation
+                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-link <name>      - Prints link to asset (valid for 24hr) and loads into the conversation
 /asset-revisions <name> <count> - Lists <count> number of revisions of an asset
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
@@ -383,10 +396,20 @@ Assets:
 
 Tasks
 /task <name/path>       - Enter task mode by loading task from repo (username/task-name) or file path
+                          .key=STRING   Namespace the cache (default: none)
+                          .trust=BOOL   Do not prompt for user confirmations (default: false)
 /task-search <query>    - Search for tasks in the repository
 /task-view <name/path>  - View a task without loading it from repo or file path
 /task-versions <name>   - List all versions of a task in the repo
 /task-publish <path>    - Publish task to repo (requires /account-login)
+
+Usage guideline for command options:
+
+/<cmd>.<opt> (defaults option to true)
+/<cmd>.<opt>=true (explicitly set bool)
+/<cmd>.<opt>="" (set string)
+/<cmd>.<opt>=10 (set number)
+/<cmd>.<opt1>.<opt2>="" (multi-option specification)
 
 Usage guideline for <NEWLINE>:
 
