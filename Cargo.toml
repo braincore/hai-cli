@@ -1,6 +1,6 @@
 [package]
 name = "hai-cli"
-version = "1.24.0"
+version = "1.25.0"
 authors = ["Ken Elkabany <ken@elkabany.com>"]
 edition = "2024"
 license = "Apache-2.0"
