@@ -1,0 +1,1842 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://braincore.github.io/hai-cli/repl/tools/">
+      
+      
+        <link rel="prev" href="../basics/">
+      
+      
+        <link rel="next" href="../tasks/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../image/hai-favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.3">
+    
+    
+      
+        <title>Tools - hai</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="yellow" data-md-color-accent="yellow">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#tools" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="hai" class="md-header__button md-logo" aria-label="hai" data-md-component="logo">
+      
+  <img src="../../image/hai-logo.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            hai
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Tools
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://www.github.com/braincore/hai-cli" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hai-cli
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="hai" class="md-nav__button md-logo" aria-label="hai" data-md-component="logo">
+      
+  <img src="../../image/hai-logo.svg" alt="logo">
+
+    </a>
+    hai
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://www.github.com/braincore/hai-cli" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    hai-cli
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Introduction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/api-keys/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API keys
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/getting-help/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting help
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    REPL
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    REPL
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../basics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Basics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#shell-tool-sh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell tool !sh
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#require-confirmation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Require confirmation !?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#make-tool-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Make tool optional ?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repeat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Repeat !
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#same-tool-different-prompt-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Same tool, different prompt ! &lt;prompt&gt;
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-tool-py-pyuv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Tool !py !pyuv
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-program-tool-cmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom program tool !'&lt;cmd&gt;'
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#html-tool-html" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTML tool !html
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clipboard-tool-clip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clipboard tool !clip
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hai-tool-hai" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hai tool !hai
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="hai tool !hai">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hai-recursion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        !hai recursion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#function-tool-fn-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Function tool !fn-*
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Function tool !fn-*">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#use-native-expressions-as-function-args" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use native expressions as function args
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#named-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Named functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#show-all-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Show all functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../assets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Assets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../stdlib/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Stdlib
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llm-models/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LLM models
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../send-email/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Send email
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../account/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Account
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    CLI
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/subcommands-and-options/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subcommands and options
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/run-and-exit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Run and exit
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/incognito/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Incognito
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/using-with-vim/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Using with vim
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/websocket-queue/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Websocket queue
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#shell-tool-sh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Shell tool !sh
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#require-confirmation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Require confirmation !?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#make-tool-optional" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Make tool optional ?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repeat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Repeat !
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#same-tool-different-prompt-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Same tool, different prompt ! &lt;prompt&gt;
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tool mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#python-tool-py-pyuv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Python Tool !py !pyuv
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-program-tool-cmd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom program tool !'&lt;cmd&gt;'
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#html-tool-html" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTML tool !html
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clipboard-tool-clip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clipboard tool !clip
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hai-tool-hai" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        hai tool !hai
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="hai tool !hai">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#hai-recursion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        !hai recursion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#function-tool-fn-" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Function tool !fn-*
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Function tool !fn-*">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#use-native-expressions-as-function-args" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use native expressions as function args
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#named-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Named functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#show-all-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Show all functions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="tools">Tools<a class="headerlink" href="#tools" title="Permanent link">&para;</a></h1>
+<p>Tools let the AI do more than just respond with a message.</p>
+<p><img alt="" src="../../image/hai-tool.gif" /></p>
+<h2 id="shell-tool-sh">Shell tool <code>!sh</code><a class="headerlink" href="#shell-tool-sh" title="Permanent link">&para;</a></h2>
+<p><code>!sh &lt;prompt&gt;</code> - Ask the AI to execute shell commands directly.</p>
+<p>The shell tool prompts the AI to generate a shell script to be executed on your
+machine. Both the code and the output is added to the conversation history.</p>
+<div class="highlight"><pre><span></span><code>[0]: !sh list my home dir
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+ls -lh ~
+
+⚙ ⚙ ⚙
+
+Desktop
+Documents
+...
+</code></pre></div>
+<h2 id="require-confirmation">Require confirmation <code>!?</code><a class="headerlink" href="#require-confirmation" title="Permanent link">&para;</a></h2>
+<p>If you're worried about destructive side effects, you can require your final
+confirmation with <code>!?sh</code>.</p>
+<div class="highlight"><pre><span></span><code>[0]: !?sh delete evidence.txt
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+rm evidence.txt
+
+⚙ ⚙ ⚙
+
+[QUESTION] Execute? y/[n]:
+</code></pre></div>
+<h2 id="make-tool-optional">Make tool optional <code>?</code><a class="headerlink" href="#make-tool-optional" title="Permanent link">&para;</a></h2>
+<p>To let the AI to decide whether to use your suggested tool, add a "?" as a
+suffix to the tool’s name.</p>
+<div class="highlight"><pre><span></span><code>[0]: !sh? how old is the earth?
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>The Earth is approximately 4.54 billion years old.
+</code></pre></div>
+<p>Note that the answer was given without invoking the shell tool.</p>
+<h2 id="repeat">Repeat <code>!</code><a class="headerlink" href="#repeat" title="Permanent link">&para;</a></h2>
+<p>Sometimes simply asking the AI the same prompt over again helps it work through
+errors it may have encountered in script or code writing. A lone <code>!</code> in the
+REPL is a shortcut to do this. Note that the previous invocation and error is
+now in the conversation history which guides the AI to improve its answer.</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !sh what&#39;s the weather in santa clara, ca
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+curl -s &#39;wttr.in/Santa+Clara,CA?format=%C+%t&#39;
+
+⚙ ⚙ ⚙
+
+Unknown location; please try ~37.2333253,-121.6846349
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>[3]: !
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+curl -s &#39;wttr.in/Santa+Clara?format=%C+%t&#39;
+
+⚙ ⚙ ⚙
+
+Partly cloudy +51°F
+</code></pre></div></p>
+<h2 id="same-tool-different-prompt-prompt">Same tool, different prompt <code>! &lt;prompt&gt;</code><a class="headerlink" href="#same-tool-different-prompt-prompt" title="Permanent link">&para;</a></h2>
+<p>If you need to change your prompt while using the same tool, use <code>! &lt;prompt&gt;</code>
+(note that <code>sh</code> is omitted). Following from the above weather example:</p>
+<p><div class="highlight"><pre><span></span><code>[6]: ! how about tokyo?
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+curl -s &#39;wttr.in/Tokyo?format=%C+%t&#39;
+
+⚙ ⚙ ⚙
+
+Clear +59°F
+</code></pre></div></p>
+<h2 id="tool-mode">Tool mode<a class="headerlink" href="#tool-mode" title="Permanent link">&para;</a></h2>
+<p>If you find yourself using the same tool over-and-over, you can enter tool-mode
+by specifying a tool without a prompt (e.g. <code>!sh</code>).</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !sh
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>Entering tool mode; All messages are treated as prompts for !sh.
+</code></pre></div></p>
+<p>To exit tool mode, use <code>!exit</code> or <code>Ctrl + D</code>.</p>
+<div class="admonition tip">
+<p class="admonition-title">Tool mode in tasks</p>
+<p>When publishing tasks, you can place users directly into tool-mode by
+making it the final command in your task's list of steps. This approach is
+helpful when your task relies on a tool to respond to user requests. If
+your task requires tool use and regular text responses, consider using the
+optional suffix for the tool mode (e.g. <code>!sh?</code>).</p>
+</div>
+<h2 id="python-tool-py-pyuv">Python Tool <code>!py</code> <code>!pyuv</code><a class="headerlink" href="#python-tool-py-pyuv" title="Permanent link">&para;</a></h2>
+<p><code>!py</code> prompts the AI to write a Python script and execute it with your system
+Python or virtual env (<code>.venv</code>) if available in the current working directory.
+It may use dependencies that you do not have installed: you can either install
+them, try <a href="#repeat-">repeat <code>!</code></a> to see if the AI can work around it, or use
+<code>!pyuv</code> described below.</p>
+<p><code>!pyuv</code> prompts the AI to write Python with
+<a href="https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies">script dependencies</a>
+so that dependencies can be automatically installed. It requires
+<a href="https://github.com/astral-sh/uv"><code>uv</code></a>.</p>
+<p>Here's an example of it in action:</p>
+<div class="highlight"><pre><span></span><code>[0]: !pyuv distance from sf to nyc
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="err">↓↓↓</span>
+
+<span class="c1"># /// script</span>
+<span class="c1"># dependencies = [&quot;geopy&quot;]</span>
+<span class="c1"># ///</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">geopy.distance</span><span class="w"> </span><span class="kn">import</span> <span class="n">geodesic</span>
+
+<span class="c1"># Coordinates: (lat, lon)</span>
+<span class="n">sf</span> <span class="o">=</span> <span class="p">(</span><span class="mf">37.7749</span><span class="p">,</span> <span class="o">-</span><span class="mf">122.4194</span><span class="p">)</span>
+<span class="n">nyc</span> <span class="o">=</span> <span class="p">(</span><span class="mf">40.7128</span><span class="p">,</span> <span class="o">-</span><span class="mf">74.0060</span><span class="p">)</span>
+
+<span class="n">distance_km</span> <span class="o">=</span> <span class="n">geodesic</span><span class="p">(</span><span class="n">sf</span><span class="p">,</span> <span class="n">nyc</span><span class="p">)</span><span class="o">.</span><span class="n">kilometers</span>
+<span class="n">distance_miles</span> <span class="o">=</span> <span class="n">geodesic</span><span class="p">(</span><span class="n">sf</span><span class="p">,</span> <span class="n">nyc</span><span class="p">)</span><span class="o">.</span><span class="n">miles</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Distance from San Francisco to New York City: </span><span class="si">{</span><span class="n">distance_km</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> km (</span><span class="si">{</span><span class="n">distance_miles</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> miles)&quot;</span><span class="p">)</span>
+
+<span class="err">⚙</span> <span class="err">⚙</span> <span class="err">⚙</span>
+
+<span class="n">Distance</span> <span class="kn">from</span><span class="w"> </span><span class="nn">San</span> <span class="n">Francisco</span> <span class="n">to</span> <span class="n">New</span> <span class="n">York</span> <span class="n">City</span><span class="p">:</span> <span class="mf">4139.15</span> <span class="n">km</span> <span class="p">(</span><span class="mf">2571.95</span> <span class="n">miles</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="custom-program-tool-cmd">Custom program tool <code>!'&lt;cmd&gt;'</code><a class="headerlink" href="#custom-program-tool-cmd" title="Permanent link">&para;</a></h2>
+<p>You can prompt the AI to generate the <code>stdin</code> to any program. For example, to
+use <code>psql</code>:</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !&#39;psql -U postgres -d my_db&#39; what db users are there?
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+SELECT usename FROM pg_user;
+
+⚙ ⚙ ⚙
+
+ usename
+---------
+postgres
+...
+</code></pre></div></p>
+<p>A <code>{file}</code> placeholder can be used to prompt the AI to generate an input file
+rather than <code>stdin</code>. The below example demonstrates the difference using <code>uv</code>.</p>
+<div class="highlight"><pre><span></span><code># Uses stdin (-)
+[0]: !&#39;uv run --with geopy -&#39; distance from sf to nyc
+
+OR
+
+# Uses temporary file
+[0]: !&#39;uv run --with geopy {file.py}&#39; distance from sf to nyc
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="err">↓↓↓</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">geopy.distance</span><span class="w"> </span><span class="kn">import</span> <span class="n">geodesic</span>
+
+<span class="n">sf_coords</span> <span class="o">=</span> <span class="p">(</span><span class="mf">37.7749</span><span class="p">,</span> <span class="o">-</span><span class="mf">122.4194</span><span class="p">)</span>  <span class="c1"># San Francisco coordinates</span>
+<span class="n">nyc_coords</span> <span class="o">=</span> <span class="p">(</span><span class="mf">40.7128</span><span class="p">,</span> <span class="o">-</span><span class="mf">74.0060</span><span class="p">)</span>   <span class="c1"># New York City coordinates</span>
+
+<span class="n">distance</span> <span class="o">=</span> <span class="n">geodesic</span><span class="p">(</span><span class="n">sf_coords</span><span class="p">,</span> <span class="n">nyc_coords</span><span class="p">)</span><span class="o">.</span><span class="n">miles</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">distance</span><span class="p">)</span>
+
+<span class="err">⚙</span> <span class="err">⚙</span> <span class="err">⚙</span>
+
+<span class="mf">2571.9457567914133</span>
+</code></pre></div>
+<p>Note that a file extension was specified (e.g. <code>{file.&lt;ext&gt;}</code>) to force the
+temporary file to have a particular extension and enable syntax highlighting.
+This is helpful for programs that require input to have a specific extension
+(<code>uv</code> happens to be one of them, requiring <code>.py</code>).</p>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>Note that <code>uv</code> is used for demonstrative purposes only and <code>!pyuv</code> would
+be the recommended tool for using <code>uv</code>.</p>
+</div>
+<h2 id="html-tool-html">HTML tool <code>!html</code><a class="headerlink" href="#html-tool-html" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>Even a terminal jockey needs to touch grass every now and then.</p>
+</blockquote>
+<p>To prompt the AI to help you visualize output, you can ask for HTML output that
+will be opened by your configured system-default browser. Asking for iterations
+using the <code>!html</code> tool will trigger reloads automatically.</p>
+<p><img alt="" src="../../image/html_tool_nyc_skyline.png" /></p>
+<h2 id="clipboard-tool-clip">Clipboard tool <code>!clip</code><a class="headerlink" href="#clipboard-tool-clip" title="Permanent link">&para;</a></h2>
+<p>Are you a caveman reaching over to your mouse to copy-and-paste from the
+terminal? Use <code>!clip</code> to ask the AI to copy-and-paste whatever your need.
+For example:</p>
+<div class="highlight"><pre><span></span><code>!clip option #3
+</code></pre></div>
+<h2 id="hai-tool-hai">hai tool <code>!hai</code><a class="headerlink" href="#hai-tool-hai" title="Permanent link">&para;</a></h2>
+<p>The LLM knows how to use the REPL.</p>
+<p><div class="highlight"><pre><span></span><code>[7]: !hai load silk road wiki. who was the founder?
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+- /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+- /prompt Who was the founder of the Silk Road marketplace?
+
+⚙ ⚙ ⚙
+
+Pushed 2 command(s) into queue
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>!hai-tool[0]: /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>Loaded (markdown): Silk Road (marketplace) (32,696 tokens)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>!hai-tool[1]: /prompt Who was the founder of the Silk Road marketplace?
+</code></pre></div></p>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+The founder of the Silk Road marketplace was **Ross Ulbricht**, who operated under the pseudonym &quot;Dread Pirate Roberts.&quot;
+</code></pre></div>
+<p>The AI is capable enough to know what URL to load and then ask itself a
+question about the contents.</p>
+<h3 id="hai-recursion">!hai recursion<a class="headerlink" href="#hai-recursion" title="Permanent link">&para;</a></h3>
+<p>Some LLMs (<code>sonnet-3.7</code> is most reliable) are able to work out whether they
+need to re-prompt themselves to act on intermediate information.</p>
+<p>In this example, only the first command is prompted by the user. The rest,
+prefixed by <code>hai-tool[ ]:</code>, are prompted by the AI. For brevity, user
+confirmations are omitted.</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !hai get a random number. if it is even, ask the AI how large the sun is. if it is odd, delete `file1.txt`.
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+- !py Generate a random number and determine if it&#39;s even or odd
+- !hai Based on the random number generated, if it&#39;s even, ask how large the sun is. If it&#39;s odd, delete file1.txt
+</code></pre></div></p>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Pushed 2 command(s) into queue
+</code></pre></div>
+<p><div class="highlight"><pre><span></span><code>hai-tool[3]: !py Generate a random number and determine if it&#39;s even or odd
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+import random
+
+# Generate a random number between 1 and 100
+random_number = random.randint(1, 100)
+
+# Check if the number is even or odd
+if random_number % 2 == 0:
+    result = &quot;even&quot;
+else:
+    result = &quot;odd&quot;
+
+print(f&quot;The random number is: {random_number}&quot;)
+print(f&quot;The number is {result}&quot;)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+The random number is: 86
+The number is even
+</code></pre></div></p>
+<p><div class="highlight"><pre><span></span><code>hai-tool[6]: !hai Based on the random number generated, if it&#39;s even, ask how large the sun is. If it&#39;s odd, delete file1.txt
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+- /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Pushed 1 command(s) into queue
+</code></pre></div></p>
+<p><div class="highlight"><pre><span></span><code>hai-tool[9]: /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+# The Size of the Sun
+
+The Sun is enormously large compared to Earth. Here are the key measurements:
+
+- Sun&#39;s diameter: approximately 1.39 million kilometers (864,000 miles)
+- Sun&#39;s volume: approximately 1.41 × 10^18 cubic kilometers
+- Sun&#39;s mass: approximately 1.989 × 10^30 kilograms
+</code></pre></div></p>
+<h2 id="function-tool-fn-">Function tool <code>!fn-*</code><a class="headerlink" href="#function-tool-fn-" title="Permanent link">&para;</a></h2>
+<p>A drawback of <code>!py</code> and <code>!sh</code> is that there's no ability to re-use the code
+that was written. The LLM writes code every time the tool is invoked, which can
+consume a lot of output tokens and the time it takes to generate them.</p>
+<p>For example, computing the square root of pi:</p>
+<div class="highlight"><pre><span></span><code>[0] !py sqrt pi
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+import math
+print(math.sqrt(math.pi))
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+1.7724538509055159
+</code></pre></div>
+<p>A second request to compute the square root of <em>e</em> requires the code to be
+rewritten:</p>
+<div class="highlight"><pre><span></span><code>[3] !py sqrt e
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+import math
+print(math.sqrt(math.e))
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+1.6487212707001282
+</code></pre></div>
+<p>The solution is to use <code>!fn-py &lt;prompt&gt;</code> which instructs the AI to generate a
+Python function that takes an argument and prints the result to add it to the
+conversation.</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !fn-py find the sqrt, print the result
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+def f(arg):
+    import math
+    result = math.sqrt(arg)
+    print(result)
+</code></pre></div></p>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Stored as command: /f0
+</code></pre></div>
+<p>The new function can be invoked like a command: <code>/f0 &lt;arg&gt;</code> without prompting
+the LLM. For example:</p>
+<div class="highlight"><pre><span></span><code>[3]: /f0 64
+8.0
+</code></pre></div>
+<p>The LLM can invoke <code>/f0</code> when you use the <code>!hai</code> tool:</p>
+<div class="highlight"><pre><span></span><code>[5]: !hai what&#39;s the sqrt of pi
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+- /f0 3.141592653589793
+</code></pre></div>
+<p><div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Pushed 1 command(s) into queue
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>!hai-tool[0]: /f0 3.141592653589793
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>1.7724538509055159
+</code></pre></div></p>
+<p>For a reusable shell function, use <code>!fn-sh</code>. For a resuable Python function
+that can declare script dependencies, use <code>!fn-pyuv</code>.</p>
+<h3 id="use-native-expressions-as-function-args">Use native expressions as function args<a class="headerlink" href="#use-native-expressions-as-function-args" title="Permanent link">&para;</a></h3>
+<p>For <code>!fn-py</code> and <code>!fn-pyuv</code>, the arg can be any Python expression.</p>
+<p><div class="highlight"><pre><span></span><code>[0]: !fn-py distance from san francisco. input is tuple of geo coordinates. print result.
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>↓↓↓
+
+def f(arg):
+    # arg is a tuple of (latitude, longitude)
+    from math import radians, sin, cos, sqrt, atan2
+    # San Francisco coordinates
+    sf_lat, sf_lon = 37.7749, -122.4194
+    lat1, lon1 = sf_lat, sf_lon
+    lat2, lon2 = arg
+    # Radius of the Earth in kilometers
+    R = 6371.0
+    # Convert degrees to radians
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    distance = R * c
+    print(f&quot;Distance from San Francisco, CA to {arg}: {distance:.2f} km&quot;)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Stored as command: /f0
+</code></pre></div></p>
+<p>Using a Python tuple as the arg:</p>
+<div class="highlight"><pre><span></span><code>[3]: /f0 (0.0, 78.5)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>Distance from San Francisco, CA to (0.0, 78.5): 15299.16 km
+</code></pre></div>
+<p>Similarly, <code>!fn-sh</code> accepts a shell expression.</p>
+<h3 id="named-functions">Named functions<a class="headerlink" href="#named-functions" title="Permanent link">&para;</a></h3>
+<p>Use the <code>name</code> option to give a function a proper name:</p>
+<div class="highlight"><pre><span></span><code>[0] !fn-py(name=&quot;sqrt&quot;) find the sqrt
+</code></pre></div>
+<p><div class="highlight"><pre><span></span><code>↓↓↓
+
+def f(arg):
+    import math
+    return math.sqrt(arg)
+</code></pre></div>
+<div class="highlight"><pre><span></span><code>⚙ ⚙ ⚙
+
+Stored as command: /f_sqrt
+</code></pre></div></p>
+<h3 id="show-all-functions">Show all functions<a class="headerlink" href="#show-all-functions" title="Permanent link">&para;</a></h3>
+<p>To see all functions declared in the current conversation, use:</p>
+<div class="highlight"><pre><span></span><code>/fns
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.tabs.link", "navigation.expand", "navigation.instant", "navigation.instant.prefetch", "navigation.instant.progress"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
