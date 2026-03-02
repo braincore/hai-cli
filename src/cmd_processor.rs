@@ -357,6 +357,9 @@ pub async fn process_cmd(
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             session.quick_index_vars.clear();
+            session
+                .mcps
+                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -392,6 +395,9 @@ pub async fn process_cmd(
                 .ai_defined_fns
                 .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             session.quick_index_vars.clear();
+            session
+                .mcps
+                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
@@ -4415,6 +4421,100 @@ lesson (e.g. "understanding").\n\n{}"#,
             );
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::McpAdd(cmd::McpAddCmd { name, cmd }) => {
+            let (mcp_service, mcp_tools) = match crate::feature::mcp::init_mcp(cmd).await {
+                Some(res) => res,
+                None => {
+                    eprintln!("error: failed to initialize MCP service");
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            session
+                .mcps
+                .insert(name.clone(), (mcp_service, is_task_mode_step));
+
+            let tools_str =
+                serde_json::to_string_pretty(&mcp_tools).expect("Failed to serialize tools");
+
+            let output = format!(
+                "{}\n\nMCP service '{}' added. Call with: \n\n    /mcp_{} <mcp_tool> <json_arg>\n",
+                tools_str, name, name
+            );
+
+            println!("{}", output);
+
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &output,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::McpToolCall(cmd::McpToolCallCmd {
+            name,
+            tool_name,
+            json_arg,
+        }) => {
+            let (mcp_service, _) = if let Some(res) = session.mcps.get(name) {
+                res
+            } else {
+                eprintln!("error: no MCP service named '{}'", name);
+                return ProcessCmdResult::Loop;
+            };
+
+            let arg = match serde_json::from_str(json_arg) {
+                Ok(arg) => arg,
+                Err(e) => {
+                    eprintln!("error: failed to parse JSON argument: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use rmcp::model::CallToolRequestParams;
+
+            let tool_call_res = match mcp_service
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: tool_name.clone().into(),
+                    arguments: arg,
+                    task: None,
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to call MCP tool: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let tool_call_res_content = tool_call_res
+                .content
+                .iter()
+                .filter_map(|c| match &c.raw {
+                    rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                    rmcp::model::RawContent::Image(_) => None,
+                    rmcp::model::RawContent::Audio(_) => None,
+                    rmcp::model::RawContent::Resource(_) => None,
+                    rmcp::model::RawContent::ResourceLink(_) => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            println!("{}", tool_call_res_content);
+
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &tool_call_res_content,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Account(cmd::AccountCmd { username }) => {
             if let Some(username) = username {
                 if username == "_" {
@@ -5072,6 +5172,17 @@ Assets (Experimental):
                                    If asset name omitted, name automatically generated
 /chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`
                                    If asset name omitted, resumes last auto-saved chat
+
+--
+
+MCPs (Experimental):
+
+/mcp-add <name> [<env>] <cmd...> - Add Model Context Protocol server.
+                                   Ex: `/mcp-add git V=1 uvx -q mcp-server-git`
+                                   New command is created to invoke with:
+                                   `/mcp_<name> <tool_name> <json_arg>`
+
+--
 
 Usage guideline for command options:
 

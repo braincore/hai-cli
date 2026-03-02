@@ -128,6 +128,8 @@ pub struct SessionState {
         crate::feature::gateway::Clients,
         CancellationToken,
     )>,
+    // (MCP service, is task step?)
+    pub mcps: HashMap<String, (crate::feature::mcp::McpService, bool)>,
 }
 
 impl SessionState {
