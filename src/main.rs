@@ -400,6 +400,7 @@ async fn repl(
         "/email",
         "/fns",
         "/std",
+        "/mcp-add",
         "/account",
         "/account-new",
         "/account-login",
@@ -582,6 +583,7 @@ async fn repl(
         html_output: None,
         quick_index_vars: vec![],
         gateways: vec![],
+        mcps: HashMap::new(),
     };
 
     if let Some(account) = &account {
@@ -736,6 +738,12 @@ async fn repl(
                     .ai_defined_fns
                     .keys()
                     .map(|fn_name| format!("/{}", fn_name)),
+            );
+            autocomplete_repl_cmds.extend(
+                session
+                    .mcps
+                    .keys()
+                    .map(|mcp_name| format!("/mcp_{}", mcp_name)),
             );
             cur_line_editor.set_line_completer(
                 debug,

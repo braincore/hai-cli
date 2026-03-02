@@ -403,6 +403,17 @@ Tasks
 /task-versions <name>   - List all versions of a task in the repo
 /task-publish <path>    - Publish task to repo (requires /account-login)
 
+--
+
+MCPs (Experimental):
+
+/mcp-add <name> [<env>] <cmd...> - Add Model Context Protocol server.
+                                   Ex: `/mcp-add git V=1 uvx -q mcp-server-git`
+                                   New command is created to invoke with:
+                                   `/mcp_<name> <tool_name> <json_arg>`
+
+--
+
 Usage guideline for command options:
 
 /<cmd>.<opt> (defaults option to true)

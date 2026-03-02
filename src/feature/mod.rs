@@ -4,5 +4,6 @@ pub mod asset_keyring;
 pub mod gateway;
 pub mod haivar;
 pub mod html_tool;
+pub mod mcp;
 pub mod queue_listen;
 pub mod save_chat;

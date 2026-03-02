@@ -18,6 +18,7 @@ A REPL for hackers using LLMs.
 - 📂 Load images, code, or text into the conversation.
 - 🔗 Load URLs with automatic article extraction and markdown conversion.
 - 🎨 Highlights syntax for markdown and code snippets.
+- 🔌 Connect to Model Context Protocol (MCP) servers.
 - 🖼 Render output to browser.
 - 💾 Auto-saves last conversation for easy resumption.
 - ☁ Store and share data on the cloud for easy access by AIs.

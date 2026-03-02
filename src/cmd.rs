@@ -164,6 +164,10 @@ pub enum Cmd {
     Fns,
     /// Execute a standard library function
     Std(StdCmd),
+    /// Add MCP server
+    McpAdd(McpAddCmd),
+    /// Call an MCP tool
+    McpToolCall(McpToolCallCmd),
     /// Get current account (or if specified, switch to logged-in account)
     Account(AccountCmd),
     /// Make a new account
@@ -720,6 +724,19 @@ pub enum StdCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct McpAddCmd {
+    pub name: String,
+    pub cmd: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpToolCallCmd {
+    pub name: String,
+    pub tool_name: String,
+    pub json_arg: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct AccountCmd {
     pub username: Option<String>,
 }
@@ -763,6 +780,11 @@ fn get_ai_def_tool_re() -> &'static Regex {
     TOOL_RE.get_or_init(|| {
         Regex::new(r"^f([0-9]+|_[A-Za-z]+(?:_[A-Za-z]+)*|'(?:\\'|[^'])*')?(\.| |$)").unwrap()
     })
+}
+
+fn get_mcp_invoke_re() -> &'static Regex {
+    static MCP_RE: OnceLock<Regex> = OnceLock::new();
+    MCP_RE.get_or_init(|| Regex::new("^mcp_([A-Za-z_][A-Za-z0-9_]*)$").unwrap())
 }
 
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
@@ -1063,6 +1085,34 @@ fn parse_command(
         return Some(Cmd::FnExec(FnExecCmd {
             fn_name,
             arg: remaining.trim().to_string(),
+        }));
+    }
+    let mcp_invoke_re = get_mcp_invoke_re();
+    if let Some(captures) = mcp_invoke_re.captures(cmd_name)
+        && let Some(name_match) = captures.get(1)
+    {
+        let mcp_name = name_match.as_str().to_string();
+        let (tool_name, json_arg) = match remaining.trim().split_once(' ') {
+            Some((first, rest)) => (first.to_string(), rest.trim().to_string()),
+            None => (remaining.trim().to_string(), String::new()),
+        };
+        return Some(Cmd::McpToolCall(McpToolCallCmd {
+            name: mcp_name,
+            tool_name,
+            json_arg,
+        }));
+    }
+
+    if let Some(captures) = mcp_invoke_re.captures(cmd_name)
+        && let Some(name_match) = captures.get(1)
+        && let Some(tool_match) = captures.get(2)
+    {
+        let mcp_name = name_match.as_str().to_string();
+        let tool_name = tool_match.as_str().to_string();
+        return Some(Cmd::McpToolCall(McpToolCallCmd {
+            name: mcp_name,
+            tool_name,
+            json_arg: remaining.trim().to_string(),
         }));
     }
     match cmd_name {
@@ -2218,6 +2268,18 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /{cmd_name} <fn_name> [<fn_arg>]");
+                    None
+                }
+            }
+        }
+        "mcp-add" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((name, cmd)) => Some(Cmd::McpAdd(McpAddCmd { name, cmd })),
+                None => {
+                    eprintln!("Usage: /mcp-add <name> <cmd>");
                     None
                 }
             }
