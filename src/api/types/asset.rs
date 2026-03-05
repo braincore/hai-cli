@@ -3490,6 +3490,283 @@ impl ::serde::ser::Serialize for AssetMoveResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolCreateSharedArg {
+    pub usernames: Vec<String>,
+}
+
+impl AssetPoolCreateSharedArg {
+    pub fn new(usernames: Vec<String>) -> Self {
+        AssetPoolCreateSharedArg { usernames }
+    }
+}
+
+const ASSET_POOL_CREATE_SHARED_ARG_FIELDS: &[&str] = &["usernames"];
+impl AssetPoolCreateSharedArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolCreateSharedArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolCreateSharedArg>, V::Error> {
+        let mut field_usernames = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "usernames" => {
+                    if field_usernames.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("usernames"));
+                    }
+                    field_usernames = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolCreateSharedArg {
+            usernames: field_usernames
+                .ok_or_else(|| ::serde::de::Error::missing_field("usernames"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("usernames", &self.usernames)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolCreateSharedArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolCreateSharedArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolCreateSharedArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolCreateSharedArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolCreateSharedArg",
+            ASSET_POOL_CREATE_SHARED_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolCreateSharedArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolCreateSharedArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetPoolCreateSharedError {
+    BadUsername(String),
+    TooManyMembers,
+    ShareLimit,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolCreateSharedError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetPoolCreateSharedError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolCreateSharedError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_username" => match map.next_key()? {
+                        Some("bad_username") => {
+                            AssetPoolCreateSharedError::BadUsername(map.next_value()?)
+                        }
+                        None => return Err(de::Error::missing_field("bad_username")),
+                        _ => return Err(de::Error::unknown_field(tag, VARIANTS)),
+                    },
+                    "too_many_members" => AssetPoolCreateSharedError::TooManyMembers,
+                    "share_limit" => AssetPoolCreateSharedError::ShareLimit,
+                    _ => AssetPoolCreateSharedError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_username", "too_many_members", "share_limit", "other"];
+        deserializer.deserialize_struct("AssetPoolCreateSharedError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolCreateSharedError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetPoolCreateSharedError::BadUsername(ref x) => {
+                // primitive
+                let mut s = serializer.serialize_struct("AssetPoolCreateSharedError", 2)?;
+                s.serialize_field(".tag", "bad_username")?;
+                s.serialize_field("bad_username", x)?;
+                s.end()
+            }
+            AssetPoolCreateSharedError::TooManyMembers => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolCreateSharedError", 1)?;
+                s.serialize_field(".tag", "too_many_members")?;
+                s.end()
+            }
+            AssetPoolCreateSharedError::ShareLimit => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPoolCreateSharedError", 1)?;
+                s.serialize_field(".tag", "share_limit")?;
+                s.end()
+            }
+            AssetPoolCreateSharedError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetPoolCreateSharedError {}
+
+impl ::std::fmt::Display for AssetPoolCreateSharedError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetPoolCreateSharedError::BadUsername(inner) => {
+                write!(f, "bad_username: {:?}", inner)
+            }
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolCreateSharedResult {
+    pub mount_point: String,
+}
+
+impl AssetPoolCreateSharedResult {
+    pub fn new(mount_point: String) -> Self {
+        AssetPoolCreateSharedResult { mount_point }
+    }
+}
+
+const ASSET_POOL_CREATE_SHARED_RESULT_FIELDS: &[&str] = &["mount_point"];
+impl AssetPoolCreateSharedResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolCreateSharedResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolCreateSharedResult>, V::Error> {
+        let mut field_mount_point = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "mount_point" => {
+                    if field_mount_point.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("mount_point"));
+                    }
+                    field_mount_point = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolCreateSharedResult {
+            mount_point: field_mount_point
+                .ok_or_else(|| ::serde::de::Error::missing_field("mount_point"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("mount_point", &self.mount_point)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolCreateSharedResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolCreateSharedResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolCreateSharedResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolCreateSharedResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolCreateSharedResult",
+            ASSET_POOL_CREATE_SHARED_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolCreateSharedResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolCreateSharedResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetPoolFolderCollapseArg {
     pub prefix: String,
 }
@@ -4069,6 +4346,205 @@ impl ::serde::ser::Serialize for AssetPoolFolderListResult {
         // struct serializer
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("AssetPoolFolderListResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolListEntry {
+    pub mount_point: String,
+    pub last_modified_at: super::common::UtcTimestamp,
+}
+
+impl AssetPoolListEntry {
+    pub fn new(mount_point: String, last_modified_at: super::common::UtcTimestamp) -> Self {
+        AssetPoolListEntry {
+            mount_point,
+            last_modified_at,
+        }
+    }
+}
+
+const ASSET_POOL_LIST_ENTRY_FIELDS: &[&str] = &["mount_point", "last_modified_at"];
+impl AssetPoolListEntry {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolListEntry, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolListEntry>, V::Error> {
+        let mut field_mount_point = None;
+        let mut field_last_modified_at = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "mount_point" => {
+                    if field_mount_point.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("mount_point"));
+                    }
+                    field_mount_point = Some(map.next_value()?);
+                }
+                "last_modified_at" => {
+                    if field_last_modified_at.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("last_modified_at"));
+                    }
+                    field_last_modified_at = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolListEntry {
+            mount_point: field_mount_point
+                .ok_or_else(|| ::serde::de::Error::missing_field("mount_point"))?,
+            last_modified_at: field_last_modified_at
+                .ok_or_else(|| ::serde::de::Error::missing_field("last_modified_at"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("mount_point", &self.mount_point)?;
+        s.serialize_field("last_modified_at", &self.last_modified_at)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolListEntry {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolListEntry;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolListEntry struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolListEntry::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolListEntry",
+            ASSET_POOL_LIST_ENTRY_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolListEntry {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolListEntry", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetPoolListResult {
+    pub pools: Vec<AssetPoolListEntry>,
+}
+
+impl AssetPoolListResult {
+    pub fn new(pools: Vec<AssetPoolListEntry>) -> Self {
+        AssetPoolListResult { pools }
+    }
+}
+
+const ASSET_POOL_LIST_RESULT_FIELDS: &[&str] = &["pools"];
+impl AssetPoolListResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetPoolListResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetPoolListResult>, V::Error> {
+        let mut field_pools = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "pools" => {
+                    if field_pools.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("pools"));
+                    }
+                    field_pools = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetPoolListResult {
+            pools: field_pools.ok_or_else(|| ::serde::de::Error::missing_field("pools"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("pools", &self.pools)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetPoolListResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetPoolListResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetPoolListResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetPoolListResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetPoolListResult",
+            ASSET_POOL_LIST_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetPoolListResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetPoolListResult", 1)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

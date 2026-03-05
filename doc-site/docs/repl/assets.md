@@ -529,3 +529,37 @@ is in the vault:
 ```
 /asset-copy vault/<src> vault/<dst>
 ```
+
+## Multi-user asset pools
+
+!!!warning Experimental
+    The feature is stable but under active development.
+
+Multi-user asset pools enable granting read/write access to a select group of
+users. These users are defined in the asset path beginning with `/s/` prefix:
+
+```
+/s/<username>+<username>+.../...
+```
+
+Usernames are delimited by `+`. Canonically, they're ordered by c-collation,
+but can be specified in any order.
+
+To create an asset-pool, use:
+
+```
+/asset-pool-new <username> [<username>...]
+```
+
+To see all asset pools you're a member of, use:
+
+```
+/asset-pools
+```
+
+Paths within shared asset pools behave just like other assets.
+
+### Encryption
+
+End-to-end encryption is **required** and must be setup for each user before an
+asset can be created. Otherwise, a key not found error will be returned.

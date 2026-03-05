@@ -1,5 +1,7 @@
 namespace asset
 
+import common
+
 # --
 
 route pool/quota/get(AssetPoolQuotaGetArg, AssetPoolQuotaGetResult, AssetPoolQuotaGetError)
@@ -16,6 +18,34 @@ struct AssetPoolQuotaGetResult
 
 union AssetPoolQuotaGetError
     bad_mount_point
+
+# --
+
+route pool/create_shared(AssetPoolCreateSharedArg, AssetPoolCreateSharedResult, AssetPoolCreateSharedError)
+    "Create an asset pool shared between multiple users."
+
+struct AssetPoolCreateSharedArg
+    usernames List(String)
+
+struct AssetPoolCreateSharedResult
+    mount_point String(max_length=2048)
+
+union AssetPoolCreateSharedError
+    bad_username String
+    too_many_members
+    share_limit
+
+# --
+
+route pool/list (Void, AssetPoolListResult, Void)
+    "List all pools a user has R/W access to."
+
+struct AssetPoolListResult
+    pools List(AssetPoolListEntry)
+
+struct AssetPoolListEntry
+    mount_point String
+    last_modified_at common.UtcTimestamp
 
 # --
 
@@ -59,3 +89,4 @@ struct AssetPoolFolderListResult
 union AssetPoolFolderListError
     bad_prefix
     no_permission
+

@@ -512,15 +512,23 @@ impl RecipientKeyInfo {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum KeyRecipient {
     User(String), // username
 }
 
 impl KeyRecipient {
     pub fn recipient_key_id_prefix(&self) -> String {
-        match &self {
+        match self {
             KeyRecipient::User(username) => format!("u:{}:", username),
+        }
+    }
+}
+
+impl std::fmt::Display for KeyRecipient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyRecipient::User(username) => write!(f, "user {}", username),
         }
     }
 }
@@ -591,37 +599,201 @@ pub async fn get_encryption_key(
 #[derive(Clone, Debug)]
 /// Container for both a user's public encryption key and per-file AES key used
 /// to encrypt a specific asset.
-pub struct AssetKeyMaterial {
+pub struct UnlockedAssetKeyMaterial {
     pub enc_key_info: EncryptKeyInfo,
     pub sym_key_info: SymmetricKeyInfo,
 }
 
-pub fn mk_asset_key_material(
-    enc_key_info: EncryptKeyInfo,
-    sym_key_info: SymmetricKeyInfo,
-) -> AssetKeyMaterial {
-    AssetKeyMaterial {
-        enc_key_info,
-        sym_key_info,
+#[derive(Clone, Debug)]
+/// Container for a user's public encryption key and encrypted AES key. It's
+/// assumed that this is for a user whose private key is unavailable but whose
+/// an asset recipient and needs representation in the asset metadata.
+pub struct LockedAssetKeyMaterial {
+    //pub enc_key_info: EncryptKeyInfo,
+    pub enc_key_id: String,
+    pub enc_aes_key: String,
+    pub recipient: KeyRecipient,
+}
+
+impl LockedAssetKeyMaterial {
+    /// Create from an EncryptKeyInfo by encrypting the given AES key.
+    pub fn new(enc_key_info: EncryptKeyInfo, aes_key: &crypt::AesKey) -> Result<Self, String> {
+        let enc_aes_key_hex = crypt::encrypt_aes_key(aes_key, &enc_key_info.enc_key)
+            .map_err(|e| format!("Failed to encrypt AES key: {}", e))?
+            .to_hex();
+        Ok(Self {
+            enc_key_id: enc_key_info.enc_key_id.clone(),
+            enc_aes_key: enc_aes_key_hex,
+            recipient: enc_key_info.recipient.clone(),
+        })
+    }
+
+    /// Parse from a metadata key entry.
+    pub fn from_metadata_entry(entry: &serde_json::Value) -> Result<Self, String> {
+        let recipient_key_id = entry
+            .get("recipient_key_id")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing recipient_key_id")?;
+        let enc_aes_key_hex = entry
+            .get("encrypted_key")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing encrypted_key")?
+            .to_string();
+
+        // Parse recipient_key_id format: "u:username:key_id"
+        let (recipient, enc_key_id) = parse_recipient_key_id(recipient_key_id)?;
+
+        Ok(Self {
+            enc_key_id,
+            enc_aes_key: enc_aes_key_hex,
+            recipient,
+        })
+    }
+
+    /// Convert to RecipientKeyInfo for metadata serialization.
+    pub fn to_recipient_key_info(&self) -> RecipientKeyInfo {
+        RecipientKeyInfo {
+            enc_key_id: self.enc_key_id.clone(),
+            enc_aes_key_hex: self.enc_aes_key.clone(),
+            recipient: self.recipient.clone(),
+        }
     }
 }
 
-/// Create a new per-file encryption key info structure.
-///
-/// # Arguments
-/// * `enc_key_info` - The user's public encryption key info.
-///
-pub fn mk_asset_key_material_with_new_sym_key(enc_key_info: EncryptKeyInfo) -> AssetKeyMaterial {
-    let aes_key = crypt::generate_aes_key();
-    let enc_aes_key = crypt::encrypt_aes_key(&aes_key, &enc_key_info.enc_key)
-        .unwrap()
-        .to_hex();
-    AssetKeyMaterial {
-        enc_key_info,
-        sym_key_info: SymmetricKeyInfo {
-            aes_key,
-            enc_aes_key,
-        },
+/// Parse "u:username:key_id" format into (KeyRecipient, key_id)
+fn parse_recipient_key_id(s: &str) -> Result<(KeyRecipient, String), String> {
+    if let Some(rest) = s.strip_prefix("u:") {
+        let parts: Vec<&str> = rest.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            return Ok((
+                KeyRecipient::User(parts[0].to_string()),
+                parts[1].to_string(),
+            ));
+        }
+    }
+    Err(format!("Invalid recipient_key_id format: {}", s))
+}
+
+#[derive(Clone, Debug)]
+/// Container for both the writer's AKM and all other AKMs for recipients
+/// whose private keys are unavailable. This is used to represent the full set
+/// AKM information stored in the asset metadata for encrypted assets.
+pub struct AssetKeyMaterial {
+    pub unlocked_akm: UnlockedAssetKeyMaterial,
+    pub locked_akms: Vec<LockedAssetKeyMaterial>,
+}
+
+impl AssetKeyMaterial {
+    /// Create new shared key material for multiple recipients.
+    /// The writer's EncryptKeyInfo comes first; they get the unlocked AKM.
+    pub fn new_for_recipients(
+        writer_enc_key: EncryptKeyInfo,
+        other_enc_keys: &[EncryptKeyInfo],
+    ) -> Result<Self, String> {
+        // Generate fresh AES key
+        let aes_key = crypt::generate_aes_key();
+
+        // Create writer's unlocked AKM
+        let enc_aes_key = crypt::encrypt_aes_key(&aes_key, &writer_enc_key.enc_key)
+            .map_err(|e| format!("Failed to encrypt AES key for writer: {}", e))?
+            .to_hex();
+        let writer_akm = UnlockedAssetKeyMaterial {
+            enc_key_info: writer_enc_key,
+            sym_key_info: SymmetricKeyInfo {
+                aes_key: aes_key.clone(),
+                enc_aes_key,
+            },
+        };
+
+        // Create locked AKMs for other recipients
+        let other_recipients = other_enc_keys
+            .iter()
+            .map(|enc_key| LockedAssetKeyMaterial::new(enc_key.clone(), &aes_key))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            unlocked_akm: writer_akm,
+            locked_akms: other_recipients,
+        })
+    }
+
+    /// Add a new recipient to this shared key material.
+    pub fn add_recipient(&mut self, enc_key_info: EncryptKeyInfo) -> Result<(), String> {
+        let locked =
+            LockedAssetKeyMaterial::new(enc_key_info, &self.unlocked_akm.sym_key_info.aes_key)?;
+        self.locked_akms.push(locked);
+        Ok(())
+    }
+
+    /// Get all recipient key infos for metadata serialization.
+    pub fn all_recipient_key_infos(&self) -> Vec<RecipientKeyInfo> {
+        let mut infos = vec![RecipientKeyInfo {
+            enc_key_id: self.unlocked_akm.enc_key_info.enc_key_id.clone(),
+            enc_aes_key_hex: self.unlocked_akm.sym_key_info.enc_aes_key.clone(),
+            recipient: self.unlocked_akm.enc_key_info.recipient.clone(),
+        }];
+        infos.extend(self.locked_akms.iter().map(|l| l.to_recipient_key_info()));
+        infos
+    }
+
+    /// Generate the `encrypted` metadata section.
+    pub fn to_encrypted_metadata_json(&self) -> serde_json::Value {
+        let mut infos = self.all_recipient_key_infos();
+        // Sort for stability
+        infos.sort_by(|a, b| a.recipient_key_id().cmp(&b.recipient_key_id()));
+
+        let keys: Vec<serde_json::Value> = infos
+            .iter()
+            .map(recipient_key_info_to_key_entry_json)
+            .collect();
+
+        serde_json::json!({
+            "algorithm": "AES-GCM",
+            "keys": keys
+        })
+    }
+
+    /// Reconstruct from metadata, unlocking only the current user's key.
+    pub fn from_metadata(
+        md_contents: &[u8],
+        current_recipient: &KeyRecipient,
+        sym_key_info: SymmetricKeyInfo,
+        current_enc_key_info: EncryptKeyInfo,
+    ) -> Result<Self, String> {
+        let md_json =
+            serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(md_contents))
+                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+
+        let enc_keys = md_json
+            .get("encrypted")
+            .and_then(|e| e.get("keys"))
+            .and_then(|k| k.as_array())
+            .ok_or("No encrypted.keys array")?;
+
+        let current_prefix = current_recipient.recipient_key_id_prefix();
+        let mut other_recipients = Vec::new();
+
+        for entry in enc_keys {
+            let recipient_key_id = entry
+                .get("recipient_key_id")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing recipient_key_id")?;
+
+            // Skip current user's entry (we already have it unlocked)
+            if recipient_key_id.starts_with(&current_prefix) {
+                continue;
+            }
+
+            other_recipients.push(LockedAssetKeyMaterial::from_metadata_entry(entry)?);
+        }
+
+        Ok(Self {
+            unlocked_akm: UnlockedAssetKeyMaterial {
+                enc_key_info: current_enc_key_info,
+                sym_key_info,
+            },
+            locked_akms: other_recipients,
+        })
     }
 }
 
@@ -714,19 +886,8 @@ pub async fn put_asset_encryption_metadata(
     asset_name: &str,
     akm_info: &AssetKeyMaterial,
 ) -> Result<(), String> {
-    let recipient_key_info = RecipientKeyInfo {
-        enc_key_id: akm_info.enc_key_info.enc_key_id.clone(),
-        enc_aes_key_hex: akm_info.sym_key_info.enc_aes_key.clone(),
-        recipient: akm_info.enc_key_info.recipient.clone(),
-    };
-    let recipient_key_entry = recipient_key_info_to_key_entry_json(&recipient_key_info);
     let md_contents = serde_json::json!({
-        "encrypted": {
-            "algorithm": "AES-GCM",
-            // NOTE: Use list in preparation for future with multiple
-            // recipients.
-            "keys": [recipient_key_entry]
-        },
+        "encrypted": akm_info.to_encrypted_metadata_json()
     })
     .to_string();
     use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
@@ -1128,6 +1289,112 @@ pub async fn choose_akm_for_asset(
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
     recipient: Option<&KeyRecipient>,
+    additional_recipients: &[KeyRecipient],
+    md_contents: Option<&[u8]>,
+    generate_akm_if_new: bool,
+) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
+    let Some(recipient) = recipient else {
+        return Ok(None);
+    };
+
+    // Case 1: Existing encrypted asset - reconstruct AssetKeyMaterial
+    if let Some(md_contents) = md_contents
+        && let Some(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
+    {
+        let sym_key_info = get_symmetric_key_ez(
+            asset_blob_cache.clone(),
+            asset_keyring.clone(),
+            &api_client,
+            &rec_key_info,
+        )
+        .await
+        .map_err(|e| AkmSelectionError::Abort(format!("{}", e)))?;
+
+        let enc_key_info = get_encryption_key(
+            asset_blob_cache.clone(),
+            &api_client,
+            recipient,
+            Some(&rec_key_info.enc_key_id),
+        )
+        .await
+        .map_err(|e| AkmSelectionError::Abort(e))?
+        .ok_or_else(|| {
+            AkmSelectionError::Abort(format!(
+                "encryption key {} not found",
+                rec_key_info.enc_key_id
+            ))
+        })?;
+
+        let mut akm =
+            AssetKeyMaterial::from_metadata(md_contents, recipient, sym_key_info, enc_key_info)
+                .map_err(|e| AkmSelectionError::Abort(e))?;
+
+        // Add any new recipients to existing asset
+        for additional in additional_recipients {
+            let add_enc_key_info =
+                get_encryption_key(asset_blob_cache.clone(), &api_client, additional, None)
+                    .await
+                    .map_err(|e| AkmSelectionError::Abort(e))?
+                    .ok_or_else(|| {
+                        AkmSelectionError::Abort(format!(
+                            "encryption key not found for {}",
+                            additional
+                        ))
+                    })?;
+
+            akm.add_recipient(add_enc_key_info)
+                .map_err(|e| AkmSelectionError::Abort(e))?;
+        }
+
+        return Ok(Some(akm));
+    }
+
+    // Case 2: New asset needing encryption - create fresh AssetKeyMaterial
+    if generate_akm_if_new {
+        let enc_key_info =
+            get_encryption_key(asset_blob_cache.clone(), &api_client, recipient, None)
+                .await
+                .map_err(|e| AkmSelectionError::Abort(e))?
+                .ok_or_else(|| {
+                    AkmSelectionError::Abort(
+                        "no encryption key found; generate one with /asset-crypt-setup".to_string(),
+                    )
+                })?;
+
+        // Fetch additional recipients' keys
+        let mut other_enc_keys = Vec::new();
+        for additional_recipient in additional_recipients {
+            let add_enc_key_info = get_encryption_key(
+                asset_blob_cache.clone(),
+                &api_client,
+                additional_recipient,
+                None,
+            )
+            .await
+            .map_err(|e| AkmSelectionError::Abort(e))?
+            .ok_or_else(|| {
+                AkmSelectionError::Abort(format!(
+                    "encryption key not found for {}",
+                    additional_recipient
+                ))
+            })?;
+            other_enc_keys.push(add_enc_key_info);
+        }
+
+        let akm = AssetKeyMaterial::new_for_recipients(enc_key_info, &other_enc_keys)
+            .map_err(|e| AkmSelectionError::Abort(e))?;
+
+        return Ok(Some(akm));
+    }
+
+    Ok(None)
+}
+/*
+pub async fn choose_akm_for_asset(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: HaiClient,
+    recipient: Option<&KeyRecipient>,
     md_contents: Option<&[u8]>,
     generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
@@ -1187,7 +1454,7 @@ pub async fn choose_akm_for_asset(
     } else {
         Ok(None)
     }
-}
+}*/
 
 pub async fn choose_akm_for_asset_by_name(
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -1197,7 +1464,9 @@ pub async fn choose_akm_for_asset_by_name(
     asset_name: &str,
     force_generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
-    let generate_akm_if_new = asset_name.starts_with("vault/") || force_generate_akm_if_new;
+    let generate_akm_if_new = asset_name.starts_with("vault/")
+        || asset_name.starts_with("/s/")
+        || force_generate_akm_if_new;
     let md_contents = match asset_reader::get_only_asset_metadata(
         asset_blob_cache.clone(),
         &api_client,
@@ -1218,13 +1487,51 @@ pub async fn choose_akm_for_asset_by_name(
         },
     };
 
+    let additional_recipients = extract_usernames_from_shared_asset(asset_name)
+        .into_iter()
+        .map(|username| KeyRecipient::User(username.to_string()))
+        .filter(|r| Some(r) != recipient)
+        .collect::<Vec<_>>();
+
     choose_akm_for_asset(
         asset_blob_cache,
         asset_keyring,
         api_client,
         recipient,
+        &additional_recipients,
         md_contents.as_deref(),
         generate_akm_if_new,
     )
     .await
+}
+
+fn extract_usernames_from_shared_asset(asset_name: &str) -> Vec<&str> {
+    // Check if path starts with "/s/"
+    if !asset_name.starts_with("/s/") {
+        return Vec::new();
+    }
+
+    // Get everything after "/s/"
+    let after_prefix = &asset_name[3..];
+
+    // Get the second component (first component after "/s/")
+    let second_component = after_prefix.split('/').next().unwrap_or("");
+
+    // Split by '+' and collect non-empty parts
+    second_component
+        .split('+')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+pub fn extract_key_recipients_from_shared_asset_name(
+    asset_name: &str,
+    ignore_username: &str,
+) -> Vec<KeyRecipient> {
+    extract_usernames_from_shared_asset(asset_name)
+        .into_iter()
+        .filter(|username| username != &ignore_username)
+        .map(|username| KeyRecipient::User(username.to_string()))
+        .collect()
 }

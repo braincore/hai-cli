@@ -404,6 +404,23 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_pool_create_shared(
+        &self,
+        arg: asset::AssetPoolCreateSharedArg,
+    ) -> Result<asset::AssetPoolCreateSharedResult, RequestError<asset::AssetPoolCreateSharedError>>
+    {
+        self.mk_api_request::<_, _, _>("/asset/pool/create_shared", &arg)
+            .await
+    }
+
+    pub async fn asset_pool_list(
+        &self,
+        arg: (),
+    ) -> Result<asset::AssetPoolListResult, RequestError<()>> {
+        self.mk_api_request::<_, _, _>("/asset/pool/list", &arg)
+            .await
+    }
+
     pub async fn messaging_email_recipient_send(
         &self,
         arg: messaging::EmailRecipientSendArg,

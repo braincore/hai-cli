@@ -1734,8 +1734,12 @@ pub async fn process_cmd(
                                 session.asset_keyring.clone(),
                                 api_client.clone(),
                                 Some(&KeyRecipient::User(username.clone())),
+                                &asset_crypt::extract_key_recipients_from_shared_asset_name(
+                                    &asset_name,
+                                    &username,
+                                ),
                                 md_contents.as_deref(),
-                                asset_name.starts_with("vault/"),
+                                asset_name.starts_with("vault/") || asset_name.starts_with("/s/"),
                             )
                             .await
                             {
@@ -1756,7 +1760,7 @@ pub async fn process_cmd(
                                 (
                                     crypt::decrypt_content(
                                         &enc_content,
-                                        &akm_info.sym_key_info.aes_key,
+                                        &akm_info.unlocked_akm.sym_key_info.aes_key,
                                     )
                                     .unwrap(),
                                     asset_entry,
@@ -1772,8 +1776,12 @@ pub async fn process_cmd(
                                 session.asset_keyring.clone(),
                                 api_client.clone(),
                                 Some(&KeyRecipient::User(username.clone())),
+                                &asset_crypt::extract_key_recipients_from_shared_asset_name(
+                                    &asset_name,
+                                    &username,
+                                ),
                                 None,
-                                asset_name.starts_with("vault/"),
+                                asset_name.starts_with("vault/") || asset_name.starts_with("/s/"),
                             )
                             .await
                             {
@@ -1826,7 +1834,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             let asset_name = resolve_asset_name(&asset_name, session);
-            if asset_helper::get_invalid_asset_name_re().is_match(&asset_name) {
+            if !asset_helper::is_likely_valid_asset_name(&asset_name) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
                 // user won't be aware that their new asset didn't save.
@@ -1927,6 +1935,7 @@ pub async fn process_cmd(
                 session.asset_keyring.clone(),
                 api_client.clone(),
                 Some(&KeyRecipient::User(username.clone())),
+                &asset_crypt::extract_key_recipients_from_shared_asset_name(&asset_name, &username),
                 md_contents.as_deref(),
                 false,
             )
@@ -1945,7 +1954,8 @@ pub async fn process_cmd(
 
             let decrypted_asset_contents = if let Some(akm_info) = &akm_info {
                 let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
-                crypt::decrypt_content(&enc_content, &akm_info.sym_key_info.aes_key).unwrap()
+                crypt::decrypt_content(&enc_content, &akm_info.unlocked_akm.sym_key_info.aes_key)
+                    .unwrap()
             } else {
                 asset_contents.clone()
             };
@@ -3994,6 +4004,52 @@ pub async fn process_cmd(
             .await;
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetPoolNew(cmd::AssetPoolNewCmd { usernames }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            use crate::api::types::asset::AssetPoolCreateSharedArg;
+            match api_client
+                .asset_pool_create_shared(AssetPoolCreateSharedArg {
+                    usernames: usernames.clone(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    println!("Asset pool mounted at {}", res.mount_point);
+                }
+                Err(e) => {
+                    eprintln!("error: failed to create asset pool: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetPools => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            match api_client.asset_pool_list(()).await {
+                Ok(res) => {
+                    if res.pools.is_empty() {
+                        println!("[no asset pools]");
+                    } else {
+                        for pool in res.pools {
+                            if pool.mount_point.starts_with("/s/") {
+                                println!("{}", pool.mount_point);
+                            }
+                        }
+                    }
+                }
+                Err(_) => {
+                    eprintln!("error: failed to list asset pools");
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Chats => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
@@ -5506,7 +5562,7 @@ pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::e
 /// 1. Expands public asset names (//) to explicitly include the username.
 /// 2. Resolves quick variables ($) to their values in the session.
 fn resolve_asset_name(asset_name: &str, session: &SessionState) -> String {
-    let expanded = expand_pub_asset_name(asset_name, &session.account);
+    let expanded = expand_asset_name(asset_name, &session.account);
     resolve_quick_var(&expanded, session).unwrap_or(expanded)
 }
 
@@ -5522,6 +5578,28 @@ pub fn expand_pub_asset_name(asset_name: &str, account: &Option<crate::db::Accou
     } else {
         asset_name.to_string()
     }
+}
+
+/// If an asset-key begins with `/s/+`..., the current logged-in user's username
+/// is added: `/s/<username>+...`.
+pub fn expand_shared_pool_asset_name(
+    asset_name: &str,
+    account: &Option<crate::db::Account>,
+) -> String {
+    if asset_name.starts_with("/s/+") {
+        if let Some(account) = account {
+            format!("/s/{}+{}", account.username, &asset_name[4..])
+        } else {
+            asset_name.to_string()
+        }
+    } else {
+        asset_name.to_string()
+    }
+}
+
+/// Expands `//` and `/s/+` prefixes in asset names.
+pub fn expand_asset_name(asset_name: &str, account: &Option<crate::db::Account>) -> String {
+    expand_shared_pool_asset_name(&expand_pub_asset_name(asset_name, account), account)
 }
 
 pub fn resolve_quick_var(asset_name: &str, session: &SessionState) -> Option<String> {

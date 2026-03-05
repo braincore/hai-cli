@@ -9,6 +9,36 @@ pub fn get_invalid_asset_name_re() -> &'static Regex {
     })
 }
 
+/// Checks for whitespace, control chars, and symbols.
+/// Does not check for confusable homoglyphs.
+pub fn is_likely_valid_asset_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    if name.contains(char::is_whitespace) {
+        return false;
+    }
+    if name.chars().any(|c| c.is_control()) {
+        return false;
+    }
+
+    // For /s/ paths, skip the user segment and only validate the rest
+    let to_validate = if let Some(after_s) = name.strip_prefix("/s/") {
+        // Find the end of the user segment
+        match after_s.split_once('/') {
+            Some((_, rest)) => rest,
+            None => "", // Just "/s/<users>" with no relpath - nothing more to validate
+        }
+    } else {
+        name
+    };
+
+    if !to_validate.is_empty() && get_invalid_asset_name_re().is_match(to_validate) {
+        return false;
+    }
+    true
+}
+
 /// Constructs the publicly accessible URL for an asset.
 pub fn get_public_asset_url(asset_name: &str) -> Option<String> {
     let (username, asset_path) = if asset_name.starts_with("/")

@@ -150,6 +150,10 @@ pub enum Cmd {
     AssetCryptRecover(AssetCryptRecoverCmd),
     /// Launch an asset-based app in the browser
     AssetApp(AssetAppCmd),
+    /// Create a new asset-pool shared between users
+    AssetPoolNew(AssetPoolNewCmd),
+    /// List asset pools
+    AssetPools,
     /// List chats and prompt for resumption
     Chats,
     /// Resume a chat
@@ -684,6 +688,12 @@ pub struct AssetCryptLockCmd {
 pub struct AssetAppCmd {
     /// Name of the asset
     pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetPoolNewCmd {
+    /// List of usernames
+    pub usernames: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2184,6 +2194,24 @@ fn parse_command(
                     None
                 }
             }
+        }
+        "asset-pool-new" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_n_args(remaining) {
+                Some(usernames) => Some(Cmd::AssetPoolNew(AssetPoolNewCmd { usernames })),
+                None => {
+                    eprintln!("Usage: /{cmd_name} <username> [<username> ...]");
+                    None
+                }
+            }
+        }
+        "asset-pools" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::AssetPools)
         }
         "chats" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
