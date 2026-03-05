@@ -116,7 +116,7 @@ pub async fn worker_update_asset(
                 }
                 let (new_hash_str, new_contents) = if let Some(akm_info) = akm_info.as_ref() {
                     let enc_content = crate::feature::asset_crypt::encrypt_asset_with_aes_key(
-                        &akm_info.sym_key_info.aes_key,
+                        &akm_info.unlocked_akm.sym_key_info.aes_key,
                         &new_contents,
                     );
                     (

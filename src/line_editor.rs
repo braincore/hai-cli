@@ -1026,7 +1026,43 @@ impl CmdAndFileCompleter {
 
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix =
-            crate::cmd_processor::expand_pub_asset_name(asset_prefix, &self.account);
+            crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
+        if asset_prefix.starts_with("/s/") && asset_prefix.matches('/').count() == 2 {
+            // If prefix is querying /s/, auto-complete asset pools.
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.api_client.asset_pool_list(()))
+            });
+            match result {
+                Ok(res) => {
+                    let mut sorted_pools = res.pools;
+                    sorted_pools
+                        .sort_by(|a, b| human_sort::compare(&a.mount_point, &b.mount_point));
+                    let mut completions = Vec::new();
+                    for pool in sorted_pools {
+                        if pool.mount_point.starts_with(&expanded_asset_prefix) {
+                            completions.push(Suggestion {
+                                value: pool.mount_point.clone(),
+                                description: None,
+                                style: None,
+                                extra: None,
+                                // Replace entirety of existing contents
+                                span: Span {
+                                    start: 0,
+                                    end: asset_prefix.len(),
+                                },
+                                append_whitespace: false,
+                                match_indices: None,
+                            });
+                        }
+                    }
+                    return completions;
+                }
+                Err(_) => {
+                    eprintln!("error: failed to list asset pools");
+                    return vec![];
+                }
+            }
+        }
         use crate::api::types::asset::{AssetEntryListArg, EntryListOrder};
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
