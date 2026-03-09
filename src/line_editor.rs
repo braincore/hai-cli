@@ -379,6 +379,13 @@ fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
     re.is_match(line)
 }
 
+fn is_cmd_input(line: &str, cmd: &str) -> bool {
+    line == cmd
+        || line.starts_with(&format!("{} ", cmd))
+        || line.starts_with(&format!("{}(", cmd))
+        || line.starts_with(&format!("{}.", cmd))
+}
+
 /// # Arguments
 ///
 /// - `line` -  The input line to process.
@@ -534,10 +541,10 @@ impl Completer for CmdAndFileCompleter {
         // Auto-completion never looks ahead of the cursor.
         let line = &line[..pos];
         let (completions, fallback_ok) = if line.starts_with('/') || line.starts_with("!!") {
-            if line.starts_with("/load ")
-                || line.starts_with("/l ")
-                || line.starts_with("/cd ")
-                || line.starts_with("/task-publish ")
+            if is_cmd_input(line, "/load")
+                || is_cmd_input(line, "/l")
+                || is_cmd_input(line, "/cd")
+                || is_cmd_input(line, "/task-publish")
                 || is_task_file_path_arg(line, "/t")
                 || is_task_file_path_arg(line, "/task")
                 || is_task_file_path_arg(line, "/task-include")
@@ -556,14 +563,14 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.file_completer2(arg1_prefix, cmd_word == "/cd");
                 realign_suggestions(&mut completions, arg1_index, self.debug);
                 (completions, false)
-            } else if line.starts_with("/task ")
-                || line.starts_with("/t ")
-                || line.starts_with("/task-view ")
-                || line.starts_with("/task-edit ")
-                || line.starts_with("/task-purge ")
-                || line.starts_with("/task-forget ")
-                || line.starts_with("/task-fetch ")
-                || line.starts_with("/task-update ")
+            } else if is_cmd_input(line, "/task")
+                || is_cmd_input(line, "/t")
+                || is_cmd_input(line, "/task-view")
+                || is_cmd_input(line, "/task-edit")
+                || is_cmd_input(line, "/task-purge")
+                || is_cmd_input(line, "/task-forget")
+                || is_cmd_input(line, "/task-fetch")
+                || is_cmd_input(line, "/task-update")
             {
                 let (cmd_word, arg_prefix) = line
                     .split_once(" ")
@@ -576,7 +583,7 @@ impl Completer for CmdAndFileCompleter {
                 let completions =
                     self.task_completer(line.len(), cmd_word.len(), arg_prefix, arg_index);
                 (completions, false)
-            } else if line.starts_with("/ai ") {
+            } else if is_cmd_input(line, "/ai") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions = self.simple_completer(
                     arg_prefix,
@@ -588,26 +595,26 @@ impl Completer for CmdAndFileCompleter {
                 );
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
-            } else if line.starts_with("/std ") {
+            } else if is_cmd_input(line, "/std") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions =
                     self.simple_completer(arg_prefix, &["now", "new-day-alert", "which"]);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
-            } else if line.starts_with("/asset ")
-                || line.starts_with("/a ")
-                || line.starts_with("/asset-edit ")
-                || line.starts_with("/asset-temp ")
-                || line.starts_with("/asset-push ")
-                || line.starts_with("/asset-link ")
-                || line.starts_with("/asset-revisions ")
-                || line.starts_with("/asset-remove ")
-                || line.starts_with("/asset-list ")
-                || line.starts_with("/ls ")
-                || line.starts_with("/asset-md-get ")
-                || line.starts_with("/asset-listen ")
-                || line.starts_with("/asset-app ")
-                || line.starts_with("/chat-resume ")
+            } else if is_cmd_input(line, "/asset")
+                || is_cmd_input(line, "/a")
+                || is_cmd_input(line, "/asset-edit")
+                || is_cmd_input(line, "/asset-temp")
+                || is_cmd_input(line, "/asset-push")
+                || is_cmd_input(line, "/asset-link")
+                || is_cmd_input(line, "/asset-revisions")
+                || is_cmd_input(line, "/asset-remove")
+                || is_cmd_input(line, "/asset-list")
+                || is_cmd_input(line, "/ls")
+                || is_cmd_input(line, "/asset-md-get")
+                || is_cmd_input(line, "/asset-listen")
+                || is_cmd_input(line, "/asset-app")
+                || is_cmd_input(line, "/chat-resume")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 if self.debug {
@@ -623,10 +630,10 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, true)
-            } else if line.starts_with("/asset-load ")
-                || line.starts_with("/asset-view ")
-                || line.starts_with("/asset-move")
-                || line.starts_with("/asset-copy")
+            } else if is_cmd_input(line, "/asset-load")
+                || is_cmd_input(line, "/asset-view")
+                || is_cmd_input(line, "/asset-move")
+                || is_cmd_input(line, "/asset-copy")
             {
                 let (cmd_word, _ignored_args, arg_prefix, arg_index) = split_cmd_and_last_arg(line);
                 if self.debug {
@@ -642,7 +649,7 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
-            } else if line.starts_with("/exec ") || line.starts_with("!!") {
+            } else if is_cmd_input(line, "/exec") || is_cmd_input(line, "!!") {
                 let (cur_token_id, cur_token, cur_token_offset) = get_current_token(line);
                 if cur_token_id == 1 {
                     // Handle executables
@@ -669,7 +676,7 @@ impl Completer for CmdAndFileCompleter {
                         (completions, false)
                     }
                 }
-            } else if line.starts_with("/asset-export ") || line.starts_with("/asset-import ") {
+            } else if is_cmd_input(line, "/asset-export") || is_cmd_input(line, "/asset-import") {
                 let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
                 let cmd_length = cmd_word.len();
                 let (arg1_prefix, arg2_prefix) = arg_prefix
