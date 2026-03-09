@@ -5122,7 +5122,9 @@ const HELP_MSG: &str = r##"Available Commands:
                                (>), the output will be uploaded as an asset.
 !!<cmd>                      - Alternative to `/exec` not to be confused with tools.
 /prep                        - Queue a message to be sent with your next message (or, end with two blank lines)
+                               .{danger,warn,info,success}=BOOL   Accent color (default: none)
 /pin                         - Like /prep but the message is retained on /reset
+                               .{danger,warn,info,success}=BOOL   Accent color (default: none)
 /system-prompt               - Set a system prompt for the conversation
 /clip                        - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
 /forget [<n>]                - Forget the last <n> messages in the conversation. Defaults to 1.

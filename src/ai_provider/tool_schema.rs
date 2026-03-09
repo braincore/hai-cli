@@ -301,9 +301,10 @@ Available Commands:
                         be uploaded to the `@@name` asset obviating `/asset-export`.
                         .cache=BOOL  Cache the result for the next execution (default: false)
 /prep <msg>           - Add message to converation without prompting AI for response.
-/prep(<accent>) <msg> - Adds message with accent color: danger, warn, info, success
+                        .{danger,warn,info,success}=BOOL   Accent color (default: none)
+/prep <msg>           - Adds message with accent color: danger, warn, info, success
 /pin                  - Like /prep but the message is retained on /reset
-/pin(<accent>) <msg>  - Add /pin with accent color: danger, warn, info, success
+                        .{danger,warn,info,success}=BOOL   Accent color (default: none)
 /clip                 - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
 
 --
