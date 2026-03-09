@@ -664,10 +664,10 @@ impl Completer for CmdAndFileCompleter {
                     (completions, true)
                 } else {
                     // Find/extract current token
-                    // If the token starts with '@', it's an asset lookup
-                    if let Some(asset_prefix) = cur_token.strip_prefix('@') {
+                    // If the token starts with '@@', it's an asset lookup
+                    if let Some(asset_prefix) = cur_token.strip_prefix("@@") {
                         let mut completions = self.asset_completer(asset_prefix);
-                        realign_suggestions(&mut completions, cur_token_offset + 1, self.debug);
+                        realign_suggestions(&mut completions, cur_token_offset + 2, self.debug);
                         (completions, false)
                     } else {
                         // Fallback to file completion
@@ -756,10 +756,10 @@ impl Completer for CmdAndFileCompleter {
                 ));
             }
 
-            // If the token starts with '@', complete with assets
-            if let Some(asset_prefix) = current_token.strip_prefix('@') {
+            // If the token starts with '@@', complete with assets
+            if let Some(asset_prefix) = current_token.strip_prefix("@@") {
                 let mut completions = self.asset_completer(asset_prefix);
-                realign_suggestions(&mut completions, arg_index + 1, self.debug);
+                realign_suggestions(&mut completions, arg_index + 2, self.debug);
                 completions
             } else {
                 // Fallback to file completion

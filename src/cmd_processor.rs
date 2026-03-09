@@ -5117,7 +5117,7 @@ const HELP_MSG: &str = r##"Available Commands:
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                                .raw=BOOL  Return raw content rather than extracting markdown (default: false)
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
-                               @asset can be used in place of file paths. These assets will be
+                               @@asset can be used in place of file paths. These assets will be
                                transparently downloaded. If specified as a shell output redirect
                                (>), the output will be uploaded as an asset.
 !!<cmd>                      - Alternative to `/exec` not to be confused with tools.

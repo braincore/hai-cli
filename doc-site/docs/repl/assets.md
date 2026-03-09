@@ -263,13 +263,13 @@ Examples:
 
 ## Usage with `/exec`
 
-When executing a shell command, use `@name` to reference an asset. The asset
+When executing a shell command, use `@@name` to reference an asset. The asset
 will be transparently downloaded into a temporary file.
 
 ```
-[0] !!cat @/hai/changelog | grep -A 2 v1.3.0
+[0] !!cat @@/hai/changelog | grep -A 2 v1.3.0
 equivalent to:
-[0] !!grep -A 2 v1.3.0 @/hai/changelog
+[0] !!grep -A 2 v1.3.0 @@/hai/changelog
 ```
 
 ```
@@ -280,11 +280,11 @@ equivalent to:
 
 Note: `!!` is shorthand for `/exec`.
 
-If a shell redirects (`>` or `>>`) to an @asset, the output file will be
+If a shell redirects (`>` or `>>`) to an @@asset, the output file will be
 uploaded as well.
 
 ```
-[0] !!grep -A 2 v1.3.0 @/hai/changelog > @changes-v1.3.0
+[0] !!grep -A 2 v1.3.0 @@/hai/changelog > @@changes-v1.3.0
 ```
 
 This processes a public asset from the `hai` account and saves a filtered

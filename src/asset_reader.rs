@@ -518,9 +518,9 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     cmd: &str,
     max_concurrent_downloads: usize,
 ) -> Result<(String, AssetTempFileMap, HashSet<String>), String> {
-    let asset_regex = Regex::new(r"@([^\s]+)").expect("Invalid regex");
-    let append_regex = Regex::new(r">>\s*@([^\s]+)").expect("Invalid regex");
-    let output_regex = Regex::new(r"(?:>|>>)\s*@([^\s]+)").expect("Invalid regex");
+    let asset_regex = Regex::new(r"@@([^\s]+)").expect("Invalid regex");
+    let append_regex = Regex::new(r">>\s*@@([^\s]+)").expect("Invalid regex");
+    let output_regex = Regex::new(r"(?:>|>>)\s*@@([^\s]+)").expect("Invalid regex");
 
     let mut append_assets = HashSet::new();
     let mut output_assets = HashSet::new();
@@ -555,7 +555,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     // Identify input assets (may overlap with output assets) separately since
     // they must be downloaded.
     let input_assets: HashSet<String> = {
-        let output_redirection_regex = Regex::new(r">>?\s*@[^\s]+").expect("Invalid regex");
+        let output_redirection_regex = Regex::new(r">>?\s*@@[^\s]+").expect("Invalid regex");
         let cmd_without_outputs = output_redirection_regex.replace_all(cmd, "");
 
         asset_regex

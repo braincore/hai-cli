@@ -294,11 +294,11 @@ Available Commands:
                         .raw=BOOL Return raw content rather than extracting markdown (default: false)
 /exec <cmd>           - Executes a shell command and adds the output to this conversation.
                         The <cmd> can be treated as a bash shell command. One deviation
-                        is the use of `@name` where a file would typically be specified.
-                        `@name` will transparently be converted to the referenced asset
+                        is the use of `@@name` where a file would typically be specified.
+                        `@@name` will transparently be converted to the referenced asset
                         by `name` which avoids the need to `/asset-import` them to the
-                        local filesystem. Shell output redirection (>) to `@name` will
-                        be uploaded to the `@name` asset avoiding `/asset-export`.
+                        local filesystem. Shell output redirection (>) to `@@name` will
+                        be uploaded to the `@@name` asset obviating `/asset-export`.
                         .cache=BOOL  Cache the result for the next execution (default: false)
 /prep <msg>           - Add message to converation without prompting AI for response.
 /prep(<accent>) <msg> - Adds message with accent color: danger, warn, info, success
