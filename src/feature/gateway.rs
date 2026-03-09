@@ -1605,6 +1605,60 @@ async fn handle_client_message(
                 }
             }
         }
+        "asset/pool/create_shared" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let create_shared_arg: asset::AssetPoolCreateSharedArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            match api_client.asset_pool_create_shared(create_shared_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetPoolCreateSharedResult,
+                        asset::AssetPoolCreateSharedError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/pool/list" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            match api_client.asset_pool_list(()).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<asset::AssetPoolListResult, ()> =
+                        ClientMessageResponse::Ok {
+                            mid: mid.clone(),
+                            result: res,
+                        };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
         "account/whoami" => {
             let json_string = format!(
                 r#"{{"type":"ok","mid":{},"result":{{"username":{}}}}}"#,
