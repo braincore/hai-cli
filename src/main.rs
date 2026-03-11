@@ -1189,7 +1189,7 @@ async fn repl(
             for ai_response in &ai_responses {
                 if let chat::ChatCompletionResponse::Tool {
                     tool_id,
-                    tool_name,
+                    tool_name: _,
                     arg,
                 } = &ai_response
                 {
@@ -1197,26 +1197,7 @@ async fn repl(
                     println!("{}", "⚙ ⚙ ⚙".white().on_black());
                     println!();
 
-                    // The combined policy is a byproduct of pecularities in
-                    // Anthropic's API. Once a tool is used once in a conversation,
-                    // it can be used again by the AI and there's no way to disable
-                    // it. The tool cannot be removed from tool-schemas either once
-                    // it has appeared in the message history. This means that
-                    // tool_policy could be None, but the AI will still respond
-                    // with tool use. The "combined" policy accommodates the logic
-                    // for these over-zealous recommendations. Unfortunately, this
-                    // logic is still inadequate as the use of a tool that doesn't
-                    // match the tool policy may be a poor approximation of the
-                    // original one used (FIXME).
-                    let inexact_tool = ai_provider::tool_schema::get_tool_from_name(tool_name);
-                    let tool_policy_combined = tool_policy.clone().or_else(|| {
-                        inexact_tool.map(|tool| tool::ToolPolicy {
-                            tool,
-                            user_confirmation: false,
-                            force_tool: false,
-                            agentic: session.agentic,
-                        })
-                    });
+                    let tool_policy = tool_policy.clone();
 
                     // The tools that don't need user-confirmation are those that
                     // don't have destructive potential. !fn-py only assigns a
@@ -1224,14 +1205,14 @@ async fn repl(
                     // it's more of a nuisance. Also, the prompting of the AI may
                     // still require user confirmation.
                     let tool_needs_user_confirmation = !matches!(
-                        tool_policy_combined,
+                        tool_policy,
                         Some(tool::ToolPolicy {
                             tool: tool::Tool::Fn(_) | tool::Tool::CopyToClipboard,
                             ..
                         })
                     );
                     // If the tool is a no-op, then it doesn't need user confirmation.
-                    let tool_noops = match tool_policy_combined {
+                    let tool_noops = match tool_policy {
                         Some(tool::ToolPolicy {
                             tool: tool::Tool::HaiRepl,
                             ..
@@ -1249,7 +1230,7 @@ async fn repl(
 
                     // The negation of the policy to require the AI to use a tool
                     // doubles as a way to require user confirmation.
-                    let tool_policy_needs_user_confirmation = tool_policy_combined
+                    let tool_policy_needs_user_confirmation = tool_policy
                         .clone()
                         .map(|tp| tp.user_confirmation)
                         .unwrap_or(false);
@@ -1289,7 +1270,7 @@ async fn repl(
                         true
                     };
 
-                    if user_confirmed_tool_execute && let Some(ref tp) = tool_policy_combined {
+                    if user_confirmed_tool_execute && let Some(ref tp) = tool_policy {
                         let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
                             println!("Tool Interrupted");
                         });

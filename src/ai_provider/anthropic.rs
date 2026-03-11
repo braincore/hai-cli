@@ -2,11 +2,11 @@ use colored::*;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::{get_tool_from_name, get_tool_name, get_tool_schema};
+use crate::ai_provider::tool_schema::{get_tool_name, get_tool_schema};
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config;
@@ -150,45 +150,16 @@ pub async fn send_to_anthropic(
 
     // Create the JSON payload
     let mut tool_schemas = vec![];
-
-    let mut tools_added = HashSet::new();
-    for message in history {
-        if let Some(ref tool_calls) = message.tool_calls {
-            for tool_call in tool_calls {
-                if tools_added.contains(&tool_call.function.name) {
-                    continue;
-                }
-                tools_added.insert(tool_call.function.name.clone());
-                // WARN: If a shell-exec-with-{file,stdin} was used previously,
-                // this recreation of the tool-schema will be highly inaccurate
-                // since shell-cmd is not populated by get_tool_from_name()!
-                // WARN: There's a serious issue if the name isn't present
-                if let Some(tool) = get_tool_from_name(&tool_call.function.name) {
-                    tool_schemas.push(get_tool_schema(
-                        &tool,
-                        "input_schema",
-                        shell,
-                        tool_policy.map_or(false, |tp| tp.agentic),
-                    ));
-                }
-            }
-        }
-    }
     let tool_choice = if let Some(tp) = tool_policy {
         let tool_name = get_tool_name(&tp.tool);
-        if !tools_added.contains(tool_name) {
-            tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell, tp.agentic))
-        }
+        tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell, tp.agentic));
         if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))
         } else {
             Some(json!({"type": "auto"}))
         }
     } else {
-        // This is for the case where there's no `tool_policy` but tool schemas
-        // are added due to the history. Ideally, we'd force tool_choice off
-        // but that isn't an option.
-        Some(json!({"type": "auto"}))
+        None
     };
     let mut request_body = if tool_schemas.is_empty() {
         json!({

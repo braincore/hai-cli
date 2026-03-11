@@ -513,43 +513,6 @@ pub fn get_tool_name(tool: &Tool) -> &str {
     }
 }
 
-/// WARN: Returns a best-effort Tool object from just the name of the tool as
-/// specified in function-calling APIs. For certain tools, this returns a tool
-/// of the correct type but with dummy internal data.
-pub fn get_tool_from_name(name: &str) -> Option<Tool> {
-    match name {
-        "hai_repl" => Some(Tool::HaiRepl),
-        "copy_to_clipboard" => Some(Tool::CopyToClipboard),
-        "exec_python_script" => Some(Tool::ExecPythonScript),
-        "exec_python_uv_script" => Some(Tool::ExecPythonUvScript),
-        // Replaced by `shell_script_exec`
-        "exec_shell_script" => Some(Tool::ShellScriptExec),
-        "fn_py" => Some(Tool::Fn(FnTool {
-            kind: FnToolType::FnPy,
-            name: None,
-        })),
-        "fn_pyuv" => Some(Tool::Fn(FnTool {
-            kind: FnToolType::FnPyUv,
-            name: None,
-        })),
-        "fn_sh" => Some(Tool::Fn(FnTool {
-            kind: FnToolType::FnSh,
-            name: None,
-        })),
-        "html" => Some(Tool::Html),
-        // Replaced by `shell_script_exec`
-        "shell_exec" => Some(Tool::ShellScriptExec),
-        "shell_exec_with_file" => Some(Tool::ShellExecWithFile("UNKNOWN".to_string(), None)),
-        // This is deprecated, but included for compatibility with old saved
-        // chats.
-        "shell_exec_with_script" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
-        "shell_exec_with_stdin" => Some(Tool::ShellExecWithStdin("UNKNOWN".to_string())),
-        "shell_script_exec" => Some(Tool::ShellScriptExec),
-
-        _ => None,
-    }
-}
-
 /// Must be kept in sync with tool:get_tool_sytax_highlighter_lang_token.
 /// Useful when interpretting old AI chat history where the tool::Tool object
 /// is no longer available but a string representation of the tool name is.
