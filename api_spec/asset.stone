@@ -74,6 +74,10 @@ union AssetPutError
     no_permission
     name_conflict
         "Only returned if conflict policy is set to reject."
+    name_prefix_conflict
+        "Returned if the :field:`AssetPutArg.name` would make this new asset
+        a directory prefix of an existing asset, or would make an existing
+        asset simultaneously a file and directory."
     over_quota
 
 union AssetEntryOp
@@ -174,6 +178,7 @@ union AssetMoveError
     no_permission
     target_bad_name
     target_name_conflict
+    target_name_prefix_conflict
     asset_pool_mismatch
         "Assets cannot be moved across asset pools."
 
@@ -407,6 +412,14 @@ struct AssetPushResult
 union AssetPushError
     bad_name
     no_permission
+    name_conflict
+        "Returned in rare instances where the push is responsible for asset
+        creation and the request loses a race with another push."
+    name_prefix_conflict
+        "Returned if the push is responsible for asset creation and the
+        :field:`AssetPushArg.name` would make this new asset a directory prefix
+        of an existing asset, or would make an existing asset simultaneously a
+        file and directory."
     over_quota
 
 # --

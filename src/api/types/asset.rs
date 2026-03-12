@@ -3299,6 +3299,7 @@ pub enum AssetMoveError {
     NoPermission,
     TargetBadName,
     TargetNameConflict,
+    TargetNamePrefixConflict,
     /// Assets cannot be moved across asset pools.
     AssetPoolMismatch,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
@@ -3326,6 +3327,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
                     "no_permission" => AssetMoveError::NoPermission,
                     "target_bad_name" => AssetMoveError::TargetBadName,
                     "target_name_conflict" => AssetMoveError::TargetNameConflict,
+                    "target_name_prefix_conflict" => AssetMoveError::TargetNamePrefixConflict,
                     "asset_pool_mismatch" => AssetMoveError::AssetPoolMismatch,
                     _ => AssetMoveError::Other,
                 };
@@ -3338,6 +3340,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
             "no_permission",
             "target_bad_name",
             "target_name_conflict",
+            "target_name_prefix_conflict",
             "asset_pool_mismatch",
             "other",
         ];
@@ -3372,6 +3375,12 @@ impl ::serde::ser::Serialize for AssetMoveError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
                 s.serialize_field(".tag", "target_name_conflict")?;
+                s.end()
+            }
+            AssetMoveError::TargetNamePrefixConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "target_name_prefix_conflict")?;
                 s.end()
             }
             AssetMoveError::AssetPoolMismatch => {
@@ -4945,6 +4954,13 @@ impl ::serde::ser::Serialize for AssetPushArg {
 pub enum AssetPushError {
     BadName,
     NoPermission,
+    /// Returned in rare instances where the push is responsible for asset creation and the request
+    /// loses a race with another push.
+    NameConflict,
+    /// Returned if the push is responsible for asset creation and the
+    /// [`AssetPushArg::name`](AssetPushArg) would make this new asset a directory prefix of an
+    /// existing asset, or would make an existing asset simultaneously a file and directory.
+    NamePrefixConflict,
     OverQuota,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
@@ -4969,6 +4985,8 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
                 let value = match tag {
                     "bad_name" => AssetPushError::BadName,
                     "no_permission" => AssetPushError::NoPermission,
+                    "name_conflict" => AssetPushError::NameConflict,
+                    "name_prefix_conflict" => AssetPushError::NamePrefixConflict,
                     "over_quota" => AssetPushError::OverQuota,
                     _ => AssetPushError::Other,
                 };
@@ -4976,7 +4994,14 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["bad_name", "no_permission", "over_quota", "other"];
+        const VARIANTS: &[&str] = &[
+            "bad_name",
+            "no_permission",
+            "name_conflict",
+            "name_prefix_conflict",
+            "over_quota",
+            "other",
+        ];
         deserializer.deserialize_struct("AssetPushError", VARIANTS, EnumVisitor)
     }
 }
@@ -4998,6 +5023,18 @@ impl ::serde::ser::Serialize for AssetPushError {
                 s.serialize_field(".tag", "no_permission")?;
                 s.end()
             }
+            AssetPushError::NameConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPushError", 1)?;
+                s.serialize_field(".tag", "name_conflict")?;
+                s.end()
+            }
+            AssetPushError::NamePrefixConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPushError", 1)?;
+                s.serialize_field(".tag", "name_prefix_conflict")?;
+                s.end()
+            }
             AssetPushError::OverQuota => {
                 // unit
                 let mut s = serializer.serialize_struct("AssetPushError", 1)?;
@@ -5015,7 +5052,10 @@ impl ::std::error::Error for AssetPushError {}
 
 impl ::std::fmt::Display for AssetPushError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        write!(f, "{:?}", *self)
+        match self {
+            AssetPushError::NameConflict => f.write_str("Returned in rare instances where the push is responsible for asset creation and the request loses a race with another push."),
+            _ => write!(f, "{:?}", *self),
+        }
     }
 }
 
@@ -5339,6 +5379,10 @@ pub enum AssetPutError {
     NoPermission,
     /// Only returned if conflict policy is set to reject.
     NameConflict,
+    /// Returned if the [`AssetPutArg::name`](AssetPutArg) would make this new asset a directory
+    /// prefix of an existing asset, or would make an existing asset simultaneously a file and
+    /// directory.
+    NamePrefixConflict,
     OverQuota,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
@@ -5364,6 +5408,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
                     "bad_name" => AssetPutError::BadName,
                     "no_permission" => AssetPutError::NoPermission,
                     "name_conflict" => AssetPutError::NameConflict,
+                    "name_prefix_conflict" => AssetPutError::NamePrefixConflict,
                     "over_quota" => AssetPutError::OverQuota,
                     _ => AssetPutError::Other,
                 };
@@ -5375,6 +5420,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
             "bad_name",
             "no_permission",
             "name_conflict",
+            "name_prefix_conflict",
             "over_quota",
             "other",
         ];
@@ -5403,6 +5449,12 @@ impl ::serde::ser::Serialize for AssetPutError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetPutError", 1)?;
                 s.serialize_field(".tag", "name_conflict")?;
+                s.end()
+            }
+            AssetPutError::NamePrefixConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPutError", 1)?;
+                s.serialize_field(".tag", "name_prefix_conflict")?;
                 s.end()
             }
             AssetPutError::OverQuota => {
