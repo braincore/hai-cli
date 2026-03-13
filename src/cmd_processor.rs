@@ -498,7 +498,11 @@ pub async fn process_cmd(
             cfg.haivars.insert(key.to_owned(), value.to_owned());
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Exec(cmd::ExecCmd { command, cache }) => {
+        cmd::Cmd::Exec(cmd::ExecCmd {
+            command,
+            cache,
+            interactive,
+        }) => {
             let username = session
                 .account
                 .as_ref()
@@ -553,6 +557,7 @@ pub async fn process_cmd(
                                 username.as_deref(),
                                 &session.shell,
                                 command,
+                                *interactive,
                             )
                             .await,
                             false,
@@ -568,6 +573,7 @@ pub async fn process_cmd(
                             username.as_deref(),
                             &session.shell,
                             command,
+                            *interactive,
                         )
                         .await,
                         false,
@@ -5131,6 +5137,7 @@ const HELP_MSG: &str = r##"Available Commands:
                                @@asset can be used in place of file paths. These assets will be
                                transparently downloaded. If specified as a shell output redirect
                                (>), the output will be uploaded as an asset.
+                               .i=BOOL    Run the command in interactive mode (default: false)
 !!<cmd>                      - Alternative to `/exec` not to be confused with tools.
 /prep                        - Queue a message to be sent with your next message (or, end with two blank lines)
                                .{danger,warn,info,success}=BOOL   Accent color (default: none)
@@ -5269,6 +5276,7 @@ pub async fn shell_exec_with_asset_substitution(
     username: Option<&str>,
     shell: &str,
     cmd: &str,
+    interactive: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
     match asset_reader::prepare_assets_from_cmd_as_temp_files(
@@ -5298,7 +5306,13 @@ pub async fn shell_exec_with_asset_substitution(
             if username.is_none() && !output_assets.is_empty() {
                 return Err(ASSET_ACCOUNT_REQ_MSG.into());
             }
-            let res = shell_exec(shell, &updated_cmd).await;
+            let res = if interactive {
+                shell_exec_interactive(shell, &updated_cmd)
+                    .await
+                    .and_then(|_| Ok("".to_string()))
+            } else {
+                shell_exec(shell, &updated_cmd).await
+            };
             for output_asset in output_assets {
                 let username = username.unwrap(); // Checked before execution
                 let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
@@ -5566,6 +5580,21 @@ pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::e
         .spawn()?;
 
     tool::collect_and_print_command_output(&mut child).await
+}
+
+pub async fn shell_exec_interactive(
+    shell: &str,
+    cmd: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut child = Command::new(shell)
+        .arg("-c")
+        .arg(cmd)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    child.wait().await?;
+    Ok(())
 }
 
 // --

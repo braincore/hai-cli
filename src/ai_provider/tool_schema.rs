@@ -300,6 +300,7 @@ Available Commands:
                         local filesystem. Shell output redirection (>) to `@@name` will
                         be uploaded to the `@@name` asset obviating `/asset-export`.
                         .cache=BOOL  Cache the result for the next execution (default: false)
+                        .i=BOOL  Run the command in interactive mode (default: false) Inherit terminal stdin/stdout/stderr (required for vim, etc.)
 /prep <msg>           - Add message to converation without prompting AI for response.
                         .{danger,warn,info,success}=BOOL   Accent color (default: none)
 /prep <msg>           - Adds message with accent color: danger, warn, info, success

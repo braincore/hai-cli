@@ -271,6 +271,8 @@ pub struct ExecCmd {
     pub command: String,
     /// Whether to cache the output to re-use next time
     pub cache: bool,
+    /// Whether to run the command in interactive mode
+    pub interactive: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1503,22 +1505,33 @@ fn parse_command(
             Some(Cmd::Keep(KeepCmd { bottom, top }))
         }
         "exec" | "e" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["cache", "i"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("cache".to_string(), OptionType::Bool),
+                ("i".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
+            let interactive = options.get("i").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(command) => Some(Cmd::Exec(ExecCmd { command, cache })),
+                Some(command) => Some(Cmd::Exec(ExecCmd {
+                    command,
+                    cache,
+                    interactive,
+                })),
                 None => {
                     eprintln!("Usage: /exec <command>");
                     eprintln!("Options:");
                     eprintln!(
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
+                    );
+                    eprintln!(
+                        "  .i=BOOL        Run the command in interactive mode (default: false)"
                     );
                     None
                 }
