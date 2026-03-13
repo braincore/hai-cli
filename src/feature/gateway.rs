@@ -943,7 +943,10 @@ async fn handle_get(
     api_client: &HaiClient,
     username: Option<String>,
 ) -> HttpResponse {
-    let (data_contents, md_contents, asset_revision) =
+    let default_filenames = &["index", "index.html", "README", "README.md"];
+
+    let (data_contents, md_contents, asset_revision, resolved_name) = {
+        // Try the exact asset name first
         match asset_reader::get_asset_and_metadata_revision(
             asset_blob_cache.clone(),
             api_client,
@@ -953,14 +956,51 @@ async fn handle_get(
         )
         .await
         {
-            Ok(res) => res,
+            Ok((data, md, rev)) => (data, md, rev, asset_name.to_string()),
+            Err(
+                GetRevisionError::BadEntryRef
+                | GetRevisionError::BadRevId
+                | GetRevisionError::Deleted,
+            ) if rev_id.is_none() => {
+                // Only try fallback if no specific rev_id was requested
+                let mut found = None;
+                for filename in default_filenames {
+                    let fallback_name = if asset_name.is_empty() {
+                        filename.to_string()
+                    } else {
+                        format!("{}/{}", asset_name, filename)
+                    };
+
+                    match asset_reader::get_asset_and_metadata_revision(
+                        asset_blob_cache.clone(),
+                        api_client,
+                        &fallback_name,
+                        None,
+                        !return_metadata,
+                    )
+                    .await
+                    {
+                        Ok((data, md, rev)) => {
+                            found = Some((data, md, rev, fallback_name));
+                            break;
+                        }
+                        Err(_) => continue,
+                    }
+                }
+
+                match found {
+                    Some(res) => res,
+                    None => return HttpResponse::not_found(),
+                }
+            }
             Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
             Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
             Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
             Err(GetRevisionError::DataFetchFailed) => {
                 return HttpResponse::bad_request("Invalid URL encoding");
             }
-        };
+        }
+    };
 
     let (decrypted_contents, content_type) = if return_metadata {
         if let Some(md_contents) = md_contents {
@@ -985,7 +1025,7 @@ async fn handle_get(
                     .metadata
                     .and_then(|md| md.content_type.clone());
                 let content_type = crate::asset_helper::best_guess_content_type(
-                    asset_name,
+                    &resolved_name,
                     asset_content_type.as_deref(),
                     &decrypted_asset_contents,
                 );

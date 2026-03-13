@@ -43,47 +43,10 @@ pub async fn launch_browser(
                 }
             } else {
                 // Prog-asset is private -> use proxy through the gateaway
-                use crate::api::types::asset::AssetGetArg;
-                match api_client
-                    .asset_get(AssetGetArg {
-                        name: prog_asset_name.clone(),
-                    })
-                    .await
-                {
-                    Ok(res) => {
-                        // NOTE: Both the encrypted and unencrypted code paths
-                        // use the same gateway proxy URL. They are kept
-                        // separate to make it clear that the encrypted path
-                        // has no other option but to proxy whereas the
-                        // unencrypted path could use the temporary public URL.
-                        if res
-                            .entry
-                            .metadata
-                            .as_ref()
-                            .map_or(false, |md| md.content_encrypted.is_some())
-                        {
-                            (
-                                format!("http://{}/~/{}", localhost_addr, prog_asset_name),
-                                true,
-                            )
-                        } else if let Some(_data_url) = res.entry.asset.url {
-                            (
-                                format!("http://{}/~/{}", localhost_addr, prog_asset_name),
-                                true,
-                            )
-                        } else {
-                            eprintln!(
-                                "error: asset '{}' does not have a link; cannot launch in browser",
-                                prog_asset_name
-                            );
-                            return;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("error: {}", e);
-                        return;
-                    }
-                }
+                (
+                    format!("http://{}/~/{}", localhost_addr, prog_asset_name),
+                    true,
+                )
             };
 
         let gateway_localhost_addr = format!("localhost:{}", ws_addr.port());
