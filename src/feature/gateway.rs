@@ -256,6 +256,17 @@ impl HttpResponse {
         }
     }
 
+    fn redirect_temp(location: &str) -> Self {
+        Self {
+            status: 302,
+            status_text: "Found",
+            content_type: "text/plain".into(),
+            body: Vec::new(),
+            set_cookie: None,
+            additional_headers: vec![("Location".to_string(), location.to_string())],
+        }
+    }
+
     fn not_found() -> Self {
         Self {
             status: 404,
@@ -946,58 +957,94 @@ async fn handle_get(
     let default_filenames = &["index", "index.html", "README", "README.md"];
 
     let (data_contents, md_contents, asset_revision, resolved_name) = {
-        // Try the exact asset name first
-        match asset_reader::get_asset_and_metadata_revision(
-            asset_blob_cache.clone(),
-            api_client,
-            asset_name,
-            rev_id,
-            !return_metadata,
-        )
-        .await
-        {
-            Ok((data, md, rev)) => (data, md, rev, asset_name.to_string()),
-            Err(
-                GetRevisionError::BadEntryRef
-                | GetRevisionError::BadRevId
-                | GetRevisionError::Deleted,
-            ) if rev_id.is_none() => {
-                // Only try fallback if no specific rev_id was requested
-                let mut found = None;
-                for filename in default_filenames {
-                    let fallback_name = if asset_name.is_empty() {
-                        filename.to_string()
-                    } else {
-                        format!("{}/{}", asset_name, filename)
-                    };
+        let is_directory_request = asset_name.is_empty() || asset_name.ends_with('/');
 
-                    match asset_reader::get_asset_and_metadata_revision(
-                        asset_blob_cache.clone(),
-                        api_client,
-                        &fallback_name,
-                        None,
-                        !return_metadata,
-                    )
-                    .await
-                    {
-                        Ok((data, md, rev)) => {
-                            found = Some((data, md, rev, fallback_name));
-                            break;
-                        }
-                        Err(_) => continue,
+        if is_directory_request {
+            // Skip exact lookup, go straight to default files
+            let base_name = asset_name.trim_end_matches('/');
+
+            let mut found = None;
+            for filename in default_filenames {
+                let fallback_name = if base_name.is_empty() {
+                    filename.to_string()
+                } else {
+                    format!("{}/{}", base_name, filename)
+                };
+
+                match asset_reader::get_asset_and_metadata_revision(
+                    asset_blob_cache.clone(),
+                    api_client,
+                    &fallback_name,
+                    rev_id,
+                    !return_metadata,
+                )
+                .await
+                {
+                    Ok((data, md, rev)) => {
+                        found = Some((data, md, rev, fallback_name));
+                        break;
                     }
-                }
-
-                match found {
-                    Some(res) => res,
-                    None => return HttpResponse::not_found(),
+                    Err(_) => continue,
                 }
             }
-            Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
-            Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
-            Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
-            Err(GetRevisionError::DataFetchFailed) => {
-                return HttpResponse::bad_request("Invalid URL encoding");
+
+            match found {
+                Some(res) => res,
+                None => return HttpResponse::not_found(),
+            }
+        } else {
+            // Try exact asset first
+            match asset_reader::get_asset_and_metadata_revision(
+                asset_blob_cache.clone(),
+                api_client,
+                asset_name,
+                rev_id,
+                !return_metadata,
+            )
+            .await
+            {
+                Ok((data, md, rev)) => (data, md, rev, asset_name.to_string()),
+                Err(
+                    GetRevisionError::BadEntryRef
+                    | GetRevisionError::BadRevId
+                    | GetRevisionError::Deleted,
+                ) if rev_id.is_none() => {
+                    // Exact asset not found, try default files
+                    let mut found = None;
+                    for filename in default_filenames {
+                        let fallback_name = format!("{}/{}", asset_name, filename);
+
+                        match asset_reader::get_asset_and_metadata_revision(
+                            asset_blob_cache.clone(),
+                            api_client,
+                            &fallback_name,
+                            None,
+                            !return_metadata,
+                        )
+                        .await
+                        {
+                            Ok((data, md, rev)) => {
+                                found = Some((data, md, rev, fallback_name));
+                                break;
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+
+                    match found {
+                        Some(_res) => {
+                            // Found a default file, redirect to trailing slash
+                            return HttpResponse::redirect_temp(&format!("{}/", asset_name));
+                        }
+                        None => return HttpResponse::not_found(),
+                    }
+                }
+                Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
+                Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
+                Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
+                Err(GetRevisionError::DataFetchFailed) => {
+                    return HttpResponse::bad_request("Invalid URL encoding");
+                }
             }
         }
     };
@@ -1006,7 +1053,6 @@ async fn handle_get(
         if let Some(md_contents) = md_contents {
             (md_contents, "application/json".to_string())
         } else {
-            // Asset does not have metadata
             return HttpResponse::not_found();
         }
     } else {
