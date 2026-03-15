@@ -387,8 +387,7 @@ fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
 }
 
 fn is_cmd_input(line: &str, cmd: &str) -> bool {
-    line == cmd
-        || line.starts_with(&format!("{} ", cmd))
+    line.starts_with(&format!("{} ", cmd))
         || line.starts_with(&format!("{}(", cmd))
         || line.starts_with(&format!("{}.", cmd))
 }
@@ -656,7 +655,10 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
-            } else if is_cmd_input(line, "/exec") || is_cmd_input(line, "!!") {
+            } else if is_cmd_input(line, "/exec")
+                || line.starts_with("!!")
+                || is_cmd_input(line, "!!")
+            {
                 let (cur_token_id, cur_token, cur_token_offset) = get_current_token(line);
                 if cur_token_id == 1 {
                     // Handle executables
