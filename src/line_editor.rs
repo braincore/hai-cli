@@ -1050,7 +1050,7 @@ impl CmdAndFileCompleter {
                 Ok(res) => {
                     let mut sorted_pools = res.pools;
                     sorted_pools
-                        .sort_by(|a, b| human_sort::compare(&a.mount_point, &b.mount_point));
+                        .sort_by(|a, b| numeric_sort::cmp(&a.mount_point, &b.mount_point));
                     let mut completions = Vec::new();
                     for pool in sorted_pools {
                         if pool.mount_point.starts_with(&expanded_asset_prefix) {
@@ -1093,7 +1093,7 @@ impl CmdAndFileCompleter {
                 let mut sorted_entries = res.entries;
                 let collapsed_prefixes = res.collapsed_prefixes.clone();
                 let mut collapsed_idx = 0;
-                sorted_entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+                sorted_entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
                 for entry in sorted_entries {
                     // Return collapsed prefixes that come before this entry
                     while collapsed_idx < collapsed_prefixes.len()
@@ -1186,7 +1186,7 @@ impl CmdAndFileCompleter {
                         ));
                     }
                     let mut sorted_tasks = res.tasks;
-                    sorted_tasks.sort_by(|a, b| human_sort::compare(&a.task_fqn, &b.task_fqn));
+                    sorted_tasks.sort_by(|a, b| numeric_sort::cmp(&a.task_fqn, &b.task_fqn));
                     for task in sorted_tasks {
                         if task.task_fqn.starts_with(task_prefix) {
                             completions.push(Suggestion {

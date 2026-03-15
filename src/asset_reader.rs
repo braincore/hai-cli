@@ -360,7 +360,7 @@ async fn expand_glob(
     }
 
     // Sort for consistent ordering
-    matching_assets.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+    matching_assets.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
 
     Ok(matching_assets)
 }

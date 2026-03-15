@@ -1633,7 +1633,6 @@ dependencies = [
  "hex",
  "hkdf",
  "htmd",
- "human-sort",
  "image",
  "is_executable",
  "jaq-core",
@@ -1647,6 +1646,7 @@ dependencies = [
  "notify",
  "nu-ansi-term",
  "num-format",
+ "numeric-sort",
  "open",
  "predicates",
  "rand 0.9.2",
@@ -1859,12 +1859,6 @@ name = "httparse"
 version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d71d3574edd2771538b901e6549113b4006ece66150fb69c0fb6d9a2adae946"
-
-[[package]]
-name = "human-sort"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "140a09c9305e6d5e557e2ed7cbc68e05765a7d4213975b87cb04920689cc6219"
 
 [[package]]
 name = "hyper"
@@ -2852,6 +2846,12 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
 ]
+
+[[package]]
+name = "numeric-sort"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2dcb6053ab98da45585315f79932c5c9821fab8efa4301c0d7b637c91630eb7"
 
 [[package]]
 name = "objc"

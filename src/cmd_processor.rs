@@ -2178,7 +2178,8 @@ pub async fn process_cmd(
             } else {
                 // If all entries are fetched in one-go, sort them.
                 entries.extend_from_slice(&asset_list_res.entries);
-                entries.sort_by(|a, b| human_sort::compare(&a.name, &b.name));
+                println!("entries: {}, collapsed prefixes: {}", entries.len(), collapsed_prefixes.len());
+                entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
                 let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
                 for entry in &entries {
                     // Print all collapsed prefixes that come before this entry
