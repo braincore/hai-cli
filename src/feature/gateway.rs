@@ -218,6 +218,21 @@ impl HttpRequest {
         self.query_params.get(key).map(|s| s.as_str())
     }
 
+    /// Returns the query string (without leading `?`), or `None` if empty
+    fn query_string(&self) -> Option<String> {
+        if self.query_params.is_empty() {
+            None
+        } else {
+            let qs = self
+                .query_params
+                .iter()
+                .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+                .collect::<Vec<_>>()
+                .join("&");
+            Some(qs)
+        }
+    }
+
     #[allow(dead_code)]
     fn subdomain(&self) -> Option<&str> {
         self.subdomain.as_deref()
@@ -855,6 +870,7 @@ async fn handle_http_request(
                 return HttpResponse::bad_request("push parameter is not valid for GET requests");
             }
             handle_get(
+                &request,
                 &asset_name,
                 rev_id.as_deref(),
                 metadata_ref,
@@ -946,6 +962,7 @@ fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
 }
 
 async fn handle_get(
+    request: &HttpRequest,
     asset_name: &str,
     rev_id: Option<&str>,
     return_metadata: bool,
@@ -1034,7 +1051,18 @@ async fn handle_get(
                     match found {
                         Some(_res) => {
                             // Found a default file, redirect to trailing slash
-                            return HttpResponse::redirect_temp(&format!("{}/", asset_name));
+                            if request.path.find('@').is_some() {
+                                return HttpResponse::redirect_temp(&format!(
+                                    "{}/{}",
+                                    request.path,
+                                    request
+                                        .query_string()
+                                        .map(|qs| format!("?{}", qs))
+                                        .unwrap_or_default(),
+                                ));
+                            } else {
+                                return HttpResponse::redirect_temp(&format!("{}/", asset_name));
+                            }
                         }
                         None => return HttpResponse::not_found(),
                     }
