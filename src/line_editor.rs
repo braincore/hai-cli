@@ -1051,8 +1051,7 @@ impl CmdAndFileCompleter {
             match result {
                 Ok(res) => {
                     let mut sorted_pools = res.pools;
-                    sorted_pools
-                        .sort_by(|a, b| numeric_sort::cmp(&a.mount_point, &b.mount_point));
+                    sorted_pools.sort_by(|a, b| numeric_sort::cmp(&a.mount_point, &b.mount_point));
                     let mut completions = Vec::new();
                     for pool in sorted_pools {
                         if pool.mount_point.starts_with(&expanded_asset_prefix) {
