@@ -3332,6 +3332,43 @@ pub async fn process_cmd(
             .await;
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetSyncUp(cmd::AssetSyncUpCmd {
+            source_path,
+            target_prefix,
+            sync_new_files,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let source_path = expand_pub_asset_name(source_path, &session.account);
+            let target_prefix = match shellexpand::full(&target_prefix) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let api_client = mk_api_client(Some(session));
+            let _ = asset_sync::sync_up(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+                update_asset_tx,
+                &source_path,
+                &target_prefix,
+                asset_sync::SyncUpOptions {
+                    sync_new_files: *sync_new_files,
+                    max_concurrent_uploads: 10,
+                    debug,
+                },
+            )
+            .await;
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
