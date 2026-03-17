@@ -126,6 +126,8 @@ pub enum Cmd {
     AssetTemp(AssetTempCmd),
     /// Syncs assets onto the local filesystem
     AssetSyncDown(AssetSyncDownCmd),
+    /// Syncs assets up to the cloud
+    AssetSyncUp(AssetSyncUpCmd),
     /// Grant permission to an asset
     AssetAcl(AssetAclCmd),
     /// Get metadata for asset
@@ -587,6 +589,16 @@ pub struct AssetSyncDownCmd {
     pub prefix: String,
     /// Path to sync down to
     pub target_path: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetSyncUpCmd {
+    /// Path of files to sync up as assets
+    pub source_path: String,
+    /// Prefix to sync up to
+    pub target_prefix: String,
+    /// Whether to sync new files
+    pub sync_new_files: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2053,6 +2065,22 @@ fn parse_command(
                 })),
                 None => {
                     eprintln!("Usage: /asset-sync-down <prefix> <target_path>");
+                    None
+                }
+            }
+        }
+        "asset-sync-up" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["new"]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((prefix, target_path)) => Some(Cmd::AssetSyncUp(AssetSyncUpCmd {
+                    source_path: prefix,
+                    target_prefix: target_path,
+                    sync_new_files: options.contains_key("new"),
+                })),
+                None => {
+                    eprintln!("Usage: /asset-sync-up <source_path> <target_prefix>");
                     None
                 }
             }

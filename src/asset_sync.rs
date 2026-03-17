@@ -896,3 +896,708 @@ fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
         }
     }
 }
+
+// --
+
+//
+// Asset Sync Up
+//
+
+use std::path::Path;
+use walkdir::WalkDir;
+
+use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+use crate::asset_async_writer::{WorkerAssetMsg, WorkerAssetUpdate};
+
+/// Result of a single file sync-up operation
+pub struct SyncUpResult {
+    #[allow(dead_code)]
+    pub file_path: String,
+    #[allow(dead_code)]
+    pub asset_name: String,
+    pub action: SyncUpAction,
+    pub success: bool,
+    #[allow(dead_code)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SyncUpAction {
+    Created,
+    Updated,
+    Skipped,    // Hash unchanged
+    SkippedNew, // New file but sync_new_files=false
+}
+
+impl std::fmt::Display for SyncUpAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SyncUpAction::Created => write!(f, "Created"),
+            SyncUpAction::Updated => write!(f, "Updated"),
+            SyncUpAction::Skipped => write!(f, "Skipped (unchanged)"),
+            SyncUpAction::SkippedNew => write!(f, "Skipped (new file)"),
+        }
+    }
+}
+
+/// Options for sync-up operation
+pub struct SyncUpOptions {
+    pub sync_new_files: bool,
+    pub max_concurrent_uploads: usize,
+    pub debug: bool,
+}
+
+impl Default for SyncUpOptions {
+    fn default() -> Self {
+        Self {
+            sync_new_files: false,
+            max_concurrent_uploads: 10,
+            debug: false,
+        }
+    }
+}
+
+/// Syncs local changes up to the remote API server.
+///
+/// # Arguments
+/// * `asset_blob_cache` - Asset blob cache
+/// * `asset_keyring` - Asset keyring for encryption
+/// * `api_client` - The API client
+/// * `username` - Optional username for encryption
+/// * `update_asset_tx` - Channel to send asset updates
+/// * `source_path` - Local directory path to sync from
+/// * `target_prefix` - Remote asset prefix (folder path)
+/// * `options` - Sync options
+///
+/// # Returns
+/// Vector of results for each file processed
+pub async fn sync_up(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    update_asset_tx: tokio::sync::mpsc::Sender<WorkerAssetMsg>,
+    source_path: &str,
+    target_prefix: &str,
+    options: SyncUpOptions,
+) -> Result<Vec<SyncUpResult>, String> {
+    let source_path = Path::new(source_path);
+
+    if !source_path.exists() {
+        return Err(format!(
+            "Source path '{}' does not exist",
+            source_path.display()
+        ));
+    }
+
+    if !source_path.is_dir() {
+        return Err(format!(
+            "Source path '{}' is not a directory",
+            source_path.display()
+        ));
+    }
+
+    // Normalize target_prefix to ensure it ends with '/' if non-empty
+    let target_prefix = if !target_prefix.is_empty() && !target_prefix.ends_with('/') {
+        format!("{}/", target_prefix)
+    } else {
+        target_prefix.to_string()
+    };
+
+    // Collect all files to potentially sync
+    let mut file_pairs: Vec<(String, String, bool)> = Vec::new(); // (file_path, asset_name, is_metadata)
+
+    for entry in WalkDir::new(source_path)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+
+        // Skip directories
+        if path.is_dir() {
+            continue;
+        }
+
+        let file_path = path.to_string_lossy().to_string();
+
+        // Get relative path from source_path
+        let relative_path = match path.strip_prefix(source_path) {
+            Ok(rel) => rel.to_string_lossy().to_string(),
+            Err(_) => continue,
+        };
+
+        // Skip hidden files and directories
+        if relative_path.starts_with('.') || relative_path.contains("/.") {
+            continue;
+        }
+
+        // Determine if this is a metadata file
+        let is_metadata = relative_path.ends_with(".metadata");
+
+        // Construct asset name
+        let asset_name = if is_metadata {
+            // For .metadata files, the asset name is the file without .metadata suffix
+            let base_name = relative_path.strip_suffix(".metadata").unwrap();
+            format!("{}{}", target_prefix, base_name)
+        } else {
+            format!("{}{}", target_prefix, relative_path)
+        };
+
+        file_pairs.push((file_path, asset_name, is_metadata));
+    }
+
+    if options.debug {
+        let _ = config::write_to_debug_log(format!(
+            "sync_up: found {} files to process\n",
+            file_pairs.len()
+        ));
+    }
+
+    // Process files with concurrency control
+    let semaphore = Arc::new(Semaphore::new(options.max_concurrent_uploads));
+    let mut handles = Vec::new();
+
+    for (file_path, asset_name, is_metadata) in file_pairs {
+        let asset_blob_cache_clone = asset_blob_cache.clone();
+        let asset_keyring_clone = asset_keyring.clone();
+        let api_client_clone = api_client.clone();
+        let username_clone = username.to_string().clone();
+        let update_asset_tx_clone = update_asset_tx.clone();
+        let sem_clone = Arc::clone(&semaphore);
+        let debug = options.debug;
+        let sync_new_files = options.sync_new_files;
+
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire().await.unwrap();
+
+            if is_metadata {
+                sync_up_metadata_file(
+                    &api_client_clone,
+                    &file_path,
+                    &asset_name,
+                    sync_new_files,
+                    debug,
+                )
+                .await
+            } else {
+                sync_up_data_file(
+                    asset_blob_cache_clone,
+                    asset_keyring_clone,
+                    &api_client_clone,
+                    &username_clone,
+                    update_asset_tx_clone,
+                    &file_path,
+                    &asset_name,
+                    sync_new_files,
+                    debug,
+                )
+                .await
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    // Collect results
+    let mut results = Vec::new();
+    for handle in join_all(handles).await {
+        match handle {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                eprintln!("A sync task panicked: {}", e);
+            }
+        }
+    }
+
+    // Print summary
+    let created = results
+        .iter()
+        .filter(|r| matches!(r.action, SyncUpAction::Created) && r.success)
+        .count();
+    let updated = results
+        .iter()
+        .filter(|r| matches!(r.action, SyncUpAction::Updated) && r.success)
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|r| matches!(r.action, SyncUpAction::Skipped))
+        .count();
+    let skipped_new = results
+        .iter()
+        .filter(|r| matches!(r.action, SyncUpAction::SkippedNew))
+        .count();
+    let failed = results.iter().filter(|r| !r.success).count();
+
+    println!(
+        "Sync up complete: {} created, {} updated, {} unchanged, {} skipped (new), {} failed",
+        created, updated, skipped, skipped_new, failed
+    );
+
+    Ok(results)
+}
+
+/// Syncs a single data file up to the remote server.
+///
+/// TODO:
+/// - Add support for moves
+/// - Clear xattrs if anything unexpected (or missing)
+/// - Atomic xattr updates (modifying bit?)
+async fn sync_up_data_file(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    update_asset_tx: tokio::sync::mpsc::Sender<WorkerAssetMsg>,
+    file_path: &str,
+    asset_name: &str,
+    sync_new_files: bool,
+    debug: bool,
+) -> SyncUpResult {
+    // Check if this file was originally synced down (has xattrs)
+    let existing_rev_id =
+        xattr_get(file_path, "user.hai.rev_id").and_then(|bytes| String::from_utf8(bytes).ok());
+    let existing_entry_id =
+        xattr_get(file_path, "user.hai.entry_id").and_then(|bytes| String::from_utf8(bytes).ok());
+    let existing_hash =
+        xattr_get(file_path, "user.hai.hash").and_then(|bytes| String::from_utf8(bytes).ok());
+    // Check for decrypted_hash first (indicates file was decrypted during sync-down)
+    let existing_decrypted_hash = xattr_get(file_path, "user.hai.decrypted_hash")
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+
+    let is_previously_synced = existing_rev_id.is_some();
+
+    // If not previously synced and we're not syncing new files, skip
+    if !is_previously_synced && !sync_new_files {
+        if debug {
+            let _ = config::write_to_debug_log(format!(
+                "sync_up: skipping new file '{}' (sync_new_files=false)\n",
+                file_path
+            ));
+        }
+        return SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: SyncUpAction::SkippedNew,
+            success: true,
+            error: None,
+        };
+    }
+
+    // Calculate current file hash
+    let current_hash = match calculate_file_hash(file_path).await {
+        Ok(hash) => hex::encode(hash),
+        Err(e) => {
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Failed to calculate hash: {}", e)),
+            };
+        }
+    };
+
+    // Compare with existing hash to determine if changed
+    // Use decrypted_hash if available (for files that were encrypted on server)
+    let hash_to_compare = existing_decrypted_hash.as_ref().or(existing_hash.as_ref());
+
+    if let Some(existing) = hash_to_compare {
+        if current_hash.eq_ignore_ascii_case(existing) {
+            if debug {
+                let _ = config::write_to_debug_log(format!(
+                    "sync_up: skipping unchanged file '{}'\n",
+                    file_path
+                ));
+            }
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: true,
+                error: None,
+            };
+        }
+    }
+
+    // Read file contents
+    let file_contents = match tokio::fs::read(file_path).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Failed to read file: {}", e)),
+            };
+        }
+    };
+
+    let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client.clone(),
+        Some(&KeyRecipient::User(username.to_string())),
+        &asset_name,
+        false,
+    )
+    .await
+    {
+        Ok(akm_info) => akm_info,
+        Err(e) => {
+            match e {
+                asset_crypt::AkmSelectionError::Abort(msg) => {
+                    eprintln!("error: {}", msg);
+                }
+            }
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Decryption key error")),
+            };
+        }
+    };
+
+    // Build asset_entry_ref if we have both entry_id and rev_id (for replace/fork)
+    let asset_entry_ref = match (&existing_entry_id, &existing_rev_id) {
+        (Some(entry_id), Some(rev_id)) => Some((entry_id.clone(), rev_id.clone())),
+        _ => None,
+    };
+
+    let is_update = asset_entry_ref.is_some();
+    if debug {
+        if is_update {
+            let _ = config::write_to_debug_log(format!(
+                "sync_up: updating '{}' -> '{}' (entry_id: {:?}, rev_id: {:?})\n",
+                file_path, asset_name, existing_entry_id, existing_rev_id
+            ));
+        } else {
+            let _ = config::write_to_debug_log(format!(
+                "sync_up: creating '{}' -> '{}'\n",
+                file_path, asset_name
+            ));
+        }
+    }
+
+    // Send update through the async writer channel
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+
+    let send_result = update_asset_tx
+        .send(WorkerAssetMsg::Update(WorkerAssetUpdate {
+            asset_name: asset_name.to_string(),
+            asset_entry_ref,
+            new_contents: file_contents,
+            is_push: false,
+            api_client: api_client.clone(),
+            one_shot: true,
+            akm_info,
+            reply_channel: Some(reply_tx),
+        }))
+        .await;
+
+    if let Err(e) = send_result {
+        return SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_update {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: false,
+            error: Some(format!("Failed to send update: {}", e)),
+        };
+    }
+
+    // Wait for reply
+    match reply_rx.await {
+        Ok(Ok(asset_entry)) => {
+            // Update xattrs with new entry info
+            let _ = xattr_set(file_path, "user.hai.rev_id", &asset_entry.asset.rev_id);
+            let _ = xattr_set(file_path, "user.hai.entry_id", &asset_entry.entry_id);
+            if let Some(hash) = &asset_entry.asset.hash {
+                update_hash_xattrs(file_path, hash);
+            }
+            let _ = xattr_set(
+                file_path,
+                "user.hai.seq_id",
+                &asset_entry.seq_id.to_string(),
+            );
+
+            SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: if is_update {
+                    SyncUpAction::Updated
+                } else {
+                    SyncUpAction::Created
+                },
+                success: true,
+                error: None,
+            }
+        }
+        Ok(Err(e)) => SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_update {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: false,
+            error: Some(format!("Asset save error: {:?}", e)),
+        },
+        Err(e) => SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_update {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: false,
+            error: Some(format!("Reply channel error: {}", e)),
+        },
+    }
+}
+
+/// Syncs a single metadata file up to the remote server.
+async fn sync_up_metadata_file(
+    api_client: &HaiClient,
+    file_path: &str,
+    asset_name: &str,
+    sync_new_files: bool,
+    debug: bool,
+) -> SyncUpResult {
+    // Check if this metadata file was originally synced down
+    let is_metadata = xattr_get(file_path, "user.hai.is_metadata")
+        .map(|bytes| String::from_utf8(bytes).ok())
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    let existing_hash =
+        xattr_get(file_path, "user.hai.hash").and_then(|bytes| String::from_utf8(bytes).ok());
+
+    let is_previously_synced = is_metadata && existing_hash.is_some();
+
+    // If not previously synced and we're not syncing new files, skip
+    if !is_previously_synced && !sync_new_files {
+        if debug {
+            let _ = config::write_to_debug_log(format!(
+                "sync_up: skipping new metadata file '{}' (sync_new_files=false)\n",
+                file_path
+            ));
+        }
+        return SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: SyncUpAction::SkippedNew,
+            success: true,
+            error: None,
+        };
+    }
+
+    // Calculate current file hash
+    let current_hash = match calculate_file_hash(file_path).await {
+        Ok(hash) => hex::encode(hash),
+        Err(e) => {
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Failed to calculate hash: {}", e)),
+            };
+        }
+    };
+
+    // Compare with existing hash
+    if let Some(existing) = &existing_hash {
+        if current_hash.eq_ignore_ascii_case(existing) {
+            if debug {
+                let _ = config::write_to_debug_log(format!(
+                    "sync_up: skipping unchanged metadata file '{}'\n",
+                    file_path
+                ));
+            }
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: true,
+                error: None,
+            };
+        }
+    }
+
+    // Read file contents
+    let file_contents = match tokio::fs::read(file_path).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Failed to read file: {}", e)),
+            };
+        }
+    };
+
+    if debug {
+        let _ = config::write_to_debug_log(format!(
+            "sync_up: uploading metadata '{}' -> '{}'\n",
+            file_path, asset_name
+        ));
+    }
+
+    let metadata_contents = match serde_json::from_slice(&file_contents) {
+        Ok(json) => json,
+        Err(e) => {
+            return SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action: SyncUpAction::Skipped,
+                success: false,
+                error: Some(format!("Failed to parse metadata JSON: {}", e)),
+            };
+        }
+    };
+
+    // Metadata always uses put with override
+    match api_client
+        .asset_metadata_put(AssetMetadataPutArg {
+            name: asset_name.to_string(),
+            data: metadata_contents,
+            conflict_policy: PutConflictPolicy::Override,
+        })
+        .await
+    {
+        Ok(result) => {
+            // Update xattrs
+            let _ = xattr_set(file_path, "user.hai.is_metadata", "true");
+            if let Some(md) = result.entry.metadata {
+                if let Some(hash) = md.hash {
+                    update_hash_xattrs(file_path, &hash);
+                }
+                let _ = xattr_set(file_path, "user.hai.rev_id", &md.rev_id);
+            }
+
+            let action = if is_previously_synced {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            };
+
+            SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: asset_name.to_string(),
+                action,
+                success: true,
+                error: None,
+            }
+        }
+        Err(e) => SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_previously_synced {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: false,
+            error: Some(format!("API error: {}", e)),
+        },
+    }
+}
+
+/// Updates hash-related xattrs after successful upload
+fn update_hash_xattrs(file_path: &str, hash: &str) {
+    let _ = xattr_set(file_path, "user.hai.hash", hash);
+
+    // Update mtime
+    if let Ok(metadata) = std::fs::metadata(file_path) {
+        if let Ok(modified_time) = metadata.modified() {
+            let mtime_ts = modified_time
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+            let _ = xattr_set(file_path, "user.hai.hash_mtime", &mtime_ts.to_string());
+        }
+    }
+}
+
+#[allow(dead_code)]
+/// Inner function to sync specific file/asset pairs.
+/// Useful when you already know which files need to be synced.
+pub async fn sync_up_pairs(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    update_asset_tx: tokio::sync::mpsc::Sender<WorkerAssetMsg>,
+    pairs: Vec<(String, String)>, // (file_path, asset_name)
+    options: SyncUpOptions,
+) -> Result<Vec<SyncUpResult>, String> {
+    let semaphore = Arc::new(Semaphore::new(options.max_concurrent_uploads));
+    let mut handles = Vec::new();
+
+    for (file_path, asset_name) in pairs {
+        let asset_blob_cache_clone = asset_blob_cache.clone();
+        let asset_keyring_clone = asset_keyring.clone();
+        let api_client_clone = api_client.clone();
+        let username_clone = username.to_string();
+        let update_asset_tx_clone = update_asset_tx.clone();
+        let sem_clone = Arc::clone(&semaphore);
+        let debug = options.debug;
+        let sync_new_files = options.sync_new_files;
+
+        // Determine if this is a metadata file based on file path
+        let is_metadata = file_path.ends_with(".metadata");
+
+        let handle = tokio::spawn(async move {
+            let _permit = sem_clone.acquire().await.unwrap();
+
+            if is_metadata {
+                sync_up_metadata_file(
+                    &api_client_clone,
+                    &file_path,
+                    &asset_name,
+                    sync_new_files,
+                    debug,
+                )
+                .await
+            } else {
+                sync_up_data_file(
+                    asset_blob_cache_clone,
+                    asset_keyring_clone,
+                    &api_client_clone,
+                    &username_clone,
+                    update_asset_tx_clone,
+                    &file_path,
+                    &asset_name,
+                    sync_new_files,
+                    debug,
+                )
+                .await
+            }
+        });
+
+        handles.push(handle);
+    }
+
+    let mut results = Vec::new();
+    for handle in join_all(handles).await {
+        match handle {
+            Ok(result) => results.push(result),
+            Err(e) => {
+                eprintln!("A sync task panicked: {}", e);
+            }
+        }
+    }
+
+    Ok(results)
+}

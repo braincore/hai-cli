@@ -380,6 +380,7 @@ async fn repl(
         "/asset-export",
         "/asset-temp",
         "/asset-sync-down",
+        "/asset-sync-up",
         "/asset-listen",
         "/asset-acl",
         "/asset-remove",

@@ -1674,6 +1674,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "viuer",
+ "walkdir",
  "which 8.0.0",
  "x25519-dalek",
  "xattr",

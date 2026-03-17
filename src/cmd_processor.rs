@@ -3332,6 +3332,60 @@ pub async fn process_cmd(
             .await;
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetSyncUp(cmd::AssetSyncUpCmd {
+            source_path,
+            target_prefix,
+            sync_new_files,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let source_path = match shellexpand::full(&source_path) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let target_prefix = expand_pub_asset_name(target_prefix, &session.account);
+            let api_client = mk_api_client(Some(session));
+            match asset_sync::sync_up(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+                update_asset_tx,
+                &source_path,
+                &target_prefix,
+                asset_sync::SyncUpOptions {
+                    sync_new_files: *sync_new_files,
+                    max_concurrent_uploads: 10,
+                    debug,
+                },
+            )
+            .await
+            {
+                Ok(sync_results) => {
+                    for res in sync_results {
+                        println!(
+                            "sync up: {} -> {}: {}: {:?}: {}",
+                            res.file_path,
+                            res.asset_name,
+                            res.action,
+                            res.success,
+                            res.error.unwrap_or_default()
+                        )
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to sync up: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));

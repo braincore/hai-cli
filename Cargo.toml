@@ -84,6 +84,7 @@ two-face = { version = "0.4.3", default-features = false, features = ["syntect-d
 urlencoding = "2.1.3"
 uuid = { version = "1.11.0", features = ["std", "v7"] }
 viuer = { version = "0.10.0", features = ["icy_sixel"] }
+walkdir = "2.5.0"
 which = "8.0.0"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 zeroize = "1.8.2"
