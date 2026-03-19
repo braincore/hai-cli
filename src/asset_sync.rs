@@ -1,5 +1,7 @@
 use futures::future::join_all;
+use ignore::WalkBuilder;
 use sha2::{Digest, Sha256};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::fs::create_dir_all;
 use tokio::sync::{Mutex, Semaphore};
@@ -903,9 +905,6 @@ fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
 // Asset Sync Up
 //
 
-use std::path::Path;
-use walkdir::WalkDir;
-
 use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
 use crate::asset_async_writer::{WorkerAssetMsg, WorkerAssetUpdate};
 
@@ -1007,11 +1006,21 @@ pub async fn sync_up(
     // Collect all files to potentially sync
     let mut file_pairs: Vec<(String, String, bool)> = Vec::new(); // (file_path, asset_name, is_metadata)
 
-    for entry in WalkDir::new(source_path)
+    let walker = WalkBuilder::new(source_path)
         .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+        .hidden(false)
+        // NOTE: Only uses .gitignore if .git exists
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.') || name == ".gitignore" || name == ".ignore"
+        })
+        .build();
+
+    for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
 
         // Skip directories
@@ -1026,11 +1035,6 @@ pub async fn sync_up(
             Ok(rel) => rel.to_string_lossy().to_string(),
             Err(_) => continue,
         };
-
-        // Skip hidden files and directories
-        if relative_path.starts_with('.') || relative_path.contains("/.") {
-            continue;
-        }
 
         // Determine if this is a metadata file
         let is_metadata = relative_path.ends_with(".metadata");
