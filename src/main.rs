@@ -694,8 +694,19 @@ async fn repl(
                 };
                 print_step(&step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
+                // Intention here is to avoid double-printing large code blocks
+                // being written by `/asset-new`.
                 let step_badge = format!("!hai-tool[{}]:", index);
-                print_step(&step_badge, &cmd_info.input, &masked_strings);
+                let display_input =
+                    if cmd_info.input.starts_with("/asset") && cmd_info.input.contains('\n') {
+                        format!(
+                            "{}\n<truncated>",
+                            cmd_info.input.lines().next().unwrap_or(&cmd_info.input)
+                        )
+                    } else {
+                        cmd_info.input.clone()
+                    };
+                print_step(&step_badge, &display_input, &masked_strings);
             } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
                 let step_badge = format!("bye[{}]:", index);
                 print_step(&step_badge, &cmd_info.input, &masked_strings);
