@@ -2,6 +2,7 @@ use colored::*;
 use glob::glob;
 use num_format::{Locale, ToFormattedString};
 use regex::Regex;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -558,6 +559,7 @@ pub async fn process_cmd(
                                 &session.shell,
                                 command,
                                 *interactive,
+                                &session.get_shell_exec_env_vars(),
                             )
                             .await,
                             false,
@@ -574,6 +576,7 @@ pub async fn process_cmd(
                             &session.shell,
                             command,
                             *interactive,
+                            &session.get_shell_exec_env_vars(),
                         )
                         .await,
                         false,
@@ -4528,6 +4531,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                 &ai_defined_fn.fn_tool,
                 &ai_defined_fn.fn_def,
                 &arg_with_default,
+                Some(&session.get_shell_exec_env_vars()),
             )
             .await
             {
@@ -5331,6 +5335,7 @@ pub async fn shell_exec_with_asset_substitution(
     shell: &str,
     cmd: &str,
     interactive: bool,
+    shell_exec_env_vars: &HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
     match asset_reader::prepare_assets_from_cmd_as_temp_files(
@@ -5361,11 +5366,11 @@ pub async fn shell_exec_with_asset_substitution(
                 return Err(ASSET_ACCOUNT_REQ_MSG.into());
             }
             let res = if interactive {
-                shell_exec_interactive(shell, &updated_cmd)
+                shell_exec_interactive(shell, &updated_cmd, Some(shell_exec_env_vars))
                     .await
                     .and_then(|_| Ok("".to_string()))
             } else {
-                shell_exec(shell, &updated_cmd).await
+                shell_exec(shell, &updated_cmd, Some(shell_exec_env_vars)).await
             };
             for output_asset in output_assets {
                 let username = username.unwrap(); // Checked before execution
@@ -5625,28 +5630,44 @@ async fn prompt_ai_simple(
 
 // --
 
-pub async fn shell_exec(shell: &str, cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let mut child = Command::new(shell)
+/// Executes the given command in the shell and returns the combined stdout and
+/// stderr output as a string.
+pub async fn shell_exec(
+    shell: &str,
+    cmd: &str,
+    env_vars: Option<&HashMap<String, String>>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut command = Command::new(shell);
+    command
         .arg("-c")
         .arg(cmd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-
+        .stderr(Stdio::piped());
+    if let Some(vars) = env_vars {
+        command.envs(vars);
+    }
+    let mut child = command.spawn()?;
     tool::collect_and_print_command_output(&mut child).await
 }
 
+/// Executes the given command in the shell allowing it to inherit stdin,
+/// stdout, and stderr for full interactivity.
 pub async fn shell_exec_interactive(
     shell: &str,
     cmd: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()?;
+        .stderr(Stdio::inherit());
+    if let Some(vars) = env_vars {
+        command.envs(vars);
+    }
+    let mut child = command.spawn()?;
     child.wait().await?;
     Ok(())
 }

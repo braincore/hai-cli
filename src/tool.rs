@@ -1,6 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -147,18 +147,21 @@ pub async fn execute_shell_based_tool(
     tool: &Tool,
     arg: &str,
     shell: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
     let ToolShellBasedArg { input, _continue } = serde_json::from_str::<ToolShellBasedArg>(arg)?;
     Ok((
         match tool {
             Tool::CopyToClipboard => copy_to_clipboard(&input)?,
-            Tool::ExecPythonScript => exec_python_script(&input).await?,
-            Tool::ExecPythonUvScript => exec_python_uv_script(&input).await?,
-            Tool::ShellExecWithStdin(cmd) => shell_exec_with_stdin(shell, cmd, &input).await?,
-            Tool::ShellExecWithFile(cmd, ext) => {
-                shell_exec_with_file(shell, cmd, &input, ext.as_deref()).await?
+            Tool::ExecPythonScript => exec_python_script(&input, env_vars).await?,
+            Tool::ExecPythonUvScript => exec_python_uv_script(&input, env_vars).await?,
+            Tool::ShellExecWithStdin(cmd) => {
+                shell_exec_with_stdin(shell, cmd, &input, env_vars).await?
             }
-            Tool::ShellScriptExec => shell_script_exec(shell, &input).await?,
+            Tool::ShellExecWithFile(cmd, ext) => {
+                shell_exec_with_file(shell, cmd, &input, ext.as_deref(), env_vars).await?
+            }
+            Tool::ShellScriptExec => shell_script_exec(shell, &input, env_vars).await?,
             _ => "fatal: not a shell-based tool".to_string(),
         },
         _continue,
@@ -169,6 +172,7 @@ pub async fn execute_ai_defined_tool(
     fn_tool: &FnTool,
     fn_def: &str,
     arg: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     match fn_tool.kind {
         FnToolType::FnPy => {
@@ -181,7 +185,7 @@ if __name__ == "__main__":
 "#,
                 fn_def, arg
             );
-            exec_python_script(&script).await
+            exec_python_script(&script, env_vars).await
         }
         FnToolType::FnPyUv => {
             let script = format!(
@@ -193,7 +197,7 @@ if __name__ == "__main__":
 "#,
                 fn_def, arg
             );
-            exec_python_uv_script(&script).await
+            exec_python_uv_script(&script, env_vars).await
         }
         FnToolType::FnSh => {
             let script = format!(
@@ -202,7 +206,7 @@ if __name__ == "__main__":
 "#,
                 arg, fn_def
             );
-            shell_script_exec("sh", &script).await
+            shell_script_exec("sh", &script, env_vars).await
         }
     }
 }
@@ -261,17 +265,24 @@ pub fn copy_to_clipboard(text: &str) -> Result<String, Box<dyn std::error::Error
 }
 
 /// Executes python3 with a script provided by the -c flag.
-pub async fn exec_python_script(script: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn exec_python_script(
+    script: &str,
+    env_vars: Option<&HashMap<String, String>>,
+) -> Result<String, Box<dyn std::error::Error>> {
     // Use the `.venv/bin/python` if found, otherwise fallback to "python3"
     let python_exec = find_python_in_venv();
-    let mut child = Command::new(python_exec)
+    let mut command = Command::new(python_exec);
+    command
         .arg("-c")
         .arg(script)
         // Allow the script to read from the terminal's stdin
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    if let Some(env_vars) = env_vars {
+        command.envs(env_vars);
+    }
+    let mut child = command.spawn()?;
     collect_and_print_command_output(&mut child).await
 }
 
@@ -279,19 +290,26 @@ pub async fn exec_python_script(script: &str) -> Result<String, Box<dyn std::err
 ///
 /// The advantage over `exec_python_script` is that it allows the script to
 /// automatically install "script dependencies".
-pub async fn exec_python_uv_script(script: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn exec_python_uv_script(
+    script: &str,
+    env_vars: Option<&HashMap<String, String>>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let mut temp_file = NamedTempFile::with_suffix(".py")?;
     temp_file.write_all(script.as_bytes())?;
     temp_file.flush()?;
-    let mut child = Command::new("uv")
+    let mut command = Command::new("uv");
+    command
         .arg("--quiet") // Suppress uv's output (especially installation msgs)
         .arg("run")
         .arg(temp_file.path())
         // Allow the script to read from the terminal's stdin
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    if let Some(env_vars) = env_vars {
+        command.envs(env_vars);
+    }
+    let mut child = command.spawn()?;
     collect_and_print_command_output(&mut child).await
 }
 
@@ -321,15 +339,20 @@ fn find_python_in_venv() -> String {
 pub async fn shell_script_exec(
     shell: &str,
     script: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .arg("-c")
         .arg(script)
         // Allow the script to read from the terminal's stdin
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    if let Some(env_vars) = env_vars {
+        command.envs(env_vars);
+    }
+    let mut child = command.spawn()?;
     collect_and_print_command_output(&mut child).await
 }
 
@@ -341,6 +364,7 @@ pub async fn shell_exec_with_file(
     cmd: &str,
     file_contents: &str,
     ext: Option<&str>,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut temp_file = if let Some(ext) = ext {
         NamedTempFile::with_suffix(format!(".{}", ext))?
@@ -352,14 +376,18 @@ pub async fn shell_exec_with_file(
     let prepared_cmd = get_file_placeholder_re()
         .replace(cmd, &temp_file.path().to_string_lossy())
         .into_owned();
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .arg("-c")
         .arg(prepared_cmd)
         // Allow the script to read from the terminal's stdin
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    if let Some(env_vars) = env_vars {
+        command.envs(env_vars);
+    }
+    let mut child = command.spawn()?;
     collect_and_print_command_output(&mut child).await
 }
 
@@ -369,14 +397,19 @@ pub async fn shell_exec_with_stdin(
     shell: &str,
     cmd: &str,
     stdin: &str,
+    env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let mut child = Command::new(shell)
+    let mut command = Command::new(shell);
+    command
         .arg("-c")
         .arg(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+        .stderr(Stdio::piped());
+    if let Some(env_vars) = env_vars {
+        command.envs(env_vars);
+    }
+    let mut child = command.spawn()?;
     if let Some(mut child_stdin) = child.stdin.take() {
         child_stdin.write_all(stdin.as_bytes()).await?;
     } else {
@@ -385,6 +418,10 @@ pub async fn shell_exec_with_stdin(
     collect_and_print_command_output(&mut child).await
 }
 
+/// Given a child process, collects stdout and stderr, prints them to the
+/// terminal, and returns the combined output as a string.
+///
+/// This function waits for the child process to exit before returning.
 pub async fn collect_and_print_command_output(
     child: &mut tokio::process::Child,
 ) -> Result<String, Box<dyn std::error::Error>> {

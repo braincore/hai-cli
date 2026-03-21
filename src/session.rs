@@ -165,6 +165,22 @@ impl SessionState {
                 .sort_by_key(|b| std::cmp::Reverse(b.len()));
         }
     }
+
+    pub fn get_shell_exec_env_vars(&self) -> HashMap<String, String> {
+        let mut env_vars = HashMap::new();
+        if let Some(username) = self
+            .account
+            .as_ref()
+            .map(|account| account.username.clone())
+        {
+            env_vars.insert("HAI_USER".to_string(), username);
+        }
+        env_vars.insert(
+            "HAI_MODEL".to_string(),
+            config::ai_model_to_string(&self.ai),
+        );
+        env_vars
+    }
 }
 
 /// Convenience function to add "user text" into conversation history while

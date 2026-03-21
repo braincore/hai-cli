@@ -367,6 +367,199 @@ pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
     false
 }
 
+// --
+
+pub fn ai_model_to_string(ai_model: &AiModel) -> String {
+    match ai_model {
+        // Anthropic models
+        AiModel::Anthropic(model) => match model {
+            AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
+            AnthropicModel::Opus4(thinking) => {
+                if *thinking {
+                    "opus-4,thinking=true".to_string()
+                } else {
+                    "opus-4".to_string()
+                }
+            }
+            AnthropicModel::Opus41(thinking) => {
+                if *thinking {
+                    "opus-4.1,thinking=true".to_string()
+                } else {
+                    "opus-4.1".to_string()
+                }
+            }
+            AnthropicModel::Opus45(thinking) => {
+                if *thinking {
+                    "opus-4.5,thinking=true".to_string()
+                } else {
+                    "opus-4.5".to_string()
+                }
+            }
+            AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
+            AnthropicModel::Sonnet37(thinking) => {
+                if *thinking {
+                    "sonnet-3.7,thinking=true".to_string()
+                } else {
+                    "sonnet-3.7".to_string()
+                }
+            }
+            AnthropicModel::Sonnet4(thinking) => {
+                if *thinking {
+                    "sonnet-4,thinking=true".to_string()
+                } else {
+                    "sonnet-4".to_string()
+                }
+            }
+            AnthropicModel::Sonnet45(thinking) => {
+                if *thinking {
+                    "sonnet-4.5,thinking=true".to_string()
+                } else {
+                    "sonnet-4.5".to_string()
+                }
+            }
+            AnthropicModel::Other(name) => format!("anthropic/{}", name),
+        },
+
+        // DeepSeek models
+        AiModel::DeepSeek(model) => match model {
+            DeepSeekModel::DeepSeekChat => "deepseek-chat".to_string(),
+            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner".to_string(),
+            DeepSeekModel::Other(name) => format!("deepseek/{}", name),
+        },
+
+        // Google models
+        AiModel::Google(model) => match model {
+            GoogleModel::Gemini3Flash(opts) => {
+                let base = "gemini-3-flash".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini3Pro(opts) => {
+                let base = "gemini-3-pro".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini25Flash => "gemini-2.5-flash".to_string(),
+            GoogleModel::Gemini25Pro => "gemini-2.5-pro".to_string(),
+            GoogleModel::Gemini20Flash => "gemini-2.0-flash".to_string(),
+            GoogleModel::Gemini15Flash => "gemini-1.5-flash".to_string(),
+            GoogleModel::Gemini15Flash8B => "gemini-1.5-flash-8b".to_string(),
+            GoogleModel::Gemini15Pro => "gemini-1.5-pro".to_string(),
+            GoogleModel::Other(name) => format!("google/{}", name),
+        },
+
+        // LlamaCpp models
+        AiModel::LlamaCpp(model) => match model {
+            LlamaCppModel::Other(name) if name == "n/a" => "llamacpp".to_string(),
+            LlamaCppModel::Other(name) => format!("llamacpp/{}", name),
+        },
+
+        // Ollama models
+        AiModel::Ollama(model) => match model {
+            OllamaModel::Gemma3 => "gemma-3".to_string(),
+            OllamaModel::GptOss20b => "gpt-oss".to_string(),
+            OllamaModel::Llama32 => "llama-3.2".to_string(),
+            OllamaModel::Llama32Vision => "llama-3.2-vision".to_string(),
+            OllamaModel::Other(name) => format!("ollama/{}", name),
+        },
+
+        // OpenAI models
+        AiModel::OpenAi(model) => match model {
+            OpenAiModel::ChatGpt4o => "chatgpt-4o".to_string(),
+            OpenAiModel::Gpt41 => "gpt-4.1".to_string(),
+            OpenAiModel::Gpt41Mini => "gpt-4.1-mini".to_string(),
+            OpenAiModel::Gpt41Nano => "gpt-4.1-nano".to_string(),
+            OpenAiModel::Gpt5(opts) => {
+                let base = "gpt-5".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt5Chat => "gpt-5-chat".to_string(),
+            OpenAiModel::Gpt5Mini(opts) => {
+                let base = "gpt-5-mini".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt5Nano(opts) => {
+                let base = "gpt-5-nano".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt51(opts) => {
+                let base = "gpt-5.1".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt51Chat => "gpt-5.1-chat".to_string(),
+            OpenAiModel::Gpt52(opts) => {
+                let base = "gpt-5.2".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt52Chat => "gpt-5.2-chat".to_string(),
+            OpenAiModel::Gpt4o => "gpt-4o".to_string(),
+            OpenAiModel::Gpt4oMini => "gpt-4o-mini".to_string(),
+            OpenAiModel::O1 => "o1".to_string(),
+            OpenAiModel::O1Mini => "o1-mini".to_string(),
+            OpenAiModel::O3 => "o3".to_string(),
+            OpenAiModel::O3Mini => "o3-mini".to_string(),
+            OpenAiModel::O4Mini => "o4-mini".to_string(),
+            OpenAiModel::Other(name) => format!("openai/{}", name),
+        },
+
+        // xAI models
+        AiModel::Xai(model) => match model {
+            XaiModel::Grok4 => "grok-4".to_string(),
+            XaiModel::Grok3 => "grok-3".to_string(),
+            XaiModel::Grok3Fast => "grok-3-fast".to_string(),
+            XaiModel::Grok3Mini => "grok-3-mini".to_string(),
+            XaiModel::Grok3MiniFast => "grok-3-mini-fast".to_string(),
+            XaiModel::Other(name) => format!("xai/{}", name),
+        },
+
+        // Void models (testing only)
+        AiModel::Void(model) => match model {
+            VoidModel::Other(name) => format!("void/{}", name),
+        },
+    }
+}
+
+fn append_gemini_opts(base: String, opts: &GeminiOptions) -> String {
+    let mut result = base;
+    if let Some(ref thinking_level) = opts.thinking_level {
+        result.push_str(",thinking=");
+        result.push_str(reasoning_effort_to_string(thinking_level));
+    }
+    result
+}
+
+fn append_gpt5_opts(base: String, opts: &Gpt5Options) -> String {
+    let mut result = base;
+    if let Some(ref reasoning_effort) = opts.reasoning_effort {
+        result.push_str(",reasoning=");
+        result.push_str(reasoning_effort_to_string(reasoning_effort));
+    }
+    if let Some(ref verbosity) = opts.verbosity {
+        result.push_str(",verbosity=");
+        result.push_str(verbosity_to_string(verbosity));
+    }
+    result
+}
+
+fn reasoning_effort_to_string(effort: &OpenAiReasoningEffort) -> &'static str {
+    match effort {
+        OpenAiReasoningEffort::None => "none",
+        OpenAiReasoningEffort::Minimal => "minimal",
+        OpenAiReasoningEffort::Low => "low",
+        OpenAiReasoningEffort::Medium => "medium",
+        OpenAiReasoningEffort::High => "high",
+        OpenAiReasoningEffort::Xhigh => "xhigh",
+    }
+}
+
+fn verbosity_to_string(verbosity: &OpenAiVerbosity) -> &'static str {
+    match verbosity {
+        OpenAiVerbosity::Low => "low",
+        OpenAiVerbosity::Medium => "medium",
+        OpenAiVerbosity::High => "high",
+    }
+}
+
+// --
+
 impl Config {
     pub fn reload(
         &mut self,

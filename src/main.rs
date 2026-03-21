@@ -270,12 +270,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         } else {
             (ReplMode::Normal, vec![], false, false, false)
         };
+        // Prioritize command-line specified username/model over env var. Env
+        // var will always be specified when `hai` shells out to `hai`.
+        let force_username = args
+            .username
+            .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
+        let force_model = args
+            .model
+            .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
         repl(
             &config_path_override,
             args.debug,
             args.incognito,
-            args.username,
-            args.model,
+            force_username,
+            force_model,
             &mut ctrlc_handler,
             repl_mode,
             init_cmds,
@@ -1353,8 +1361,13 @@ async fn repl(
                                 }
                             }
                         } else {
-                            match tool::execute_shell_based_tool(&tp.tool, arg, &session.shell)
-                                .await
+                            match tool::execute_shell_based_tool(
+                                &tp.tool,
+                                arg,
+                                &session.shell,
+                                Some(&session.get_shell_exec_env_vars()),
+                            )
+                            .await
                             {
                                 Ok((output_text, follow_up)) => (output_text, follow_up),
                                 Err(e) => {
