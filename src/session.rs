@@ -281,6 +281,45 @@ pub fn session_history_add_user_image_entry(
     token_count
 }
 
+/// Convenience function to add mocked assistant text into conversation history
+/// while making the appropriate modifications to the session and token count.
+///
+/// # Returns
+///
+/// The number of tokens in `contents`.
+pub fn session_history_add_assistant_text_entry(
+    contents: &str,
+    session: &mut SessionState,
+    bpe_tokenizer: &tiktoken_rs::CoreBPE,
+    retention_policy: (bool, LogEntryRetentionPolicy),
+) -> u32 {
+    let asset_tokens = bpe_tokenizer.encode_with_special_tokens(contents);
+    let token_count = asset_tokens.len() as u32;
+    if matches!(
+        retention_policy.1,
+        LogEntryRetentionPolicy::ConversationLoad
+    ) {
+        session.input_loaded_tokens += token_count;
+    } else {
+        session.input_tokens += token_count;
+    }
+    session.history.push(db::LogEntry {
+        uuid: Uuid::now_v7().to_string(),
+        ts: chrono::Local::now(),
+        message: chat::Message {
+            role: chat::MessageRole::Assistant,
+            content: vec![chat::MessageContent::Text {
+                text: contents.to_string(),
+            }],
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        tokens: token_count,
+        retention_policy,
+    });
+    token_count
+}
+
 // --
 
 /// Attempts to activate the hai-router.

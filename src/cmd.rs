@@ -49,6 +49,8 @@ pub enum Cmd {
     Pin(PinCmd),
     /// Add a message without triggering an AI response
     Prep(PrepCmd),
+    /// Add a message mocked as from the AI to the conversation
+    Assistant(AssistantCmd),
     /// Get/set system prompt
     SystemPrompt(SystemPromptCmd),
     /// Forgot messages in the conversation
@@ -325,6 +327,12 @@ pub struct PrepCmd {
     pub message: String,
     /// Accent color for the prep message
     pub accent: Option<Accent>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssistantCmd {
+    /// Message to add as from the AI to the conversation
+    pub message: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1453,6 +1461,18 @@ fn parse_command(
                 Some(message) => Some(Cmd::Pin(PinCmd { message, accent })),
                 None => {
                     eprintln!("Usage: /pin <message>");
+                    None
+                }
+            }
+        }
+        "assistant" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(message) => Some(Cmd::Assistant(AssistantCmd { message })),
+                None => {
+                    eprintln!("Usage: /assistant <message>");
                     None
                 }
             }

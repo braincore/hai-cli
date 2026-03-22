@@ -15,8 +15,9 @@ use uuid::Uuid;
 use crate::api::client::RequestError;
 use crate::session::{
     self, HaiRouterState, ReplMode, SessionState, hai_router_set, hai_router_try_activate,
-    mk_api_client, session_history_add_user_cmd_and_reply_entries,
-    session_history_add_user_image_entry, session_history_add_user_text_entry,
+    mk_api_client, session_history_add_assistant_text_entry,
+    session_history_add_user_cmd_and_reply_entries, session_history_add_user_image_entry,
+    session_history_add_user_text_entry,
 };
 use crate::{
     api::{self, client::HaiClient},
@@ -726,6 +727,20 @@ pub async fn process_cmd(
                 db::LogEntryRetentionPolicy::None
             };
             session_history_add_user_text_entry(
+                message,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, retention_policy),
+            );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::Assistant(cmd::AssistantCmd { message }) => {
+            let retention_policy = if matches!(cmd, cmd::Cmd::Pin(_)) {
+                db::LogEntryRetentionPolicy::ConversationPin
+            } else {
+                db::LogEntryRetentionPolicy::None
+            };
+            session_history_add_assistant_text_entry(
                 message,
                 session,
                 bpe_tokenizer,
