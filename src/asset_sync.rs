@@ -996,6 +996,20 @@ pub async fn sync_up(
         ));
     }
 
+    let source_str = source_path.to_string_lossy();
+    let has_trailing_slash = source_str.ends_with('/') || source_str.ends_with('\\');
+
+    // The base path we strip from, and optionally a prefix to add back
+    let (strip_base, dir_prefix) = if has_trailing_slash {
+        (source_path.to_path_buf(), String::new())
+    } else {
+        let dir_name = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        (source_path.to_path_buf(), format!("{}/", dir_name))
+    };
+
     // Normalize target_prefix to ensure it ends with '/' if non-empty
     let target_prefix = if !target_prefix.is_empty() && !target_prefix.ends_with('/') {
         format!("{}/", target_prefix)
@@ -1031,7 +1045,7 @@ pub async fn sync_up(
         let file_path = path.to_string_lossy().to_string();
 
         // Get relative path from source_path
-        let relative_path = match path.strip_prefix(source_path) {
+        let relative_path = match path.strip_prefix(&strip_base) {
             Ok(rel) => rel.to_string_lossy().to_string(),
             Err(_) => continue,
         };
@@ -1039,13 +1053,12 @@ pub async fn sync_up(
         // Determine if this is a metadata file
         let is_metadata = relative_path.ends_with(".metadata");
 
-        // Construct asset name
+        // Construct asset name (with dir_prefix for rsync-like behavior)
         let asset_name = if is_metadata {
-            // For .metadata files, the asset name is the file without .metadata suffix
             let base_name = relative_path.strip_suffix(".metadata").unwrap();
-            format!("{}{}", target_prefix, base_name)
+            format!("{}{}{}", target_prefix, dir_prefix, base_name)
         } else {
-            format!("{}{}", target_prefix, relative_path)
+            format!("{}{}{}", target_prefix, dir_prefix, relative_path)
         };
 
         file_pairs.push((file_path, asset_name, is_metadata));
