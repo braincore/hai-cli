@@ -1,3 +1,4 @@
+use ed25519_dalek::SigningKey;
 #[cfg(target_os = "linux")]
 use keyring::{
     credential::{CredentialApi, CredentialBuilderApi},
@@ -21,7 +22,10 @@ const KEYRING_SERVICE: &str = "hai-asset-keys";
 /// Unlocked private keys for decrypting per-file AES keys
 pub struct AssetKeyring {
     /// Map of rec_key_id -> decrypted private key (X25519 secret)
-    unlocked_keys: HashMap<String, Zeroizing<StaticSecret>>,
+    unlocked_decrypt_keys: HashMap<String, StaticSecret>,
+
+    /// Map of rec_key_id -> decrypted private key (ED25519 secret)
+    unlocked_signing_keys: HashMap<String, SigningKey>,
 
     /// Timestamp for auto-lock after idle timeout
     last_used: std::time::Instant,
@@ -34,8 +38,12 @@ impl fmt::Debug for AssetKeyring {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AssetKeyring")
             .field(
-                "unlocked_keys",
-                &format!("<{} keys redacted>", self.unlocked_keys.len()),
+                "unlocked_decrypt_keys",
+                &format!("<{} keys redacted>", self.unlocked_decrypt_keys.len()),
+            )
+            .field(
+                "unlocked_signing_keys",
+                &format!("<{} keys redacted>", self.unlocked_signing_keys.len()),
             )
             .field("last_used", &self.last_used)
             .field("keyring_available", &self.keyring_available)
@@ -54,7 +62,8 @@ impl AssetKeyring {
 
         // Test if keyring is available by attempting a dummy operation
         Self {
-            unlocked_keys: HashMap::new(),
+            unlocked_decrypt_keys: HashMap::new(),
+            unlocked_signing_keys: HashMap::new(),
             last_used: std::time::Instant::now(),
             keyring_available: enable_os_keyring && Self::test_keyring_availability(),
         }
@@ -141,8 +150,8 @@ impl AssetKeyring {
         }
     }
 
-    /// Unlock a specific encryption key by ID
-    pub async fn unlock_key(
+    /// Unlock a specific decryption key by ID
+    pub async fn unlock_decrypt_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
@@ -171,8 +180,8 @@ impl AssetKeyring {
             match crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()) {
                 Ok(secret) => {
                     // Stored password works!
-                    self.unlocked_keys
-                        .insert(rec_key_id.to_string(), Zeroizing::new(secret));
+                    self.unlocked_decrypt_keys
+                        .insert(rec_key_id.to_string(), secret);
                     self.last_used = std::time::Instant::now();
                     return Ok(());
                 }
@@ -188,11 +197,9 @@ impl AssetKeyring {
         }
 
         // Prompt for password if we don't have a valid stored one
-        let password = term::ask_question(
-            &format!("Unlock key {}:", rec_key_id_parts.enc_key_id),
-            true,
-        )
-        .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        let password =
+            term::ask_question(&format!("Unlock key {}:", rec_key_id_parts.key_id), true)
+                .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
         let password = Zeroizing::new(password);
 
         // Decrypt and store the private key
@@ -204,53 +211,150 @@ impl AssetKeyring {
         // Store password in OS keyring for future use
         self.store_password_in_keyring(&rec_key_id, &password);
 
-        self.unlocked_keys
-            .insert(rec_key_id, Zeroizing::new(secret));
+        self.unlocked_decrypt_keys.insert(rec_key_id, secret);
+        self.last_used = std::time::Instant::now();
+
+        Ok(())
+    }
+
+    /// Unlock a specific signing key by ID
+    pub async fn unlock_signing_key(
+        &mut self,
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
+        // Fetch the encrypted private key
+        let signing_key =
+            asset_crypt::get_encrypted_signing_key(asset_blob_cache, api_client, &rec_key_id_parts)
+                .await
+                .map_err(|e| {
+                    asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+                })?;
+        let signing_key = if let Some(signing_key) = signing_key {
+            signing_key
+        } else {
+            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
+        };
+
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        // Try to get password from OS keyring first
+        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
+            // Verify the stored password works
+            match crypt::unprotect_signing_key(&signing_key, stored_password.as_bytes()) {
+                Ok(secret) => {
+                    // Stored password works!
+                    self.unlocked_signing_keys
+                        .insert(rec_key_id.to_string(), secret);
+                    self.last_used = std::time::Instant::now();
+                    return Ok(());
+                }
+                Err(_) => {
+                    // Stored password is invalid, remove it and prompt for new one
+                    println!(
+                        "error: stored password for {} is invalid, prompting for new password",
+                        rec_key_id
+                    );
+                    self.delete_password_from_keyring(&rec_key_id);
+                }
+            }
+        }
+
+        // Prompt for password if we don't have a valid stored one
+        let password =
+            term::ask_question(&format!("Unlock key {}:", rec_key_id_parts.key_id), true)
+                .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        let password = Zeroizing::new(password);
+
+        // Decrypt and store the private key
+        let secret =
+            crypt::unprotect_signing_key(&signing_key, password.as_bytes()).map_err(|e| {
+                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+            })?;
+
+        // Store password in OS keyring for future use
+        self.store_password_in_keyring(&rec_key_id, &password);
+
+        self.unlocked_signing_keys.insert(rec_key_id, secret);
         self.last_used = std::time::Instant::now();
 
         Ok(())
     }
 
     /// Get an unlocked key, prompting to unlock if needed
-    pub async fn get_or_unlock(
+    pub async fn get_or_unlock_decrypt_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<&StaticSecret, asset_crypt::AssetKeyMaterialDecryptionError> {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        if !self.unlocked_keys.contains_key(&rec_key_id) {
-            self.unlock_key(asset_blob_cache, api_client, &rec_key_id_parts)
+        if !self.unlocked_decrypt_keys.contains_key(&rec_key_id) {
+            self.unlock_decrypt_key(asset_blob_cache, api_client, &rec_key_id_parts)
                 .await?;
         }
 
         self.last_used = std::time::Instant::now();
-        Ok(self.unlocked_keys.get(&rec_key_id).unwrap())
+        Ok(self.unlocked_decrypt_keys.get(&rec_key_id).unwrap())
+    }
+
+    /// Get an unlocked key, prompting to unlock if needed
+    pub async fn get_or_unlock_signing_key(
+        &mut self,
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> Result<&SigningKey, asset_crypt::AssetKeyMaterialDecryptionError> {
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        if !self.unlocked_signing_keys.contains_key(&rec_key_id) {
+            self.unlock_signing_key(asset_blob_cache, api_client, &rec_key_id_parts)
+                .await?;
+        }
+
+        self.last_used = std::time::Instant::now();
+        Ok(self.unlocked_signing_keys.get(&rec_key_id).unwrap())
     }
 
     /// Lock (clear) a specific key from memory (keeps keyring entry)
-    pub fn lock_key(&mut self, rec_key_id: &str) {
-        self.unlocked_keys.remove(rec_key_id);
+    pub fn lock_decrypt_key(&mut self, rec_key_id: &str) {
+        self.unlocked_decrypt_keys.remove(rec_key_id);
+    }
+
+    /// Lock (clear) a specific key from memory (keeps keyring entry)
+    pub fn lock_signing_key(&mut self, rec_key_id: &str) {
+        self.unlocked_signing_keys.remove(rec_key_id);
     }
 
     /// Lock all keys from memory (keeps keyring entries)
     pub fn lock_all(&mut self) {
-        self.unlocked_keys.clear();
+        self.unlocked_decrypt_keys.clear();
+        self.unlocked_signing_keys.clear();
     }
 
     /// Lock and forget a specific key (removes from memory AND keyring)
-    pub fn forget_key(&mut self, rec_key_id: &str) {
-        self.unlocked_keys.remove(rec_key_id);
+    pub fn forget_decrypt_key(&mut self, rec_key_id: &str) {
+        self.unlocked_decrypt_keys.remove(rec_key_id);
+        self.delete_password_from_keyring(rec_key_id);
+    }
+
+    /// Lock and forget a specific key (removes from memory AND keyring)
+    pub fn forget_signing_key(&mut self, rec_key_id: &str) {
+        self.unlocked_signing_keys.remove(rec_key_id);
         self.delete_password_from_keyring(rec_key_id);
     }
 
     /// Lock and forget all keys (removes from memory AND keyring)
     pub fn forget_all(&mut self) {
-        let keys: Vec<String> = self.unlocked_keys.keys().cloned().collect();
+        let keys: Vec<String> = self.unlocked_decrypt_keys.keys().cloned().collect();
         for key_id in keys {
             self.delete_password_from_keyring(&key_id);
         }
-        self.unlocked_keys.clear();
+        self.unlocked_decrypt_keys.clear();
+        let keys: Vec<String> = self.unlocked_signing_keys.keys().cloned().collect();
+        for key_id in keys {
+            self.delete_password_from_keyring(&key_id);
+        }
+        self.unlocked_signing_keys.clear();
     }
 
     /// Check if idle timeout exceeded
@@ -347,7 +451,7 @@ mod tests {
     fn test_lock_operations() {
         let mut keyring = AssetKeyring::new(true);
         keyring.lock_all();
-        keyring.lock_key("nonexistent");
+        keyring.lock_decrypt_key("nonexistent");
         // Should not panic
     }
 }

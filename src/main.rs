@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use line_editor::LineEditor;
 use reedline::{self, Signal};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::io::Read;
@@ -39,7 +39,6 @@ mod term;
 mod term_color;
 mod tool;
 
-use feature::asset_keyring::AssetKeyring;
 use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
@@ -133,6 +132,27 @@ enum CliSubcommand {
         #[arg(short = 'w', long = "whitelisted-origin")]
         whitelisted_origin: Option<String>,
     },
+    /// Bot management commands
+    Bot {
+        #[command(subcommand)]
+        command: BotSubcommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum BotSubcommand {
+    /// Start the bot
+    Start {
+        /// Run in background/daemon mode
+        #[arg(short = 'd', long = "daemon")]
+        daemon: bool,
+    },
+
+    /// Stop the bot
+    Stop,
+
+    // Status of the bot
+    Status,
 }
 
 #[tokio::main]
@@ -209,6 +229,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     yes,
                     !print_all,
                 )
+        } else if let Some(CliSubcommand::Bot { command }) = args.subcommand {
+            let db = Arc::new(Mutex::new(db::open_db()?));
+            let force_username = args
+                .username
+                .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
+            let force_ai_model = args
+                .model
+                .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
+
+            let cfg = match config::get_config(&config_path_override) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("error: failed to read config: {}", e);
+                    process::exit(1);
+                }
+            };
+
+            let account = if let Some(force_username) = force_username {
+                if force_username == "_" {
+                    None
+                } else {
+                    match db::get_account_by_username(&*db.lock().await, &force_username)? {
+                        Some(account) => Some(account),
+                        None => {
+                            eprintln!(
+                                "error: `{}` is unavailable (try /account-login)",
+                                force_username
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
+            } else {
+                db::get_active_account(&*db.lock().await)?
+            };
+            let force_ai_model = if let Some(force_ai_model) = force_ai_model {
+                if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
+                    Some(ai_model)
+                } else {
+                    eprintln!("error: unknown model {}", force_ai_model);
+                    process::exit(1);
+                }
+            } else {
+                None
+            };
+            match command {
+                BotSubcommand::Start { daemon } => {
+                    let _ = crate::feature::haibot::start_bot(cfg, account, force_ai_model, daemon)
+                        .await;
+                    return Ok(());
+                }
+                BotSubcommand::Stop => {
+                    let _ = crate::feature::haibot::stop_bot();
+                    return Ok(());
+                }
+                BotSubcommand::Status => {
+                    let _ = crate::feature::haibot::bot_status();
+                    return Ok(());
+                }
+            }
         } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
             let account_login_cmd = if let Some(password) = password {
                 format!("/account-login {} {}", username, password)
@@ -412,6 +492,12 @@ async fn repl(
         "/fns",
         "/std",
         "/mcp-add",
+        "/bot-boot",
+        "/bot-get-active",
+        "/bot-probe",
+        "/bot-setup",
+        "/bot-ssh",
+        "/bot-shutdown",
         "/account",
         "/account-new",
         "/account-login",
@@ -523,27 +609,15 @@ async fn repl(
         *tokenizer_locked = Some(loaded_tokenizer);
     });
 
-    let mut default_ai_model = config::choose_init_ai_model(&cfg);
-    if incognito && let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
-        if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
-            default_ai_model = ai_model;
-        } else {
-            eprintln!("error: unknown incognito model {}", ai_model_unmatched_str);
-        }
-    }
-    if let Some(force_ai_model) = force_ai_model {
+    let force_ai_model = if let Some(force_ai_model) = force_ai_model {
         if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
-            default_ai_model = ai_model;
+            Some(ai_model)
         } else {
             eprintln!("error: unknown model {}", force_ai_model);
             process::exit(1);
         }
-    }
-    let default_editor = cfg.default_editor.clone().unwrap_or("vim".into());
-    let default_shell = if cfg!(target_os = "windows") {
-        cfg.default_shell.clone().unwrap_or("powershell".into())
     } else {
-        cfg.default_shell.clone().unwrap_or("bash".into())
+        None
     };
 
     let account = if let Some(force_account) = force_account {
@@ -567,37 +641,8 @@ async fn repl(
 
     let multiple_accounts = db::list_accounts(&*db.lock().await)?.len() > 1;
 
-    let mut session = SessionState {
-        repl_mode,
-        ai: default_ai_model,
-        ai_temperature: if cfg.default_ai_temperature_to_absolute_zero {
-            Some(0.)
-        } else {
-            None
-        },
-        input_tokens: 0,
-        input_loaded_tokens: 0,
-        cmd_queue: VecDeque::new(),
-        history: vec![],
-        editor: default_editor,
-        shell: default_shell,
-        masked_strings: vec![],
-        mask_secrets: false,
-        account: account.clone(),
-        asset_keyring: Arc::new(Mutex::new(AssetKeyring::new(cfg.use_os_keyring))),
-        incognito,
-        last_tool_cmd: None,
-        tool_mode: None,
-        use_hai_router: HaiRouterState::Off,
-        agentic: false,
-        temp_files: vec![],
-        ai_defined_fns: HashMap::new(),
-        add_msg_on_new_day: false,
-        html_output: None,
-        quick_index_vars: vec![],
-        gateways: vec![],
-        mcps: HashMap::new(),
-    };
+    let mut session =
+        SessionState::new_from_cfg(repl_mode, &cfg, account.clone(), incognito, force_ai_model);
 
     if let Some(account) = &account {
         session::account_login_setup_session(
@@ -608,11 +653,6 @@ async fn repl(
             &account.token,
         )
         .await;
-    }
-
-    if matches!(session.use_hai_router, HaiRouterState::Off) {
-        // Prints error if API key not available
-        config::check_api_key(&session.ai, &cfg);
     }
 
     for init_cmd in init_cmds.into_iter() {

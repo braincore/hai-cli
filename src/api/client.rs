@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
-use super::types::{account, asset, messaging, task};
+use super::types::{account, asset, bot, messaging, task};
 
 #[derive(Debug, Clone)]
 pub struct HaiClient {
@@ -419,6 +419,32 @@ impl HaiClient {
     ) -> Result<asset::AssetPoolListResult, RequestError<()>> {
         self.mk_api_request::<_, _, _>("/asset/pool/list", &arg)
             .await
+    }
+
+    pub async fn bot_boot(
+        &self,
+        arg: bot::BootArg,
+    ) -> Result<bot::BootResult, RequestError<bot::BootError>> {
+        self.mk_api_request::<_, _, _>("/bot/boot", &arg).await
+    }
+
+    pub async fn bot_get(
+        &self,
+        arg: bot::GetArg,
+    ) -> Result<bot::GetResult, RequestError<bot::GetError>> {
+        self.mk_api_request::<_, _, _>("/bot/get", &arg).await
+    }
+
+    pub async fn bot_get_active(&self, arg: ()) -> Result<bot::GetActiveResult, RequestError<()>> {
+        self.mk_api_request::<_, _, _>("/bot/get_active", &arg)
+            .await
+    }
+
+    pub async fn bot_shutdown(
+        &self,
+        arg: bot::ShutdownArg,
+    ) -> Result<bot::ShutdownResult, RequestError<bot::ShutdownError>> {
+        self.mk_api_request::<_, _, _>("/bot/shutdown", &arg).await
     }
 
     pub async fn messaging_email_recipient_send(

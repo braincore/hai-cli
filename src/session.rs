@@ -135,6 +135,64 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    pub fn new_from_cfg(
+        repl_mode: ReplMode,
+        cfg: &config::Config,
+        account: Option<db::Account>,
+        incognito: bool,
+        force_ai_model: Option<config::AiModel>,
+    ) -> Self {
+        let mut default_ai_model = config::choose_init_ai_model(&cfg);
+        if incognito && let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
+            if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
+                default_ai_model = ai_model;
+            } else {
+                eprintln!("error: unknown incognito model {}", ai_model_unmatched_str);
+            }
+        }
+        if let Some(force_ai_model) = force_ai_model {
+            default_ai_model = force_ai_model;
+        }
+        let default_editor = cfg.default_editor.clone().unwrap_or("vim".into());
+        let default_shell = if cfg!(target_os = "windows") {
+            cfg.default_shell.clone().unwrap_or("powershell".into())
+        } else {
+            cfg.default_shell.clone().unwrap_or("bash".into())
+        };
+
+        SessionState {
+            repl_mode,
+            ai: default_ai_model,
+            ai_temperature: if cfg.default_ai_temperature_to_absolute_zero {
+                Some(0.)
+            } else {
+                None
+            },
+            input_tokens: 0,
+            input_loaded_tokens: 0,
+            cmd_queue: VecDeque::new(),
+            history: vec![],
+            editor: default_editor,
+            shell: default_shell,
+            masked_strings: vec![],
+            mask_secrets: false,
+            account: account.clone(),
+            asset_keyring: Arc::new(Mutex::new(AssetKeyring::new(cfg.use_os_keyring))),
+            incognito,
+            last_tool_cmd: None,
+            tool_mode: None,
+            use_hai_router: HaiRouterState::Off,
+            agentic: false,
+            temp_files: vec![],
+            ai_defined_fns: HashMap::new(),
+            add_msg_on_new_day: false,
+            html_output: None,
+            quick_index_vars: vec![],
+            gateways: vec![],
+            mcps: HashMap::new(),
+        }
+    }
+
     /// Recalculates token count based on history.
     ///
     /// Useful when history has been pruned.

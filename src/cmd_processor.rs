@@ -42,6 +42,8 @@ pub enum ProcessCmdResult {
 const ASSET_ACCOUNT_REQ_MSG: &str =
     "You must be logged-in to use assets. Try /account-login or /account-new";
 
+const BOT_ACCOUNT_REQ_MSG: &str = "You must be logged-in to use bots. Try /account-login";
+
 #[allow(clippy::too_many_arguments)]
 pub async fn process_cmd(
     config_path_override: &Option<String>,
@@ -3894,10 +3896,15 @@ pub async fn process_cmd(
                     let mut asset_keyring_locked = session.asset_keyring.lock().await;
                     let rec_key_id_parts = asset_crypt::RecipientKeyIdParts {
                         recipient: key.recipient.clone(),
-                        enc_key_id: key.enc_key_id.clone(),
+                        key_id: key.enc_key_id.clone(),
+                        key_type: asset_crypt::KeyType::Encryption,
                     };
                     match asset_keyring_locked
-                        .unlock_key(asset_blob_cache.clone(), &api_client, &rec_key_id_parts)
+                        .unlock_decrypt_key(
+                            asset_blob_cache.clone(),
+                            &api_client,
+                            &rec_key_id_parts,
+                        )
                         .await
                     {
                         Ok(()) => {
@@ -3928,7 +3935,7 @@ pub async fn process_cmd(
 
             let mut asset_keyring_locked = session.asset_keyring.lock().await;
             if let Some(enc_key_id) = enc_key_id {
-                asset_keyring_locked.forget_key(&enc_key_id);
+                asset_keyring_locked.forget_decrypt_key(&enc_key_id);
             } else {
                 asset_keyring_locked.forget_all();
             }
@@ -4659,6 +4666,331 @@ lesson (e.g. "understanding").\n\n{}"#,
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
             );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotBoot => {
+            let username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let api_client = mk_api_client(Some(session));
+
+            println!("Booting bot... you may be asked for your asset-encryption passphrase");
+            let (key_id, pub_key, _priv_key) = match asset_crypt::get_ed25519_for_ssh_key(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::api::types::bot::BootArg;
+            let boot_res = match api_client
+                .bot_boot(BootArg {
+                    pub_key: pub_key.clone(),
+                    pub_key_id: key_id.clone(),
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            println!();
+            println!("╔══════════════════════════════════════════════════════════════╗");
+            println!("║                        BOT BOOTED                            ║");
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║ Bot ID:            {:<41} ║", boot_res.bot.bot_id);
+            println!("║ Hostname:          {:<41} ║", boot_res.bot.hostname);
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║                        NEXT STEP                             ║");
+            println!("║  Setting up bot...                                           ║");
+            println!("╚══════════════════════════════════════════════════════════════╝");
+            println!();
+
+            session.cmd_queue.push_front(session::CmdInput {
+                input: "/boot-setup".to_string(),
+                source: session::CmdSource::Internal,
+            });
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotGetActive => {
+            let _username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+
+            let api_client = mk_api_client(Some(session));
+
+            let get_res = match api_client.bot_get_active(()).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            if let Some(bot) = get_res.bot {
+                println!("Bot ID: {}", bot.bot_id);
+                println!("Hostname: {}", bot.hostname);
+                println!("Booted At: {}", bot.booted_at);
+            } else {
+                eprintln!("error: no active bots");
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotProbe => {
+            let username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let api_client = mk_api_client(Some(session));
+
+            let get_res = match api_client.bot_get_active(()).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let hostname = if let Some(bot) = get_res.bot {
+                println!("Bot ID: {}", bot.bot_id);
+                println!("Hostname: {}", bot.hostname);
+                println!("Booted At: {}", bot.booted_at);
+                bot.hostname
+            } else {
+                eprintln!("error: no active bots");
+                return ProcessCmdResult::Loop;
+            };
+
+            let (_key_id, _pub_key, priv_key) = match asset_crypt::get_ed25519_for_ssh_key(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::feature::haibot;
+
+            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+                Ok(client) => client,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let _ = client.call_streaming("~/.local/bin/hai -V").await;
+            let _ = client.close().await;
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotSetup => {
+            let username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let api_client = mk_api_client(Some(session));
+
+            let get_res = match api_client.bot_get_active(()).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let hostname = if let Some(bot) = get_res.bot {
+                println!("bot: id={}: ssh hai@{}", bot.bot_id, bot.hostname);
+                bot.hostname
+            } else {
+                eprintln!("error: no active bots");
+                return ProcessCmdResult::Loop;
+            };
+
+            let (_key_id, _pub_key, priv_key) = match asset_crypt::get_ed25519_for_ssh_key(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::feature::haibot;
+
+            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+                Ok(client) => client,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            println!();
+            println!("╔══════════════════════════════════════════════════════════════╗");
+            println!("║                      CONNECTED TO BOT                        ║");
+            println!("╠══════════════════════════════════════════════════════════════╣");
+            println!("║                     UPCOMING BOT SETUP                       ║");
+            println!("║                                                              ║");
+            println!("║  1. Copy your hai.toml config to your bot                    ║");
+            println!("║  2. Login to your hai account                                ║");
+            println!("║  3. Unlock your asset encryption key                         ║");
+            println!("╚══════════════════════════════════════════════════════════════╝");
+            println!();
+
+            let _ = client.call("mkdir -p /home/hai/.hai").await;
+            println!("Copying hai.toml config...");
+            let _ = client
+                .upload(config::get_default_config_path(), "/home/hai/.hai/hai.toml")
+                .await;
+            println!("Logging into your hai account ({})...", username);
+            let _ = client
+                .call_interactive(&format!("~/.local/bin/hai login {}", username))
+                .await;
+            println!("Unlocking your asset encryption key...");
+            let _ = client
+                .call_interactive(&format!("~/.local/bin/hai bye /asset-crypt-unlock"))
+                .await;
+            if matches!(
+                session.use_hai_router,
+                session::HaiRouterState::On | session::HaiRouterState::OffForModel
+            ) {
+                println!("Turning on hai-router...");
+                let _ = client
+                    .call(&format!("~/.local/bin/hai bye '/hai-router on'"))
+                    .await;
+            }
+            println!("Running haibot...");
+            let _ = client
+                .call_interactive(&format!("~/.local/bin/hai bot start -d"))
+                .await;
+            let _ = client.close().await;
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotSsh => {
+            let username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let api_client = mk_api_client(Some(session));
+
+            let get_res = match api_client.bot_get_active(()).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let hostname = if let Some(bot) = get_res.bot {
+                println!("bot: id={}: ssh hai@{}", bot.bot_id, bot.hostname);
+                bot.hostname
+            } else {
+                eprintln!("error: no active bots");
+                return ProcessCmdResult::Loop;
+            };
+
+            let (_key_id, _pub_key, priv_key) = match asset_crypt::get_ed25519_for_ssh_key(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            use crate::feature::haibot;
+
+            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+                Ok(client) => client,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let _ = client.call_interactive("/usr/bin/bash").await;
+            let _ = client.close().await;
+
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::BotShutdown => {
+            let _username = if let Some(account) = &session.account {
+                account.username.clone()
+            } else {
+                eprintln!("{}", BOT_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+
+            use crate::api::types::bot::ShutdownArg;
+            let api_client = mk_api_client(Some(session));
+
+            let get_res = match api_client.bot_get_active(()).await {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: {:?}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            if let Some(bot) = get_res.bot {
+                let _ = match api_client
+                    .bot_shutdown(ShutdownArg { bot_id: bot.bot_id })
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(e) => {
+                        eprintln!("error: {:?}", e);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+            } else {
+                eprintln!("error: no active bots");
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Account(cmd::AccountCmd { username }) => {

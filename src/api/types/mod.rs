@@ -15,6 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as BASE64};
 
 pub mod account;
 pub mod asset;
+pub mod bot;
 pub mod common;
 pub mod messaging;
 pub mod notify;

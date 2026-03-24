@@ -1616,3 +1616,17 @@ pub fn get_asset_blob_cache_path() -> PathBuf {
     path.push("cache/asset-blob");
     path
 }
+
+// --
+
+pub fn get_bot_pid_path() -> PathBuf {
+    let mut path = get_config_folder_path();
+    path.push("bot.pid");
+    path
+}
+
+pub fn get_bot_log_path() -> PathBuf {
+    let mut path = get_config_folder_path();
+    path.push("bot.log");
+    path
+}

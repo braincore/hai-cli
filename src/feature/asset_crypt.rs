@@ -1,7 +1,11 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use std::sync::Arc;
+use ed25519_dalek::SigningKey;
+use ssh_key::{LineEnding, PrivateKey};
+use std::{fmt::Debug, sync::Arc};
 use tokio::sync::Mutex;
 use x25519_dalek::PublicKey;
+use zeroize::Zeroizing;
 
 use crate::api::{
     client::{HaiClient, RequestError},
@@ -507,7 +511,8 @@ impl RecipientKeyInfo {
     pub fn recipient_key_id_parts(&self) -> RecipientKeyIdParts {
         RecipientKeyIdParts {
             recipient: self.recipient.clone(),
-            enc_key_id: self.enc_key_id.clone(),
+            key_id: self.enc_key_id.clone(),
+            key_type: KeyType::Encryption,
         }
     }
 }
@@ -534,19 +539,30 @@ impl std::fmt::Display for KeyRecipient {
 }
 
 #[derive(Clone, Debug)]
+pub enum KeyType {
+    Encryption,
+    Signing,
+}
+
+#[derive(Clone, Debug)]
 /// Container for the information that gets stored as a string in the
 /// `encrypted.keys[].recipient_key_id` field of an encrypted asset's metadata.
 pub struct RecipientKeyIdParts {
     pub recipient: KeyRecipient,
-    pub enc_key_id: String,
+    pub key_id: String,
+    pub key_type: KeyType,
 }
 
 impl RecipientKeyIdParts {
     pub fn recipient_key_id(&self) -> String {
         format!(
-            "{}{}",
+            "{}{}:{}",
             self.recipient.recipient_key_id_prefix(),
-            self.enc_key_id
+            match self.key_type {
+                KeyType::Encryption => "enc",
+                KeyType::Signing => "sign",
+            },
+            self.key_id,
         )
     }
 }
@@ -797,9 +813,9 @@ impl AssetKeyMaterial {
     }
 }
 
-/// Retrieve the user's asset decryption key.
+/// Retrieve the user's encrypted decryption key.
 ///
-/// The decryption key is encrypted with a password.
+/// It's encrypted with a password.
 ///
 /// # Arguments
 /// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
@@ -810,15 +826,52 @@ pub async fn get_encrypted_decryption_key(
     api_client: &HaiClient,
     rec_key_id_parts: &RecipientKeyIdParts,
 ) -> Result<Option<crypt::EncryptedEncryptionKey>, String> {
+    if !matches!(rec_key_id_parts.key_type, KeyType::Encryption) {
+        return Err("Invalid key type for decryption key".to_string());
+    }
     let key_path = match rec_key_id_parts.recipient {
         KeyRecipient::User(_) => {
-            format!("keys/enc_{}.key", rec_key_id_parts.enc_key_id)
+            format!("keys/enc_{}.key", rec_key_id_parts.key_id)
         }
     };
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
         Ok((key_contents, _key_id, _md_contents, _entry)) => Ok(Some(
             crypt::EncryptedEncryptionKey::from_bytes(&key_contents)
                 .map_err(|e| format!("failed to parse encryption key: {}", e))?,
+        )),
+        Err(e) => match e {
+            GetKeyError::NoKey => Ok(None),
+            GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
+            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+        },
+    }
+}
+
+/// Retrieve the user's encrypted signing key.
+///
+/// It's encrypted with a password.
+///
+/// # Arguments
+/// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
+/// * `api_client` - An instance of HaiClient to interact with the API.
+/// * `rec_key_id_parts` - The recipient key ID parts to identify which encryption key to retrieve.
+pub async fn get_encrypted_signing_key(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    rec_key_id_parts: &RecipientKeyIdParts,
+) -> Result<Option<crypt::EncryptedSigningKey>, String> {
+    if !matches!(rec_key_id_parts.key_type, KeyType::Signing) {
+        return Err("Invalid key type for signing key".to_string());
+    }
+    let key_path = match rec_key_id_parts.recipient {
+        KeyRecipient::User(_) => {
+            format!("keys/sign_{}.key", rec_key_id_parts.key_id)
+        }
+    };
+    match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
+        Ok((key_contents, _key_id, _md_contents, _entry)) => Ok(Some(
+            crypt::EncryptedSigningKey::from_bytes(&key_contents)
+                .map_err(|e| format!("failed to parse signing key: {}", e))?,
         )),
         Err(e) => match e {
             GetKeyError::NoKey => Ok(None),
@@ -996,7 +1049,7 @@ pub async fn get_symmetric_key_ez(
 ) -> Result<SymmetricKeyInfo, AssetKeyMaterialDecryptionError> {
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let secret = match asset_keyring_locked
-        .get_or_unlock(
+        .get_or_unlock_decrypt_key(
             asset_blob_cache,
             api_client,
             &rec_key_info.recipient_key_id_parts(),
@@ -1534,4 +1587,140 @@ pub fn extract_key_recipients_from_shared_asset_name(
         .filter(|username| username != &ignore_username)
         .map(|username| KeyRecipient::User(username.to_string()))
         .collect()
+}
+
+// --
+
+pub enum SshKeyGenerationError {
+    KeyNotFound,
+    FetchFailed,
+    InvalidKey,
+    BadPassword,
+    Other(String),
+}
+
+impl Debug for SshKeyGenerationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SshKeyGenerationError::KeyNotFound => write!(f, "key not found"),
+            SshKeyGenerationError::FetchFailed => write!(f, "failed to fetch key data"),
+            SshKeyGenerationError::InvalidKey => write!(f, "invalid key data"),
+            SshKeyGenerationError::BadPassword => write!(f, "bad password for key decryption"),
+            SshKeyGenerationError::Other(e) => write!(f, "error: {}", e),
+        }
+    }
+}
+
+/// Gets signing/verifying key and formats it for use as SSH public/private
+/// keys.
+///
+/// # Returns
+/// A tuple containing the key ID, base64 public key, and base64 private key.
+pub async fn get_ed25519_for_ssh_key(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+) -> Result<(String, String, zeroize::Zeroizing<String>), SshKeyGenerationError> {
+    use ed25519_dalek::VerifyingKey;
+    // Fetch signing public key
+    let verifying_key_asset_name = format!("/{username}/keys/sign.pub");
+    let verifying_key_pub_data = match asset_reader::get_asset(
+        asset_blob_cache.clone(),
+        &api_client,
+        &verifying_key_asset_name,
+        true,
+    )
+    .await
+    {
+        Ok((data, _entry)) => data,
+        Err(e) => match e {
+            GetAssetError::BadName => {
+                return Err(SshKeyGenerationError::KeyNotFound);
+            }
+            GetAssetError::DataFetchFailed => {
+                return Err(SshKeyGenerationError::FetchFailed);
+            }
+        },
+    };
+
+    if verifying_key_pub_data.len() != 32 {
+        return Err(SshKeyGenerationError::InvalidKey);
+    }
+    let mut verifying_key_pub_bytes = [0u8; 32];
+    verifying_key_pub_bytes.copy_from_slice(&verifying_key_pub_data);
+    let verifying_key = VerifyingKey::from_bytes(&verifying_key_pub_bytes)
+        .map_err(|_e| SshKeyGenerationError::InvalidKey)?;
+    let signing_key_id = crypt::format_key_id(&crypt::derive_signing_key_id(&verifying_key));
+    let ssh_public_key = to_ssh_authorized_key(verifying_key.as_bytes(), "test");
+
+    let mut asset_keyring_locked = asset_keyring.lock().await;
+    let signing_key = match asset_keyring_locked
+        .get_or_unlock_signing_key(
+            asset_blob_cache,
+            api_client,
+            &RecipientKeyIdParts {
+                recipient: KeyRecipient::User(username.to_string()),
+                key_id: signing_key_id.clone(),
+                key_type: KeyType::Signing,
+            },
+        )
+        .await
+    {
+        Ok(secret) => secret,
+        Err(e) => {
+            eprintln!("error: failed to unlock keyring: {}", e);
+            return Err(SshKeyGenerationError::BadPassword);
+        }
+    };
+
+    let ssh_private_key = to_openssh_private_key(&signing_key).map_err(|e| {
+        SshKeyGenerationError::Other(format!(
+            "Failed to convert signing key to OpenSSH format: {}",
+            e
+        ))
+    })?;
+
+    Ok((signing_key_id, ssh_public_key, ssh_private_key))
+}
+
+/// Convert an Ed25519 public key to OpenSSH authorized_keys format.
+pub fn to_ssh_authorized_key(ed25519_pubkey: &[u8; 32], comment: &str) -> String {
+    // SSH wire format for Ed25519:
+    // 4 bytes: length of key type string (11)
+    // 11 bytes: "ssh-ed25519"
+    // 4 bytes: length of public key (32)
+    // 32 bytes: the public key
+
+    let key_type = b"ssh-ed25519";
+    let mut blob = Vec::with_capacity(4 + key_type.len() + 4 + 32);
+
+    // Key type length + key type
+    blob.extend_from_slice(&(key_type.len() as u32).to_be_bytes());
+    blob.extend_from_slice(key_type);
+
+    // Public key length + public key
+    blob.extend_from_slice(&(32u32).to_be_bytes());
+    blob.extend_from_slice(ed25519_pubkey);
+
+    format!("ssh-ed25519 {} {}", STANDARD.encode(&blob), comment)
+}
+
+/// Convert an Ed25519 private key to OpenSSH format.
+pub fn to_openssh_private_key(
+    signing_key: &SigningKey,
+) -> Result<Zeroizing<String>, ssh_key::Error> {
+    // Build the Ed25519 keypair for ssh-key crate
+    let secret_bytes = signing_key.to_bytes();
+    let public_bytes = signing_key.verifying_key().to_bytes();
+
+    // Combine into 64-byte keypair (secret || public) that ssh-key expects
+    let mut keypair_bytes = [0u8; 64];
+    keypair_bytes[..32].copy_from_slice(&secret_bytes);
+    keypair_bytes[32..].copy_from_slice(&public_bytes);
+
+    let ed25519_keypair = ssh_key::private::Ed25519Keypair::from_bytes(&keypair_bytes)?;
+    let ssh_private = PrivateKey::from(ed25519_keypair);
+
+    ssh_private.to_openssh(LineEnding::LF)
 }

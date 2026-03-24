@@ -178,6 +178,18 @@ pub enum Cmd {
     McpAdd(McpAddCmd),
     /// Call an MCP tool
     McpToolCall(McpToolCallCmd),
+    /// Boot hai bot
+    BotBoot,
+    /// Get active hai bot info
+    BotGetActive,
+    /// Probe hai bot
+    BotProbe,
+    /// Setup hai bot
+    BotSetup,
+    /// Ssh into hai bot
+    BotSsh,
+    /// Shutdown hai bot
+    BotShutdown,
     /// Get current account (or if specified, switch to logged-in account)
     Account(AccountCmd),
     /// Make a new account
@@ -2397,6 +2409,42 @@ fn parse_command(
                     None
                 }
             }
+        }
+        "bot-boot" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotBoot)
+        }
+        "bot-get-active" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotGetActive)
+        }
+        "bot-probe" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotProbe)
+        }
+        "bot-setup" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotSetup)
+        }
+        "bot-ssh" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotSsh)
+        }
+        "bot-shutdown" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            Some(Cmd::BotShutdown)
         }
         "account" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

@@ -1,0 +1,65 @@
+namespace bot
+
+import common
+
+route boot(BootArg, BootResult, BootError)
+    attrs
+        auth = "user"
+
+struct BootArg
+    pub_key_id String(min_length=1)
+    pub_key String(min_length=1)
+
+struct BootResult
+    bot BotInfo
+
+union BootError
+    already_running
+    deploy_failed
+
+struct BotInfo
+    bot_id String(min_length=1)
+    hostname String
+    booted_at common.UtcTimestamp
+    terminated_at common.UtcTimestamp?
+
+# --
+
+route shutdown(ShutdownArg, ShutdownResult, ShutdownError)
+    attrs
+        auth = "user"
+
+struct ShutdownArg
+    bot_id String(min_length=1)
+
+struct ShutdownResult
+    bot BotInfo
+
+union ShutdownError
+    bad_bot_id
+    failed
+    already_shutdown
+
+# --
+
+route get(GetArg, GetResult, GetError)
+    attrs
+        auth = "user"
+
+struct GetArg
+    bot_id String(min_length=1)
+
+struct GetResult
+    bot BotInfo
+
+union GetError
+    bad_bot_id
+
+# --
+
+route get_active(Void, GetActiveResult, Void)
+    attrs
+        auth = "user"
+
+struct GetActiveResult
+    bot BotInfo?
