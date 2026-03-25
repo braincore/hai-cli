@@ -1,3 +1,8 @@
+use keyring::{
+    credential::{CredentialApi, CredentialBuilderApi},
+    keyutils::KeyutilsCredential,
+    secret_service::SsCredential,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -39,6 +44,12 @@ impl fmt::Debug for AssetKeyring {
 
 impl AssetKeyring {
     pub fn new(enable_os_keyring: bool) -> Self {
+        // Try to replace the default store with one that can use secret-
+        // service and keyutils (headless) on Linux.
+        if let Ok(backend) = FallbackCredentialBuilder::new() {
+            keyring::set_default_credential_builder(Box::new(backend));
+        }
+
         // Test if keyring is available by attempting a dummy operation
         Self {
             unlocked_keys: HashMap::new(),
@@ -262,6 +273,59 @@ impl Drop for AssetKeyring {
         self.lock_all();
     }
 }
+
+// --
+
+/// A custom credential builder for linux that tries secret-service first, then
+/// falls back to keyutils. This allows us to use secret-service on desktop
+/// linux (persists credentials between reboot) and keyutils on headless linux
+/// servers (no persistence between reboots).
+#[derive(Debug)]
+struct FallbackCredentialBuilder {
+    /// Indicator to only test once
+    secret_service_missing: bool,
+}
+
+impl FallbackCredentialBuilder {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // Create a fake cred
+        let ss = SsCredential::new_with_target(None, "test", "user")?;
+
+        // Force a connect to secret service to determine if it exists
+        let missing = match ss.map_matching_items(|_item| Ok(()), false) {
+            Err(keyring::Error::PlatformFailure(_x)) => true,
+            _ => false,
+        };
+        Ok(Self {
+            secret_service_missing: missing,
+        })
+    }
+}
+
+impl CredentialBuilderApi for FallbackCredentialBuilder {
+    /// Helper method to try secret-service first, then fallback to the kernel's store
+    fn build(
+        &self,
+        target: Option<&str>,
+        service: &str,
+        user: &str,
+    ) -> Result<Box<dyn CredentialApi + Send + Sync + 'static>, keyring::Error> {
+        // First try secret-service if it exists
+        if !self.secret_service_missing {
+            let cred = SsCredential::new_with_target(target, service, user)?;
+            return Ok(Box::new(cred));
+        }
+
+        // Fallback to the kernel's keystore
+        let cred = KeyutilsCredential::new_with_target(target, service, user)?;
+        Ok(Box::new(cred))
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// --
 
 #[cfg(test)]
 mod tests {
