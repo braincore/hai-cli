@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 use keyring::{
     credential::{CredentialApi, CredentialBuilderApi},
     keyutils::KeyutilsCredential,
@@ -46,6 +47,7 @@ impl AssetKeyring {
     pub fn new(enable_os_keyring: bool) -> Self {
         // Try to replace the default store with one that can use secret-
         // service and keyutils (headless) on Linux.
+        #[cfg(target_os = "linux")]
         if let Ok(backend) = FallbackCredentialBuilder::new() {
             keyring::set_default_credential_builder(Box::new(backend));
         }
@@ -280,12 +282,14 @@ impl Drop for AssetKeyring {
 /// falls back to keyutils. This allows us to use secret-service on desktop
 /// linux (persists credentials between reboot) and keyutils on headless linux
 /// servers (no persistence between reboots).
+#[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct FallbackCredentialBuilder {
     /// Indicator to only test once
     secret_service_missing: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl FallbackCredentialBuilder {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         // Create a fake cred
@@ -302,6 +306,7 @@ impl FallbackCredentialBuilder {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl CredentialBuilderApi for FallbackCredentialBuilder {
     /// Helper method to try secret-service first, then fallback to the kernel's store
     fn build(
