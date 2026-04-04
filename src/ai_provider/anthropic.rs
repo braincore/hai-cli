@@ -96,6 +96,8 @@ pub async fn send_to_anthropic(
     provider_header: Option<String>,
     model: &str,
     use_thinking: bool,
+    use_thinking46: Option<bool>,
+    use_effort: Option<&config::AnthropicEffort>,
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
@@ -180,18 +182,43 @@ pub async fn send_to_anthropic(
             "tool_choice": tool_choice,
         })
     };
-    if let Some(request_obj) = request_body.as_object_mut()
-        && use_thinking
-    {
-        request_obj.insert(
-            "thinking".to_string(),
-            json!({
-                "type": "enabled",
-                "budget_tokens": 4096,
-            }),
-        );
-        // API requires thinking to be set to 1 if thinking is enabled.
-        request_obj.insert("temperature".to_string(), json!(1));
+    if let Some(request_obj) = request_body.as_object_mut() {
+        if use_thinking {
+            request_obj.insert(
+                "thinking".to_string(),
+                json!({
+                    "type": "enabled",
+                    "budget_tokens": 4096,
+                }),
+            );
+            // API requires thinking to be set to 1 if thinking is enabled.
+            request_obj.insert("temperature".to_string(), json!(1));
+        }
+        if let Some(use_thinking46) = use_thinking46 {
+            if use_thinking46 {
+                request_obj.insert(
+                    "thinking".to_string(),
+                    json!({
+                        "type": "adaptive",
+                    }),
+                );
+                // API requires thinking to be set to 1 if thinking is enabled.
+                request_obj.insert("temperature".to_string(), json!(1));
+            }
+        }
+        if let Some(effort) = use_effort {
+            request_obj.insert(
+                "output_config".to_string(),
+                json!({
+                    "effort": match effort {
+                        config::AnthropicEffort::Low => json!("low"),
+                        config::AnthropicEffort::Medium => json!("medium"),
+                        config::AnthropicEffort::High => json!("high"),
+                        config::AnthropicEffort::Max => json!("max"),
+                    },
+                }),
+            );
+        }
     }
     remove_nulls(&mut request_body);
 

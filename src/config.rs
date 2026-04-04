@@ -156,24 +156,30 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
             parse_anthropic_opts(opts),
         ))),
         "opus41thinking" => Some(AiModel::Anthropic(AnthropicModel::Opus41(true))),
-        "opus" | "opus45" => Some(AiModel::Anthropic(AnthropicModel::Opus45(
+        "opus45" => Some(AiModel::Anthropic(AnthropicModel::Opus45(
             parse_anthropic_opts(opts),
         ))),
-        "sonnet" | "sonnet45" => Some(AiModel::Anthropic(AnthropicModel::Sonnet45(
+        "opus" | "opus46" => Some(AiModel::Anthropic(AnthropicModel::Opus46(
+            parse_anthropic46_opts(opts),
+        ))),
+        "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
+        "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(
+            parse_anthropic_opts(opts),
+        ))),
+        "sonnet37thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true))),
+        "sonnet4" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(
+            parse_anthropic_opts(opts),
+        ))),
+        "sonnet4thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(true))),
+        "sonnet45" => Some(AiModel::Anthropic(AnthropicModel::Sonnet45(
             parse_anthropic_opts(opts),
         ))),
         "sonnetthinking" | "sonnet45thinking" => {
             Some(AiModel::Anthropic(AnthropicModel::Sonnet45(true)))
         }
-        "sonnet4" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(
-            parse_anthropic_opts(opts),
+        "sonnet" | "sonnet46" => Some(AiModel::Anthropic(AnthropicModel::Sonnet46(
+            parse_anthropic46_opts(opts),
         ))),
-        "sonnet4thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet4(true))),
-        "sonnet37" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(
-            parse_anthropic_opts(opts),
-        ))),
-        "sonnet37thinking" => Some(AiModel::Anthropic(AnthropicModel::Sonnet37(true))),
-        "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
         "llamacpp" => Some(AiModel::LlamaCpp(LlamaCppModel::Other("n/a".to_string()))),
         _ => {
             let openai_regex = Regex::new(r"^openai/(\S+)$").unwrap();
@@ -367,6 +373,47 @@ pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
     false
 }
 
+pub fn parse_anthropic46_opts(opts: Vec<&str>) -> Anthropic46Options {
+    let mut effort = None;
+    let mut thinking = None;
+    for opt in opts {
+        let mut kv = opt.split('=');
+        let key = match kv.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let value = kv.next().unwrap_or("true");
+        match key {
+            "t" | "thinking" => {
+                match value {
+                    "true" => thinking = Some(true),
+                    "false" => thinking = Some(false),
+                    _ => {
+                        println!("ignoring unknown thinking value: {}", value);
+                        continue;
+                    }
+                };
+            }
+            "e" | "effort" => {
+                match value {
+                    "l" | "low" => effort = Some(AnthropicEffort::Low),
+                    "m" | "medium" => effort = Some(AnthropicEffort::Medium),
+                    "h" | "high" => effort = Some(AnthropicEffort::High),
+                    "max" => effort = Some(AnthropicEffort::Max),
+                    _ => {
+                        println!("ignoring unknown effort level: {}", value);
+                        continue;
+                    }
+                };
+            }
+            _ => {
+                println!("ignoring unknown option: {}", key);
+            }
+        }
+    }
+    Anthropic46Options { effort, thinking }
+}
+
 // --
 
 pub fn ai_model_to_string(ai_model: &AiModel) -> String {
@@ -395,6 +442,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
                     "opus-4.5".to_string()
                 }
             }
+            AnthropicModel::Opus46(opts) => {
+                let base = "opus-4.6".to_string();
+                append_anthropic46_opts(base, opts)
+            }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(thinking) => {
                 if *thinking {
@@ -416,6 +467,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
                 } else {
                     "sonnet-4.5".to_string()
                 }
+            }
+            AnthropicModel::Sonnet46(opts) => {
+                let base = "sonnet-4.6".to_string();
+                append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Other(name) => format!("anthropic/{}", name),
         },
@@ -517,6 +572,19 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
     }
 }
 
+fn append_anthropic46_opts(base: String, opts: &Anthropic46Options) -> String {
+    let mut result = base;
+    if let Some(ref thinking) = opts.thinking {
+        result.push_str(",thinking=");
+        result.push_str(&thinking.to_string());
+    }
+    if let Some(ref effort) = opts.effort {
+        result.push_str(",effort=");
+        result.push_str(anthropic_effort_to_string(effort));
+    }
+    result
+}
+
 fn append_gemini_opts(base: String, opts: &GeminiOptions) -> String {
     let mut result = base;
     if let Some(ref thinking_level) = opts.thinking_level {
@@ -537,6 +605,15 @@ fn append_gpt5_opts(base: String, opts: &Gpt5Options) -> String {
         result.push_str(verbosity_to_string(verbosity));
     }
     result
+}
+
+fn anthropic_effort_to_string(effort: &AnthropicEffort) -> &'static str {
+    match effort {
+        AnthropicEffort::Low => "low",
+        AnthropicEffort::Medium => "medium",
+        AnthropicEffort::High => "high",
+        AnthropicEffort::Max => "max",
+    }
 }
 
 fn reasoning_effort_to_string(effort: &OpenAiReasoningEffort) -> &'static str {
@@ -720,14 +797,30 @@ pub enum AiModel {
 #[derive(Debug)]
 pub enum AnthropicModel {
     Haiku35,
-    Opus4(bool),  // If true, enables thinking
-    Opus41(bool), // If true, enables thinking
-    Opus45(bool), // If true, enables thinking
+    Opus4(bool),                // If true, enables thinking
+    Opus41(bool),               // If true, enables thinking
+    Opus45(bool),               // If true, enables thinking
+    Opus46(Anthropic46Options), // If true, enables thinking
     Sonnet35,
-    Sonnet37(bool), // If true, enables thinking
-    Sonnet4(bool),  // If true, enables thinking
-    Sonnet45(bool), // If true, enables thinking
+    Sonnet37(bool),               // If true, enables thinking
+    Sonnet4(bool),                // If true, enables thinking
+    Sonnet45(bool),               // If true, enables thinking
+    Sonnet46(Anthropic46Options), // If true, enables thinking
     Other(String),
+}
+
+#[derive(Debug)]
+pub struct Anthropic46Options {
+    pub effort: Option<AnthropicEffort>,
+    pub thinking: Option<bool>,
+}
+
+#[derive(Debug)]
+pub enum AnthropicEffort {
+    Low,
+    Medium,
+    High,
+    Max,
 }
 
 #[derive(Debug)]
@@ -838,10 +931,12 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Opus4(_) => "claude-opus-4-20250514",
             AnthropicModel::Opus41(_) => "claude-opus-4-1-20250805",
             AnthropicModel::Opus45(_) => "claude-opus-4-5-20251101",
+            AnthropicModel::Opus46(_) => "claude-opus-4-6",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
             AnthropicModel::Sonnet45(_) => "claude-sonnet-4-5-20250929",
+            AnthropicModel::Sonnet46(_) => "claude-sonnet-4-6",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
@@ -916,6 +1011,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Opus41(true) => "opus-4.1(t)".to_string(),
             AnthropicModel::Opus45(false) => "opus-4.5".to_string(),
             AnthropicModel::Opus45(true) => "opus-4.5(t)".to_string(),
+            AnthropicModel::Opus46(opts) => {
+                format!("opus-4.6{}", get_anthropic46_opts_display(opts))
+            }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
             AnthropicModel::Sonnet37(true) => "sonnet-3.7(t)".to_string(),
@@ -923,6 +1021,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Sonnet4(true) => "sonnet-4(t)".to_string(),
             AnthropicModel::Sonnet45(false) => "sonnet-4.5".to_string(),
             AnthropicModel::Sonnet45(true) => "sonnet-4.5(t)".to_string(),
+            AnthropicModel::Sonnet46(opts) => {
+                format!("sonnet-4.6{}", get_anthropic46_opts_display(opts))
+            }
             AnthropicModel::Other(name) => name.clone(),
         },
         AiModel::DeepSeek(model) => match model {
@@ -1017,6 +1118,27 @@ pub fn get_gpt5_opts_display(opts: &Gpt5Options) -> String {
         parts.push(format!("v={}", v_str));
     }
 
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(","))
+    }
+}
+
+pub fn get_anthropic46_opts_display(opts: &Anthropic46Options) -> String {
+    let mut parts = Vec::new();
+    if let Some(true) = opts.thinking {
+        parts.push("t".to_string());
+    }
+    if let Some(ref e) = opts.effort {
+        let e_str = match e {
+            &AnthropicEffort::Low => "l",
+            &AnthropicEffort::Medium => "m",
+            &AnthropicEffort::High => "h",
+            &AnthropicEffort::Max => "max",
+        };
+        parts.push(format!("e={}", e_str));
+    }
     if parts.is_empty() {
         String::new()
     } else {
@@ -1138,10 +1260,12 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Opus4(_)
                     | AnthropicModel::Opus41(_)
                     | AnthropicModel::Opus45(_)
+                    | AnthropicModel::Opus46(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
                     | AnthropicModel::Sonnet45(_)
+                    | AnthropicModel::Sonnet46(_)
             )
         }
         AiModel::DeepSeek(model) => matches!(
@@ -1203,10 +1327,12 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
             AnthropicModel::Opus45(_) => Some((5000, 25000)),
+            AnthropicModel::Opus46(_) => Some((5000, 25000)),
             AnthropicModel::Sonnet35
             | AnthropicModel::Sonnet37(_)
             | AnthropicModel::Sonnet4(_)
-            | AnthropicModel::Sonnet45(_) => Some((3000, 15000)),
+            | AnthropicModel::Sonnet45(_)
+            | AnthropicModel::Sonnet46(_) => Some((3000, 15000)),
             AnthropicModel::Other(_) => None,
         },
         AiModel::DeepSeek(model) => match model {
@@ -1552,7 +1678,10 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             verbosity: None,
         }))
     } else if get_anthropic_api_key(cfg).is_some() {
-        AiModel::Anthropic(AnthropicModel::Sonnet45(false))
+        AiModel::Anthropic(AnthropicModel::Sonnet46(Anthropic46Options {
+            effort: None,
+            thinking: None,
+        }))
     } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
     } else if get_google_api_key(cfg).is_some() {

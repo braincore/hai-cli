@@ -550,6 +550,7 @@ async fn repl(
         "opus4-thinking",
         "opus41",
         "opus45",
+        "opus46",
         "sonnet",
         "sonnet35",
         "sonnet37",
@@ -557,6 +558,7 @@ async fn repl(
         "sonnet4",
         "sonnet4-thinking",
         "sonnet45",
+        "sonnet46",
         "llama32",
         "llama32-vision",
         "flash",
@@ -1723,12 +1725,26 @@ pub async fn prompt_ai(
                 | config::AnthropicModel::Sonnet45(use_thinking) => *use_thinking,
                 _ => false,
             };
+            let use_thinking46 = match anthropic_model {
+                config::AnthropicModel::Opus46(opts) | config::AnthropicModel::Sonnet46(opts) => {
+                    opts.thinking
+                }
+                _ => None,
+            };
+            let use_effort = match anthropic_model {
+                config::AnthropicModel::Opus46(opts) | config::AnthropicModel::Sonnet46(opts) => {
+                    opts.effort.as_ref()
+                }
+                _ => None,
+            };
             anthropic::send_to_anthropic(
                 api_url.as_deref(),
                 &api_key,
                 provider_header,
                 config::get_ai_model_provider_name(&session.ai),
                 use_thinking,
+                use_thinking46,
+                use_effort,
                 session.ai_temperature,
                 msg_history,
                 tool_policy.as_ref(),
