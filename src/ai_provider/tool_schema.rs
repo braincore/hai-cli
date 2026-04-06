@@ -381,6 +381,7 @@ Assets:
 /asset-export <name> <path>   - Exports asset with name to <path> on local machine
 /asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
                               - If count specified, that number of revisions is exported.
+/asset-revision-temp <name> [<rev_id>] - Exports revision of asset & metadata to a temporary file.
 /asset-remove <name>    - Removes an asset
 /asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst> - Copies an asset from <src> to <dst>

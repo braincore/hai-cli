@@ -724,6 +724,19 @@ impl Completer for CmdAndFileCompleter {
                     realign_suggestions(&mut completions, arg1_index, self.debug);
                     (completions, false)
                 }
+            } else if is_cmd_input(line, "/asset-revision-temp") {
+                let (_cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
+                let (arg1_prefix, arg2_prefix) = arg_prefix
+                    .split_once(char::is_whitespace)
+                    .map(|(arg1, arg2)| (arg1, Some(arg2.trim_start())))
+                    .unwrap_or((arg_prefix, None));
+                if arg2_prefix.is_some() {
+                    (vec![], false)
+                } else {
+                    let mut completions = self.asset_completer(arg1_prefix);
+                    realign_suggestions(&mut completions, arg1_index, self.debug);
+                    (completions, false)
+                }
             } else {
                 (
                     self.simple_completer(

@@ -126,6 +126,8 @@ pub enum Cmd {
     AssetExport(AssetExportCmd),
     /// Temporarily replicate asset onto local filesystem
     AssetTemp(AssetTempCmd),
+    /// Temporarily replicate asset revision onto local filesystem
+    AssetRevisionTemp(AssetRevisionTempCmd),
     /// Syncs assets onto the local filesystem
     AssetSyncDown(AssetSyncDownCmd),
     /// Syncs assets up to the cloud
@@ -627,6 +629,14 @@ pub struct AssetTempCmd {
     pub asset_name: String,
     /// Number of revisions to output
     pub count: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetRevisionTempCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Revision ID to fetch
+    pub rev_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2082,6 +2092,21 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-temp <asset_name> [<count>]");
+                    None
+                }
+            }
+        }
+        "asset-revision-temp" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg(remaining) {
+                Some((asset_name, rev_id)) => Some(Cmd::AssetRevisionTemp(AssetRevisionTempCmd {
+                    asset_name,
+                    rev_id,
+                })),
+                None => {
+                    eprintln!("Usage: /{} <asset_name> <rev_id>", cmd_name);
                     None
                 }
             }

@@ -3571,6 +3571,136 @@ pub async fn process_cmd(
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
             );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetRevisionTemp(cmd::AssetRevisionTempCmd { asset_name, rev_id }) => {
+            let _username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+
+            use api::types::asset::{AssetRevision, AssetRevisionGetArg, EntryRef};
+            let revision_get_res = match api_client
+                .asset_revision_get(AssetRevisionGetArg {
+                    entry_ref: EntryRef::Name(asset_name.to_string()),
+                    rev_id: Some(rev_id.clone()),
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    eprintln!("error: failed to get asset revision: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let sync_res = asset_sync::sync_entries(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| KeyRecipient::User(a.username.clone())),
+                asset_sync::AssetSyncSource::AssetRevision((
+                    asset_name.clone(),
+                    vec![revision_get_res.revision.clone()],
+                )),
+                None,
+                None,
+                true,
+            )
+            .await;
+
+            // Collect all messages to log at once
+            let mut all_msgs = vec![];
+            if let Ok(sync_res) = sync_res {
+                for (source, data_temp_file, metadata_temp_file) in sync_res {
+                    if let Some(data_temp_file) = data_temp_file {
+                        let msg = format!(
+                            "Asset '{}' revision {} data copied to '{}'",
+                            asset_name,
+                            source.asset.rev_id,
+                            data_temp_file.path().display()
+                        );
+                        println!("{}", msg);
+                        all_msgs.push(msg);
+                        session.temp_files.push((data_temp_file, is_task_mode_step));
+                    }
+                    if let Some(metadata_temp_file) = metadata_temp_file
+                        && let Some(metadata_info) = source.metadata.as_ref()
+                    {
+                        let msg = format!(
+                            "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
+                            asset_name,
+                            source.asset.rev_id,
+                            metadata_info.rev_id,
+                            metadata_temp_file.path().display()
+                        );
+                        println!("{}", msg);
+                        all_msgs.push(msg);
+                        session
+                            .temp_files
+                            .push((metadata_temp_file, is_task_mode_step));
+                    }
+                }
+            }
+            fn format_revision(revision: &AssetRevision) -> String {
+                let mut output = String::new();
+
+                // Operation
+                let op_str = match revision.op {
+                    AssetEntryOp::Add => "Add",
+                    AssetEntryOp::Fork => "Fork",
+                    AssetEntryOp::Edit => "Edit",
+                    AssetEntryOp::Push => "Push",
+                    AssetEntryOp::Delete => "Delete",
+                    AssetEntryOp::Metadata => "Metadata",
+                    AssetEntryOp::Move => "Move",
+                    AssetEntryOp::Other => "Other",
+                };
+                output.push_str(&format!("Operation: {}\n", op_str));
+
+                // Asset Info
+                output.push_str("\nAsset:\n");
+                output.push_str(&format!("  Rev ID:     {}\n", revision.asset.rev_id));
+                output.push_str(&format!("  Created By: {:?}\n", revision.asset.created_by));
+                output.push_str(&format!("  Size:       {} bytes\n", revision.asset.size));
+                if let Some(hash) = &revision.asset.hash {
+                    output.push_str(&format!("  Hash:       {}\n", hash));
+                }
+
+                // Metadata Info (if present)
+                if let Some(metadata) = &revision.metadata {
+                    output.push_str("\nMetadata:\n");
+                    output.push_str(&format!("  Rev ID:     {}\n", metadata.rev_id));
+                    output.push_str(&format!("  Created By: {:?}\n", metadata.created_by));
+                    output.push_str(&format!("  Size:       {} bytes\n", metadata.size));
+                    if let Some(hash) = &metadata.hash {
+                        output.push_str(&format!("  Hash:       {}\n", hash));
+                    }
+                    if let Some(title) = &metadata.title {
+                        output.push_str(&format!("  Title:      {}\n", title));
+                    }
+                    if let Some(content_type) = &metadata.content_type {
+                        output.push_str(&format!("  Content Type: {}\n", content_type));
+                    }
+                    if let Some(encrypted) = &metadata.content_encrypted {
+                        output.push_str(&format!("  Encrypted:  {:?}\n", encrypted));
+                    }
+                }
+
+                output
+            }
+
+            let msg = format!("Revision: {}", format_revision(&revision_get_res.revision));
+            println!("{}", msg);
+            all_msgs.push(msg);
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
                 &all_msgs.join("\n"),
@@ -5628,6 +5758,7 @@ Assets (Experimental):
 /asset-export <n> <p>            - Exports asset with name to <path>
 /asset-temp <name> [<count>]     - Exports asset to a temporary file.
                                    If `count` set, the latest `count` revisions are exported.
+/asset-revision-temp <n> [<rev>] - Exports revision of asset to a temporary file. `n` is asset name.
 /asset-remove <name>             - Removes an asset
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>
