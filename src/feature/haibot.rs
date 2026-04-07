@@ -555,7 +555,7 @@ pub async fn run_bot_loop(
     let schedule_notify = Arc::new(Notify::new());
     let schedule_notify_clone = Arc::clone(&schedule_notify);
 
-    // Spawn the listener task
+    // Spawn the listener task for job config changes
     let api_client_for_listener = crate::session::mk_api_client(Some(&session));
     let prefix_clone = prefix.clone();
     let listen_url = format!(
@@ -575,8 +575,9 @@ pub async fn run_bot_loop(
         .await
     });
 
-    // Run the scheduler
-    run_scheduler(job_groups, schedule_notify).await
+    // Run the scheduler (which will also spawn asset change listeners)
+    let api_client_for_scheduler = crate::session::mk_api_client(Some(&session));
+    run_scheduler(job_groups, schedule_notify, api_client_for_scheduler).await
 }
 
 /// Fetching the list of jobs is equivalent to listing all assets at a given
@@ -591,23 +592,37 @@ async fn fetch_job_list(
     (Vec<crate::api::types::asset::AssetEntry>, String),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    use crate::api::types::asset::{AssetEntryListArg, AssetEntryListError, EntryListOrder};
+    use crate::api::types::asset::{AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg};
 
     loop {
         match api_client
-            .asset_entry_list(AssetEntryListArg {
+            .asset_entry_iter(AssetEntryIterArg {
                 prefix: Some(prefix.to_string()),
                 limit: 200,
-                order: EntryListOrder::Asc,
             })
             .await
         {
-            Ok(res) => {
-                return Ok((res.entries, res.cursor));
+            Ok(mut iter_res) => {
+                let mut entries = Vec::new();
+                let cursor;
+                loop {
+                    entries.extend_from_slice(&iter_res.entries);
+                    if !iter_res.has_more {
+                        cursor = iter_res.cursor;
+                        break;
+                    }
+                    iter_res = api_client
+                        .asset_entry_iter_next(AssetEntryIterNextArg {
+                            cursor: iter_res.cursor,
+                            limit: 200,
+                        })
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                }
+                return Ok((entries, cursor));
             }
             Err(e) => match &e {
-                crate::api::client::RequestError::Route(AssetEntryListError::Empty) => {
-                    // Pool uncreated, wait and retry
+                crate::api::client::RequestError::Route(AssetEntryIterError::Empty) => {
                     eprintln!("No cursor available, will retry...");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     continue;
@@ -674,22 +689,79 @@ async fn listen_for_changes(
         while let Some(msg) = ws_stream.next().await {
             match msg {
                 Ok(_msg) => {
-                    // Received a notification - refresh the job list
-                    println!("Received change notification, refreshing job list...");
-                    let job_groups_clone = Arc::clone(&job_groups);
-                    match fetch_job_list(&api_client, &prefix).await {
-                        Ok((new_jobs, new_cursor)) => {
-                            {
-                                let mut job_groups_guard = job_groups_clone.write().await;
-                                *job_groups_guard = new_jobs;
-                            }
-                            notify.notify_one(); // Wake up the scheduler
-                            println!("Job list refreshed");
+                    // Received a notification - use iter_next to get changes
+                    println!("Received change notification, scanning for changes...");
+                    use crate::api::types::asset::AssetEntryIterNextArg;
 
-                            current_cursor = new_cursor;
+                    match api_client
+                        .asset_entry_iter_next(AssetEntryIterNextArg {
+                            cursor: current_cursor.clone(),
+                            limit: 200,
+                        })
+                        .await
+                    {
+                        Ok(mut iter_res) => {
+                            let mut changed_entries = Vec::new();
+                            loop {
+                                changed_entries.extend_from_slice(&iter_res.entries);
+                                if !iter_res.has_more {
+                                    current_cursor = iter_res.cursor;
+                                    break;
+                                }
+                                match api_client
+                                    .asset_entry_iter_next(AssetEntryIterNextArg {
+                                        cursor: iter_res.cursor,
+                                        limit: 200,
+                                    })
+                                    .await
+                                {
+                                    Ok(next_res) => iter_res = next_res,
+                                    Err(e) => {
+                                        eprintln!("error during iter_next pagination: {}", e);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if !changed_entries.is_empty() {
+                                println!(
+                                    "Detected {} changed entries, updating job list...",
+                                    changed_entries.len()
+                                );
+
+                                // Apply changes to the job groups
+                                let mut job_groups_guard = job_groups.write().await;
+                                for changed in &changed_entries {
+                                    // Remove existing entry with same name (if any)
+                                    job_groups_guard.retain(|e| e.name != changed.name);
+                                    // Add updated entry (unless it was deleted - check if it has a URL)
+                                    if changed.asset.url.is_some() {
+                                        job_groups_guard.push(changed.clone());
+                                    } else {
+                                        println!("Entry removed: {}", changed.name);
+                                    }
+                                }
+                                drop(job_groups_guard);
+
+                                notify.notify_one();
+                                println!("Job list updated");
+                            }
                         }
                         Err(e) => {
-                            eprintln!("error refreshing job list: {}", e);
+                            eprintln!("error fetching changes via iter_next: {}", e);
+                            // Fallback: full refresh
+                            match fetch_job_list(&api_client, &prefix).await {
+                                Ok((new_jobs, new_cursor)) => {
+                                    let mut job_groups_guard = job_groups.write().await;
+                                    *job_groups_guard = new_jobs;
+                                    drop(job_groups_guard);
+                                    current_cursor = new_cursor;
+                                    notify.notify_one();
+                                }
+                                Err(e2) => {
+                                    eprintln!("error during fallback refresh: {}", e2);
+                                }
+                            }
                         }
                     }
                 }
@@ -738,6 +810,8 @@ pub struct JobConfig {
     pub schedule: Option<HumanSchedule>,
     /// Cron expression (escape hatch)
     pub cron: Option<String>,
+    /// Trigger on change to asset with given name
+    pub asset_change: Option<String>,
     /// Override bot-level timezone
     pub timezone: Option<String>,
 }
@@ -968,6 +1042,7 @@ enum ResolvedSchedule {
     Always,
     Cron(cron::Schedule),
     Human(HumanSchedule),
+    AssetChange(String),
 }
 
 #[derive(Debug)]
@@ -979,6 +1054,15 @@ struct DaemonState {
     child: Child,
 }
 
+/// State for an asset change watcher
+struct AssetWatcherState {
+    #[allow(dead_code)]
+    /// The job key this watcher is for
+    job_key: String,
+    /// Handle to the spawned watcher task
+    handle: tokio::task::JoinHandle<()>,
+}
+
 //
 // Scheduler
 //
@@ -986,12 +1070,16 @@ struct DaemonState {
 async fn run_scheduler(
     job_groups: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
+    api_client: crate::api::client::HaiClient,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Track running daemons (always-on tasks)
     let mut daemons: HashMap<String, DaemonState> = HashMap::new();
 
     // Track next run time for scheduled jobs
     let mut next_runs: HashMap<String, DateTime<Utc>> = HashMap::new();
+
+    // Track asset change watchers
+    let mut asset_watchers: HashMap<String, AssetWatcherState> = HashMap::new();
 
     loop {
         // Parse current job configurations
@@ -1005,6 +1093,9 @@ async fn run_scheduler(
 
         // Check and restart any crashed daemons
         check_daemon_health(&mut daemons).await;
+
+        // Reconcile asset watchers
+        reconcile_asset_watchers(&scheduled_jobs, &mut asset_watchers, &api_client).await;
 
         // Update next_runs for any new/changed jobs
         update_next_runs(&scheduled_jobs, &mut next_runs);
@@ -1022,6 +1113,7 @@ async fn run_scheduler(
                         job.description.as_deref(),
                         job.task.as_deref(),
                         job.steps.as_deref(),
+                        None, // No asset revision for scheduled jobs
                     )
                     .await;
 
@@ -1049,6 +1141,7 @@ async fn run_scheduler(
                     _ = tokio::signal::ctrl_c() => {
                         log_scheduler("Received Ctrl+C, shutting down scheduler...");
                         shutdown_all_daemons(&mut daemons).await;
+                        shutdown_all_watchers(&mut asset_watchers).await;
                         return Ok(());
                     }
                 }
@@ -1063,6 +1156,7 @@ async fn run_scheduler(
                     _ = tokio::signal::ctrl_c() => {
                         log_scheduler("Received Ctrl+C, shutting down scheduler...");
                         shutdown_all_daemons(&mut daemons).await;
+                        shutdown_all_watchers(&mut asset_watchers).await;
                         return Ok(());
                     }
                 }
@@ -1076,9 +1170,295 @@ async fn shutdown_all_daemons(daemons: &mut HashMap<String, DaemonState>) {
     log_scheduler(&format!("Stopping {} daemon(s)...", daemons.len()));
     for (name, mut daemon) in daemons.drain() {
         log_scheduler(&format!("Stopping daemon: {}", name));
-        // Assuming DaemonState has a way to stop the daemon
-        // Adjust based on your actual DaemonState implementation
         let _ = daemon.child.kill().await;
+    }
+}
+
+/// Helper function to shutdown all asset watchers
+async fn shutdown_all_watchers(watchers: &mut HashMap<String, AssetWatcherState>) {
+    log_scheduler(&format!("Stopping {} asset watcher(s)...", watchers.len()));
+    for (name, watcher) in watchers.drain() {
+        log_scheduler(&format!("Stopping asset watcher: {}", name));
+        watcher.handle.abort();
+    }
+}
+
+// --
+
+//
+// Asset change watcher management
+//
+
+async fn reconcile_asset_watchers(
+    jobs: &[ScheduledJob],
+    watchers: &mut HashMap<String, AssetWatcherState>,
+    api_client: &crate::api::client::HaiClient,
+) {
+    // Find all asset change jobs
+    let asset_change_jobs: HashMap<String, &ScheduledJob> = jobs
+        .iter()
+        .filter_map(|j| {
+            if let ResolvedSchedule::AssetChange(_) = &j.schedule {
+                Some((job_key_for(j), j))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Stop watchers that are no longer configured
+    let to_remove: Vec<String> = watchers
+        .keys()
+        .filter(|job_key| !asset_change_jobs.contains_key(*job_key))
+        .cloned()
+        .collect();
+
+    for job_key in to_remove {
+        if let Some(watcher) = watchers.remove(&job_key) {
+            log_scheduler(&format!("Stopping asset watcher: {}", job_key));
+            watcher.handle.abort();
+        }
+    }
+
+    // Start new watchers
+    for (job_key, job) in asset_change_jobs {
+        if !watchers.contains_key(&job_key) {
+            if let ResolvedSchedule::AssetChange(asset_name) = &job.schedule {
+                log_scheduler(&format!(
+                    "Starting asset watcher for job {} on asset: {}",
+                    job_key, asset_name
+                ));
+
+                match spawn_asset_watcher(
+                    api_client.clone(),
+                    job_key.clone(),
+                    asset_name.clone(),
+                    job.task.clone(),
+                    job.steps.clone(),
+                    job.description.clone(),
+                )
+                .await
+                {
+                    Ok(handle) => {
+                        watchers.insert(job_key.clone(), AssetWatcherState { job_key, handle });
+                    }
+                    Err(e) => {
+                        log_scheduler(&format!("Failed to start asset watcher: {}", e));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Spawn an asset watcher that listens for changes to a specific asset
+async fn spawn_asset_watcher(
+    api_client: crate::api::client::HaiClient,
+    job_key: String,
+    asset_name: String,
+    task: Option<String>,
+    steps: Option<Vec<String>>,
+    description: Option<String>,
+) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {
+    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
+
+    // Get initial cursor (latest revision) - we don't want to process existing versions
+    let initial_cursor = match api_client
+        .asset_revision_iter(AssetRevisionIterArg {
+            entry_ref: EntryRef::Name(asset_name.clone()),
+            limit: 1,
+            direction: RevisionIterDirection::Newer,
+        })
+        .await
+    {
+        Ok(iter_res) => iter_res.next.map(|n| n.cursor),
+        Err(e) => {
+            log_scheduler(&format!(
+                "Warning: Could not get initial cursor for asset '{}': {}. Will retry on connection.",
+                asset_name, e
+            ));
+            None
+        }
+    };
+
+    let handle = tokio::spawn(async move {
+        asset_watcher_loop(
+            api_client,
+            job_key,
+            asset_name,
+            task,
+            steps,
+            description,
+            initial_cursor,
+        )
+        .await;
+    });
+
+    Ok(handle)
+}
+
+/// The main loop for watching an asset for changes
+async fn asset_watcher_loop(
+    api_client: crate::api::client::HaiClient,
+    job_key: String,
+    asset_name: String,
+    task: Option<String>,
+    steps: Option<Vec<String>>,
+    description: Option<String>,
+    initial_cursor: Option<String>,
+) {
+    use crate::api::types::asset::{
+        AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
+    };
+    use crate::api::types::notify::{ListenAsset, NotifyListenArg};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::connect_async;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listen_url = format!(
+        "{}/notify/listen",
+        crate::session::get_api_base_url().replace("http", "ws")
+    );
+
+    // If we don't have an initial cursor, we need to get one
+    let mut current_cursor = match initial_cursor {
+        Some(cursor) => cursor,
+        None => {
+            // Keep trying to get a cursor
+            loop {
+                match api_client
+                    .asset_revision_iter(AssetRevisionIterArg {
+                        entry_ref: EntryRef::Name(asset_name.clone()),
+                        limit: 1,
+                        direction: RevisionIterDirection::Newer,
+                    })
+                    .await
+                {
+                    Ok(iter_res) => {
+                        if let Some(next) = iter_res.next {
+                            break next.cursor;
+                        }
+                        log_scheduler(&format!(
+                            "Asset '{}' has no revisions yet, waiting...",
+                            asset_name
+                        ));
+                    }
+                    Err(e) => {
+                        log_scheduler(&format!(
+                            "Error getting cursor for asset '{}': {}, retrying...",
+                            asset_name, e
+                        ));
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        }
+    };
+
+    let mut attempt = 0;
+
+    loop {
+        let arg = NotifyListenArg::Asset(ListenAsset {
+            cursor: current_cursor.clone(),
+        });
+
+        let (mut ws_stream, _) = match connect_async(&listen_url).await {
+            Ok(res) => res,
+            Err(e) => {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': failed to connect: {}",
+                    job_key, e
+                ));
+                attempt += 1;
+                let backoff_duration = std::time::Duration::from_secs(2_u64.pow(attempt).min(60));
+                log_scheduler(&format!(
+                    "Asset watcher '{}': retrying in {} seconds...",
+                    job_key,
+                    backoff_duration.as_secs()
+                ));
+                tokio::time::sleep(backoff_duration).await;
+                continue;
+            }
+        };
+
+        if attempt > 0 {
+            log_scheduler(&format!("Asset watcher '{}': connected", job_key));
+            attempt = 0;
+        }
+
+        if let Err(e) = ws_stream
+            .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
+            .await
+        {
+            log_scheduler(&format!(
+                "Asset watcher '{}': error sending listen arg: {}",
+                job_key, e
+            ));
+            continue;
+        }
+
+        while let Some(msg) = ws_stream.next().await {
+            match msg {
+                Ok(_msg) => {
+                    // Received a notification - fetch new revisions
+                    log_scheduler(&format!(
+                        "Asset watcher '{}': change detected on '{}'",
+                        job_key, asset_name
+                    ));
+
+                    match api_client
+                        .asset_revision_iter_next(AssetRevisionIterNextArg {
+                            cursor: current_cursor.clone(),
+                            limit: 100, // Process up to 100 revisions at once
+                        })
+                        .await
+                    {
+                        Ok(iter_res) => {
+                            for revision in iter_res.revisions {
+                                let rev_id = &revision.asset.rev_id;
+                                log_scheduler(&format!(
+                                    "Asset watcher '{}': executing job for revision {}",
+                                    job_key, rev_id
+                                ));
+
+                                // Execute the job with the asset revision
+                                execute_job(
+                                    &job_key,
+                                    description.as_deref(),
+                                    task.as_deref(),
+                                    steps.as_deref(),
+                                    Some((&asset_name, rev_id)),
+                                )
+                                .await;
+                            }
+
+                            // Update cursor
+                            if let Some(next) = iter_res.next {
+                                current_cursor = next.cursor;
+                            }
+                        }
+                        Err(e) => {
+                            log_scheduler(&format!(
+                                "Asset watcher '{}': error fetching revisions: {}",
+                                job_key, e
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    if !e
+                        .to_string()
+                        .contains("Connection reset without closing handshake")
+                    {
+                        log_scheduler(&format!(
+                            "Asset watcher '{}': websocket error: {}",
+                            job_key, e
+                        ));
+                    }
+                    break; // Reconnect
+                }
+            }
+        }
     }
 }
 
@@ -1180,6 +1560,19 @@ fn resolve_schedule(job: &JobConfig) -> Option<ResolvedSchedule> {
                 log_scheduler(&format!("Invalid cron expression '{}': {}", cron_str, e));
                 return None;
             }
+        }
+    }
+
+    if let Some(ref asset_name) = job.asset_change {
+        if crate::asset_helper::is_likely_valid_asset_name(asset_name) {
+            return Some(ResolvedSchedule::AssetChange(asset_name.clone()));
+        } else {
+            log_scheduler(&format!(
+                "Job ({}) has invalid asset change name '{}'",
+                job.description.as_deref().unwrap_or("<no description>"),
+                asset_name
+            ));
+            return None;
         }
     }
 
@@ -1339,7 +1732,12 @@ fn update_next_runs(jobs: &[ScheduledJob], next_runs: &mut HashMap<String, DateT
     // Remove entries for jobs that no longer exist
     let current_keys: std::collections::HashSet<String> = jobs
         .iter()
-        .filter(|j| !matches!(j.schedule, ResolvedSchedule::Always))
+        .filter(|j| {
+            !matches!(
+                j.schedule,
+                ResolvedSchedule::Always | ResolvedSchedule::AssetChange(_)
+            )
+        })
         .map(job_key_for)
         .collect();
 
@@ -1347,8 +1745,11 @@ fn update_next_runs(jobs: &[ScheduledJob], next_runs: &mut HashMap<String, DateT
 
     // Add entries for new jobs
     for job in jobs {
-        if matches!(job.schedule, ResolvedSchedule::Always) {
-            continue; // Daemons handled separately
+        if matches!(
+            job.schedule,
+            ResolvedSchedule::Always | ResolvedSchedule::AssetChange(_)
+        ) {
+            continue; // Daemons and asset watchers handled separately
         }
 
         let key = job_key_for(job);
@@ -1377,6 +1778,8 @@ fn calculate_next_run(
 ) -> Option<DateTime<Utc>> {
     match schedule {
         ResolvedSchedule::Always => None, // Handled by daemon system
+
+        ResolvedSchedule::AssetChange(_) => None, // Handled by asset watcher system
 
         ResolvedSchedule::Cron(cron_schedule) => cron_schedule.after(&after).next(),
 
@@ -1530,15 +1933,52 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
 // Job execution
 //
 
+/// Returns the command and initial args needed to re-invoke this program.
+fn self_invocation() -> (String, Vec<String>) {
+    // Check if we're running under cargo
+    // When run via `cargo run`, CARGO env var is set
+    if let Ok(cargo) = std::env::var("CARGO") {
+        // We're in a cargo run context
+        // Reconstruct: cargo run --
+        let mut args = vec!["run".to_string()];
+
+        // Preserve the package name if in a workspace
+        if let Ok(pkg) = std::env::var("CARGO_PKG_NAME") {
+            args.push("-p".to_string());
+            args.push(pkg);
+        }
+
+        args.push("--".to_string());
+
+        return (cargo, args);
+    }
+
+    // Production: use the current executable path
+    let exe = std::env::current_exe()
+        .expect("Failed to determine current executable path")
+        .to_string_lossy()
+        .to_string();
+
+    (exe, vec![])
+}
+
 async fn execute_job(
     job_key: &str,
     description: Option<&str>,
     task: Option<&str>,
     steps: Option<&[String]>,
+    asset_revision: Option<(&str, &str)>,
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
-    let mut args = vec!["bye".to_string()];
+    let (program, mut args) = self_invocation();
+
+    args.push("bye".to_string());
+
+    if let Some((asset_name, rev_id)) = asset_revision {
+        args.push(format!("/asset-revision-temp {} {}", asset_name, rev_id));
+    }
+
     if let Some(task) = task {
         args.push(format!("/task.trust {}", task));
     }
@@ -1546,7 +1986,9 @@ async fn execute_job(
         args.extend(steps.iter().cloned());
     }
 
-    let result = Command::new("hai")
+    log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
+
+    let result = Command::new(&program)
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
