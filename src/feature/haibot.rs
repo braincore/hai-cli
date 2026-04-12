@@ -1933,35 +1933,6 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
 // Job execution
 //
 
-/// Returns the command and initial args needed to re-invoke this program.
-fn self_invocation() -> (String, Vec<String>) {
-    // Check if we're running under cargo
-    // When run via `cargo run`, CARGO env var is set
-    if let Ok(cargo) = std::env::var("CARGO") {
-        // We're in a cargo run context
-        // Reconstruct: cargo run --
-        let mut args = vec!["run".to_string()];
-
-        // Preserve the package name if in a workspace
-        if let Ok(pkg) = std::env::var("CARGO_PKG_NAME") {
-            args.push("-p".to_string());
-            args.push(pkg);
-        }
-
-        args.push("--".to_string());
-
-        return (cargo, args);
-    }
-
-    // Production: use the current executable path
-    let exe = std::env::current_exe()
-        .expect("Failed to determine current executable path")
-        .to_string_lossy()
-        .to_string();
-
-    (exe, vec![])
-}
-
 async fn execute_job(
     job_key: &str,
     description: Option<&str>,
@@ -1971,7 +1942,7 @@ async fn execute_job(
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
-    let (program, mut args) = self_invocation();
+    let (program, mut args) = crate::feature::self_invocation();
 
     args.push("bye".to_string());
 

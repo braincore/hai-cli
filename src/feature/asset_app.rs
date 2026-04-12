@@ -27,6 +27,7 @@ pub async fn launch_browser(
             api_client.clone(),
             username,
             update_asset_tx.clone(),
+            None,
         )
         .await
     {

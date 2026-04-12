@@ -392,21 +392,38 @@ impl HttpResponse {
     }
 }
 
+/// Launches a gateway server (websocket + http).
+///
+/// # Arguments
+///
+/// * `asset_blob_cache` - A cache for asset blobs.
+/// * `asset_keyring` - A keyring for asset encryption keys.
+/// * `api_client` - The API client to use for requests.
+/// * `username` - The username of the user launching the gateway.
+/// * `update_asset_tx` - A channel for sending asset update messages.
+/// * `auth_token` - Set the auth token explicitly rather than randomly
+///   generating one.
 pub async fn launch_gateway(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
+    auth_token: Option<&str>,
 ) -> std::io::Result<(SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
-    let token: String = (0..32)
-        .map(|_| {
-            let idx = rand::rng().random_range(0..62);
-            let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            chars[idx] as char
-        })
-        .collect();
+    let token = auth_token.map_or_else(
+        || {
+            (0..32)
+                .map(|_| {
+                    let idx = rand::rng().random_range(0..62);
+                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                    chars[idx] as char
+                })
+                .collect()
+        },
+        |t| t.to_string(),
+    );
 
     let mut port = 1339;
     let listener = loop {
@@ -1286,11 +1303,61 @@ struct ClientMessageAuthRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = ".tag", rename_all = "snake_case")]
 enum ClientMessageAuthResponse {
     Ok { version: String },
     BadToken,
     BadRequest,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: MessageContent,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum MessageContent {
+    Text { text: String },
+    ImageUrl { image_url: ImageData },
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ImageData {
+    pub url: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplPromptArg {
+    messages: Vec<ChatMessage>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplPromptResultDelta {
+    Delta {
+        delta: String,
+    },
+    /// Redundant (inverse) with message-frame `more`
+    Done,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplPromptError {
+    ExecutionFailed { message: String },
 }
 
 // --
@@ -1305,13 +1372,33 @@ struct ClientMessageRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = ".tag", rename_all = "snake_case")]
 enum ClientMessageResponse<T, U> {
-    Ok { mid: u64, result: T },
-    RouteError { mid: u64, error: U },
-    BadRequestError { error: String },
-    HttpError { mid: u64, error: String },
-    UnexpectedError { mid: u64, error: String },
+    Ok {
+        mid: u64,
+        result: T,
+        /// If set, client should keep `mid` response handler alive to handle
+        /// subsequent messages related to it. Only set if `more` is true to
+        /// reduce overhead.
+        #[serde(default)]
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        more: bool,
+    },
+    RouteError {
+        mid: u64,
+        error: U,
+    },
+    BadRequestError {
+        error: String,
+    },
+    HttpError {
+        mid: u64,
+        error: String,
+    },
+    UnexpectedError {
+        mid: u64,
+        error: String,
+    },
 }
 
 // --
@@ -1354,12 +1441,14 @@ async fn send_response<T: Serialize, E: Serialize>(
     >,
     mid: u64,
     result: Result<T, RequestError<E>>,
+    more: bool,
 ) -> bool {
     match result {
         Ok(res) => {
             let resp_ok: ClientMessageResponse<T, E> = ClientMessageResponse::Ok {
                 mid: mid,
                 result: res,
+                more,
             };
             let json_string =
                 serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1417,6 +1506,180 @@ async fn handle_client_message(
     let ClientMessageRequest { mid, route, arg } = client_msg;
 
     match route.as_str() {
+        "repl/prompt" => {
+            let repl_arg: ReplPromptArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let (exe, mut args) = crate::feature::self_invocation();
+            if let Some(model) = repl_arg.model {
+                args.push("-m".to_string());
+                args.push(model);
+            }
+            args.push("bye".to_string());
+
+            let len = repl_arg.messages.len();
+            for (i, msg) in repl_arg.messages.iter().enumerate() {
+                let content = match &msg.content {
+                    MessageContent::Text { text } => match msg.role {
+                        ChatRole::User => {
+                            if i == len - 1 {
+                                text.clone()
+                            } else {
+                                format!("/prep {}", text)
+                            }
+                        }
+                        ChatRole::Assistant => format!("/assistant {}", text),
+                    },
+                    MessageContent::ImageUrl { .. } => {
+                        // TODO: handle images (need /load-image-b64)
+                        continue;
+                    }
+                };
+                args.push(content);
+            }
+
+            let mut child = match tokio::process::Command::new(&exe)
+                .args(&args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(e) => {
+                    send_response::<ReplPromptResultDelta, ReplPromptError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplPromptError::ExecutionFailed {
+                            message: e.to_string(),
+                        })),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let stdout = child.stdout.take().expect("stdout was piped");
+            let stderr = child.stderr.take().expect("stderr was piped");
+
+            let mut stdout_reader = BufReader::new(stdout);
+            let mut stderr_reader = BufReader::new(stderr);
+            let mut stdout_buf = vec![0u8; 4096];
+            let mut stderr_buf = vec![0u8; 4096];
+
+            loop {
+                tokio::select! {
+                    result = stdout_reader.read(&mut stdout_buf) => {
+                        match result {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let chunk = String::from_utf8_lossy(&stdout_buf[..n]).to_string();
+                                let resp: ClientMessageResponse<ReplPromptResultDelta, ReplPromptError> =
+                                    ClientMessageResponse::Ok {
+                                        mid,
+                                        result: ReplPromptResultDelta::Delta { delta: chunk },
+                                        more: true,
+                                    };
+                                let json_string =
+                                    serde_json::to_string(&resp).expect("Failed to serialize chunk");
+                                if ws_sink
+                                    .send(Message::Text(Utf8Bytes::from(&json_string)))
+                                    .await
+                                    .is_err()
+                                {
+                                    let _ = child.kill().await;
+                                    return;
+                                }
+                            },
+                            Err(e) => {
+                                send_response::<ReplPromptResultDelta, ReplPromptError>(
+                                    ws_sink,
+                                    mid,
+                                    Err(RequestError::Route(ReplPromptError::ExecutionFailed {
+                                        message: e.to_string(),
+                                    })),
+                                    false,
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                    result = stderr_reader.read(&mut stderr_buf) => {
+                        match result {
+                            Ok(0) => {},
+                            Ok(n) => {
+                                let chunk = String::from_utf8_lossy(&stderr_buf[..n]).to_string();
+                                let resp: ClientMessageResponse<ReplPromptResultDelta, ReplPromptError> =
+                                    ClientMessageResponse::Ok {
+                                        mid,
+                                        result: ReplPromptResultDelta::Delta { delta: chunk },
+                                        more: false,
+                                    };
+                                let json_string =
+                                    serde_json::to_string(&resp).expect("Failed to serialize chunk");
+                                if ws_sink
+                                    .send(Message::Text(Utf8Bytes::from(&json_string)))
+                                    .await
+                                    .is_err()
+                                {
+                                    let _ = child.kill().await;
+                                    return;
+                                }
+                            },
+                            Err(e) => {
+                                send_response::<ReplPromptResultDelta, ReplPromptError>(
+                                    ws_sink,
+                                    mid,
+                                    Err(RequestError::Route(ReplPromptError::ExecutionFailed {
+                                        message: e.to_string(),
+                                    })),
+                                    false,
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let status = child.wait().await;
+            let success = status.map(|s| s.success()).unwrap_or(false);
+
+            if success {
+                let resp: ClientMessageResponse<ReplPromptResultDelta, ReplPromptError> =
+                    ClientMessageResponse::Ok {
+                        mid,
+                        result: ReplPromptResultDelta::Done,
+                        more: false,
+                    };
+                let json_string = serde_json::to_string(&resp).expect("Failed to serialize done");
+                let _ = ws_sink
+                    .send(Message::Text(Utf8Bytes::from(&json_string)))
+                    .await;
+            } else {
+                send_response::<ReplPromptResultDelta, ReplPromptError>(
+                    ws_sink,
+                    mid,
+                    Err(RequestError::Route(ReplPromptError::ExecutionFailed {
+                        message: "Process exited with non-zero status".to_string(),
+                    })),
+                    false,
+                )
+                .await;
+            }
+        }
         "asset/get" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let asset_arg: asset::AssetGetArg = match serde_json::from_str(&arg.to_string()) {
@@ -1438,6 +1701,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1471,6 +1735,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1505,6 +1770,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1539,6 +1805,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1572,6 +1839,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1605,6 +1873,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1639,6 +1908,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1673,6 +1943,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1707,6 +1978,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1741,6 +2013,7 @@ async fn handle_client_message(
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
                         result: res,
+                        more: false,
                     };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1761,6 +2034,7 @@ async fn handle_client_message(
                         ClientMessageResponse::Ok {
                             mid: mid.clone(),
                             result: res,
+                            more: false,
                         };
                     let json_string =
                         serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
@@ -1775,7 +2049,7 @@ async fn handle_client_message(
         }
         "account/whoami" => {
             let json_string = format!(
-                r#"{{"type":"ok","mid":{},"result":{{"username":{}}}}}"#,
+                r#"{{".tag":"ok","mid":{},"result":{{"username":{}}}}}"#,
                 mid,
                 serde_json::to_string(&username).unwrap_or("null".to_string())
             );
@@ -1840,6 +2114,7 @@ async fn handle_client_message(
                     ws_sink,
                     mid,
                     Ok(new_entry),
+                    false,
                 )
                 .await;
                 return;
@@ -1905,6 +2180,7 @@ async fn handle_client_message(
                     ws_sink,
                     mid,
                     Ok(new_entry),
+                    false,
                 )
                 .await;
                 return;

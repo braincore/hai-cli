@@ -4252,6 +4252,23 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Gateway(cmd::GatewayCmd { auth_token }) => {
+            let api_client = mk_api_client(Some(session));
+            let _ = crate::feature::gateway::launch_gateway(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client,
+                session
+                    .account
+                    .as_ref()
+                    .map(|account| account.username.clone())
+                    .as_deref(),
+                update_asset_tx.clone(),
+                auth_token.clone().as_deref(),
+            )
+            .await;
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetPools => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
