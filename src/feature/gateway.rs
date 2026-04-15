@@ -1680,6 +1680,16 @@ async fn handle_client_message(
                 .await;
             }
         }
+        "repl/whoami" => {
+            let json_string = format!(
+                r#"{{".tag":"ok","mid":{},"result":{{"username":{}}}}}"#,
+                mid,
+                serde_json::to_string(&username).unwrap_or("null".to_string())
+            );
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
         "asset/get" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let asset_arg: asset::AssetGetArg = match serde_json::from_str(&arg.to_string()) {
@@ -2046,16 +2056,6 @@ async fn handle_client_message(
                     send_error_response(ws_sink, mid, e).await;
                 }
             }
-        }
-        "account/whoami" => {
-            let json_string = format!(
-                r#"{{".tag":"ok","mid":{},"result":{{"username":{}}}}}"#,
-                mid,
-                serde_json::to_string(&username).unwrap_or("null".to_string())
-            );
-            let _ = ws_sink
-                .send(Message::Text(Utf8Bytes::from(&json_string)))
-                .await;
         }
         "asset/put" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
