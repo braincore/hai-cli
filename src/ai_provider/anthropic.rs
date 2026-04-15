@@ -98,6 +98,7 @@ pub async fn send_to_anthropic(
     use_thinking: bool,
     use_thinking46: Option<bool>,
     use_effort: Option<&config::AnthropicEffort>,
+    use_automatic_caching: bool,
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
@@ -183,6 +184,9 @@ pub async fn send_to_anthropic(
         })
     };
     if let Some(request_obj) = request_body.as_object_mut() {
+        if use_automatic_caching {
+            request_obj.insert("cache_control".to_string(), json!({"type": "ephemeral"}));
+        }
         if use_thinking {
             request_obj.insert(
                 "thinking".to_string(),

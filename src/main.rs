@@ -1750,6 +1750,7 @@ pub async fn prompt_ai(
                 use_thinking,
                 use_thinking46,
                 use_effort,
+                session.prompt_cache,
                 session.ai_temperature,
                 msg_history,
                 tool_policy.as_ref(),

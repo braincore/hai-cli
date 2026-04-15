@@ -105,6 +105,8 @@ pub struct SessionState {
     pub use_hai_router: HaiRouterState,
     /// Agentic mode
     pub agentic: bool,
+    /// Whether to use prompt cache (Anthropic API)
+    pub prompt_cache: bool,
     /// (Temporary asset file, is task step?)
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
     /// Tools defined by the AI: name -> (Fn def, is task step?).
@@ -183,6 +185,7 @@ impl SessionState {
             tool_mode: None,
             use_hai_router: HaiRouterState::Off,
             agentic: false,
+            prompt_cache: false,
             temp_files: vec![],
             ai_defined_fns: HashMap::new(),
             add_msg_on_new_day: false,

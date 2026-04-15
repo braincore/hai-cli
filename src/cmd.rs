@@ -277,7 +277,8 @@ pub struct HaiRouterCmd {
 
 #[derive(Clone, Debug)]
 pub struct AgenticCmd {
-    pub on: Option<bool>,
+    // Tuple of (agentic-mode, use-prompt-cache)
+    pub on: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Debug)]
@@ -1359,12 +1360,12 @@ fn parse_command(
             }
             match parse_one_arg(remaining) {
                 Some(arg) => {
-                    if arg != "on" && arg != "off" {
-                        eprintln!("Usage: /{cmd_name} <on|off>");
+                    if arg != "on" && arg != "on-without-cache" && arg != "off" {
+                        eprintln!("Usage: /{cmd_name} <on|on-without-cache|off>");
                         None
                     } else {
                         Some(Cmd::Agentic(AgenticCmd {
-                            on: Some(arg == "on"),
+                            on: Some((arg == "on" || arg == "on-without-cache", arg == "on")),
                         }))
                     }
                 }

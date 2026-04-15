@@ -324,8 +324,9 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Agentic(cmd::AgenticCmd { on }) => {
-            if let Some(on) = on {
+            if let Some((on, use_prompt_cache)) = on {
                 session.agentic = *on;
+                session.prompt_cache = *use_prompt_cache;
             } else {
                 println!(
                     "agentic mode: {}",

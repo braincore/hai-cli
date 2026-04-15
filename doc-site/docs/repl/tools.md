@@ -395,6 +395,21 @@ Specifically with `!hai`, it's easier for LLMs to reason about than
 [!hai recursion](#hai-recursion). As an aside, if the LLM chooses to loop, it's
 implemented as adding a recursive `!hai` as the final command.
 
+### Prompt caching with Anthropic API
+
+Due to the iterative, back-and-forth nature of agentic mode, prompt caching is
+explicitly turned on when used with Anthropic's API. This increases input token
+costs by 1.25x when novel, but saves 90% of input token costs when cached.
+
+To disable prompt caching, use:
+
+```
+/agentic on-without-cache
+```
+
+This is not relevant to OpenAI since their API always caches and does not have
+additional costs.
+
 ## Function tool `!fn-*`
 
 A drawback of `!py` and `!sh` is that there's no ability to re-use the code
