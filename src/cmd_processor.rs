@@ -79,7 +79,7 @@ pub async fn process_cmd(
     // write consistency.
     asset_async_writer::flush_asset_updates(&update_asset_tx).await;
 
-    match cmd {
+    match cmd.clone() {
         cmd::Cmd::Noop => ProcessCmdResult::Loop,
         cmd::Cmd::Quit => {
             println!("さようなら！");
@@ -89,7 +89,7 @@ pub async fn process_cmd(
             println!("{}", HELP_MSG);
             println!();
             println!("For interactive help: `/task hai/help`");
-            if *history {
+            if history {
                 session::session_history_add_user_text_entry(
                     HELP_MSG,
                     session,
@@ -100,7 +100,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Cd(cmd::CdCmd { path }) => {
-            let path = if path.is_empty() { "~" } else { path };
+            let path = if path.is_empty() { "~" } else { &path };
             let cd_target = shellexpand::full(path).unwrap().into_owned();
             if let Err(e) = env::set_current_dir(cd_target) {
                 eprintln!("Failed to change directory: {}", e);
@@ -108,7 +108,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Ai(cmd::AiCmd { model }) => {
-            if let Some(model_name) = model {
+            if let Some(model_name) = model.as_deref() {
                 if let Some(selected_ai_model) = config::ai_model_from_string(model_name) {
                     let ai_model_capability = config::get_ai_model_capability(&selected_ai_model);
                     if is_task_mode_step
@@ -232,8 +232,8 @@ pub async fn process_cmd(
                 config::insert_config_kv(
                     config_path_override,
                     None,
-                    &"default_ai_model".to_string(),
-                    model_name,
+                    "default_ai_model",
+                    &model_name,
                 );
                 cfg.reload(config_path_override)
                     .expect("Could not read config");
@@ -262,9 +262,9 @@ pub async fn process_cmd(
                 "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
                     config::insert_config_kv(
                         config_path_override,
-                        Some(provider),
-                        &"api_key".to_string(),
-                        key,
+                        Some(&provider),
+                        "api_key",
+                        &key,
                     );
                     cfg.reload(config_path_override)
                         .expect("Could not read config");
@@ -280,7 +280,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::SetMaskSecrets(cmd::SetMaskSecretsCmd { on }) => {
             if let Some(on) = on {
-                session.mask_secrets = *on;
+                session.mask_secrets = on;
             } else {
                 println!(
                     "Mask secrets: {}",
@@ -297,7 +297,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             if let Some(on) = on {
-                hai_router_set(session, *on);
+                hai_router_set(session, on);
                 db::set_misc_entry(
                     &*db.lock().await,
                     &username,
@@ -325,8 +325,8 @@ pub async fn process_cmd(
         }
         cmd::Cmd::Agentic(cmd::AgenticCmd { on }) => {
             if let Some((on, use_prompt_cache)) = on {
-                session.agentic = *on;
-                session.prompt_cache = *use_prompt_cache;
+                session.agentic = on;
+                session.prompt_cache = use_prompt_cache;
             } else {
                 println!(
                     "agentic mode: {}",
@@ -337,8 +337,8 @@ pub async fn process_cmd(
         }
         cmd::Cmd::Temperature(cmd::TemperatureCmd { temperature }) => {
             if let Some(temperature) = temperature {
-                session.ai_temperature = Some(*temperature);
-            } else if let Some(temperature) = &session.ai_temperature {
+                session.ai_temperature = Some(temperature);
+            } else if let Some(temperature) = session.ai_temperature {
                 println!("AI Temperature: {}", temperature);
             } else {
                 println!("AI Temperature: none (Using AI provider default)",);
@@ -493,7 +493,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::SetVar(cmd::SetVarCmd { key, value }) => {
             let key_regex = Regex::new(r"^[a-zA-Z][a-zA-Z0-9_]*$").unwrap();
-            if !key_regex.is_match(key) {
+            if !key_regex.is_match(&key) {
                 println!(
                     "error: variable name '{}' is invalid: must start with a letter and only contain alphanumeric characters or underscores.",
                     key
@@ -519,7 +519,7 @@ pub async fn process_cmd(
 
             let (shell_exec_output, from_cache) =
                 if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
-                    let cached_output = if *cache {
+                    let cached_output = if cache {
                         db::get_task_step_cache(
                             &*db.lock().await,
                             session
@@ -561,8 +561,8 @@ pub async fn process_cmd(
                                 &api_client,
                                 username.as_deref(),
                                 &session.shell,
-                                command,
-                                *interactive,
+                                &command,
+                                interactive,
                                 &session.get_shell_exec_env_vars(),
                             )
                             .await,
@@ -578,8 +578,8 @@ pub async fn process_cmd(
                             &api_client,
                             username.as_deref(),
                             &session.shell,
-                            command,
-                            *interactive,
+                            &command,
+                            interactive,
                             &session.get_shell_exec_env_vars(),
                         )
                         .await,
@@ -602,7 +602,7 @@ pub async fn process_cmd(
                 }
                 // Because it's from the cache, the value is not yet on the screen.
                 println!("{}", shell_exec_output);
-            } else if *cache
+            } else if cache
                 && let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature
             {
                 db::set_task_step_cache(
@@ -620,7 +620,7 @@ pub async fn process_cmd(
                 )
             }
             session_history_add_user_cmd_and_reply_entries(
-                command,
+                &command,
                 &shell_exec_output,
                 session,
                 bpe_tokenizer,
@@ -633,7 +633,7 @@ pub async fn process_cmd(
             secret,
             cache,
         }) => {
-            let (answer, from_cache) = if *cache {
+            let (answer, from_cache) = if cache {
                 if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                     db::get_task_step_cache(
                         &*db.lock().await,
@@ -650,15 +650,15 @@ pub async fn process_cmd(
                     .map(|a| (Some(a), true))
                     .unwrap_or_else(|| {
                         println!();
-                        (term::ask_question(question, *secret), false)
+                        (term::ask_question(&question, secret), false)
                     })
                 } else {
                     println!();
-                    (term::ask_question(question, *secret), false)
+                    (term::ask_question(&question, secret), false)
                 }
             } else {
                 println!();
-                (term::ask_question(question, *secret), false)
+                (term::ask_question(&question, secret), false)
             };
             let answer = if let Some(answer) = answer {
                 answer
@@ -680,13 +680,13 @@ pub async fn process_cmd(
                 // Because it's from the cache, the value is not yet on the screen.
                 if answer.is_empty() {
                     println!("*You left this blank*");
-                } else if *secret {
+                } else if secret {
                     let mask: String = "*".repeat(answer.len());
                     println!("{}", mask);
                 } else {
                     println!("{}", answer);
                 }
-            } else if *cache
+            } else if cache
                 && let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature
             {
                 db::set_task_step_cache(
@@ -703,13 +703,13 @@ pub async fn process_cmd(
                     &answer,
                 )
             }
-            if *secret {
+            if secret {
                 // Since it was written as a secret, we assume it shouldn't be
                 // printed on the screen.
                 session.add_masked_string(&answer);
             }
             session_history_add_user_text_entry(
-                question,
+                &question,
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
@@ -730,7 +730,7 @@ pub async fn process_cmd(
                 db::LogEntryRetentionPolicy::None
             };
             session_history_add_user_text_entry(
-                message,
+                &message,
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, retention_policy),
@@ -744,7 +744,7 @@ pub async fn process_cmd(
                 db::LogEntryRetentionPolicy::None
             };
             session_history_add_assistant_text_entry(
-                message,
+                &message,
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, retention_policy),
@@ -820,8 +820,7 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Forget(cmd::ForgetCmd { n }) => {
-            let mut n = *n;
+        cmd::Cmd::Forget(cmd::ForgetCmd { mut n }) => {
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -852,8 +851,7 @@ pub async fn process_cmd(
             session.recalculate_input_tokens();
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Keep(cmd::KeepCmd { bottom, top }) => {
-            let mut bottom = *bottom;
+        cmd::Cmd::Keep(cmd::KeepCmd { mut bottom, top }) => {
             fn prepare_preview(preview: String, max_length: usize) -> String {
                 let s = preview.replace("\n", " ");
                 if s.chars().count() > max_length {
@@ -921,7 +919,7 @@ pub async fn process_cmd(
             // inject files into the system context.
             //
             let raw_load_target = path;
-            let load_target_deref = haivar::replace_haivars(raw_load_target, &cfg.haivars);
+            let load_target_deref = haivar::replace_haivars(&raw_load_target, &cfg.haivars);
             let load_target = match shellexpand::full(&load_target_deref) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -961,12 +959,12 @@ pub async fn process_cmd(
                             let mut file_contents_with_delimeters = format!(
                                 "<<<<<< BEGIN_FILE: {}{} >>>>>>\n{}\n<<<<<< END_FILE: {} >>>>>>",
                                 file_path.to_string_lossy(),
-                                if *show_line_numbers {
+                                if show_line_numbers {
                                     " (with line numbers)"
                                 } else {
                                     ""
                                 },
-                                if *show_line_numbers {
+                                if show_line_numbers {
                                     add_line_numbers(file_contents)
                                 } else {
                                     file_contents.to_string()
@@ -1042,7 +1040,7 @@ pub async fn process_cmd(
             show_line_numbers,
         }) => {
             let http_response = match reqwest::Client::new()
-                .get(url)
+                .get(&url)
                 .header("User-Agent", &format!("hai/{}", env!("CARGO_PKG_VERSION")))
                 .send()
                 .await
@@ -1102,7 +1100,7 @@ pub async fn process_cmd(
                         }
                     };
 
-                    let (contents, format, title) = if !*raw && is_html_content_type {
+                    let (contents, format, title) = if !raw && is_html_content_type {
                         let cfg = dom_smoothie::Config {
                             max_elements_to_parse: 9000,
                             ..Default::default()
@@ -1147,12 +1145,12 @@ pub async fn process_cmd(
                         "{}\n<<<<<< BEGIN_URL: {}{} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
                         raw_user_input,
                         url,
-                        if *show_line_numbers {
+                        if show_line_numbers {
                             " (with line numbers)"
                         } else {
                             ""
                         },
-                        if *show_line_numbers {
+                        if show_line_numbers {
                             add_line_numbers(&contents)
                         } else {
                             contents
@@ -1196,7 +1194,7 @@ pub async fn process_cmd(
                     source: session::CmdSource::Internal,
                 });
             } else if let Some((_, haitask)) = get_haitask_from_task_ref(
-                task_ref,
+                &task_ref,
                 session,
                 "task",
                 matches!(cmd_input.source, session::CmdSource::Internal),
@@ -1298,7 +1296,7 @@ pub async fn process_cmd(
                 let window_title = format!(
                     "{}{}",
                     haitask.name,
-                    if let Some(key) = key {
+                    if let Some(key) = key.as_deref() {
                         format!(" ({key})")
                     } else {
                         "".to_string()
@@ -1331,13 +1329,13 @@ pub async fn process_cmd(
                         ),
                     });
                 }
-                session.repl_mode = ReplMode::Task(haitask.name.clone(), key.clone(), *trust);
+                session.repl_mode = ReplMode::Task(haitask.name.clone(), key.clone(), trust);
             }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskInclude(cmd::TaskIncludeCmd { task_ref, key }) => {
             if let Some((_, haitask)) = get_haitask_from_task_ref(
-                task_ref,
+                &task_ref,
                 session,
                 "task-include",
                 matches!(cmd_input.source, session::CmdSource::Internal),
@@ -1356,7 +1354,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskFetch(cmd::TaskFetchCmd { task_fqn }) => {
-            if config::is_valid_task_fqn(task_fqn).is_none() {
+            if config::is_valid_task_fqn(&task_fqn).is_none() {
                 eprintln!(
                     "invalid task fqn (fully-qualified name): format should be username/task-name"
                 );
@@ -1424,7 +1422,7 @@ pub async fn process_cmd(
                 eprintln!("You must be logged-in to publish. Try /account-login or /account-new");
                 return ProcessCmdResult::Loop;
             };
-            let task_novar_path = haivar::replace_haivars(task_path, &cfg.haivars);
+            let task_novar_path = haivar::replace_haivars(&task_path, &cfg.haivars);
             let task_full_path = match shellexpand::full(&task_novar_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -1478,7 +1476,7 @@ pub async fn process_cmd(
                 );
                 return ProcessCmdResult::Loop;
             };
-            if config::is_valid_task_fqn(task_fqn).is_none() {
+            if config::is_valid_task_fqn(&task_fqn).is_none() {
                 eprintln!(
                     "invalid task fqn (fully-qualified name): format should be username/task-name"
                 );
@@ -1540,7 +1538,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskForget(cmd::TaskForgetCmd { task_ref, key }) => {
-            let task_name = if config::is_valid_task_fqn(task_ref).is_some() {
+            let task_name = if config::is_valid_task_fqn(&task_ref).is_some() {
                 task_ref.clone()
             } else if task_ref.starts_with(".")
                 || task_ref.starts_with("/")
@@ -1577,14 +1575,14 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskPurge(cmd::TaskPurgeCmd { task_fqn }) => {
-            if config::is_valid_task_fqn(task_fqn).is_none() {
+            if config::is_valid_task_fqn(&task_fqn).is_none() {
                 eprintln!(
                     "invalid task fqn (fully-qualified name): format should be username/task-name"
                 );
                 return ProcessCmdResult::Loop;
             };
-            db::purge_task_step_cache(&*db.lock().await, task_fqn);
-            match config::purge_cached_task(task_fqn) {
+            db::purge_task_step_cache(&*db.lock().await, &task_fqn);
+            match config::purge_cached_task(&task_fqn) {
                 Ok(_) => {
                     println!("Sucessfully purged");
                 }
@@ -1680,7 +1678,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::TaskView(cmd::TaskViewCmd { task_ref }) => {
             if let Some((config, haitask)) = get_haitask_from_task_ref(
-                task_ref,
+                &task_ref,
                 session,
                 "task-view",
                 matches!(cmd_input.source, session::CmdSource::Internal),
@@ -1705,7 +1703,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::TaskVersions(cmd::TaskVersionsCmd { task_fqn }) => {
-            if config::is_valid_task_fqn(task_fqn).is_none() {
+            if config::is_valid_task_fqn(&task_fqn).is_none() {
                 eprintln!(
                     "invalid task fqn (fully-qualified name): format should be username/task-name"
                 );
@@ -1739,7 +1737,7 @@ pub async fn process_cmd(
             };
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
-            if let Some(editor) = editor
+            if let Some(editor) = editor.as_deref()
                 && let Some(prog_asset_name) = editor.strip_prefix("@")
             {
                 crate::feature::asset_app::launch_browser(
@@ -1878,7 +1876,7 @@ pub async fn process_cmd(
                 // user won't be aware that their new asset didn't save.
                 eprintln!("error: invalid name");
                 return ProcessCmdResult::Loop;
-            } else if *encrypt && asset_name.starts_with("/") {
+            } else if encrypt && asset_name.starts_with("/") {
                 eprintln!("error: cannot create encrypted asset in the public pool");
                 return ProcessCmdResult::Loop;
             }
@@ -1889,7 +1887,7 @@ pub async fn process_cmd(
                 api_client.clone(),
                 Some(&KeyRecipient::User(username.clone())),
                 &asset_name,
-                *encrypt,
+                encrypt,
             )
             .await
             {
@@ -2403,12 +2401,12 @@ pub async fn process_cmd(
                                 let asset_contents_with_delimeters = format!(
                                     "<<<<<< BEGIN_ASSET: {}{} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
                                     asset_name,
-                                    if *show_line_numbers {
+                                    if show_line_numbers {
                                         " (with line numbers)"
                                     } else {
                                         ""
                                     },
-                                    if *show_line_numbers {
+                                    if show_line_numbers {
                                         add_line_numbers(&asset_contents_string)
                                     } else {
                                         asset_contents_string.clone()
@@ -2430,7 +2428,7 @@ pub async fn process_cmd(
                                 } else {
                                     println!(
                                         "{}",
-                                        if *show_line_numbers {
+                                        if show_line_numbers {
                                             add_line_numbers(&asset_contents_string)
                                         } else {
                                             asset_contents_string.clone()
@@ -2577,7 +2575,7 @@ pub async fn process_cmd(
                 }
                 println!();
             }
-            let mut remaining = *count;
+            let mut remaining = count;
             let mut revision_cursor = match api_client
                 .asset_revision_iter(AssetRevisionIterArg {
                     entry_ref: EntryRef::Name(asset_name),
@@ -2999,7 +2997,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(asset_name, &session.account);
+            let asset_name = expand_pub_asset_name(&asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetRemoveArg;
             match api_client
@@ -3031,8 +3029,8 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let source_asset_name = expand_pub_asset_name(source_asset_name, &session.account);
-            let dest_asset_name = expand_pub_asset_name(dest_asset_name, &session.account);
+            let source_asset_name = expand_pub_asset_name(&source_asset_name, &session.account);
+            let dest_asset_name = expand_pub_asset_name(&dest_asset_name, &session.account);
 
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetMoveArg;
@@ -3062,8 +3060,8 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
 
-            let source_asset_name = resolve_asset_name(source_asset_name, session);
-            let mut target_asset_name = resolve_asset_name(dest_asset_name, session);
+            let source_asset_name = resolve_asset_name(&source_asset_name, session);
+            let mut target_asset_name = resolve_asset_name(&dest_asset_name, session);
 
             // If target ends with '/', append the filename from source
             if target_asset_name.ends_with('/') {
@@ -3202,7 +3200,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let target_asset_name = expand_pub_asset_name(target_asset_name, &session.account);
+            let target_asset_name = expand_pub_asset_name(&target_asset_name, &session.account);
             let source_file_path = match shellexpand::full(&source_file_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -3266,7 +3264,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let source_asset_name = resolve_asset_name(source_asset_name, session);
+            let source_asset_name = resolve_asset_name(&source_asset_name, session);
             // Special case if target is `.`
             let target_file_path = if target_file_path == "." {
                 match source_asset_name.rsplit('/').next() {
@@ -3328,7 +3326,7 @@ pub async fn process_cmd(
             prefix,
             target_path,
         }) => {
-            let prefix = expand_pub_asset_name(prefix, &session.account);
+            let prefix = expand_pub_asset_name(&prefix, &session.account);
             let target_path = match shellexpand::full(&target_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -3371,7 +3369,7 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
-            let target_prefix = expand_pub_asset_name(target_prefix, &session.account);
+            let target_prefix = expand_pub_asset_name(&target_prefix, &session.account);
             let api_client = mk_api_client(Some(session));
             match asset_sync::sync_up(
                 asset_blob_cache.clone(),
@@ -3382,7 +3380,7 @@ pub async fn process_cmd(
                 &source_path,
                 &target_prefix,
                 asset_sync::SyncUpOptions {
-                    sync_new_files: *sync_new_files,
+                    sync_new_files,
                     max_concurrent_uploads: 10,
                     debug,
                 },
@@ -3422,7 +3420,7 @@ pub async fn process_cmd(
                 let msg = "(newest revisions first)".to_string();
                 println!("{}", msg);
                 all_msgs.push(msg);
-                *count
+                count
             } else {
                 1
             };
@@ -3834,7 +3832,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             let asset_name = resolve_asset_name(&asset_name, session);
-            let value_json = match serde_json::from_str::<serde_json::Value>(value) {
+            let value_json = match serde_json::from_str::<serde_json::Value>(&value) {
                 Ok(value_json) => value_json,
                 Err(e) => {
                     eprintln!("error: not a json value: {}", e);
@@ -3845,7 +3843,7 @@ pub async fn process_cmd(
             if asset_async_writer::asset_metadata_set_key(
                 &api_client,
                 &asset_name,
-                key,
+                &key,
                 Some(value_json),
             )
             .await
@@ -3867,7 +3865,7 @@ pub async fn process_cmd(
             }
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
-            if asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, key, None)
+            if asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, &key, None)
                 .await
                 .is_ok()
             {
@@ -3885,7 +3883,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let prefix = expand_pub_asset_name(prefix, &session.account);
+            let prefix = expand_pub_asset_name(&prefix, &session.account);
 
             use api::types::asset::AssetPoolFolderCollapseArg;
             let api_client = mk_api_client(Some(session));
@@ -3905,7 +3903,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let prefix = expand_pub_asset_name(prefix, &session.account);
+            let prefix = expand_pub_asset_name(&prefix, &session.account);
 
             use api::types::asset::AssetPoolFolderExpandArg;
             let api_client = mk_api_client(Some(session));
@@ -4660,7 +4658,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                 }
                 cmd::StdCmd::Which(prog) => {
                     session.add_msg_on_new_day = true;
-                    let output = match which::which(prog) {
+                    let output = match which::which(&prog) {
                         Ok(path) => path.display().to_string(),
                         Err(which::Error::CannotFindBinaryPath) => format!("'{}' not found", prog),
                         Err(e) => format!("error: could not find {}: {}", prog, e),
@@ -4679,7 +4677,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         }
         cmd::Cmd::FnExec(cmd::FnExecCmd { fn_name, arg }) => {
             let ai_defined_fn =
-                if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(fn_name) {
+                if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(&fn_name) {
                     ai_defined_fn
                 } else {
                     eprintln!("error: function '{}' is undefined", fn_name);
@@ -4723,7 +4721,7 @@ lesson (e.g. "understanding").\n\n{}"#,
             ProcessCmdResult::Loop
         }
         cmd::Cmd::McpAdd(cmd::McpAddCmd { name, cmd }) => {
-            let (mcp_service, mcp_tools) = match crate::feature::mcp::init_mcp(cmd).await {
+            let (mcp_service, mcp_tools) = match crate::feature::mcp::init_mcp(&cmd).await {
                 Some(res) => res,
                 None => {
                     eprintln!("error: failed to initialize MCP service");
@@ -4759,14 +4757,14 @@ lesson (e.g. "understanding").\n\n{}"#,
             tool_name,
             json_arg,
         }) => {
-            let (mcp_service, _) = if let Some(res) = session.mcps.get(name) {
+            let (mcp_service, _) = if let Some(res) = session.mcps.get(&name) {
                 res
             } else {
                 eprintln!("error: no MCP service named '{}'", name);
                 return ProcessCmdResult::Loop;
             };
 
-            let arg = match serde_json::from_str(json_arg) {
+            let arg = match serde_json::from_str(&json_arg) {
                 Ok(arg) => arg,
                 Err(e) => {
                     eprintln!("error: failed to parse JSON argument: {}", e);
@@ -5146,7 +5144,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                 if username == "_" {
                     session::account_nobody_setup_session(session, db).await;
                 } else {
-                    let account = match db::switch_account(&*db.lock().await, username) {
+                    let account = match db::switch_account(&*db.lock().await, &username) {
                         Ok(Some(account)) => account,
                         Ok(None) => {
                             eprintln!(
@@ -5398,7 +5396,7 @@ lesson (e.g. "understanding").\n\n{}"#,
             let client = mk_api_client(Some(session));
             match client
                 .account_whois(AccountWhoisArg {
-                    username: username.into(),
+                    username: username.clone(),
                 })
                 .await
             {
@@ -5441,7 +5439,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                         (is_task_mode_step, LogEntryRetentionPolicy::None),
                     );
                     if let Some(account) = &session.account
-                        && account.username == *username
+                        && account.username == username
                     {
                         println!();
                         println!("To set a name or bio, run: `/task hai/account-update`");
@@ -5626,7 +5624,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         }
         cmd::Cmd::Prompt(cmd::PromptCmd { prompt, cache })
         | cmd::Cmd::Tool(cmd::ToolCmd { prompt, cache, .. }) => {
-            ProcessCmdResult::PromptAi(prompt.to_owned(), *cache)
+            ProcessCmdResult::PromptAi(prompt.to_owned(), cache)
         }
     }
 }

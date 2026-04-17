@@ -5,7 +5,7 @@ use image::ImageReader;
 use std::fs;
 use std::io::{Cursor, Read};
 
-pub async fn resolve_image_b64(text: &String) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn resolve_image_b64(text: &str) -> Result<String, Box<dyn std::error::Error>> {
     if text.starts_with("http://") || text.starts_with("https://") {
         let response = reqwest::get(text).await?;
 

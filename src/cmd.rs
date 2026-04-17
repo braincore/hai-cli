@@ -2959,7 +2959,7 @@ fn parse_accent(options: &HashMap<String, String>) -> Option<Accent> {
 /// Some tool calls are better handled by the AI when the tool-cmd is prefixed
 /// to the prompt. For other tool calls (e.g. !sh), the tool-cmd confuses the
 /// AI and causes mistakes (e.g. prefixing shell command with !).
-fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: &String) -> String {
+fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: &str) -> String {
     let tool_call_type = if user_confirmation { "!?" } else { "!" };
     let tool_call = match tool {
         tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),

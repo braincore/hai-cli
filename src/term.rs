@@ -8,7 +8,7 @@ use std::io::Write;
 
 use crate::{line_editor, term_color};
 
-pub fn print_image_to_term(encoded_image: &String) -> Result<(), Box<dyn std::error::Error>> {
+pub fn print_image_to_term(encoded_image: &str) -> Result<(), Box<dyn std::error::Error>> {
     let use_pretty_images = std::env::var_os("HAI_NO_PRETTY_IMAGES").is_none();
     let image_height = std::env::var("HAI_IMAGE_HEIGHT")
         .ok()

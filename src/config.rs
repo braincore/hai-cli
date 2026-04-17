@@ -788,8 +788,8 @@ pub fn write_config(path: &str, cfg: &str) {
 pub fn insert_config_kv(
     config_path_override: &Option<String>,
     section: Option<&str>,
-    key: &String,
-    val: &String,
+    key: &str,
+    val: &str,
 ) {
     let cfg = read_config_as_string(config_path_override).unwrap();
     let mut doc = cfg.parse::<toml_edit::DocumentMut>().expect("invalid doc");

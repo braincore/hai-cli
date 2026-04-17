@@ -73,7 +73,7 @@ impl HttpRequest {
         }
 
         // Parse subdomain from Host header
-        let subdomain = Self::parse_subdomain(headers.get("host"), base_domain);
+        let subdomain = Self::parse_subdomain(headers.get("host").map(|s| s.as_str()), base_domain);
 
         // Read body if Content-Length is present
         let body = if let Some(content_length) = headers.get("content-length") {
@@ -104,7 +104,7 @@ impl HttpRequest {
         })
     }
 
-    fn parse_subdomain(host_header: Option<&String>, base_domain: &str) -> Option<String> {
+    fn parse_subdomain(host_header: Option<&str>, base_domain: &str) -> Option<String> {
         let host = host_header?;
 
         // Strip port if present (e.g., "foo.example.com:8080" -> "foo.example.com")
