@@ -1036,6 +1036,7 @@ async fn repl(
             },
             tokens,
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+            model: None,
         });
 
         loop {
@@ -1216,6 +1217,7 @@ async fn repl(
                                 is_task_mode_step,
                                 db::LogEntryRetentionPolicy::None,
                             ),
+                            model: Some(config::ai_model_to_string(&session.ai)),
                         });
                     }
                     chat::ChatCompletionResponse::Tool {
@@ -1244,6 +1246,7 @@ async fn repl(
                                 is_task_mode_step,
                                 db::LogEntryRetentionPolicy::None,
                             ),
+                            model: Some(config::ai_model_to_string(&session.ai)),
                         });
                     }
                 }
@@ -1330,6 +1333,7 @@ async fn repl(
                                     is_task_mode_step,
                                     db::LogEntryRetentionPolicy::None,
                                 ),
+                                model: None,
                             });
                         }
                         answered_yes
@@ -1447,6 +1451,7 @@ async fn repl(
                                 is_task_mode_step,
                                 db::LogEntryRetentionPolicy::None,
                             ),
+                            model: None,
                         });
                     }
                 }
@@ -1480,6 +1485,7 @@ async fn repl(
                     },
                     tokens,
                     retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                    model: None,
                 });
             } else {
                 break;
@@ -1488,7 +1494,7 @@ async fn repl(
     }
 
     if !exit_when_done {
-        feature::save_chat::save_chat_to_db(&session, db).await;
+        feature::chat_store::save_chat_to_db(&session, db).await;
     }
 
     wrapup_and_cleanup(&session, update_asset_tx).await;

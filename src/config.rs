@@ -428,6 +428,8 @@ pub fn parse_anthropic46_opts(opts: Vec<&str>) -> Anthropic46Options {
 
 // --
 
+/// Returns a String that `hai` can parse to identify the exact LLM model and
+/// configuration.
 pub fn ai_model_to_string(ai_model: &AiModel) -> String {
     match ai_model {
         // Anthropic models

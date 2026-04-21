@@ -1,13 +1,13 @@
 pub mod asset_app;
 pub mod asset_crypt;
 pub mod asset_keyring;
+pub mod chat_store;
 pub mod gateway;
 pub mod haibot;
 pub mod haivar;
 pub mod html_tool;
 pub mod mcp;
 pub mod queue_listen;
-pub mod save_chat;
 
 /// Returns the command and args needed to re-invoke this program.
 fn self_invocation() -> (String, Vec<String>) {

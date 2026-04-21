@@ -28,7 +28,7 @@ use crate::{
     db::{self, LogEntryRetentionPolicy},
     feature::{
         asset_crypt::{self, KeyRecipient},
-        haivar, save_chat,
+        chat_store, haivar,
     },
     loader, term, term_color, tool,
 };
@@ -346,36 +346,8 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::New => {
-            save_chat::save_chat_to_db(session, db).await;
-            // In task-mode, we keep all task-mode initialization steps regardless
-            // of standard retention policy.
-            let task_mode = matches!(session.repl_mode, ReplMode::Task(..));
-            session
-                .history
-                .retain(|log_entry| task_mode && log_entry.retention_policy.0);
-            session.recalculate_input_tokens();
-            session
-                .temp_files
-                .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, _, _, cancel_token)) = session.html_output.as_ref()
-                && (!task_mode || !*is_task_step)
-            {
-                cancel_token.cancel();
-                session.html_output = None;
-            }
-            for (is_task_step, _ws_addr, _clients, cancel_token) in &session.gateways {
-                if !task_mode || !is_task_step {
-                    cancel_token.cancel();
-                }
-            }
-            session.gateways.clear();
-            session
-                .ai_defined_fns
-                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
-            session.quick_index_vars.clear();
-            session
-                .mcps
-                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+            chat_store::save_chat_to_db(session, db).await;
+            session.cmd_new().await;
             if let ReplMode::Task(ref task_fqn, ..) = session.repl_mode {
                 let task_restarted_header = format!("Task Restarted: {}", task_fqn);
                 println!("{}", task_restarted_header.black().on_white());
@@ -385,35 +357,8 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Reset => {
-            save_chat::save_chat_to_db(session, db).await;
-            let task_mode = matches!(session.repl_mode, ReplMode::Task(..));
-            session.history.retain(|log_entry| {
-                (task_mode && log_entry.retention_policy.0)
-                    || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
-            });
-            session.recalculate_input_tokens();
-            session
-                .temp_files
-                .retain(|(_, is_task_step)| task_mode && *is_task_step);
-            if let Some((_, is_task_step, _, _, cancel_token)) = session.html_output.as_ref()
-                && (!task_mode || !*is_task_step)
-            {
-                cancel_token.cancel();
-                session.html_output = None;
-            }
-            for (is_task_step, _ws_addr, _clients, cancel_token) in &session.gateways {
-                if !task_mode || !is_task_step {
-                    cancel_token.cancel();
-                }
-            }
-            session.gateways.clear();
-            session
-                .ai_defined_fns
-                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
-            session.quick_index_vars.clear();
-            session
-                .mcps
-                .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+            chat_store::save_chat_to_db(session, db).await;
+            session.cmd_reset().await;
             if !session.history.is_empty() {
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     println!("Task restarted additional /pin(s) and /load(s) retained");
@@ -748,6 +693,7 @@ pub async fn process_cmd(
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, retention_policy),
+                None,
             );
             ProcessCmdResult::Loop
         }
@@ -816,6 +762,7 @@ pub async fn process_cmd(
                         is_task_mode_step,
                         db::LogEntryRetentionPolicy::ConversationPin,
                     ),
+                    model: None,
                 },
             );
             ProcessCmdResult::Loop
@@ -1391,27 +1338,10 @@ pub async fn process_cmd(
             // their history when they exit. This makes accidentally using
             // /task instead of /task-include an inconvenience rather than
             // fatal.
-            match session.repl_mode.clone() {
-                ReplMode::Task(task_fqn, _, _) => {
-                    session.repl_mode = ReplMode::Normal;
-                    session.tool_mode = None;
-                    // Support ending task prematurely while task steps are
-                    // being executed by purging any remaining task steps from
-                    // the queue.
-                    session
-                        .cmd_queue
-                        .retain(|cmd_input| match &cmd_input.source {
-                            session::CmdSource::TaskStep(step_task_fqn, _, _) => {
-                                step_task_fqn != &task_fqn
-                            }
-                            _ => true,
-                        });
-                    term::window_title_reset();
-                    println!("info: task ended");
-                }
-                _ => {
-                    eprintln!("error: not in task mode");
-                }
+            if session.cmd_task_end() {
+                println!("info: task ended");
+            } else {
+                eprintln!("error: not in task mode");
             }
             ProcessCmdResult::Loop
         }
@@ -4379,205 +4309,38 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
-            let chat_log_contents = if let Some(chat_log_name) = chat_log_name {
-                if session.account.is_none() {
-                    eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
-                    return ProcessCmdResult::Loop;
-                }
-                let chat_log_name = resolve_quick_var(&chat_log_name, session)
-                    .unwrap_or_else(|| chat_log_name.to_string());
-                let api_client = mk_api_client(Some(session));
-                let get_asset_res = asset_reader::get_asset(
-                    asset_blob_cache.clone(),
-                    &api_client,
-                    &chat_log_name,
-                    false,
-                )
-                .await;
-                match get_asset_res {
-                    Ok((bytes, _)) => match String::from_utf8(bytes) {
-                        Ok(contents) => contents,
-                        Err(_) => {
-                            eprintln!("error: chat asset isn't valid UTF-8");
-                            return ProcessCmdResult::Loop;
-                        }
-                    },
-                    Err(e) => {
-                        match e {
-                            asset_reader::GetAssetError::BadName => {
-                                eprintln!("error: asset not found");
-                            }
-                            asset_reader::GetAssetError::DataFetchFailed => {
-                                eprintln!("error: failed to fetch asset data");
-                            }
-                        }
-                        return ProcessCmdResult::Loop;
-                    }
-                }
-            } else {
-                let username = if let Some(account) = session.account.as_ref() {
-                    account.username.clone()
-                } else {
-                    "".to_string()
-                };
-                if let Some(res) = db::get_misc_entry(&*db.lock().await, &username, "chat-last")
-                    .expect("failed to write to db")
-                {
-                    res.0
-                } else {
-                    eprintln!("error: no chat saved");
-                    return ProcessCmdResult::Loop;
-                }
-            };
-            let history = match serde_json::from_str::<Vec<db::LogEntry>>(&chat_log_contents) {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("error: chat log bad format: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            };
-            session.history = history;
-
-            // Print out conversation to help user regain context
-            for (i, log_entry) in session.history.iter().enumerate() {
-                let role_name = match log_entry.message.role {
-                    chat::MessageRole::Assistant => "assistant",
-                    chat::MessageRole::User => "user",
-                    chat::MessageRole::Tool => "tool",
-                    chat::MessageRole::System => break,
-                };
-
-                if log_entry.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-                    session.input_loaded_tokens += log_entry.tokens;
-                    if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                        println!("{}[{}]: {}", role_name, i, text.split_once("\n").unwrap().0);
-                        println!();
-                    } else if let chat::MessageContent::ImageUrl { image_url } =
-                        &log_entry.message.content[0]
-                    {
-                        println!("{}[{}]:", role_name, i);
-                        match loader::resolve_image_b64(&image_url.url).await {
-                            Ok(img_png_b64) => {
-                                term::print_image_to_term(&img_png_b64).unwrap();
-                                println!();
-                            }
-                            Err(e) => {
-                                eprintln!("error: failed to load image: {}", e);
-                            }
-                        }
-                    }
-                } else {
-                    let mut entry_body = String::new();
-                    session.input_tokens += log_entry.tokens;
-                    for part in &log_entry.message.content {
-                        match part {
-                            chat::MessageContent::Text { text } => {
-                                entry_body.push_str(text);
-                            }
-                            chat::MessageContent::ImageUrl { .. } => entry_body.push_str("[image]"),
-                        }
-                        entry_body.push('\n');
-                    }
-
-                    let left_prompt = format!("{}[{}]:", role_name, i);
-                    if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
-                        if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
-                            println!("{}", left_prompt.bright_green());
-                            for tool_call in tool_calls {
-                                let tool_name = tool_call.function.name.clone();
-                                let mut json_obj_acc = crate::ai_provider::util::JsonObjectAccumulator::new(
-                                    tool_call.id.clone(),
-                                    tool_name.clone(),
-                                    crate::ai_provider::tool_schema::get_syntax_highlighter_token_from_tool_name(&tool_name),
-                                    vec![],
-                                );
-                                json_obj_acc.acc(&tool_call.function.arguments);
-                                json_obj_acc.end();
-                                println!();
-                                println!();
-                            }
-                        } else {
-                            print!("{} ", left_prompt.bright_green());
-                            term_color::print_multi_lang_syntax_highlighting(&entry_body, &None);
-                            println!();
-                        }
-                    } else {
-                        print!("{} {}", left_prompt.bright_green(), entry_body);
-                    }
-                }
-            }
+            let api_client = mk_api_client(Some(session));
+            chat_store::resume_chat_from_db_or_asset(
+                session,
+                db,
+                asset_blob_cache,
+                &api_client,
+                chat_log_name.as_deref(),
+            )
+            .await;
             ProcessCmdResult::Loop
         }
         cmd::Cmd::ChatSave(cmd::ChatSaveCmd { chat_log_name }) => {
-            if session.account.is_none() {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
-            }
-            let chat_log_asset_name = if let Some(chat_log_name) = chat_log_name {
-                chat_log_name.to_owned()
-            } else {
-                let now = chrono::Local::now();
-                format!("chat/{}", now.format("%Y-%m-%d-%H%M%S"))
             };
-
-            let abridged_history = session::get_abridged_history(&session.history);
-            let abridged_history_tokens =
-                bpe_tokenizer.encode_with_special_tokens(&abridged_history);
-            let chat_title = if abridged_history.len() > 100 {
-                println!(
-                    "Generating title ({} tokens)...",
-                    abridged_history_tokens
-                        .len()
-                        .to_formatted_string(&Locale::en)
-                );
-                use std::io::Write;
-                std::io::stdout().flush().unwrap();
-                prompt_ai_simple(
-                    &format!(
-                        r#"Generate a short title for the included chat log.
-Do not quote it.
-Do not include anything besides the title.
-Since the chat is already known as a conversation, do
-not include words that imply its a conversation or
-lesson (e.g. "understanding").\n\n{}"#,
-                        abridged_history
-                    ),
-                    session,
-                    cfg,
-                    ctrlc_handler,
-                    debug,
-                )
-                .await
-            } else {
-                None
-            };
-            println!("Saving to asset: {}", chat_log_asset_name);
-            let serialized_log = serde_json::to_string_pretty(&session.history).unwrap();
             let api_client = mk_api_client(Some(session));
-            use api::types::asset::{AssetPutTextArg, PutConflictPolicy};
-            match api_client
-                .asset_put_text(AssetPutTextArg {
-                    name: chat_log_asset_name.clone(),
-                    data: serialized_log,
-                    conflict_policy: PutConflictPolicy::Override,
-                })
-                .await
-            {
-                Ok(_) => {
-                    if let Some(chat_title) = chat_title {
-                        let _ = asset_async_writer::asset_metadata_set_key(
-                            &api_client,
-                            &chat_log_asset_name,
-                            "title",
-                            Some(serde_json::Value::String(chat_title)),
-                        )
-                        .await;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("error: failed to save chat log: {}", e);
-                }
-            }
+            chat_store::save_chat_as_asset(
+                session,
+                cfg,
+                asset_blob_cache,
+                update_asset_tx,
+                ctrlc_handler,
+                bpe_tokenizer,
+                &api_client,
+                &username,
+                chat_log_name.as_deref(),
+                debug,
+            )
+            .await;
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Email(cmd::EmailCmd { subject, body }) => {
@@ -6085,41 +5848,6 @@ fn count_digits(n: u32) -> u32 {
         return 1;
     }
     ((n as f64).log10().floor() as u32) + 1
-}
-
-// --
-
-async fn prompt_ai_simple(
-    prompt: &str,
-    session: &mut SessionState,
-    cfg: &config::Config,
-    ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
-    debug: bool,
-) -> Option<String> {
-    let msg_history = vec![chat::Message {
-        role: chat::MessageRole::User,
-        content: vec![chat::MessageContent::Text {
-            text: prompt.to_string(),
-        }],
-        tool_call_id: None,
-        tool_calls: None,
-    }];
-    let res = crate::prompt_ai(
-        &msg_history,
-        &None,
-        &Vec::new(),
-        session,
-        cfg,
-        ctrlc_handler,
-        debug,
-    )
-    .await;
-    for chat_response in &res {
-        if let chat::ChatCompletionResponse::Message { text } = chat_response {
-            return Some(text.clone());
-        }
-    }
-    None
 }
 
 // --

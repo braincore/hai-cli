@@ -17,6 +17,7 @@ pub struct LogEntry {
     pub tokens: u32,
     /// If bool true, log_entry from task-mode step.
     pub retention_policy: (bool, LogEntryRetentionPolicy),
+    pub model: Option<String>,
 }
 
 impl LogEntry {

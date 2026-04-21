@@ -242,6 +242,93 @@ impl SessionState {
         );
         env_vars
     }
+
+    /// Bring the session to a `new` state.
+    ///
+    /// `new` does not necessarily reset everything. In task mode, `new` brings
+    /// the session back to the initial state of the task.
+    pub async fn cmd_new(&mut self) {
+        // In task-mode, we keep all task-mode initialization steps regardless
+        // of standard retention policy.
+        let task_mode = matches!(self.repl_mode, ReplMode::Task(..));
+        self.history
+            .retain(|log_entry| task_mode && log_entry.retention_policy.0);
+        self.recalculate_input_tokens();
+        self.temp_files
+            .retain(|(_, is_task_step)| task_mode && *is_task_step);
+        if let Some((_, is_task_step, _, _, cancel_token)) = self.html_output.as_ref()
+            && (!task_mode || !*is_task_step)
+        {
+            cancel_token.cancel();
+            self.html_output = None;
+        }
+        for (is_task_step, _ws_addr, _clients, cancel_token) in &self.gateways {
+            if !task_mode || !*is_task_step {
+                cancel_token.cancel();
+            }
+        }
+        self.gateways.clear();
+        self.ai_defined_fns
+            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        self.quick_index_vars.clear();
+        self.mcps
+            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+    }
+
+    /// Resets the session state.
+    ///
+    /// Reset isn't comprehensive. Any loaded files/assets are pins aren't
+    /// removed. Moreover, like `cmd_new`, in task mode, the session is
+    /// brought back to the initial state of the task.
+    pub async fn cmd_reset(&mut self) {
+        let task_mode = matches!(self.repl_mode, ReplMode::Task(..));
+        self.history.retain(|log_entry| {
+            (task_mode && log_entry.retention_policy.0)
+                || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
+        });
+        self.recalculate_input_tokens();
+        self.temp_files
+            .retain(|(_, is_task_step)| task_mode && *is_task_step);
+        if let Some((_, is_task_step, _, _, cancel_token)) = self.html_output.as_ref()
+            && (!task_mode || !*is_task_step)
+        {
+            cancel_token.cancel();
+            self.html_output = None;
+        }
+        for (is_task_step, _ws_addr, _clients, cancel_token) in &self.gateways {
+            if !task_mode || !*is_task_step {
+                cancel_token.cancel();
+            }
+        }
+        self.gateways.clear();
+        self.ai_defined_fns
+            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        self.quick_index_vars.clear();
+        self.mcps
+            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+    }
+
+    /// Ends task mode.
+    ///
+    /// Does not clear the conversation history.
+    pub fn cmd_task_end(&mut self) -> bool {
+        match self.repl_mode.clone() {
+            ReplMode::Task(task_fqn, _, _) => {
+                self.repl_mode = ReplMode::Normal;
+                self.tool_mode = None;
+                // Support ending task prematurely while task steps are
+                // being executed by purging any remaining task steps from
+                // the queue.
+                self.cmd_queue.retain(|cmd_input| match &cmd_input.source {
+                    CmdSource::TaskStep(step_task_fqn, _, _) => step_task_fqn != &task_fqn,
+                    _ => true,
+                });
+                crate::term::window_title_reset();
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Convenience function to add "user text" into conversation history while
@@ -279,6 +366,7 @@ pub fn session_history_add_user_text_entry(
         },
         tokens: token_count,
         retention_policy,
+        model: None,
     });
     token_count
 }
@@ -338,6 +426,7 @@ pub fn session_history_add_user_image_entry(
         },
         tokens: token_count,
         retention_policy,
+        model: None,
     });
     token_count
 }
@@ -353,6 +442,7 @@ pub fn session_history_add_assistant_text_entry(
     session: &mut SessionState,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
+    model: Option<&config::AiModel>,
 ) -> u32 {
     let asset_tokens = bpe_tokenizer.encode_with_special_tokens(contents);
     let token_count = asset_tokens.len() as u32;
@@ -377,6 +467,7 @@ pub fn session_history_add_assistant_text_entry(
         },
         tokens: token_count,
         retention_policy,
+        model: model.map(|m| config::ai_model_to_string(m)),
     });
     token_count
 }
