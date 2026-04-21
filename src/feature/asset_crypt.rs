@@ -1335,8 +1335,32 @@ impl ::std::fmt::Display for AkmSelectionError {
     }
 }
 
-/// Assumes asset exists, though it may not have metadata or an `encrypted`
-/// section.
+pub enum NewAssetAkmPolicy {
+    /// Do not encrypt
+    Unencrypted,
+    /// Encrypt if key setup, otherwise skip.
+    PreferEncrypt,
+    /// Error if key unavailable
+    RequireEncrypt,
+}
+
+pub fn new_asset_akm_policy_by_asset_name(asset_name: &str) -> NewAssetAkmPolicy {
+    if asset_name.starts_with("vault/") || asset_name.starts_with("/s/") {
+        NewAssetAkmPolicy::RequireEncrypt
+    } else if asset_name.starts_with("/") {
+        NewAssetAkmPolicy::Unencrypted
+    } else {
+        NewAssetAkmPolicy::PreferEncrypt
+    }
+}
+
+/// Logic differs depending on whether `new_asset_akm_policy` is set. If None,
+/// assumption is that asset already exists (even if without `md_contents`), so
+/// a lack of encryption info returns no Akm for continuity.
+///
+/// If `new_asset_akm_policy` is set, the returned Akm will follow the selected
+/// policy and it's up to the caller to decide what to do: new asset -> follow
+/// the policy; existing asset -> maintain.
 pub async fn choose_akm_for_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
@@ -1344,13 +1368,13 @@ pub async fn choose_akm_for_asset(
     recipient: Option<&KeyRecipient>,
     additional_recipients: &[KeyRecipient],
     md_contents: Option<&[u8]>,
-    generate_akm_if_new: bool,
+    new_asset_akm_policy: Option<NewAssetAkmPolicy>,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
     let Some(recipient) = recipient else {
         return Ok(None);
     };
 
-    // Case 1: Existing encrypted asset - reconstruct AssetKeyMaterial
+    // Case 1: Existing encrypted asset: reconstruct AssetKeyMaterial
     if let Some(md_contents) = md_contents
         && let Some(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
     {
@@ -1402,17 +1426,34 @@ pub async fn choose_akm_for_asset(
         return Ok(Some(akm));
     }
 
-    // Case 2: New asset needing encryption - create fresh AssetKeyMaterial
-    if generate_akm_if_new {
+    let new_asset_akm_policy = if let Some(new_asset_akm_policy) = new_asset_akm_policy {
+        new_asset_akm_policy
+    } else {
+        // Since `new_asset_akm_policy` is not set, we assume the asset already
+        // exists and did not have encryption info.
+        return Ok(None);
+    };
+
+    // Case 2: New asset: Defer to policy
+    if matches!(
+        new_asset_akm_policy,
+        NewAssetAkmPolicy::PreferEncrypt | NewAssetAkmPolicy::RequireEncrypt
+    ) {
         let enc_key_info =
             get_encryption_key(asset_blob_cache.clone(), &api_client, recipient, None)
                 .await
-                .map_err(|e| AkmSelectionError::Abort(e))?
-                .ok_or_else(|| {
-                    AkmSelectionError::Abort(
-                        "no encryption key found; generate one with /asset-crypt-setup".to_string(),
-                    )
-                })?;
+                .map_err(|e| AkmSelectionError::Abort(e))?;
+        let enc_key_info = if let Some(enc_key_info) = enc_key_info {
+            enc_key_info
+        } else {
+            if matches!(new_asset_akm_policy, NewAssetAkmPolicy::PreferEncrypt) {
+                return Ok(None);
+            } else {
+                return Err(AkmSelectionError::Abort(
+                    "no encryption key found; generate one with /asset-crypt-setup".to_string(),
+                ));
+            }
+        };
 
         // Fetch additional recipients' keys
         let mut other_enc_keys = Vec::new();
@@ -1437,78 +1478,13 @@ pub async fn choose_akm_for_asset(
         let akm = AssetKeyMaterial::new_for_recipients(enc_key_info, &other_enc_keys)
             .map_err(|e| AkmSelectionError::Abort(e))?;
 
-        return Ok(Some(akm));
-    }
-
-    Ok(None)
-}
-/*
-pub async fn choose_akm_for_asset(
-    asset_blob_cache: Arc<AssetBlobCache>,
-    asset_keyring: Arc<Mutex<AssetKeyring>>,
-    api_client: HaiClient,
-    recipient: Option<&KeyRecipient>,
-    md_contents: Option<&[u8]>,
-    generate_akm_if_new: bool,
-) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
-    if let Some(md_contents) = md_contents
-        && let Some(recipient) = recipient
-        && let Some(rec_key_info) =
-            parse_metadata_for_encryption_info(&md_contents, Some(recipient))
-    {
-        match get_symmetric_key_ez(
-            asset_blob_cache.clone(),
-            asset_keyring.clone(),
-            &api_client,
-            &rec_key_info,
-        )
-        .await
-        {
-            Ok(sym_info) => {
-                let enc_key_info = match get_encryption_key(
-                    asset_blob_cache.clone(),
-                    &api_client,
-                    &recipient,
-                    Some(&rec_key_info.enc_key_id),
-                )
-                .await
-                {
-                    Ok(Some(key)) => key,
-                    Ok(None) => {
-                        return Err(AkmSelectionError::Abort(format!(
-                            "encryption key {} not found",
-                            rec_key_info.enc_key_id
-                        )));
-                    }
-                    Err(e) => {
-                        return Err(AkmSelectionError::Abort(format!("{}", e)));
-                    }
-                };
-                Ok(Some(mk_asset_key_material(enc_key_info, sym_info)))
-            }
-            Err(e) => {
-                return Err(AkmSelectionError::Abort(format!("{}", e)));
-            }
-        }
-    } else if generate_akm_if_new && let Some(recipient) = recipient {
-        match get_encryption_key(asset_blob_cache.clone(), &api_client, recipient, None).await {
-            Ok(Some(enc_key_info)) => Ok(Some(mk_asset_key_material_with_new_sym_key(
-                enc_key_info.clone(),
-            ))),
-            Ok(None) => {
-                return Err(AkmSelectionError::Abort(
-                    "no encryption key found; generate one with /asset-crypt-setup".to_string(),
-                ));
-            }
-            Err(e) => {
-                return Err(AkmSelectionError::Abort(format!("{}", e)));
-            }
-        }
+        Ok(Some(akm))
     } else {
         Ok(None)
     }
-}*/
+}
 
+/// Assumes metadata
 pub async fn choose_akm_for_asset_by_name(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
@@ -1517,10 +1493,7 @@ pub async fn choose_akm_for_asset_by_name(
     asset_name: &str,
     force_generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
-    let generate_akm_if_new = asset_name.starts_with("vault/")
-        || asset_name.starts_with("/s/")
-        || force_generate_akm_if_new;
-    let md_contents = match asset_reader::get_only_asset_metadata(
+    let (md_contents, new_asset_akm_policy) = match asset_reader::get_only_asset_metadata(
         asset_blob_cache.clone(),
         &api_client,
         asset_name,
@@ -1528,9 +1501,16 @@ pub async fn choose_akm_for_asset_by_name(
     )
     .await
     {
-        Ok(res) => res.0,
+        Ok(res) => (res.0, None),
         Err(e) => match e {
-            GetAssetError::BadName => None,
+            GetAssetError::BadName => {
+                let new_asset_akm_policy = if force_generate_akm_if_new {
+                    NewAssetAkmPolicy::RequireEncrypt
+                } else {
+                    new_asset_akm_policy_by_asset_name(asset_name)
+                };
+                (None, Some(new_asset_akm_policy))
+            }
             GetAssetError::DataFetchFailed => {
                 return Err(AkmSelectionError::Abort(format!(
                     "failed to fetch asset {}",
@@ -1553,7 +1533,7 @@ pub async fn choose_akm_for_asset_by_name(
         recipient,
         &additional_recipients,
         md_contents.as_deref(),
-        generate_akm_if_new,
+        new_asset_akm_policy,
     )
     .await
 }

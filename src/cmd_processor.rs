@@ -1705,7 +1705,7 @@ pub async fn process_cmd(
                                     &username,
                                 ),
                                 md_contents.as_deref(),
-                                asset_name.starts_with("vault/") || asset_name.starts_with("/s/"),
+                                None,
                             )
                             .await
                             {
@@ -1747,7 +1747,7 @@ pub async fn process_cmd(
                                     &username,
                                 ),
                                 None,
-                                asset_name.starts_with("vault/") || asset_name.starts_with("/s/"),
+                                Some(asset_crypt::new_asset_akm_policy_by_asset_name(&asset_name)),
                             )
                             .await
                             {
@@ -1903,7 +1903,7 @@ pub async fn process_cmd(
                 Some(&KeyRecipient::User(username.clone())),
                 &asset_crypt::extract_key_recipients_from_shared_asset_name(&asset_name, &username),
                 md_contents.as_deref(),
-                false,
+                None,
             )
             .await
             {

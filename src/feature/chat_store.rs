@@ -205,7 +205,7 @@ pub async fn resume_chat_from_db_or_asset(
                 .as_deref()
                 .unwrap_or(&[]),
             md_contents.as_deref(),
-            false,
+            None,
         )
         .await
         {
