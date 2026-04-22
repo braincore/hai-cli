@@ -1672,6 +1672,7 @@ pub async fn process_cmd(
             {
                 crate::feature::asset_app::launch_browser(
                     session,
+                    db.clone(),
                     asset_blob_cache.clone(),
                     &api_client,
                     Some(&username),
@@ -4147,6 +4148,7 @@ pub async fn process_cmd(
             let api_client = mk_api_client(Some(session));
             crate::feature::asset_app::launch_browser(
                 session,
+                db.clone(),
                 asset_blob_cache.clone(),
                 &api_client,
                 username.as_deref(),
@@ -4157,6 +4159,18 @@ pub async fn process_cmd(
                 debug,
             )
             .await;
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAppRevokePerms(cmd::AssetAppRevokePermsCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                Some(account.username.clone())
+            } else {
+                None
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            if let Some(username) = username {
+                let _ = crate::db::clear_gateway_perms(&*db.lock().await, &username, &asset_name);
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetPoolNew(cmd::AssetPoolNewCmd { usernames }) => {
@@ -4184,6 +4198,7 @@ pub async fn process_cmd(
         cmd::Cmd::Gateway(cmd::GatewayCmd { auth_token }) => {
             let api_client = mk_api_client(Some(session));
             let _ = crate::feature::gateway::launch_gateway(
+                db.clone(),
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 api_client,
@@ -4194,6 +4209,7 @@ pub async fn process_cmd(
                     .as_deref(),
                 update_asset_tx.clone(),
                 auth_token.clone().as_deref(),
+                "development",
             )
             .await;
             ProcessCmdResult::Loop

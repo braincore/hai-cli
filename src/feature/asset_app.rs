@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
@@ -8,6 +9,7 @@ use crate::session::SessionState;
 
 pub async fn launch_browser(
     session: &mut SessionState,
+    db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     username: Option<&str>,
@@ -20,14 +22,16 @@ pub async fn launch_browser(
     let prog_asset_name = expand_pub_asset_name(prog_asset_name, &session.account);
     let target_asset_name = target_asset_name.map(|n| expand_pub_asset_name(n, &session.account));
 
-    if let Ok((ws_addr, clients, cancel_token, auth_token)) =
+    if let Ok((ws_addr, _perm_addr, clients, cancel_token, auth_token)) =
         crate::feature::gateway::launch_gateway(
+            db.clone(),
             asset_blob_cache.clone(),
             session.asset_keyring.clone(),
             api_client.clone(),
             username,
             update_asset_tx.clone(),
             None,
+            &prog_asset_name,
         )
         .await
     {

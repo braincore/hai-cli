@@ -158,6 +158,8 @@ pub enum Cmd {
     AssetCryptRecover(AssetCryptRecoverCmd),
     /// Launch an asset-based app in the browser
     AssetApp(AssetAppCmd),
+    /// Revoke permissions
+    AssetAppRevokePerms(AssetAppRevokePermsCmd),
     /// Create a new asset-pool shared between users
     AssetPoolNew(AssetPoolNewCmd),
     /// List asset pools
@@ -740,6 +742,12 @@ pub struct AssetCryptLockCmd {
 
 #[derive(Clone, Debug)]
 pub struct AssetAppCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAppRevokePermsCmd {
     /// Name of the asset
     pub asset_name: String,
 }
@@ -2321,7 +2329,21 @@ fn parse_command(
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /asset-app <asset_name>");
+                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    None
+                }
+            }
+        }
+        "asset-app-revoke-perms" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetAppRevokePerms(AssetAppRevokePermsCmd {
+                    asset_name,
+                })),
+                None => {
+                    eprintln!("Usage: /{cmd_name} <asset_name>");
                     None
                 }
             }
