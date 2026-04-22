@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -21,9 +22,213 @@ use crate::{
     feature::asset_crypt::{self, KeyRecipient},
 };
 
+pub const DEV_MODE: &str = "DEV_MODE";
+
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
 pub type Clients = Arc<Mutex<std::collections::HashMap<ClientId, Client>>>;
+
+pub type Perms = Arc<Mutex<Vec<Perm>>>;
+
+// Map of perm_request_id -> (csrf_token, expiry time, requested_perms)
+pub type PermRequestMap = Arc<Mutex<HashMap<String, (String, std::time::Instant, Vec<Perm>)>>>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPerm {
+    read: bool,
+    write: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPrefixPerm {
+    create: bool,
+    list: bool,
+}
+
+/// A key detail about `Perm` is that it's a coarse permission scheme for what
+/// requests will be forwarded from the gateway to the API. Just because an op
+/// has permission in the gateway doesn't mean it will be allowed by the API.
+///
+/// For example, there's a permission for public assets that's read/write.
+/// But, unless the asset is the current user's public asset, it won't be
+/// writable. The API will reject the request and the error will be sent back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum Perm {
+    AssetName {
+        name: String,
+        perm: AssetPerm,
+    },
+    AssetEntryId {
+        entry_id: String,
+        perm: AssetPerm,
+    },
+    /// prefix: Require that it ends with "/"
+    AssetPrefix {
+        prefix: String,
+        perm: AssetPerm,
+        prefix_perm: AssetPrefixPerm,
+    },
+    PublicAsset,
+    SharedAssetName {
+        name: String,
+        perm: AssetPerm,
+    },
+    SharedAssetPrefix {
+        prefix: String,
+        perm: AssetPerm,
+        prefix_perm: AssetPrefixPerm,
+    },
+    LlmPrompt,
+}
+
+impl Perm {
+    /// Check if this single permission grants the requested access
+    fn grants(&self, request: &AccessRequest<'_>) -> bool {
+        match (self, request) {
+            // Exact name match for read
+            (Perm::AssetName { name, perm }, AccessRequest::ReadByName { name: req_name }) => {
+                name == *req_name && perm.read
+            }
+
+            // Exact name match for write
+            (Perm::AssetName { name, perm }, AccessRequest::WriteByName { name: req_name }) => {
+                name == *req_name && perm.write
+            }
+
+            // Entry ID match for read
+            (
+                Perm::AssetEntryId { entry_id, perm },
+                AccessRequest::ReadByEntryId { entry_id: req_id },
+            ) => entry_id == *req_id && perm.read,
+
+            // Prefix match for read by name
+            (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
+                name.starts_with(prefix) && perm.read
+            }
+
+            // Prefix match for write by name
+            (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
+                name.starts_with(prefix) && perm.write
+            }
+
+            // Prefix permissions for list
+            (
+                Perm::AssetPrefix {
+                    prefix,
+                    prefix_perm,
+                    ..
+                },
+                AccessRequest::ListPrefix { prefix: req_prefix },
+            ) => req_prefix.starts_with(prefix) && prefix_perm.list,
+
+            // Public paths
+            (Perm::PublicAsset, AccessRequest::ReadByName { name: req_name }) => {
+                is_public_path(req_name)
+            }
+
+            // --- Shared asset name: match the suffix after /s/<participants>/ ---
+            (
+                Perm::SharedAssetName { name, perm },
+                AccessRequest::ReadByName { name: req_name },
+            ) => shared_path_suffix(req_name).map_or(false, |suffix| suffix == name && perm.read),
+            (
+                Perm::SharedAssetName { name, perm },
+                AccessRequest::WriteByName { name: req_name },
+            ) => shared_path_suffix(req_name).map_or(false, |suffix| suffix == name && perm.write),
+
+            // --- Shared asset prefix: match the suffix after /s/<participants>/ ---
+            (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
+                shared_path_suffix(name)
+                    .map_or(false, |suffix| suffix.starts_with(prefix) && perm.read)
+            }
+            (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
+                shared_path_suffix(name)
+                    .map_or(false, |suffix| suffix.starts_with(prefix) && perm.write)
+            }
+            (
+                Perm::SharedAssetPrefix {
+                    prefix,
+                    prefix_perm,
+                    ..
+                },
+                AccessRequest::ListPrefix { prefix: req_prefix },
+            ) => shared_path_suffix(req_prefix).map_or(false, |suffix| {
+                suffix.starts_with(prefix) && prefix_perm.list
+            }),
+
+            // LlmPrompt
+            (Perm::LlmPrompt, AccessRequest::LlmPrompt) => true,
+
+            // No match
+            _ => false,
+        }
+    }
+
+    // Helper if permission requires keyring access
+    fn requires_keyring(&self) -> bool {
+        matches!(
+            self,
+            Perm::AssetName { .. }
+                | Perm::AssetEntryId { .. }
+                | Perm::AssetPrefix { .. }
+                | Perm::SharedAssetName { .. }
+                | Perm::SharedAssetPrefix { .. }
+        )
+    }
+}
+
+/// Extract the path portion after `/s/<participants>/` from a shared path.
+/// Returns Some(suffix) if the path matches `/s/<participants>/...`, None otherwise.
+fn shared_path_suffix(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/s/")?;
+    // Find the first '/' after the participants segment
+    let slash_idx = rest.find('/')?;
+    let suffix = &rest[slash_idx + 1..];
+    Some(suffix)
+}
+
+fn is_public_path(path: &str) -> bool {
+    path.starts_with("/") && !path.starts_with("/s/")
+}
+
+/// Check if any permission in the list grants the requested access
+pub fn check_access(perms: &[Perm], request: &AccessRequest<'_>) -> Result<(), PermCheckError> {
+    if perms.iter().any(|p| p.grants(request)) {
+        Ok(())
+    } else {
+        Err(PermCheckError::Unauthorized)
+    }
+}
+
+/// Async version that takes the Arc<Mutex<...>> directly
+pub async fn check_access_async(
+    perms: &Perms,
+    request: &AccessRequest<'_>,
+) -> Result<(), PermCheckError> {
+    let perms = perms.lock().await;
+    check_access(&perms, request)
+}
+
+/// What kind of access is being requested
+#[derive(Debug, Clone)]
+pub enum AccessRequest<'a> {
+    /// Read a specific asset by name
+    ReadByName { name: &'a str },
+    /// Write a specific asset by name
+    WriteByName { name: &'a str },
+    /// Read a specific asset by entry_id
+    ReadByEntryId { entry_id: &'a str },
+    /// List assets under a prefix
+    ListPrefix { prefix: &'a str },
+    /// Prompt LLM
+    LlmPrompt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermCheckError {
+    Unauthorized,
+}
 
 // -- Minimal HTTP parsing/response helpers --
 
@@ -390,6 +595,20 @@ impl HttpResponse {
         stream.flush().await?;
         Ok(())
     }
+
+    fn json_status(status: u16, body: &str) -> Self {
+        Self {
+            status,
+            status_text: match status {
+                401 => "Unauthorized",
+                _ => "Error",
+            },
+            content_type: "application/json".to_string(),
+            body: body.as_bytes().to_vec(),
+            set_cookie: None,
+            additional_headers: Vec::new(),
+        }
+    }
 }
 
 /// Launches a gateway server (websocket + http).
@@ -404,13 +623,15 @@ impl HttpResponse {
 /// * `auth_token` - Set the auth token explicitly rather than randomly
 ///   generating one.
 pub async fn launch_gateway(
+    db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     auth_token: Option<&str>,
-) -> std::io::Result<(SocketAddr, Clients, CancellationToken, String)> {
+    service_name: &str,
+) -> std::io::Result<(SocketAddr, SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
     let token = auth_token.map_or_else(
         || {
@@ -425,6 +646,7 @@ pub async fn launch_gateway(
         |t| t.to_string(),
     );
 
+    // Main gateway listener
     let mut port = 1339;
     let listener = loop {
         let addr = format!("127.0.0.1:{}", port);
@@ -434,20 +656,82 @@ pub async fn launch_gateway(
         }
     };
     let local_addr = listener.local_addr()?;
+
+    // Permissions server on separate port (different origin!)
+    let mut perm_port = port + 100; // e.g., 1439
+    let perm_listener = loop {
+        let addr = format!("127.0.0.1:{}", perm_port);
+        match TcpListener::bind(&addr).await {
+            Ok(l) => break l,
+            Err(_) => perm_port += 1,
+        }
+    };
+    let perm_addr = perm_listener.local_addr()?;
+
     println!(
-        "Gateway listening on http://{} (HTTP + WebSocket) auth token: {}",
-        local_addr, token
+        "Gateway listening on http://{} (HTTP + WebSocket)",
+        local_addr
     );
+    println!("Token: {}", token);
+    println!("Permissions server on http://{}", perm_addr);
 
     let clients: Clients = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let clients_clone = clients.clone();
+
+    let default_perms = vec![
+        Perm::PublicAsset,
+        Perm::AssetName {
+            name: service_name.to_string(),
+            perm: {
+                AssetPerm {
+                    read: true,
+                    write: true,
+                }
+            },
+        },
+        Perm::AssetPrefix {
+            prefix: format!("{}/", service_name),
+            perm: AssetPerm {
+                read: true,
+                write: true,
+            },
+            prefix_perm: AssetPrefixPerm {
+                create: true,
+                list: true,
+            },
+        },
+    ];
+
+    let perms_nolock = if let Some(username) = username {
+        let mut loaded_perms =
+            crate::db::load_gateway_perms(&*db.lock().await, username, service_name);
+        for default_perm in default_perms {
+            if !loaded_perms.contains(&default_perm) {
+                loaded_perms.push(default_perm.clone());
+            }
+        }
+        loaded_perms
+    } else {
+        default_perms
+    };
+    let perms: Perms = Arc::new(Mutex::new(perms_nolock));
+
+    let perms_clone = perms.clone();
+    let perms_clone2 = perms.clone();
+
     let cancel_token = CancellationToken::new();
-    let cancel_token_child = cancel_token.child_token();
+    let cancel_child1 = cancel_token.child_token();
+    let cancel_child2 = cancel_token.child_token();
+
+    let perm_request_map: PermRequestMap = Arc::new(Mutex::new(HashMap::new()));
+    let perm_request_map_clone = perm_request_map.clone();
+
     let token_clone = token.clone();
-    let api_client_clone = api_client.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
+    let api_client_clone = api_client.clone();
     let username_owned = username.map(|s| s.to_string());
+    let service_name_clone = service_name.to_string();
     let next_client_id = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
     let cookie_set = Arc::new(AtomicBool::new(false));
@@ -455,7 +739,7 @@ pub async fn launch_gateway(
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                _ = cancel_token_child.cancelled() => {
+                _ = cancel_child1.cancelled() => {
                     let mut clients_guard = clients_clone.lock().await;
                     for (_id, client) in clients_guard.drain() {
                         drop(client);
@@ -478,7 +762,10 @@ pub async fn launch_gateway(
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
                     let asset_keyring_inner = asset_keyring_clone.clone();
                     let clients_inner = clients_clone.clone();
+                    let perms_inner = perms_clone.clone();
+                    let perm_request_map_inner = perm_request_map_clone.clone();
                     let username_inner = username_owned.clone();
+                    let service_name_inner = service_name_clone.clone();
                     let update_asset_tx_inner = update_asset_tx.clone();
                     let next_client_id_inner = next_client_id.clone();
                     let cookie_set_inner = cookie_set.clone();
@@ -487,12 +774,16 @@ pub async fn launch_gateway(
                         if let Err(e) = handle_connection(
                             stream,
                             peer_addr,
+                            perm_addr,
                             token_clone_inner,
-                            api_client_clone_inner,
                             asset_blob_cache_inner,
                             asset_keyring_inner,
+                            api_client_clone_inner,
                             clients_inner,
+                            perms_inner,
+                            perm_request_map_inner,
                             username_inner,
+                            &service_name_inner,
                             update_asset_tx_inner,
                             next_client_id_inner,
                             cookie_set_inner,
@@ -505,7 +796,63 @@ pub async fn launch_gateway(
         }
     });
 
-    Ok((local_addr, clients, cancel_token, token))
+    let db_clone = db.clone();
+    let asset_keyring_clone = asset_keyring.clone();
+    let asset_blob_cache_cloned = asset_blob_cache.clone();
+    let api_client_clone = api_client.clone();
+    let clients_clone = clients.clone();
+    let perm_request_map_clone = perm_request_map.clone();
+
+    let username_clone = username.map(|u| u.to_string()).clone();
+    let service_name_clone = service_name.to_string();
+
+    // Permissions server task
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel_child2.cancelled() => break,
+                accept_result = perm_listener.accept() => {
+                    let (stream, _peer_addr) = match accept_result {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            eprintln!("Perm server accept error: {:?}", e);
+                            continue;
+                        }
+                    };
+                    let _ = stream.set_nodelay(true);
+
+                    let db_inner = db_clone.clone();
+                    let api_client_clone_inner = api_client_clone.clone();
+                    let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
+                    let asset_keyring_inner = asset_keyring_clone.clone();
+                    let clients_inner = clients_clone.clone();
+                    let perms_inner = perms_clone2.clone();
+                    let perm_request_map_inner = perm_request_map_clone.clone();
+                    let username_inner = username_clone.clone();
+                    let service_name_inner = service_name_clone.clone();
+
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_perm_http_connection(
+                            db_inner,
+                            asset_blob_cache_inner,
+                            asset_keyring_inner,
+                            &api_client_clone_inner,
+                            clients_inner,
+                            stream,
+                            perms_inner,
+                            perm_request_map_inner,
+                            username_inner.as_deref(),
+                            &service_name_inner,
+                        ).await {
+                            eprintln!("Perm connection error: {:?}", e);
+                        }
+                    });
+                }
+            }
+        }
+    });
+
+    Ok((local_addr, perm_addr, clients, cancel_token, token))
 }
 
 // Handles both HTTP and WebSocket connections, dispatching to the appropriate
@@ -513,12 +860,16 @@ pub async fn launch_gateway(
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
+    perm_addr: SocketAddr,
     token: String,
-    api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: HaiClient,
     clients: Clients,
+    perms: Perms,
+    perm_request_map: PermRequestMap,
     username: Option<String>,
+    #[allow(unused_variables)] service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
@@ -544,12 +895,14 @@ async fn handle_connection(
         // Handle as WebSocket - tokio-tungstenite will read the upgrade request
         handle_websocket_connection(
             stream,
-            &peer_addr,
+            &perm_addr,
             token,
             api_client,
             asset_blob_cache,
             asset_keyring,
             clients,
+            perms,
+            perm_request_map,
             username,
             update_asset_tx,
             next_client_id,
@@ -566,6 +919,7 @@ async fn handle_connection(
             api_client,
             asset_blob_cache,
             asset_keyring,
+            perms,
             username,
             update_asset_tx,
             cookie_set,
@@ -595,12 +949,14 @@ fn extract_cookie_from_raw(raw_headers: &str, cookie_name: &str) -> Option<Strin
 
 async fn handle_websocket_connection(
     stream: tokio::net::TcpStream,
-    #[allow(unused_variables)] peer_addr: &SocketAddr,
+    perm_addr: &SocketAddr,
     token: String,
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     clients: Clients,
+    perms: Perms,
+    perm_request_map: PermRequestMap,
     username: Option<String>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
@@ -707,9 +1063,13 @@ async fn handle_websocket_connection(
                 match msg_option {
                     Some(Ok(Message::Text(msg))) => {
                         handle_client_message(
+                            perm_addr,
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
-                            &api_client, username.as_deref(),
+                            &api_client,
+                            perms.clone(),
+                            perm_request_map.clone(),
+                            username.as_deref(),
                             update_asset_tx.clone(),
                             &mut ws_sink,
                             &msg).await;
@@ -764,6 +1124,7 @@ async fn handle_http_connection(
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    perms: Perms,
     username: Option<String>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
@@ -784,6 +1145,7 @@ async fn handle_http_connection(
         asset_blob_cache,
         asset_keyring,
         &api_client,
+        perms,
         username,
         update_asset_tx,
         cookie_set,
@@ -804,6 +1166,7 @@ async fn handle_http_request(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    perms: Perms,
     username: Option<String>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
@@ -894,6 +1257,7 @@ async fn handle_http_request(
                 asset_blob_cache,
                 asset_keyring,
                 api_client,
+                perms,
                 username,
             )
             .await
@@ -911,6 +1275,7 @@ async fn handle_http_request(
                     asset_blob_cache,
                     asset_keyring,
                     api_client.clone(),
+                    perms,
                     username,
                 )
                 .await
@@ -922,6 +1287,7 @@ async fn handle_http_request(
                     asset_blob_cache,
                     asset_keyring,
                     api_client.clone(),
+                    perms,
                     username,
                     update_asset_tx,
                 )
@@ -986,8 +1352,16 @@ async fn handle_get(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    perms: Perms,
     username: Option<String>,
 ) -> HttpResponse {
+    // Check permission at the start
+    if let Err(PermCheckError::Unauthorized) =
+        check_access_async(&perms, &AccessRequest::ReadByName { name: asset_name }).await
+    {
+        return HttpResponse::forbidden();
+    }
+
     let default_filenames = &["index", "index.html", "README", "README.md"];
 
     let (data_contents, md_contents, asset_revision, resolved_name) = {
@@ -1139,9 +1513,15 @@ async fn handle_put(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    perms: Perms,
     username: Option<String>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> HttpResponse {
+    if let Err(PermCheckError::Unauthorized) =
+        check_access_async(&perms, &AccessRequest::WriteByName { name: asset_name }).await
+    {
+        return HttpResponse::forbidden();
+    }
     // Choose encryption key material for this asset
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
         asset_blob_cache.clone(),
@@ -1254,8 +1634,14 @@ async fn handle_put_metadata(
     _asset_blob_cache: Arc<AssetBlobCache>,
     _asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    perms: Perms,
     _username: Option<String>,
 ) -> HttpResponse {
+    if let Err(PermCheckError::Unauthorized) =
+        check_access_async(&perms, &AccessRequest::WriteByName { name: asset_name }).await
+    {
+        return HttpResponse::forbidden();
+    }
     match api_client
         .asset_metadata_put(asset::AssetMetadataPutArg {
             name: asset_name.to_string(),
@@ -1360,6 +1746,26 @@ enum ReplPromptError {
     ExecutionFailed { message: String },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplPermGetResult {
+    perms: Vec<Perm>,
+    keyring_need_unlock: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplPermRequestArg {
+    perms: Vec<Perm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplPermRequestResult {
+    existing_perms: Vec<Perm>,
+    requested_perms: Vec<Perm>,
+    keyring_need_unlock: bool,
+    request_id: String,
+    url: String,
+}
+
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1391,6 +1797,10 @@ enum ClientMessageResponse<T, U> {
     BadRequestError {
         error: String,
     },
+    AuthorizationError {
+        mid: u64,
+        error: String,
+    },
     HttpError {
         mid: u64,
         error: String,
@@ -1403,7 +1813,9 @@ enum ClientMessageResponse<T, U> {
 
 // --
 
+//
 // Helper functions for sending responses
+//
 
 async fn send_error_response<E: Serialize>(
     ws_sink: &mut futures_util::stream::SplitSink<
@@ -1480,12 +1892,33 @@ async fn send_bad_request_error(
         .await;
 }
 
+async fn send_bad_authorization_error(
+    ws_sink: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        Message,
+    >,
+    mid: u64,
+    error: &str,
+) {
+    let resp_err = ClientMessageResponse::<(), String>::AuthorizationError {
+        mid,
+        error: error.to_string(),
+    };
+    let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
+    let _ = ws_sink
+        .send(Message::Text(Utf8Bytes::from(&json_string)))
+        .await;
+}
+
 // --
 
 async fn handle_client_message(
+    perm_addr: &SocketAddr,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    perms: Perms,
+    perm_request_map: PermRequestMap,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     ws_sink: &mut futures_util::stream::SplitSink<
@@ -1507,6 +1940,12 @@ async fn handle_client_message(
 
     match route.as_str() {
         "repl/prompt" => {
+            if let Err(PermCheckError::Unauthorized) =
+                check_access_async(&perms, &AccessRequest::LlmPrompt).await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             let repl_arg: ReplPromptArg = match serde_json::from_str(&arg.to_string()) {
                 Ok(arg) => arg,
                 Err(_e) => {
@@ -1690,6 +2129,175 @@ async fn handle_client_message(
                 .send(Message::Text(Utf8Bytes::from(&json_string)))
                 .await;
         }
+        "repl/perm/get" => {
+            let perms_guard = perms.lock().await;
+
+            // Check if any existing permissions require keyring access.
+            let perm_requires_keyring: bool =
+                perms_guard.iter().any(|perm| perm.requires_keyring());
+            // Perm requires it and a user has a keyring key.
+            let unlocked_keyring_required =
+                if perm_requires_keyring && let Some(username) = username {
+                    asset_crypt::get_encryption_key(
+                        asset_blob_cache.clone(),
+                        api_client,
+                        &KeyRecipient::User(username.to_string()),
+                        None,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                };
+
+            let keyring_need_unlock =
+                if let Some(unlocked_keyring_required) = unlocked_keyring_required {
+                    if asset_keyring
+                        .lock()
+                        .await
+                        .can_unlock_decrypt_key(
+                            asset_blob_cache.clone(),
+                            api_client,
+                            &unlocked_keyring_required.recipient_key_id_parts(),
+                        )
+                        .await
+                    {
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                };
+
+            let perm_get_result = ReplPermGetResult {
+                perms: perms_guard.clone(),
+                keyring_need_unlock,
+            };
+            let resp: ClientMessageResponse<ReplPermGetResult, ()> = ClientMessageResponse::Ok {
+                mid,
+                result: perm_get_result,
+                more: false,
+            };
+            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
+        "repl/perm/request" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let perm_req_arg: ReplPermRequestArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            // Generate request_id
+            let request_id: String = (0..10)
+                .map(|_| {
+                    let idx = rand::rng().random_range(0..62);
+                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                    chars[idx] as char
+                })
+                .collect();
+
+            // Generate CSRF token
+            let csrf_token: String = (0..32)
+                .map(|_| {
+                    let idx = rand::rng().random_range(0..62);
+                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+                    chars[idx] as char
+                })
+                .collect();
+
+            // Store with 5-minute expiry
+            {
+                let mut perm_requests = perm_request_map.lock().await;
+                // Prevent memory leak: clear expired tokens
+                let now = std::time::Instant::now();
+                perm_requests.retain(|_, (_, expiry, _)| now < *expiry);
+                perm_requests.insert(
+                    request_id.clone(),
+                    (
+                        csrf_token.clone(),
+                        now + std::time::Duration::from_secs(300),
+                        perm_req_arg.perms.clone(),
+                    ),
+                );
+            }
+
+            let perm_requires_keyring: bool = perm_req_arg
+                .perms
+                .iter()
+                .any(|perm| perm.requires_keyring());
+            // Perm requires it and a user has a keyring key.
+            let unlocked_keyring_required =
+                if perm_requires_keyring && let Some(username) = username {
+                    asset_crypt::get_encryption_key(
+                        asset_blob_cache.clone(),
+                        api_client,
+                        &KeyRecipient::User(username.to_string()),
+                        None,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                };
+
+            let keyring_need_unlock =
+                if let Some(unlocked_keyring_required) = unlocked_keyring_required {
+                    if asset_keyring
+                        .lock()
+                        .await
+                        .can_unlock_decrypt_key(
+                            asset_blob_cache.clone(),
+                            api_client,
+                            &unlocked_keyring_required.recipient_key_id_parts(),
+                        )
+                        .await
+                    {
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                };
+
+            let perms_guard = perms.lock().await;
+            let new_requested_perms = perm_req_arg
+                .perms
+                .iter()
+                .filter(|req_perm| !perms_guard.contains(req_perm))
+                .collect::<Vec<_>>();
+
+            let perm_req_result = ReplPermRequestResult {
+                existing_perms: perms_guard.clone(),
+                requested_perms: new_requested_perms.iter().map(|p| (*p).clone()).collect(),
+                keyring_need_unlock,
+                request_id: request_id.clone(),
+                url: format!("http://{}/request/{}", perm_addr, request_id),
+            };
+            let resp: ClientMessageResponse<ReplPermRequestResult, ()> =
+                ClientMessageResponse::Ok {
+                    mid,
+                    result: perm_req_result,
+                    more: false,
+                };
+            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
         "asset/get" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let asset_arg: asset::AssetGetArg = match serde_json::from_str(&arg.to_string()) {
@@ -1703,6 +2311,17 @@ async fn handle_client_message(
                     return;
                 }
             };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::ReadByName {
+                    name: &asset_arg.name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             match api_client.asset_get(asset_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1737,6 +2356,17 @@ async fn handle_client_message(
                     return;
                 }
             };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::ListPrefix {
+                    prefix: list_arg.prefix.as_deref().unwrap_or(""),
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             match api_client.asset_entry_list(list_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1772,6 +2402,8 @@ async fn handle_client_message(
                         return;
                     }
                 };
+            // NOTE: No additional permission check. Assumption is that the
+            // caller was authorized for the first entry/list call.
             match api_client.asset_entry_list_next(list_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1807,6 +2439,17 @@ async fn handle_client_message(
                         return;
                     }
                 };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::ListPrefix {
+                    prefix: search_arg.asset_pool_path.as_deref().unwrap_or(""),
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             match api_client.asset_entry_search(search_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1841,6 +2484,28 @@ async fn handle_client_message(
                     return;
                 }
             };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::ReadByName {
+                    name: &move_arg.source_name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &move_arg.target_name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             match api_client.asset_move(move_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1875,6 +2540,17 @@ async fn handle_client_message(
                     return;
                 }
             };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &remove_arg.name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             match api_client.asset_remove(remove_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1910,6 +2586,31 @@ async fn handle_client_message(
                         return;
                     }
                 };
+            match &rev_iter_arg.entry_ref {
+                asset::EntryRef::Name(name) => {
+                    if let Err(PermCheckError::Unauthorized) =
+                        check_access_async(&perms, &AccessRequest::ReadByName { name }).await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                asset::EntryRef::EntryId(entry_id) => {
+                    if let Err(PermCheckError::Unauthorized) = check_access_async(
+                        &perms,
+                        &AccessRequest::ReadByEntryId { entry_id: entry_id },
+                    )
+                    .await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                _ => {
+                    send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                    return;
+                }
+            }
             match api_client.asset_revision_iter(rev_iter_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1945,6 +2646,8 @@ async fn handle_client_message(
                         return;
                     }
                 };
+            // NOTE: No additional permission check. Assumption is that the
+            // caller was authorized for the first revision/iter call.
             match api_client.asset_revision_iter_next(rev_iter_next_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -1980,6 +2683,31 @@ async fn handle_client_message(
                         return;
                     }
                 };
+            match &rev_get_arg.entry_ref {
+                asset::EntryRef::Name(name) => {
+                    if let Err(PermCheckError::Unauthorized) =
+                        check_access_async(&perms, &AccessRequest::ReadByName { name }).await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                asset::EntryRef::EntryId(entry_id) => {
+                    if let Err(PermCheckError::Unauthorized) = check_access_async(
+                        &perms,
+                        &AccessRequest::ReadByEntryId { entry_id: entry_id },
+                    )
+                    .await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                _ => {
+                    send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                    return;
+                }
+            }
             match api_client.asset_revision_get(rev_get_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -2070,6 +2798,17 @@ async fn handle_client_message(
                     return;
                 }
             };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &asset_arg.name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
@@ -2135,7 +2874,17 @@ async fn handle_client_message(
                     return;
                 }
             };
-
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &asset_arg.name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
@@ -2192,4 +2941,671 @@ async fn handle_client_message(
             send_bad_request_error(ws_sink, "Unknown route").await;
         }
     }
+}
+
+// -- Permissions server
+
+async fn handle_perm_http_connection(
+    db: Arc<Mutex<rusqlite::Connection>>,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: &HaiClient,
+    clients: Clients,
+    mut stream: tokio::net::TcpStream,
+    perms: Perms,
+    perm_request_map: PermRequestMap,
+    username: Option<&str>,
+    service_name: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut buf_reader = BufReader::new(&mut stream);
+
+    let request = match HttpRequest::parse(&mut buf_reader, "localhost").await {
+        Some(req) => req,
+        None => return Ok(()),
+    };
+
+    let response = match request.method.as_str() {
+        "GET" => {
+            if request.path.starts_with("/request/") {
+                let request_id = &request.path["/request/".len()..];
+                let perm_request_map_unlocked = perm_request_map.lock().await;
+                if let Some((csrf_token, _expiry, requested_perms)) =
+                    perm_request_map_unlocked.get(request_id).cloned()
+                {
+                    drop(perm_request_map_unlocked);
+
+                    // Build existing permissions section
+                    let existing_perms = perms.lock().await;
+                    let existing_section = if existing_perms.is_empty() {
+                        r#"<div class="existing"><div class="section-label">Existing permissions</div><div class="existing-empty">None granted yet.</div></div>"#.to_string()
+                    } else {
+                        let mut items = String::new();
+                        for perm in existing_perms.iter() {
+                            let (icon, label, detail) = format_perm_toggle(perm);
+                            items.push_str(&format!(
+                                r#"<div class="existing-item"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}</div><div class="perm-detail">{detail}</div></div></div>"#,
+                            ));
+                        }
+                        format!(
+                            r#"<div class="existing"><div class="section-label">Existing permissions</div>{items}</div>"#,
+                        )
+                    };
+
+                    let mut perm_toggles = String::new();
+                    for (i, perm) in requested_perms.iter().enumerate() {
+                        if existing_perms.contains(perm) {
+                            continue;
+                        }
+                        let (icon, label, detail) = format_perm_toggle(perm);
+                        let data_json = serde_json::to_string(perm).unwrap_or_default();
+                        let data_attr = html_escape(&data_json);
+                        perm_toggles.push_str(&format!(
+                            r#"<label class="perm" for="p{i}">
+<div class="perm-info"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}</div><div class="perm-detail">{detail}</div></div></div>
+<div class="toggle"><input type="checkbox" id="p{i}" name="perm_{i}" data-perm="{data_attr}" checked><span class="track"><span class="knob"></span></span></div>
+</label>"#,
+                        ));
+                    }
+
+                    drop(existing_perms);
+
+                    // Determine if keyring unlock is needed
+                    let perm_requires_keyring: bool =
+                        requested_perms.iter().any(|perm| perm.requires_keyring());
+
+                    let unlocked_keyring_required =
+                        if perm_requires_keyring && let Some(username) = username {
+                            asset_crypt::get_encryption_key(
+                                asset_blob_cache.clone(),
+                                api_client,
+                                &KeyRecipient::User(username.to_string()),
+                                None,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                        } else {
+                            None
+                        };
+
+                    let keyring_need_unlock =
+                        if let Some(ref unlocked_keyring_required) = unlocked_keyring_required {
+                            if asset_keyring
+                                .lock()
+                                .await
+                                .can_unlock_decrypt_key(
+                                    asset_blob_cache.clone(),
+                                    api_client,
+                                    &unlocked_keyring_required.recipient_key_id_parts(),
+                                )
+                                .await
+                            {
+                                false
+                            } else {
+                                true
+                            }
+                        } else {
+                            false
+                        };
+
+                    // Build keyring section
+                    let keyring_section = if keyring_need_unlock {
+                        r#"<div class="keyring-section">
+    <div class="section-label">Keyring unlock required</div>
+    <div class="keyring-info"><p>Some requested permissions require access to encrypted data. Enter your keyring password to unlock.</p></div>
+    <div class="keyring-error" id="keyring-error" style="display:none;"><span class="error-icon">✕</span><span id="keyring-error-msg"></span></div>
+    <div class="keyring-input-wrap">
+        <label class="keyring-label" for="keyring_password">🔒 Keyring password</label>
+        <input type="password" id="keyring_password" class="keyring-input" placeholder="Enter your keyring password" autocomplete="off">
+    </div>
+</div>"#.to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    let keyring_need_unlock_js = if keyring_need_unlock { "true" } else { "false" };
+
+                    HttpResponse::ok(
+                        format!(
+                            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Permissions — {service_name_escaped}</title>
+<style>
+:root {{ --bg: #1a1a1e; --surface: #26262b; --surface2: #2f2f35; --border: #38383f; --text: #e4e4e8; --text2: #9a9aa0; --accent: #6c8cff; --accent-hover: #5a7af0; --green: #3dd68c; --green-bg: #2a3a30; --red: #ff6b6b; --red-bg: #3a2a2a; --red-border: #5a3333; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }}
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 24px 16px; min-height: 100vh; }}
+.container {{ max-width: 460px; margin: 0 auto; }}
+.header {{ margin-bottom: 36px; }}
+.header h1 {{ font-size: 18px; font-weight: 600; margin-bottom: 4px; }}
+.header .app-name {{ color: var(--accent); }}
+.header p {{ font-size: 13px; color: var(--text2); }}
+.section-label {{ font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin-bottom: 8px; }}
+.perm {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; transition: background 0.15s; }}
+.perm:hover {{ background: var(--surface2); }}
+.perm-info {{ display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }}
+.perm-icon {{ font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; }}
+.perm-label {{ font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.perm-detail {{ font-size: 11px; color: var(--text2); font-family: var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.perm-detail code {{ background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-size: 11px; font-family: var(--mono); }}
+.toggle {{ position: relative; flex-shrink: 0; }}
+.toggle input {{ position: absolute; opacity: 0; pointer-events: none; }}
+.track {{ display: block; width: 44px; height: 26px; background: #48484f; border-radius: 13px; position: relative; transition: background 0.2s; }}
+.knob {{ position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
+.toggle input:checked + .track {{ background: var(--green); }}
+.toggle input:checked + .track .knob {{ transform: translateX(18px); }}
+.btn {{ display: block; width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; margin-top: 32px; }}
+.btn:hover {{ background: var(--accent-hover); }}
+.btn:active {{ transform: scale(0.98); }}
+.existing {{ margin-bottom: 36px; }}
+.existing-item {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; opacity: 0.65; }}
+.existing-empty {{ font-size: 13px; color: var(--text2); padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }}
+.remember {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-top: 16px; cursor: pointer; transition: background 0.15s; }}
+.remember:hover {{ background: var(--surface2); }}
+.remember-info {{ display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }}
+.remember-label {{ font-size: 13px; font-weight: 500; }}
+.remember-detail {{ font-size: 11px; color: var(--text2); }}
+.keyring-section {{ margin-bottom: 36px; }}
+.keyring-info p {{ font-size: 13px; color: var(--text2); margin-bottom: 12px; }}
+.keyring-input-wrap {{ position: relative; }}
+.keyring-label {{ display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: var(--text2); }}
+.keyring-input {{ display: block; width: 100%; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 14px; font-family: var(--mono); outline: none; transition: border-color 0.15s; }}
+.keyring-input:focus {{ border-color: var(--accent); }}
+.keyring-input.has-error {{ border-color: var(--red); }}
+.keyring-error {{ display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--red-bg); border: 1px solid var(--red-border); border-radius: 10px; margin-bottom: 10px; font-size: 13px; color: var(--red); }}
+.error-icon {{ font-size: 14px; font-weight: 700; flex-shrink: 0; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1><span class="app-name">{service_name_escaped}</span> is requesting permissions</h1>
+        <p>Toggle off anything you don't want to grant.</p>
+    </div>
+    {existing_section}
+    <form id="f">
+        <input type="hidden" name="csrf_token" value="{csrf_token_escaped}">
+        {keyring_section}
+        <div class="requested">
+            <div class="section-label">Requested</div>
+            {perm_toggles}
+        </div>
+        <label class="remember" for="remember">
+            <div class="remember-info">
+                <div class="remember-label">Long-term access</div>
+                <div class="remember-detail">Remember these permissions for future sessions</div>
+            </div>
+            <div class="toggle">
+                <input type="checkbox" id="remember" checked>
+                <span class="track"><span class="knob"></span></span>
+            </div>
+        </label>
+        <button class="btn" type="submit">Grant selected</button>
+    </form>
+</div>
+<script>
+const KEYRING_NEEDED = {keyring_need_unlock_js};
+
+function showKeyringError(msg) {{
+    const errEl = document.getElementById('keyring-error');
+    const errMsg = document.getElementById('keyring-error-msg');
+    const pwInput = document.getElementById('keyring_password');
+    if (errEl && errMsg && pwInput) {{
+        errMsg.textContent = msg;
+        errEl.style.display = 'flex';
+        pwInput.classList.add('has-error');
+        pwInput.focus();
+        pwInput.select();
+    }}
+}}
+
+function clearKeyringError() {{
+    const errEl = document.getElementById('keyring-error');
+    const pwInput = document.getElementById('keyring_password');
+    if (errEl) errEl.style.display = 'none';
+    if (pwInput) pwInput.classList.remove('has-error');
+}}
+
+if (KEYRING_NEEDED) {{
+    document.getElementById('keyring_password').addEventListener('input', clearKeyringError);
+}}
+
+document.getElementById('f').onsubmit = e => {{
+    e.preventDefault();
+    const btn = e.target.querySelector('button');
+
+    let keyring_password = null;
+    if (KEYRING_NEEDED) {{
+        const pwInput = document.getElementById('keyring_password');
+        keyring_password = pwInput.value;
+        if (!keyring_password) {{
+            showKeyringError('Please enter your keyring password.');
+            return;
+        }}
+    }}
+
+    btn.disabled = true;
+    btn.textContent = 'Granting\u2026';
+    clearKeyringError();
+
+    const grant = [];
+    document.querySelectorAll('input[type=checkbox][data-perm]').forEach(c => {{
+        if (c.checked) grant.push(JSON.parse(c.dataset.perm));
+    }});
+    const remember = document.getElementById('remember').checked;
+    const body = {{
+        csrf_token: document.querySelector('input[name=csrf_token]').value,
+        request_id: "{request_id_escaped}",
+        grant,
+        remember
+    }};
+    if (keyring_password !== null) {{
+        body.keyring_password = keyring_password;
+    }}
+    fetch('/submit', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(body)
+    }}).then(r => {{
+        if (r.ok) return r.text().then(t => {{ document.open(); document.write(t); document.close(); }});
+        if (r.status === 401) {{
+            return r.json().then(j => {{
+                btn.disabled = false;
+                btn.textContent = 'Grant selected';
+                showKeyringError(j.message || 'Incorrect keyring password. Please try again.');
+            }}).catch(() => {{
+                btn.disabled = false;
+                btn.textContent = 'Grant selected';
+                showKeyringError('Incorrect keyring password. Please try again.');
+            }});
+        }}
+        btn.disabled = false;
+        btn.textContent = 'Grant selected';
+        alert('Failed (' + r.status + ')');
+    }}).catch(() => {{
+        btn.disabled = false;
+        btn.textContent = 'Grant selected';
+        alert('Network error');
+    }});
+}};
+</script>
+</body>
+</html>"#,
+                            service_name_escaped = html_escape(service_name),
+                            csrf_token_escaped = html_escape(&csrf_token),
+                            perm_toggles = perm_toggles,
+                            request_id_escaped = html_escape(request_id),
+                            existing_section = existing_section,
+                            keyring_section = keyring_section,
+                            keyring_need_unlock_js = keyring_need_unlock_js,
+                        )
+                        .into(),
+                        "text/html",
+                    )
+                } else {
+                    HttpResponse::not_found()
+                }
+            } else {
+                HttpResponse::not_found()
+            }
+        }
+        "POST" => {
+            if request.path == "/submit" {
+                if let Ok(perm_req) = serde_json::from_slice::<PermRequestSubmit>(&request.body) {
+                    let mut perm_request_map_unlocked = perm_request_map.lock().await;
+                    if let Some((csrf_token, expiry, perms_requested)) =
+                        perm_request_map_unlocked.get(&perm_req.request_id).cloned()
+                    {
+                        let now = std::time::Instant::now();
+                        if perm_req.csrf_token == csrf_token && now < expiry {
+                            // Check if any granted perms require keyring
+                            let any_granted_requires_keyring =
+                                perm_req.grant.iter().any(|perm| perm.requires_keyring());
+
+                            let unlocked_keyring_required =
+                                if any_granted_requires_keyring && let Some(username) = username {
+                                    asset_crypt::get_encryption_key(
+                                        asset_blob_cache.clone(),
+                                        api_client,
+                                        &KeyRecipient::User(username.to_string()),
+                                        None,
+                                    )
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                } else {
+                                    None
+                                };
+
+                            let keyring_need_unlock = if let Some(ref unlocked_keyring_required) =
+                                unlocked_keyring_required
+                            {
+                                !asset_keyring
+                                    .lock()
+                                    .await
+                                    .can_unlock_decrypt_key(
+                                        asset_blob_cache.clone(),
+                                        api_client,
+                                        &unlocked_keyring_required.recipient_key_id_parts(),
+                                    )
+                                    .await
+                            } else {
+                                false
+                            };
+
+                            // If keyring unlock is needed, validate the password
+                            if keyring_need_unlock {
+                                let password = perm_req.keyring_password.as_deref().unwrap_or("");
+                                if password.is_empty() {
+                                    drop(perm_request_map_unlocked);
+                                    let resp = HttpResponse::json_status(
+                                        401,
+                                        r#"{"message":"Keyring password is required to grant these permissions."}"#,
+                                    );
+                                    resp.write_to(&mut stream).await?;
+                                    return Ok(());
+                                }
+
+                                let rec_key_id_parts = unlocked_keyring_required
+                                    .as_ref()
+                                    .unwrap()
+                                    .recipient_key_id_parts();
+
+                                let unlock_success = asset_keyring
+                                    .lock()
+                                    .await
+                                    .unlock_decrypt_key(
+                                        asset_blob_cache.clone(),
+                                        api_client,
+                                        &rec_key_id_parts,
+                                        password,
+                                    )
+                                    .await
+                                    .is_ok();
+
+                                if !unlock_success {
+                                    // Password incorrect
+                                    drop(perm_request_map_unlocked);
+                                    let resp = HttpResponse::json_status(
+                                        401,
+                                        r#"{"message":"Incorrect keyring password. Please try again."}"#,
+                                    );
+                                    resp.write_to(&mut stream).await?;
+                                    return Ok(());
+                                }
+                            }
+
+                            // Keyring is unlocked (or wasn't needed)
+                            perm_request_map_unlocked.remove(&perm_req.request_id);
+                            drop(perm_request_map_unlocked);
+
+                            let mut perms_unlocked = perms.lock().await;
+                            let mut newly_granted = Vec::new();
+                            for granted_perm in perm_req.grant.iter() {
+                                if perms_unlocked.contains(granted_perm) {
+                                    continue;
+                                }
+                                if perms_requested.contains(granted_perm) {
+                                    perms_unlocked.push(granted_perm.clone());
+                                    newly_granted.push(granted_perm.clone());
+                                }
+                            }
+
+                            if let Some(username) = username
+                                && perm_req.remember
+                                && !newly_granted.is_empty()
+                            {
+                                let _ = crate::db::merge_gateway_perms(
+                                    &mut *db.lock().await,
+                                    username,
+                                    service_name,
+                                    &newly_granted,
+                                );
+                            }
+
+                            let remember_active = perm_req.remember;
+
+                            let mut all_rows = String::new();
+                            for perm in perms_unlocked.iter() {
+                                let is_new = newly_granted.contains(perm);
+                                let (icon, label, detail) = format_perm_toggle(perm);
+                                let new_badge = if is_new {
+                                    r#" <span class="badge">new</span>"#
+                                } else {
+                                    ""
+                                };
+                                all_rows.push_str(&format!(
+                                    r#"<div class="perm-row{}"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}{new_badge}</div><div class="perm-detail">{detail}</div></div></div>"#,
+                                    if is_new { " new-row" } else { "" },
+                                ));
+                            }
+                            drop(perms_unlocked);
+
+                            if !newly_granted.is_empty() {
+                                let clients_unlocked = clients.lock().await;
+                                for (_client_id, tx) in clients_unlocked.iter() {
+                                    let json_string = format!(
+                                        r#"{{".tag":"ok","mid":{},"route":"client/perm/updated","arg":null}}"#,
+                                        -1,
+                                    );
+                                    let _ = tx.send(Message::Text(Utf8Bytes::from(&json_string)));
+                                }
+                            }
+
+                            if all_rows.is_empty() {
+                                all_rows = r#"<div class="perm-row"><div class="perm-label" style="color:var(--text2);">No permissions granted.</div></div>"#.to_string();
+                            }
+
+                            let granted_count = newly_granted.len();
+                            let subtitle = if granted_count == 0 {
+                                "No new permissions were granted.".to_string()
+                            } else {
+                                let persist_note = if remember_active {
+                                    " These will be remembered for future sessions."
+                                } else {
+                                    " These apply to this session only."
+                                };
+                                format!(
+                                    "{} permission{} granted.{}",
+                                    granted_count,
+                                    if granted_count == 1 { "" } else { "s" },
+                                    persist_note,
+                                )
+                            };
+
+                            HttpResponse::ok(
+                                format!(
+                                    r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Permissions Granted</title>
+<style>
+:root {{ --bg: #1a1a1e; --surface: #26262b; --surface2: #2f2f35; --border: #38383f; --text: #e4e4e8; --text2: #9a9aa0; --green: #3dd68c; --green-dim: #2a3a30; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }}
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 24px 16px; min-height: 100vh; }}
+.container {{ max-width: 460px; margin: 0 auto; }}
+.done-icon {{ font-size: 36px; margin-bottom: 12px; }}
+.header h1 {{ font-size: 18px; font-weight: 600; margin-bottom: 4px; }}
+.header p {{ font-size: 13px; color: var(--text2); margin-bottom: 20px; }}
+.section-label {{ font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin-bottom: 8px; }}
+.perm-row {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; }}
+.new-row {{ border-color: var(--green); background: var(--green-dim); }}
+.perm-icon {{ font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; }}
+.perm-label {{ font-size: 13px; font-weight: 500; }}
+.perm-detail {{ font-size: 11px; color: var(--text2); font-family: var(--mono); margin-top: 2px; }}
+.perm-detail code {{ background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-size: 11px; font-family: var(--mono); }}
+.badge {{ display: inline-block; font-size: 10px; font-weight: 600; background: var(--green); color: #1a1a1e; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.03em; }}
+.close-msg {{ margin-top: 20px; text-align: center; font-size: 12px; color: var(--text2); }}
+.persist-note {{ display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-size: 12px; color: var(--text2); }}
+.persist-note .pi {{ font-size: 16px; flex-shrink: 0; }}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div class="done-icon">✓</div>
+        <h1>Done</h1>
+        <p>{subtitle}</p>
+    </div>
+    <div class="section-label">All granted permissions</div>
+    {all_rows}
+    {persist_section}
+    <p class="close-msg">You can close this tab.</p>
+</div>
+</body>
+</html>"#,
+                                    subtitle = html_escape(&subtitle),
+                                    all_rows = all_rows,
+                                    persist_section = if remember_active && granted_count > 0 {
+                                        r#"<div class="persist-note"><span class="pi">💾</span>Long-term access enabled — permissions saved for future sessions.</div>"#
+                                    } else if granted_count > 0 {
+                                        r#"<div class="persist-note"><span class="pi">⏳</span>Session only — permissions will reset when the app restarts.</div>"#
+                                    } else {
+                                        ""
+                                    },
+                                )
+                                .into(),
+                                "text/html",
+                            )
+                        } else {
+                            HttpResponse::forbidden()
+                        }
+                    } else {
+                        HttpResponse::forbidden()
+                    }
+                } else {
+                    HttpResponse::bad_request("Invalid JSON")
+                }
+            } else {
+                HttpResponse::not_found()
+            }
+        }
+        _ => HttpResponse::bad_request("Only GET and POST supported"),
+    };
+
+    response.write_to(&mut stream).await?;
+
+    Ok(())
+}
+
+fn format_perm_toggle(
+    perm: &Perm,
+) -> (
+    // icon
+    &'static str,
+    // label
+    String,
+    // description (html)
+    String,
+) {
+    match perm {
+        Perm::AssetName { name, perm: ap } => {
+            let flags = perm_flags(ap.read, ap.write, false, false);
+            (
+                "📄",
+                format!("Asset by name"),
+                format!("<code>{}</code> — {}", html_escape(name), flags),
+            )
+        }
+        Perm::AssetEntryId { entry_id, perm: ap } => {
+            let flags = perm_flags(ap.read, ap.write, false, false);
+            (
+                "📄",
+                format!("Asset by ID"),
+                format!("<code>{}</code> — {}", html_escape(entry_id), flags),
+            )
+        }
+        Perm::AssetPrefix {
+            prefix,
+            perm: ap,
+            prefix_perm,
+        } if prefix == "" => {
+            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
+            ("📁", format!("All private assets"), format!("{}", flags))
+        }
+        Perm::AssetPrefix {
+            prefix,
+            perm: ap,
+            prefix_perm,
+        } => {
+            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
+            (
+                "📁",
+                format!("Asset prefix"),
+                format!("<code>{}</code> — {}", html_escape(prefix), flags),
+            )
+        }
+        Perm::PublicAsset => (
+            "📄",
+            format!("Public assets"),
+            format!("<code>/*</code> not including <code>/s/*</code>"),
+        ),
+        Perm::SharedAssetName { name, perm: ap } => {
+            let flags = perm_flags(ap.read, ap.write, false, false);
+            (
+                "📄",
+                format!("Shared asset by name"),
+                format!("<code>/s/*/{}</code> — {}", html_escape(name), flags),
+            )
+        }
+        Perm::SharedAssetPrefix {
+            prefix,
+            perm: ap,
+            prefix_perm,
+        } => {
+            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
+            (
+                "📁",
+                format!("Shared asset prefix"),
+                format!("<code>/s/*/{}</code> — {}", html_escape(prefix), flags),
+            )
+        }
+        Perm::LlmPrompt => (
+            "💬",
+            format!("LLM Prompting"),
+            "Converse without tools or system-level permissions".to_string(),
+        ),
+    }
+}
+
+fn perm_flags(read: bool, write: bool, create: bool, list: bool) -> String {
+    let mut flags = Vec::new();
+    if read {
+        flags.push("read");
+    }
+    if write {
+        flags.push("write");
+    }
+    if create {
+        flags.push("create");
+    }
+    if list {
+        flags.push("list");
+    }
+    if flags.is_empty() {
+        "none".to_string()
+    } else {
+        flags.join(", ")
+    }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermRequestSubmit {
+    request_id: String,
+    csrf_token: String,
+    grant: Vec<Perm>,
+    remember: bool,
+    keyring_password: Option<String>,
 }

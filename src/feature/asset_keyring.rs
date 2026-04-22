@@ -156,6 +156,68 @@ impl AssetKeyring {
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+        password: &str,
+    ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
+        // Fetch the encrypted private key
+        let dec_key = asset_crypt::get_encrypted_decryption_key(
+            asset_blob_cache,
+            api_client,
+            &rec_key_id_parts,
+        )
+        .await
+        .map_err(|e| {
+            asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+        })?;
+        let dec_key = if let Some(dec_key) = dec_key {
+            dec_key
+        } else {
+            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
+        };
+
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        // Try to get password from OS keyring first
+        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
+            // Verify the stored password works
+            match crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()) {
+                Ok(secret) => {
+                    // Stored password works!
+                    self.unlocked_decrypt_keys
+                        .insert(rec_key_id.to_string(), secret);
+                    self.last_used = std::time::Instant::now();
+                    return Ok(());
+                }
+                Err(_) => {
+                    // Stored password is invalid, remove it and prompt for new one
+                    println!(
+                        "error: stored password for {} is invalid, prompting for new password",
+                        rec_key_id
+                    );
+                    self.delete_password_from_keyring(&rec_key_id);
+                }
+            }
+        }
+
+        // Decrypt and store the private key
+        let secret =
+            crypt::unprotect_encryption_key(&dec_key, password.as_bytes()).map_err(|e| {
+                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+            })?;
+
+        // Store password in OS keyring for future use
+        self.store_password_in_keyring(&rec_key_id, &password);
+
+        self.unlocked_decrypt_keys.insert(rec_key_id, secret);
+        self.last_used = std::time::Instant::now();
+
+        Ok(())
+    }
+
+    /// Unlock a specific decryption key by ID
+    pub async fn unlock_decrypt_key_with_prompt(
+        &mut self,
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
         // Fetch the encrypted private key
         let dec_key = asset_crypt::get_encrypted_decryption_key(
@@ -217,8 +279,41 @@ impl AssetKeyring {
         Ok(())
     }
 
+    /// Tests whether password already available to unlock decryption key.
+    pub async fn can_unlock_decrypt_key(
+        &mut self,
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> bool {
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        if self.unlocked_decrypt_keys.get(&rec_key_id).is_some() {
+            return true;
+        }
+
+        // Fetch the encrypted private key
+        let dec_key = match asset_crypt::get_encrypted_decryption_key(
+            asset_blob_cache,
+            api_client,
+            &rec_key_id_parts,
+        )
+        .await
+        {
+            Ok(Some(key)) => key,
+            _ => return false,
+        };
+
+        // Try using a stored password to decrypt the key
+        let rec_key_id = rec_key_id_parts.recipient_key_id();
+        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
+            crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()).is_ok()
+        } else {
+            false
+        }
+    }
+
     /// Unlock a specific signing key by ID
-    pub async fn unlock_signing_key(
+    pub async fn unlock_signing_key_with_prompt(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
@@ -282,7 +377,7 @@ impl AssetKeyring {
     }
 
     /// Get an unlocked key, prompting to unlock if needed
-    pub async fn get_or_unlock_decrypt_key(
+    pub async fn get_or_unlock_decrypt_key_with_prompt(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
@@ -290,7 +385,7 @@ impl AssetKeyring {
     ) -> Result<&StaticSecret, asset_crypt::AssetKeyMaterialDecryptionError> {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
         if !self.unlocked_decrypt_keys.contains_key(&rec_key_id) {
-            self.unlock_decrypt_key(asset_blob_cache, api_client, &rec_key_id_parts)
+            self.unlock_decrypt_key_with_prompt(asset_blob_cache, api_client, &rec_key_id_parts)
                 .await?;
         }
 
@@ -299,7 +394,7 @@ impl AssetKeyring {
     }
 
     /// Get an unlocked key, prompting to unlock if needed
-    pub async fn get_or_unlock_signing_key(
+    pub async fn get_or_unlock_signing_key_with_prompt(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
@@ -307,7 +402,7 @@ impl AssetKeyring {
     ) -> Result<&SigningKey, asset_crypt::AssetKeyMaterialDecryptionError> {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
         if !self.unlocked_signing_keys.contains_key(&rec_key_id) {
-            self.unlock_signing_key(asset_blob_cache, api_client, &rec_key_id_parts)
+            self.unlock_signing_key_with_prompt(asset_blob_cache, api_client, &rec_key_id_parts)
                 .await?;
         }
 

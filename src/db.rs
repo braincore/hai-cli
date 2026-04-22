@@ -97,6 +97,19 @@ pub fn open_db() -> rusqlite::Result<rusqlite::Connection> {
         )",
         rusqlite::params![],
     )?;
+
+    // Create gateway_perms table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS gateway_perms (
+            username TEXT NOT NULL,
+            service_name TEXT NOT NULL,
+            perms_json TEXT NOT NULL, -- JSON-serialized Vec<Perm>
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (username, service_name)
+        )",
+        rusqlite::params![],
+    )?;
+
     Ok(conn)
 }
 
@@ -487,4 +500,129 @@ pub fn listen_queue_pop(
         tx.commit()?;
         Ok(None)
     }
+}
+
+// --
+
+//
+// Gateway Permissions fns
+//
+
+/// Loads persisted permissions for a (username, service_name) pair.
+/// Returns the deserialized Vec<Perm>, or an empty vec if none found.
+pub fn load_gateway_perms(
+    conn: &rusqlite::Connection,
+    username: &str,
+    service_name: &str,
+) -> Vec<crate::feature::gateway::Perm> {
+    let result: Option<String> = conn
+        .query_row(
+            "SELECT perms_json FROM gateway_perms WHERE username = ?1 AND service_name = ?2",
+            rusqlite::params![username, service_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+
+    match result {
+        Some(json) => serde_json::from_str(&json).unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+/// Merges new permissions into the persisted set for a (username, service_name) pair.
+/// This is safe under concurrent writers: it reads the existing set inside a transaction,
+/// unions with the new perms (deduplicating via PartialEq), and writes back.
+pub fn merge_gateway_perms(
+    conn: &mut rusqlite::Connection,
+    username: &str,
+    service_name: &str,
+    new_perms: &[crate::feature::gateway::Perm],
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+
+    let existing_json: Option<String> = tx
+        .query_row(
+            "SELECT perms_json FROM gateway_perms WHERE username = ?1 AND service_name = ?2",
+            rusqlite::params![username, service_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let mut merged: Vec<crate::feature::gateway::Perm> = match existing_json {
+        Some(json) => serde_json::from_str(&json).unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    for perm in new_perms {
+        if !merged.contains(perm) {
+            merged.push(perm.clone());
+        }
+    }
+
+    let merged_json = serde_json::to_string(&merged)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+    tx.execute(
+        "INSERT INTO gateway_perms (username, service_name, perms_json, updated_at)
+         VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+         ON CONFLICT(username, service_name) DO UPDATE SET
+         perms_json = excluded.perms_json,
+         updated_at = CURRENT_TIMESTAMP",
+        rusqlite::params![username, service_name, merged_json],
+    )?;
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Removes a specific permission from the persisted set.
+#[allow(dead_code)]
+pub fn remove_gateway_perm(
+    conn: &mut rusqlite::Connection,
+    username: &str,
+    service_name: &str,
+    perm: &crate::feature::gateway::Perm,
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+
+    let existing_json: Option<String> = tx
+        .query_row(
+            "SELECT perms_json FROM gateway_perms WHERE username = ?1 AND service_name = ?2",
+            rusqlite::params![username, service_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    if let Some(json) = existing_json {
+        let mut perms: Vec<crate::feature::gateway::Perm> =
+            serde_json::from_str(&json).unwrap_or_default();
+        perms.retain(|p| p != perm);
+
+        let merged_json = serde_json::to_string(&perms)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+        tx.execute(
+            "UPDATE gateway_perms SET perms_json = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE username = ?2 AND service_name = ?3",
+            rusqlite::params![merged_json, username, service_name],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
+/// Clears all persisted permissions for a (username, service_name) pair.
+pub fn clear_gateway_perms(
+    conn: &rusqlite::Connection,
+    username: &str,
+    service_name: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM gateway_perms WHERE username = ?1 AND service_name = ?2",
+        rusqlite::params![username, service_name],
+    )?;
+    Ok(())
 }

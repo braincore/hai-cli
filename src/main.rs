@@ -487,6 +487,7 @@ async fn repl(
         "/asset-crypt-setup",
         "/asset-crypt-recover",
         "/asset-app",
+        "/asset-app-revoke-perms",
         "/asset-pool-new",
         "/asset-pools",
         "/email",

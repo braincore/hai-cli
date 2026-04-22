@@ -487,6 +487,21 @@ pub struct EncryptKeyInfo {
     pub recipient: KeyRecipient,
 }
 
+impl EncryptKeyInfo {
+    #[allow(dead_code)]
+    pub fn recipient_key_id(&self) -> String {
+        self.recipient.recipient_key_id(&self.enc_key_id)
+    }
+
+    pub fn recipient_key_id_parts(&self) -> RecipientKeyIdParts {
+        RecipientKeyIdParts {
+            recipient: self.recipient.clone(),
+            key_id: self.enc_key_id.clone(),
+            key_type: KeyType::Encryption,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Container for the information that gets stored as an object in the
 /// `encrypted.keys` field of an encrypted asset's metadata.
@@ -503,9 +518,7 @@ pub struct RecipientKeyInfo {
 
 impl RecipientKeyInfo {
     pub fn recipient_key_id(&self) -> String {
-        match &self.recipient {
-            KeyRecipient::User(username) => format!("u:{}:{}", username, self.enc_key_id),
-        }
+        self.recipient.recipient_key_id(&self.enc_key_id)
     }
 
     pub fn recipient_key_id_parts(&self) -> RecipientKeyIdParts {
@@ -523,6 +536,10 @@ pub enum KeyRecipient {
 }
 
 impl KeyRecipient {
+    pub fn recipient_key_id(&self, key_id: &str) -> String {
+        format!("{}{}", self.recipient_key_id_prefix(), key_id)
+    }
+
     pub fn recipient_key_id_prefix(&self) -> String {
         match self {
             KeyRecipient::User(username) => format!("u:{}:", username),
@@ -1049,7 +1066,7 @@ pub async fn get_symmetric_key_ez(
 ) -> Result<SymmetricKeyInfo, AssetKeyMaterialDecryptionError> {
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let secret = match asset_keyring_locked
-        .get_or_unlock_decrypt_key(
+        .get_or_unlock_decrypt_key_with_prompt(
             asset_blob_cache,
             api_client,
             &rec_key_info.recipient_key_id_parts(),
@@ -1636,7 +1653,7 @@ pub async fn get_ed25519_for_ssh_key(
 
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let signing_key = match asset_keyring_locked
-        .get_or_unlock_signing_key(
+        .get_or_unlock_signing_key_with_prompt(
             asset_blob_cache,
             api_client,
             &RecipientKeyIdParts {
