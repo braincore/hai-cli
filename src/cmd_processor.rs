@@ -3256,7 +3256,11 @@ pub async fn process_cmd(
             prefix,
             target_path,
         }) => {
-            let prefix = expand_pub_asset_name(&prefix, &session.account);
+            let prefix = if prefix == "-" {
+                None
+            } else {
+                Some(expand_pub_asset_name(&prefix, &session.account))
+            };
             let target_path = match shellexpand::full(&target_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -3265,7 +3269,7 @@ pub async fn process_cmd(
                 }
             };
             let api_client = mk_api_client(Some(session));
-            let _ = asset_sync::sync_prefix(
+            let _ = asset_sync::sync_down(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
@@ -3273,7 +3277,7 @@ pub async fn process_cmd(
                     .account
                     .as_ref()
                     .map(|a| KeyRecipient::User(a.username.clone())),
-                &prefix,
+                prefix.as_deref(),
                 &target_path,
                 None,
                 debug,
@@ -3299,7 +3303,11 @@ pub async fn process_cmd(
                     return ProcessCmdResult::Loop;
                 }
             };
-            let target_prefix = expand_pub_asset_name(&target_prefix, &session.account);
+            let target_prefix = if target_prefix == "-" {
+                None
+            } else {
+                Some(expand_pub_asset_name(&target_prefix, &session.account))
+            };
             let api_client = mk_api_client(Some(session));
             match asset_sync::sync_up(
                 asset_blob_cache.clone(),
@@ -3308,7 +3316,7 @@ pub async fn process_cmd(
                 &username,
                 update_asset_tx,
                 &source_path,
-                &target_prefix,
+                target_prefix.as_deref(),
                 asset_sync::SyncUpOptions {
                     sync_new_files,
                     max_concurrent_uploads: 10,
@@ -3319,13 +3327,19 @@ pub async fn process_cmd(
             {
                 Ok(sync_results) => {
                     for res in sync_results {
+                        if matches!(res.action, asset_sync::SyncUpAction::Skipped) {
+                            continue;
+                        }
                         println!(
-                            "sync up: {} -> {}: {}: {:?}: {}",
+                            "sync: path={} -> name={}: action={}: {}",
                             res.file_path,
                             res.asset_name,
                             res.action,
-                            res.success,
-                            res.error.unwrap_or_default()
+                            if res.success {
+                                "ok".to_string()
+                            } else {
+                                res.error.unwrap_or_default()
+                            },
                         )
                     }
                 }
@@ -3371,7 +3385,7 @@ pub async fn process_cmd(
             remaining -= iter_res.revisions.len() as u32;
             let mut revision_cursor = iter_res.next.clone();
 
-            let sync_res = asset_sync::sync_entries(
+            let sync_res = asset_sync::sync_down_entries(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
@@ -3388,35 +3402,33 @@ pub async fn process_cmd(
                 true,
             )
             .await;
-            if let Ok(sync_res) = sync_res {
-                for (source, data_temp_file, metadata_temp_file) in sync_res {
-                    if let Some(data_temp_file) = data_temp_file {
-                        let msg = format!(
-                            "Asset '{}' revision {} data copied to '{}'",
-                            asset_name,
-                            source.asset.rev_id,
-                            data_temp_file.path().display()
-                        );
-                        println!("{}", msg);
-                        all_msgs.push(msg);
-                        session.temp_files.push((data_temp_file, is_task_mode_step));
-                    }
-                    if let Some(metadata_temp_file) = metadata_temp_file
-                        && let Some(metadata_info) = source.metadata.as_ref()
-                    {
-                        let msg = format!(
-                            "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
-                            asset_name,
-                            source.asset.rev_id,
-                            metadata_info.rev_id,
-                            metadata_temp_file.path().display()
-                        );
-                        println!("{}", msg);
-                        all_msgs.push(msg);
-                        session
-                            .temp_files
-                            .push((metadata_temp_file, is_task_mode_step));
-                    }
+            for (source, data_temp_file, metadata_temp_file) in sync_res {
+                if let Some(data_temp_file) = data_temp_file {
+                    let msg = format!(
+                        "Asset '{}' revision {} data copied to '{}'",
+                        asset_name,
+                        source.asset.rev_id,
+                        data_temp_file.path().display()
+                    );
+                    println!("{}", msg);
+                    all_msgs.push(msg);
+                    session.temp_files.push((data_temp_file, is_task_mode_step));
+                }
+                if let Some(metadata_temp_file) = metadata_temp_file
+                    && let Some(metadata_info) = source.metadata.as_ref()
+                {
+                    let msg = format!(
+                        "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
+                        asset_name,
+                        source.asset.rev_id,
+                        metadata_info.rev_id,
+                        metadata_temp_file.path().display()
+                    );
+                    println!("{}", msg);
+                    all_msgs.push(msg);
+                    session
+                        .temp_files
+                        .push((metadata_temp_file, is_task_mode_step));
                 }
             }
 
@@ -3441,7 +3453,7 @@ pub async fn process_cmd(
                     remaining -= iter_next_res.revisions.len() as u32;
                     revision_cursor = iter_next_res.next;
 
-                    let sync_res = asset_sync::sync_entries(
+                    let sync_res = asset_sync::sync_down_entries(
                         asset_blob_cache.clone(),
                         session.asset_keyring.clone(),
                         &api_client,
@@ -3458,35 +3470,33 @@ pub async fn process_cmd(
                         true,
                     )
                     .await;
-                    if let Ok(sync_res) = sync_res {
-                        for (source, data_temp_file, metadata_temp_file) in sync_res {
-                            if let Some(data_temp_file) = data_temp_file {
-                                let msg = format!(
-                                    "Asset '{}' revision {} data copied to '{}'",
-                                    asset_name,
-                                    source.asset.rev_id,
-                                    data_temp_file.path().display()
-                                );
-                                println!("{}", msg);
-                                all_msgs.push(msg);
-                                session.temp_files.push((data_temp_file, is_task_mode_step));
-                            }
-                            if let Some(metadata_temp_file) = metadata_temp_file
-                                && let Some(metadata_info) = source.metadata.as_ref()
-                            {
-                                let msg = format!(
-                                    "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
-                                    asset_name,
-                                    source.asset.rev_id,
-                                    metadata_info.rev_id,
-                                    metadata_temp_file.path().display()
-                                );
-                                println!("{}", msg);
-                                all_msgs.push(msg);
-                                session
-                                    .temp_files
-                                    .push((metadata_temp_file, is_task_mode_step));
-                            }
+                    for (source, data_temp_file, metadata_temp_file) in sync_res {
+                        if let Some(data_temp_file) = data_temp_file {
+                            let msg = format!(
+                                "Asset '{}' revision {} data copied to '{}'",
+                                asset_name,
+                                source.asset.rev_id,
+                                data_temp_file.path().display()
+                            );
+                            println!("{}", msg);
+                            all_msgs.push(msg);
+                            session.temp_files.push((data_temp_file, is_task_mode_step));
+                        }
+                        if let Some(metadata_temp_file) = metadata_temp_file
+                            && let Some(metadata_info) = source.metadata.as_ref()
+                        {
+                            let msg = format!(
+                                "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
+                                asset_name,
+                                source.asset.rev_id,
+                                metadata_info.rev_id,
+                                metadata_temp_file.path().display()
+                            );
+                            println!("{}", msg);
+                            all_msgs.push(msg);
+                            session
+                                .temp_files
+                                .push((metadata_temp_file, is_task_mode_step));
                         }
                     }
                 } else {
@@ -3528,7 +3538,7 @@ pub async fn process_cmd(
                 }
             };
 
-            let sync_res = asset_sync::sync_entries(
+            let sync_res = asset_sync::sync_down_entries(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
                 &api_client,
@@ -3548,35 +3558,33 @@ pub async fn process_cmd(
 
             // Collect all messages to log at once
             let mut all_msgs = vec![];
-            if let Ok(sync_res) = sync_res {
-                for (source, data_temp_file, metadata_temp_file) in sync_res {
-                    if let Some(data_temp_file) = data_temp_file {
-                        let msg = format!(
-                            "Asset '{}' revision {} data copied to '{}'",
-                            asset_name,
-                            source.asset.rev_id,
-                            data_temp_file.path().display()
-                        );
-                        println!("{}", msg);
-                        all_msgs.push(msg);
-                        session.temp_files.push((data_temp_file, is_task_mode_step));
-                    }
-                    if let Some(metadata_temp_file) = metadata_temp_file
-                        && let Some(metadata_info) = source.metadata.as_ref()
-                    {
-                        let msg = format!(
-                            "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
-                            asset_name,
-                            source.asset.rev_id,
-                            metadata_info.rev_id,
-                            metadata_temp_file.path().display()
-                        );
-                        println!("{}", msg);
-                        all_msgs.push(msg);
-                        session
-                            .temp_files
-                            .push((metadata_temp_file, is_task_mode_step));
-                    }
+            for (source, data_temp_file, metadata_temp_file) in sync_res {
+                if let Some(data_temp_file) = data_temp_file {
+                    let msg = format!(
+                        "Asset '{}' revision {} data copied to '{}'",
+                        asset_name,
+                        source.asset.rev_id,
+                        data_temp_file.path().display()
+                    );
+                    println!("{}", msg);
+                    all_msgs.push(msg);
+                    session.temp_files.push((data_temp_file, is_task_mode_step));
+                }
+                if let Some(metadata_temp_file) = metadata_temp_file
+                    && let Some(metadata_info) = source.metadata.as_ref()
+                {
+                    let msg = format!(
+                        "Asset '{}' revision {} metadata (revision {}) copied to '{}'",
+                        asset_name,
+                        source.asset.rev_id,
+                        metadata_info.rev_id,
+                        metadata_temp_file.path().display()
+                    );
+                    println!("{}", msg);
+                    all_msgs.push(msg);
+                    session
+                        .temp_files
+                        .push((metadata_temp_file, is_task_mode_step));
                 }
             }
             fn format_revision(revision: &AssetRevision) -> String {
@@ -5533,11 +5541,13 @@ Assets (Experimental):
                                    type: allow, deny, default
                                    permission: read-data, read-revisions, push-data
 /asset-push <name>               - Push data into an asset. See pushed data w/ `/asset-revisions`
-/asset-import <n> <p>            - Imports <path> into asset with <name>
-/asset-export <n> <p>            - Exports asset with name to <path>
+/asset-import <n> <p>            - Imports local <path> into asset with <name>
+/asset-export <n> <p>            - Exports asset with name to local <path>
 /asset-temp <name> [<count>]     - Exports asset to a temporary file.
                                    If `count` set, the latest `count` revisions are exported.
 /asset-revision-temp <n> [<rev>] - Exports revision of asset to a temporary file. `n` is asset name.
+/asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
+/asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
 /asset-remove <name>             - Removes an asset
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>

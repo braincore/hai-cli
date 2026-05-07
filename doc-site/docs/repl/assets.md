@@ -65,6 +65,26 @@ to produce patches or refer to specific lines), use:
 /load.n <path>
 ```
 
+## Listing assets
+
+To list assets, use:
+
+```
+/asset-list [<prefix>]
+/ls [<prefix>]
+```
+
+Specifying a `prefix` filters the result set. The `prefix` can be arbitrary and
+does not need to be aligned with a folder segment.
+
+The `prefix` may include shell-style glob patterns (`*`, `?`, `[...]`, `**`).
+Patterns can include forward slashes to span folder-like segments. Examples:
+
+```
+/ls data/2025-*       # entries starting with data/2025-
+/ls logs/**/*.log     # all .log files anywhere under logs/
+```
+
 ## Temporary local copy of asset
 
 It's undesirable to load an asset into a conversation when the data is better
@@ -114,24 +134,6 @@ To make copies of the most recent `n` revisions of an asset, try:
 /asset-temp <name> <n>
 ```
 
-## Syncing assets locally
-
-To sync local copies of assets, use:
-
-```
-/asset-sync-down <prefix> <path>
-```
-
-This does a one-way sync of all assets with the given prefix to a local path.
-Asset names are reproduced on the local filesystem and forward slashes are
-converted to folders. Existing assets are not downloaded again unless their contents have changed.
-
-No information is added to the conversation history. You will need to inform
-the LLM of relevant files. For example, by listing the files: `!!ls <path>`
-
-Any assets with metadata will have those synced as well as separate files with
-a `.metadata` extension.
-
 ## Sharing links to assets
 
 To generate a link to an asset that's valid for 24 hours, use:
@@ -169,25 +171,63 @@ To export an asset to a local file:
 /asset-export <name> <path>
 ```
 
-## Listing assets
+## Syncing assets incrementally
 
-To list assets, use:
-
-```
-/asset-list [<prefix>]
-/ls [<prefix>]
-```
-
-Specifying a `prefix` filters the result set. The `prefix` can be arbitrary and
-does not need to be aligned with a folder segment.
-
-The `prefix` may include shell-style glob patterns (`*`, `?`, `[...]`, `**`).
-Patterns can include forward slashes to span folder-like segments. Examples:
+To sync assets to your local machine, use:
 
 ```
-/ls data/2025-*       # entries starting with data/2025-
-/ls logs/**/*.log     # all .log files anywhere under logs/
+/asset-sync-down <prefix> <path>
 ```
+
+This does a one-way sync of all assets with the given prefix to a local path.
+Asset names are reproduced on the local filesystem and forward slashes are
+converted to folders. Existing assets are not downloaded again unless their
+contents have changed.
+
+A trailing `/` in the `prefix` syncs the folder's contents (rsync semantics).
+
+No information is added to the conversation history. You will need to inform
+the LLM of relevant files. For example, by listing the files: `!!ls <path>`
+
+Any assets with metadata will have those synced as separate files with a
+`.metadata` extension.
+
+A `.haisync` file will be added to `path` containing cursor information for
+later resumption. It should not be checked into code repositories. It also
+allows for abbreviated syntax the next time:
+
+```
+/asset-sync-down - <path>
+```
+
+`-` is resolved to the original `prefix` stored in `.haisync`.
+
+### Syncing up changes
+
+To sync up changes, use:
+
+```
+/asset-sync-up <path> <prefix>
+```
+
+If the `path` has a `.haisync` file, i.e. it was previously synced down,
+`prefix` can be omitted:
+
+```
+/asset-sync-up <path> -
+```
+
+As with syncing down, a trailing `/` in the `path` syncs the folder's contents
+(rsync semantics).
+
+If a file doesn't have a corresponding version already in assets, the `new`
+option must be specified:
+
+```
+/asset-sync-up.new <path> <prefix>
+```
+
+Changes to `.metadata` files are not synced up.
 
 ## Public assets
 

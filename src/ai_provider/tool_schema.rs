@@ -377,11 +377,13 @@ Assets:
                                   at that specific revision to ensure no changes are missed.
 /asset-push <name><NEWLINE><body> - Push data into an asset. See pushed data w/ `/asset-revisions`
                             - Use a newline after `name` to push arbitrary multi-line content.
-/asset-import <name> <path>   - Imports <path> from local machine into asset with <name>
-/asset-export <name> <path>   - Exports asset with name to <path> on local machine
+/asset-import <name> <path>   - Imports local <path> into asset with <name>
+/asset-export <name> <path>   - Exports asset with name to local <path>
 /asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
                               - If count specified, that number of revisions is exported.
 /asset-revision-temp <name> [<rev_id>] - Exports revision of asset & metadata to a temporary file.
+/asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
+/asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
 /asset-remove <name>    - Removes an asset
 /asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst> - Copies an asset from <src> to <dst>

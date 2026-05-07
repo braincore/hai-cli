@@ -1,5 +1,6 @@
 use futures::future::join_all;
 use ignore::WalkBuilder;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
@@ -23,108 +24,548 @@ use crate::feature::{
     asset_keyring::AssetKeyring,
 };
 
-/// Current limitations:
-/// - No cursor resumption
-pub async fn sync_prefix(
+const HAISYNC_FILENAME: &str = ".haisync";
+const METADATA_EXTENSION: &str = ".metadata";
+
+/// Represents the `.haisync` file that tracks sync state for a folder.
+///
+/// This file is placed at the root of a synced folder.
+/// - The remote prefix this folder is synced against
+/// - The cursor for resuming incremental sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HaiSyncState {
+    /// The remote asset prefix this folder syncs with (e.g. "projects/myapp/")
+    pub remote_prefix: String,
+    /// The cursor for resuming incremental sync. This is an opaque string
+    /// provided by the API after listing entries.
+    /// `None` means no sync has been performed yet (fresh state).
+    pub cursor: Option<String>,
+}
+
+impl HaiSyncState {
+    /// Read a `.haisync` file from the given directory.
+    pub fn read_from_dir(dir: &Path) -> Result<Self, String> {
+        let path = dir.join(HAISYNC_FILENAME);
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    }
+
+    /// Write this state to a `.haisync` file in the given directory.
+    pub fn write_to_dir(&self, dir: &Path) -> Result<(), String> {
+        let path = dir.join(HAISYNC_FILENAME);
+        let contents = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize haisync state: {}", e))?;
+        std::fs::write(&path, contents)
+            .map_err(|e| format!("Failed to write {}: {}", path.display(), e))
+    }
+}
+
+/// Scans the immediate children and all descendants of `dir` for any
+/// `.haisync` files.
+///
+/// This is used to prevent syncing a folder that contains nested sync roots.
+/// Returns `Some(path)` with the first `.haisync` found, or `None` if clean.
+///
+/// Note: This deliberately skips `dir_path` itself; only children are considered.
+pub fn find_haisync_in_children(dir_path: &Path) -> Option<std::path::PathBuf> {
+    let walker = WalkBuilder::new(dir_path)
+        .follow_links(true)
+        .hidden(false)
+        .git_ignore(false)
+        .max_depth(None)
+        .build();
+
+    for entry in walker.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        // Skip any .haisync that is directly in the source directory itself
+        // since that's valid.
+        if let Some(parent) = path.parent()
+            && parent == dir_path
+        {
+            continue;
+        }
+
+        if path
+            .file_name()
+            .map(|n| n == HAISYNC_FILENAME)
+            .unwrap_or(false)
+        {
+            return Some(path.to_path_buf());
+        }
+    }
+
+    None
+}
+
+/// Result of resolving the `.haisync` location for a sync operation.
+pub struct HaiSyncResolution {
+    /// The directory containing the `.haisync` file.
+    pub sync_root: std::path::PathBuf,
+
+    /// The parsed state from the `.haisync` file.
+    pub state: HaiSyncState,
+
+    /// `true` if the `.haisync` was found in an ancestor directory
+    /// (i.e., not directly in the requested target folder).
+    pub is_ancestor: bool,
+}
+
+/// Looks for a `.haisync` file starting at `target_dir` and walking up to ancestors.
+///
+/// Returns:
+/// - `Ok(Some(resolution))` if a `.haisync` was found (in target or an ancestor)
+/// - `Ok(None)` if no `.haisync` exists anywhere in the ancestor chain
+/// - `Err(...)` on I/O or parse errors
+pub fn resolve_haisync(target_dir: &Path) -> Result<Option<HaiSyncResolution>, String> {
+    let target_dir = target_dir
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize '{}': {}", target_dir.display(), e))?;
+
+    let mut current = Some(target_dir.as_path());
+    let mut is_first = true;
+
+    while let Some(dir) = current {
+        let haisync_path = dir.join(HAISYNC_FILENAME);
+        if haisync_path.is_file() {
+            let state = HaiSyncState::read_from_dir(dir)?;
+            return Ok(Some(HaiSyncResolution {
+                sync_root: dir.to_path_buf(),
+                state,
+                is_ancestor: !is_first,
+            }));
+        }
+        is_first = false;
+        // On some platforms, parent() never returns None (only empty string)
+        current = dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty() && *p != dir);
+    }
+
+    Ok(None)
+}
+
+pub async fn sync_down(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
     recipient: Option<KeyRecipient>,
-    prefix: &str,
+    prefix: Option<&str>,
     target_path: &str,
     max_concurrent_downloads: Option<usize>,
     debug: bool,
-) -> Result<(), ()> {
+) -> Result<(), String> {
     //
-    // Create target path if it doesn't exist.
+    // Resolve .haisync state
     //
-    let path = std::path::Path::new(target_path);
-    if path.exists() {
-        if !path.is_dir() {
-            eprintln!(
-                "error: target path '{}' exists but is not a directory",
-                target_path
-            );
-            return Err(());
+    let target_dir = std::path::Path::new(target_path);
+
+    // Check for .haisync in child directories (error if found)
+    if target_dir.exists() {
+        if let Some(child_haisync) = find_haisync_in_children(target_dir) {
+            return Err(format!(
+                "error: found nested .haisync at '{}'. Cannot sync a folder that contains nested sync roots.",
+                child_haisync.display()
+            ));
         }
-    } else {
-        // Path doesn't exist, create the directory
-        match create_dir_all(path).await {
-            Ok(_) => {
-                if debug {
-                    let _ =
-                        config::write_to_debug_log(format!("Created directory: {}\n", target_path));
+    }
+
+    // Resolve existing .haisync from target or ancestors
+    let resolution = if target_dir.exists() {
+        match resolve_haisync(target_dir) {
+            Ok(Some(resolution)) => {
+                // Validate prefix if one was provided
+                if let Some(prefix) = prefix {
+                    if resolution.state.remote_prefix != prefix {
+                        if resolution.is_ancestor {
+                            if debug {
+                                let _ = config::write_to_debug_log(format!(
+                                    "sync: using ancestor .haisync at '{}' with prefix '{}'\n",
+                                    resolution.sync_root.display(),
+                                    resolution.state.remote_prefix
+                                ));
+                            }
+                            resolution
+                        } else {
+                            return Err(format!(
+                                "error: .haisync in '{}' has remote_prefix '{}' but sync was requested with prefix '{}'. \
+                                 Remove the .haisync file to re-initialize.",
+                                resolution.sync_root.display(),
+                                resolution.state.remote_prefix,
+                                prefix
+                            ));
+                        }
+                    } else {
+                        if debug {
+                            let _ = config::write_to_debug_log(format!(
+                                "sync: resuming with .haisync at '{}' (cursor: {:?})\n",
+                                resolution.sync_root.display(),
+                                resolution.state.cursor
+                            ));
+                        }
+                        resolution
+                    }
+                } else {
+                    // No prefix provided — use whatever is in .haisync
+                    if debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "sync: using .haisync at '{}' with prefix '{}' (cursor: {:?})\n",
+                            resolution.sync_root.display(),
+                            resolution.state.remote_prefix,
+                            resolution.state.cursor
+                        ));
+                    }
+                    resolution
+                }
+            }
+            Ok(None) => {
+                // No .haisync found
+                if let Some(prefix) = prefix {
+                    // Fresh sync with provided prefix
+                    let state = HaiSyncState {
+                        remote_prefix: prefix.to_string(),
+                        cursor: None,
+                    };
+                    HaiSyncResolution {
+                        sync_root: target_dir.to_path_buf(),
+                        state,
+                        is_ancestor: false,
+                    }
+                } else {
+                    return Err(format!(
+                        "error: no .haisync file found in '{}' or its ancestors. \
+                         A remote prefix must be specified for the initial sync.",
+                        target_path
+                    ));
                 }
             }
             Err(e) => {
-                eprintln!("error: failed to create directory '{}': {}", target_path, e);
-                return Err(());
+                return Err(format!("error: failed to resolve .haisync: {}", e));
+            }
+        }
+    } else {
+        // Target doesn't exist yet
+        if let Some(prefix) = prefix {
+            let state = HaiSyncState {
+                remote_prefix: prefix.to_string(),
+                cursor: None,
+            };
+            HaiSyncResolution {
+                sync_root: target_dir.to_path_buf(),
+                state,
+                is_ancestor: false,
+            }
+        } else {
+            return Err(format!(
+                "error: target path '{}' does not exist and no remote prefix was specified. \
+                 A remote prefix must be specified for the initial sync.",
+                target_path
+            ));
+        }
+    };
+
+    let (sync_root, mut haisync_state, is_ancestor) = (
+        resolution.sync_root,
+        resolution.state,
+        resolution.is_ancestor,
+    );
+
+    // When using an ancestor .haisync, the actual target_path and prefix come
+    // from the ancestor's state.
+    let (effective_prefix, effective_target_path) = if is_ancestor {
+        (
+            haisync_state.remote_prefix.clone(),
+            sync_root.to_string_lossy().to_string(),
+        )
+    } else {
+        (haisync_state.remote_prefix.clone(), target_path.to_string())
+    };
+
+    //
+    // Create target path if it doesn't exist.
+    //
+    let path = std::path::Path::new(&effective_target_path);
+    if path.exists() {
+        if !path.is_dir() {
+            return Err(format!(
+                "error: target path '{}' exists but is not a directory",
+                effective_target_path
+            ));
+        }
+    } else {
+        match create_dir_all(path).await {
+            Ok(_) => {
+                if debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "Created directory: {}\n",
+                        effective_target_path
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(format!(
+                    "error: failed to create directory '{}': {}",
+                    effective_target_path, e
+                ));
             }
         }
     }
 
     // Determine the folder prefix for saved assets
-    let folder_prefix = get_folder_prefix(prefix);
+    let folder_prefix = get_folder_prefix(&effective_prefix);
 
     //
-    // Collect all entries
+    // Collect all entries — either resume from cursor or start fresh
     //
-
     let mut entries: Vec<AssetEntry> = vec![];
-    let mut asset_iter_res = match api_client
-        .asset_entry_iter(AssetEntryIterArg {
-            prefix: Some(prefix.into()),
-            limit: 200,
-        })
-        .await
-    {
-        Ok(res) => res,
-        Err(e) => {
-            match e {
-                api::client::RequestError::Route(AssetEntryIterError::Empty) => {
-                    eprintln!("[empty]");
-                }
-                _ => {
-                    eprintln!("error: {}", e);
-                }
+    let mut latest_cursor: Option<String>;
+
+    if let Some(cursor) = haisync_state.cursor.clone() {
+        // Resume from existing cursor
+        if debug {
+            let _ = config::write_to_debug_log(format!("sync: resuming from cursor\n"));
+        }
+
+        let mut iter_res = api_client
+            .asset_entry_iter_next(AssetEntryIterNextArg { cursor, limit: 200 })
+            .await
+            .map_err(|e| format!("error: {}", e))?;
+
+        loop {
+            entries.extend_from_slice(&iter_res.entries);
+            latest_cursor = Some(iter_res.cursor.clone());
+            if !iter_res.has_more {
+                break;
             }
-            return Err(());
+            iter_res = api_client
+                .asset_entry_iter_next(AssetEntryIterNextArg {
+                    cursor: iter_res.cursor,
+                    limit: 200,
+                })
+                .await
+                .map_err(|e| format!("error: {}", e))?;
         }
-    };
-    loop {
-        entries.extend_from_slice(&asset_iter_res.entries);
-        if !asset_iter_res.has_more {
-            break;
-        }
-        asset_iter_res = match api_client
-            .asset_entry_iter_next(AssetEntryIterNextArg {
-                cursor: asset_iter_res.cursor,
+    } else {
+        // Fresh sync — start from the beginning
+        let mut asset_iter_res = match api_client
+            .asset_entry_iter(AssetEntryIterArg {
+                prefix: Some(effective_prefix.clone()),
                 limit: 200,
             })
             .await
         {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("error: {}", e);
-                return Err(());
+                // Even on empty, write .haisync so future calls know the prefix
+                // (but we have no cursor to save)
+                let fresh_state = HaiSyncState {
+                    remote_prefix: effective_prefix.clone(),
+                    cursor: None,
+                };
+                if let Err(write_err) = fresh_state.write_to_dir(&sync_root) {
+                    eprintln!("warning: failed to write .haisync: {}", write_err);
+                }
+
+                return match e {
+                    api::client::RequestError::Route(AssetEntryIterError::Empty) => {
+                        println!("[empty]");
+                        Ok(())
+                    }
+                    _ => Err(format!("error: {}", e)),
+                };
             }
         };
+
+        loop {
+            entries.extend_from_slice(&asset_iter_res.entries);
+            latest_cursor = Some(asset_iter_res.cursor.clone());
+            if !asset_iter_res.has_more {
+                break;
+            }
+            asset_iter_res = api_client
+                .asset_entry_iter_next(AssetEntryIterNextArg {
+                    cursor: asset_iter_res.cursor,
+                    limit: 200,
+                })
+                .await
+                .map_err(|e| format!("error: {}", e))?;
+        }
     }
+
+    if entries.is_empty() && latest_cursor.is_some() {
+        println!("Already up to date.");
+        if let Some(cursor) = latest_cursor {
+            haisync_state.cursor = Some(cursor);
+            if let Err(e) = haisync_state.write_to_dir(&sync_root) {
+                eprintln!("warning: failed to write .haisync: {}", e);
+            }
+        }
+        return Ok(());
+    }
+
+    // Filter out any .haisync entries from the server
+    entries.retain(|entry| {
+        !entry.name.ends_with(HAISYNC_FILENAME)
+            && !entry.name.contains(&format!("/{}", HAISYNC_FILENAME))
+    });
 
     println!("Syncing {} entries...", entries.len());
 
-    let _ = sync_entries(
+    let _ = sync_down_entries(
         asset_blob_cache,
         asset_keyring,
         api_client,
         recipient,
         AssetSyncSource::AssetEntry(entries.clone()),
-        Some((&folder_prefix, target_path)),
+        Some((&folder_prefix, &effective_target_path)),
         max_concurrent_downloads,
         debug,
     )
     .await;
+
+    //
+    // Write updated .haisync after successful sync
+    //
+    if let Some(cursor) = latest_cursor {
+        haisync_state.cursor = Some(cursor);
+    }
+    if let Err(e) = haisync_state.write_to_dir(&sync_root) {
+        eprintln!("warning: failed to write .haisync: {}", e);
+    } else if debug {
+        let _ = config::write_to_debug_log(format!(
+            "sync: wrote .haisync to '{}'\n",
+            sync_root.display()
+        ));
+    }
+
     Ok(())
+}
+
+enum LocalAssetFileChangeStatus {
+    Unchanged(String), // local file hash
+    /// Caller's responsibility to reassign xattr and decide if changed.
+    XattrLost(String), // local file hash
+    DataChanged(String), // local file hash
+    /// Caller's responsibility to determine if it's deleted or moved.
+    Missing,
+}
+
+/// Decide based on hash info available in xattrs whether a file has been
+/// changed.
+///
+/// Race considerations: xattrs are read before file contents.
+async fn is_local_asset_file_changed_using_xattr(
+    file_path: &str,
+) -> Result<LocalAssetFileChangeStatus, String> {
+    // Extract stored hash from xattr
+    let maybe_encrypted_hash_xattr =
+        xattr_get(file_path, "user.hai.hash").and_then(|bytes| String::from_utf8(bytes).ok());
+    let decrypted_hash_xattr = xattr_get(file_path, "user.hai.decrypted_hash")
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+
+    // Calculate actual file hash to compare to
+    let actual_file_hash = match calculate_file_hash(file_path).await {
+        Ok(hash) => hash,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(LocalAssetFileChangeStatus::Missing);
+        }
+        Err(e) => {
+            return Err(format!("Failed to calculate hash: {}", e));
+        }
+    };
+    let actual_file_hash_hex = hex::encode(&actual_file_hash);
+
+    let hash_xattr = match decrypted_hash_xattr.or(maybe_encrypted_hash_xattr) {
+        Some(hash) => hash,
+        None => return Ok(LocalAssetFileChangeStatus::XattrLost(actual_file_hash_hex)),
+    };
+
+    // Compare hashes
+    if actual_file_hash_hex.eq_ignore_ascii_case(&hash_xattr) {
+        Ok(LocalAssetFileChangeStatus::Unchanged(actual_file_hash_hex))
+    } else {
+        Ok(LocalAssetFileChangeStatus::DataChanged(
+            actual_file_hash_hex,
+        ))
+    }
+}
+
+enum LocalAssetFileSyncDownPolicy {
+    // Caller should sync data file & xattrs
+    Sync,
+    // Caller should only sync xattrs
+    SyncOnlyXattrs,
+    // Caller needs to do nothing
+    AlreadySynced,
+    NoSyncDueToLocalChanges,
+}
+
+async fn decide_local_asset_file_sync_down_policy(
+    file_path: &str,
+    source: &AssetSourceMinimal,
+) -> Result<LocalAssetFileSyncDownPolicy, String> {
+    let change_status = match is_local_asset_file_changed_using_xattr(file_path).await {
+        Ok(status) => status,
+        Err(e) => {
+            eprintln!(
+                "Warning: Failed to check local file status for '{}': {}",
+                file_path, e
+            );
+            return Err(e);
+        }
+    };
+    if let Some(source_hash) = source.asset.hash.as_ref() {
+        return Ok(match change_status {
+            LocalAssetFileChangeStatus::Unchanged(file_hash) => {
+                // File unchanged, so we can accept changes from remote
+                if &file_hash == source_hash {
+                    LocalAssetFileSyncDownPolicy::SyncOnlyXattrs
+                } else {
+                    LocalAssetFileSyncDownPolicy::Sync
+                }
+            }
+            LocalAssetFileChangeStatus::XattrLost(file_hash) => {
+                if &file_hash == source_hash {
+                    // Local file matches remote despite lack of xattrx -> sync
+                    LocalAssetFileSyncDownPolicy::Sync
+                } else {
+                    LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
+                }
+            }
+            LocalAssetFileChangeStatus::DataChanged(file_hash) => {
+                if &file_hash == source_hash {
+                    // Local file matches remote -> sync
+                    LocalAssetFileSyncDownPolicy::Sync
+                } else {
+                    LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
+                }
+            }
+            LocalAssetFileChangeStatus::Missing => LocalAssetFileSyncDownPolicy::Sync,
+        });
+    } else {
+        // Remote is a deletion (could assert source.op is DELETE)
+        return Ok(match change_status {
+            LocalAssetFileChangeStatus::Unchanged(_file_hash) => {
+                // File unchanged, so we can accept the deletion from remote
+                LocalAssetFileSyncDownPolicy::Sync
+            }
+            LocalAssetFileChangeStatus::XattrLost(_file_hash) => {
+                LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
+            }
+            LocalAssetFileChangeStatus::DataChanged(_file_hash) => {
+                LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
+            }
+            LocalAssetFileChangeStatus::Missing => {
+                // Already deleted locally
+                LocalAssetFileSyncDownPolicy::AlreadySynced
+            }
+        });
+    }
 }
 
 /// When catching up to latest changes in the sync index, fast-forwarding lets
@@ -382,7 +823,7 @@ pub struct AssetSourceMinimal {
 ///
 /// Only returns temp files if `persist` is None. When temp files go out of
 /// scope, they will be automatically removed.
-pub async fn sync_entries(
+pub async fn sync_down_entries(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -391,14 +832,11 @@ pub async fn sync_entries(
     persist: Option<(&str, &str)>, // (folder_prefix, target_path)
     max_concurrent_downloads: Option<usize>,
     debug: bool,
-) -> Result<
-    Vec<(
-        AssetSourceMinimal,
-        Option<tempfile::NamedTempFile>,
-        Option<tempfile::NamedTempFile>,
-    )>,
-    (),
-> {
+) -> Vec<(
+    AssetSourceMinimal,
+    Option<tempfile::NamedTempFile>,
+    Option<tempfile::NamedTempFile>,
+)> {
     let max_concurrent_downloads = max_concurrent_downloads.unwrap_or(10);
     let sources = match sync_source {
         AssetSyncSource::AssetEntry(entries) => {
@@ -426,12 +864,20 @@ pub async fn sync_entries(
             .collect::<Vec<AssetSourceMinimal>>(),
     };
 
-    let mut entries_to_delete = vec![];
+    //
+    // Construct download tasks
+    //
+
     let mut entries_with_dl_tasks = vec![];
 
     for source in sources {
-        if matches!(source.op, AssetEntryOp::Delete) {
-            entries_to_delete.push(source);
+        if source.asset_name == HAISYNC_FILENAME
+            || source
+                .asset_name
+                .ends_with(&format!("/{}", HAISYNC_FILENAME))
+        {
+            // Assume any .haisync files on the server are a mistake so don't
+            // sync them down.
             continue;
         }
 
@@ -441,7 +887,6 @@ pub async fn sync_entries(
                 Some(path) => path,
                 None => &source.asset_name, // If for some reason it doesn't have the prefix
             };
-
             // Construct the full target path for the data asset
             Some(format!("{}/{}", target_path, relative_path))
         } else {
@@ -476,24 +921,59 @@ pub async fn sync_entries(
             let final_path = dl_task.final_path;
             let metadata_final_path = final_path.as_ref().map(|p| format!("{}.metadata", p));
 
+            // Handle deletion when persisting
             if matches!(source.op, AssetEntryOp::Delete)
                 && let Some(asset_final_path) = final_path.as_deref()
             {
-                // Handle deletion when persisting
-                if debug {
-                    let _ = config::write_to_debug_log(format!("Deleting: {}\n", asset_final_path));
-                }
-                let _ = tokio::fs::remove_file(asset_final_path).await;
-                if let Some(metadata_final_path) = metadata_final_path.as_deref() {
-                    if debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "Deleting: {}\n",
-                            metadata_final_path
-                        ));
+                let sync_down_policy = match decide_local_asset_file_sync_down_policy(
+                    asset_final_path,
+                    &source,
+                )
+                .await
+                {
+                    Ok(policy) => policy,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to decide sync down policy for '{}': {}. Skipping deletion.",
+                            asset_final_path, e
+                        );
+                        return Err(e);
                     }
-                    let _ = tokio::fs::remove_file(metadata_final_path).await;
+                };
+                match sync_down_policy {
+                    LocalAssetFileSyncDownPolicy::Sync
+                    | LocalAssetFileSyncDownPolicy::SyncOnlyXattrs => {
+                        // SyncOnlyXattrs is unexpected for deletion
+                        if debug {
+                            let _ = config::write_to_debug_log(format!(
+                                "Deleting: {}\n",
+                                asset_final_path
+                            ));
+                        }
+                        let _ = tokio::fs::remove_file(asset_final_path).await;
+                        if let Some(metadata_final_path) = metadata_final_path.as_deref() {
+                            if debug {
+                                let _ = config::write_to_debug_log(format!(
+                                    "Deleting: {}\n",
+                                    metadata_final_path
+                                ));
+                            }
+                            let _ = tokio::fs::remove_file(metadata_final_path).await;
+                        }
+                        return Ok((source, None, None));
+                    }
+                    LocalAssetFileSyncDownPolicy::AlreadySynced => {
+                        // Already deleted locally, nothing to do
+                        return Ok((source, None, None));
+                    }
+                    LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges => {
+                        eprintln!(
+                            "Warning: Detected local changes to '{}'. Skipping deletion from remote.",
+                            asset_final_path
+                        );
+                        return Ok((source, None, None));
+                    }
                 }
-                return Ok((source, None, None));
             }
 
             let metadata_already_uptodate = if let Some(metadata_final_path) = &metadata_final_path
@@ -544,7 +1024,7 @@ pub async fn sync_entries(
                     let metadata_contents_temp_file = asset_reader::create_empty_temp_file(
                         &source.asset_name,
                         Some(&metadata.rev_id),
-                        Some(".metadata"),
+                        Some(METADATA_EXTENSION),
                     )
                     .expect("failed to create temp data file");
                     let metadata_contents_temp_file = match asset_blob_cache
@@ -561,7 +1041,7 @@ pub async fn sync_entries(
                                 "error: failed to download metadata for '{}': {}",
                                 source.asset_name, e
                             );
-                            return Err(e);
+                            return Err(e.to_string());
                         }
                     };
                     let metadata_contents_temp_path =
@@ -582,57 +1062,63 @@ pub async fn sync_entries(
                     (None, None)
                 };
 
-            let asset_already_uptodate = if let Some(final_path) = &final_path
-                && let Some(asset_hash) = source.asset.hash.as_deref()
-            {
-                match get_file_hash(final_path).await {
-                    Ok(existing_hash) => {
-                        if let Ok(expected_hash) = hex_to_bytes(asset_hash)
-                            && existing_hash == expected_hash
-                        {
-                            let _ = config::write_to_debug_log(format!(
-                                "sync: asset data for {} already up to date at '{}'\n",
-                                source.asset_name, final_path
-                            ));
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    Err(_) => {
-                        // Ignore error and proceed with recreating it
-                        false
+            let asset_sync_down_policy = if let Some(final_path) = &final_path {
+                match decide_local_asset_file_sync_down_policy(final_path, &source).await {
+                    Ok(policy) => policy,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to decide sync down policy for '{}': {}. Skipping deletion.",
+                            final_path, e
+                        );
+                        return Err(e.to_string());
                     }
                 }
             } else {
-                false
+                LocalAssetFileSyncDownPolicy::Sync
             };
 
-            let data_contents_temp_file = if asset_already_uptodate {
-                None
-            } else if let Some(data_url) = source.asset.url.as_deref()
-                && let Some(data_hash) = source.asset.hash.as_deref()
-            {
-                let data_contents_temp_file = asset_reader::create_empty_temp_file(
-                    &source.asset_name,
-                    Some(&source.asset.rev_id),
-                    None,
-                )
-                .expect("failed to create temp data file");
-                let data_contents_temp_file = match asset_blob_cache
-                    .get_or_download_to_tempfile(&data_url, data_hash, data_contents_temp_file)
-                    .await
+            if matches!(
+                asset_sync_down_policy,
+                LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
+            ) {
+                eprintln!(
+                    "Warning: Detected local changes to '{}'. Skipping sync from remote.",
+                    final_path.as_deref().unwrap_or("<unknown>")
+                );
+                return Ok((source, None, None));
+            } else if matches!(
+                asset_sync_down_policy,
+                LocalAssetFileSyncDownPolicy::AlreadySynced
+            ) {
+                return Ok((source, None, None));
+            }
+
+            let data_contents_temp_file =
+                if !matches!(asset_sync_down_policy, LocalAssetFileSyncDownPolicy::Sync) {
+                    None
+                } else if let Some(data_url) = source.asset.url.as_deref()
+                    && let Some(data_hash) = source.asset.hash.as_deref()
                 {
-                    Ok(temp_file) => temp_file,
-                    Err(e) => {
-                        eprintln!("error: failed to download '{}': {}", source.asset_name, e);
-                        return Err(e);
-                    }
+                    let data_contents_temp_file = asset_reader::create_empty_temp_file(
+                        &source.asset_name,
+                        Some(&source.asset.rev_id),
+                        None,
+                    )
+                    .expect("failed to create temp data file");
+                    let data_contents_temp_file = match asset_blob_cache
+                        .get_or_download_to_tempfile(&data_url, data_hash, data_contents_temp_file)
+                        .await
+                    {
+                        Ok(temp_file) => temp_file,
+                        Err(e) => {
+                            eprintln!("error: failed to download '{}': {}", source.asset_name, e);
+                            return Err(e.to_string());
+                        }
+                    };
+                    Some(data_contents_temp_file)
+                } else {
+                    None
                 };
-                Some(data_contents_temp_file)
-            } else {
-                None
-            };
 
             let (decrypted_data_contents_temp_file, decrypted_hash) =
                 if let Some(data_contents_temp_file) = data_contents_temp_file.as_ref()
@@ -765,18 +1251,23 @@ pub async fn sync_entries(
     // Wait for all downloads to complete
     let mut result = vec![];
     for handle in join_all(handles).await {
-        // Unwrap the JoinHandle result to get the inner result
-        if let Ok(handle_result) = handle {
-            if let Ok((source, data_temp_file_opt, metadata_temp_file_opt)) = handle_result {
-                result.push((source, data_temp_file_opt, metadata_temp_file_opt));
+        match handle {
+            Ok(inner_result) => match inner_result {
+                Ok((source, data_temp_file_opt, metadata_temp_file_opt)) => {
+                    result.push((source, data_temp_file_opt, metadata_temp_file_opt));
+                }
+                Err(e) => {
+                    eprintln!("A download task failed: {}", e);
+                }
+            },
+            Err(e) => {
+                // Handle the case where the task panicked
+                eprintln!("A download task panicked: {}", e);
             }
-        } else {
-            // Handle the case where the task panicked
-            eprintln!("A download task panicked");
         }
     }
 
-    Ok(result)
+    result
 }
 
 /// Sets universal xattrs for an asset file.
@@ -784,6 +1275,7 @@ pub async fn sync_entries(
 /// All assets files (data or metadata) get:
 /// - user.hai.entry_id
 /// - user.hai.seq_id
+/// - user.hai.asset_name
 fn asset_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
     if let Some((entry_id, seq_id)) = source.iter_info.as_ref() {
         if xattr_set(&path, "user.hai.entry_id", &entry_id).is_err() {
@@ -791,6 +1283,9 @@ fn asset_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
         }
         if xattr_set(&path, "user.hai.seq_id", &seq_id.to_string()).is_err() {
             eprintln!("failed to set seq_id xattr");
+        }
+        if xattr_set(&path, "user.hai.asset_name", &source.asset_name).is_err() {
+            eprintln!("failed to set asset_name xattr");
         }
     }
 }
@@ -924,6 +1419,7 @@ pub struct SyncUpResult {
 pub enum SyncUpAction {
     Created,
     Updated,
+    Moved,
     Skipped,    // Hash unchanged
     SkippedNew, // New file but sync_new_files=false
 }
@@ -933,6 +1429,7 @@ impl std::fmt::Display for SyncUpAction {
         match self {
             SyncUpAction::Created => write!(f, "Created"),
             SyncUpAction::Updated => write!(f, "Updated"),
+            SyncUpAction::Moved => write!(f, "Moved"),
             SyncUpAction::Skipped => write!(f, "Skipped (unchanged)"),
             SyncUpAction::SkippedNew => write!(f, "Skipped (new file)"),
         }
@@ -977,44 +1474,139 @@ pub async fn sync_up(
     username: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<WorkerAssetMsg>,
     source_path: &str,
-    target_prefix: &str,
+    target_prefix: Option<&str>,
     options: SyncUpOptions,
 ) -> Result<Vec<SyncUpResult>, String> {
-    let source_path = Path::new(source_path);
+    let source_dir = Path::new(source_path);
 
-    if !source_path.exists() {
+    if !source_dir.exists() {
         return Err(format!(
             "Source path '{}' does not exist",
-            source_path.display()
+            source_dir.display()
         ));
     }
 
-    if !source_path.is_dir() {
+    if !source_dir.is_dir() {
         return Err(format!(
             "Source path '{}' is not a directory",
-            source_path.display()
+            source_dir.display()
         ));
     }
 
-    let source_str = source_path.to_string_lossy();
-    let has_trailing_slash = source_str.ends_with('/') || source_str.ends_with('\\');
+    //
+    // Check for .haisync in child directories (error if found in a child, not
+    // source itself)
+    //
+    if let Some(child_haisync) = find_haisync_in_children(source_dir) {
+        return Err(format!(
+            "Found nested .haisync at '{}'. Cannot sync a folder that contains nested sync roots.",
+            child_haisync.display()
+        ));
+    }
+
+    //
+    // Resolve .haisync from source or ancestors
+    //
+    let (effective_source, effective_prefix) = match resolve_haisync(source_dir) {
+        Ok(Some(resolution)) => {
+            if let Some(prefix) = target_prefix {
+                if resolution.state.remote_prefix != prefix {
+                    if resolution.is_ancestor {
+                        // Ancestor has a different prefix — use the ancestor's sync root
+                        if options.debug {
+                            let _ = config::write_to_debug_log(format!(
+                                "sync_up: using ancestor .haisync at '{}' with prefix '{}'\n",
+                                resolution.sync_root.display(),
+                                resolution.state.remote_prefix
+                            ));
+                        }
+                        (
+                            resolution.sync_root.to_string_lossy().to_string(),
+                            resolution.state.remote_prefix,
+                        )
+                    } else {
+                        return Err(format!(
+                            ".haisync in '{}' has remote_prefix '{}' but sync was requested with prefix '{}'. \
+                             Remove the .haisync file to re-initialize.",
+                            resolution.sync_root.display(),
+                            resolution.state.remote_prefix,
+                            prefix
+                        ));
+                    }
+                } else {
+                    // Prefix matches
+                    if options.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "sync_up: using .haisync at '{}' with prefix '{}'\n",
+                            resolution.sync_root.display(),
+                            resolution.state.remote_prefix
+                        ));
+                    }
+                    if resolution.is_ancestor {
+                        (
+                            resolution.sync_root.to_string_lossy().to_string(),
+                            resolution.state.remote_prefix,
+                        )
+                    } else {
+                        (source_path.to_string(), resolution.state.remote_prefix)
+                    }
+                }
+            } else {
+                // No prefix provided — use whatever is in .haisync
+                if options.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "sync_up: using .haisync at '{}' with prefix '{}'\n",
+                        resolution.sync_root.display(),
+                        resolution.state.remote_prefix
+                    ));
+                }
+                if resolution.is_ancestor {
+                    (
+                        resolution.sync_root.to_string_lossy().to_string(),
+                        resolution.state.remote_prefix,
+                    )
+                } else {
+                    (source_path.to_string(), resolution.state.remote_prefix)
+                }
+            }
+        }
+        Ok(None) => {
+            // No .haisync found
+            if let Some(prefix) = target_prefix {
+                (source_path.to_string(), prefix.to_string())
+            } else {
+                return Err(format!(
+                    "No .haisync file found in '{}' or its ancestors. \
+                     A remote prefix must be specified for sync-up.",
+                    source_path
+                ));
+            }
+        }
+        Err(e) => {
+            return Err(format!("Failed to resolve .haisync: {}", e));
+        }
+    };
+
+    let has_trailing_slash = effective_source.ends_with('/');
+    let source_path = Path::new(&effective_source);
+    let strip_base = source_path.to_path_buf();
 
     // The base path we strip from, and optionally a prefix to add back
-    let (strip_base, dir_prefix) = if has_trailing_slash {
-        (source_path.to_path_buf(), String::new())
+    let dir_prefix = if has_trailing_slash {
+        String::new()
     } else {
         let dir_name = source_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        (source_path.to_path_buf(), format!("{}/", dir_name))
+        format!("{}/", dir_name)
     };
 
     // Normalize target_prefix to ensure it ends with '/' if non-empty
-    let target_prefix = if !target_prefix.is_empty() && !target_prefix.ends_with('/') {
-        format!("{}/", target_prefix)
+    let target_prefix = if !effective_prefix.is_empty() && !effective_prefix.ends_with('/') {
+        format!("{}/", effective_prefix)
     } else {
-        target_prefix.to_string()
+        effective_prefix
     };
 
     // Collect all files to potentially sync
@@ -1030,6 +1622,9 @@ pub async fn sync_up(
         .parents(true)
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
+            if name == HAISYNC_FILENAME {
+                return false; // Never sync .haisync
+            }
             !name.starts_with('.') || name == ".gitignore" || name == ".ignore"
         })
         .build();
@@ -1051,11 +1646,11 @@ pub async fn sync_up(
         };
 
         // Determine if this is a metadata file
-        let is_metadata = relative_path.ends_with(".metadata");
+        let is_metadata = relative_path.ends_with(METADATA_EXTENSION);
 
         // Construct asset name (with dir_prefix for rsync-like behavior)
         let asset_name = if is_metadata {
-            let base_name = relative_path.strip_suffix(".metadata").unwrap();
+            let base_name = relative_path.strip_suffix(METADATA_EXTENSION).unwrap();
             format!("{}{}{}", target_prefix, dir_prefix, base_name)
         } else {
             format!("{}{}{}", target_prefix, dir_prefix, relative_path)
@@ -1085,42 +1680,88 @@ pub async fn sync_up(
         let debug = options.debug;
         let sync_new_files = options.sync_new_files;
 
-        let handle = tokio::spawn(async move {
-            let _permit = sem_clone.acquire().await.unwrap();
+        // Check if the file was previously synced under a different asset name (i.e., moved locally)
+        let previous_asset_name = xattr_get(&file_path, "user.hai.asset_name")
+            .and_then(|bytes| String::from_utf8(bytes).ok());
 
-            if is_metadata {
-                sync_up_metadata_file(
-                    &api_client_clone,
-                    &file_path,
-                    &asset_name,
-                    sync_new_files,
-                    debug,
-                )
-                .await
-            } else {
-                sync_up_data_file(
+        let is_move = match &previous_asset_name {
+            Some(old_name) => old_name != &asset_name,
+            None => false,
+        };
+
+        if is_move && !is_metadata {
+            let old_asset_name = previous_asset_name.unwrap();
+
+            if debug {
+                let _ = config::write_to_debug_log(format!(
+                    "sync_up: detected move '{}' -> '{}'\n",
+                    old_asset_name, asset_name
+                ));
+            }
+
+            let handle = tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+
+                sync_up_move(
                     asset_blob_cache_clone,
                     asset_keyring_clone,
                     &api_client_clone,
                     &username_clone,
                     update_asset_tx_clone,
                     &file_path,
+                    &old_asset_name,
                     &asset_name,
-                    sync_new_files,
                     debug,
                 )
                 .await
-            }
-        });
+            });
 
-        handles.push(handle);
+            handles.push(handle);
+        } else if is_metadata {
+            let handle = tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+
+                vec![
+                    sync_up_metadata_file(
+                        &api_client_clone,
+                        &file_path,
+                        &asset_name,
+                        sync_new_files,
+                        debug,
+                    )
+                    .await,
+                ]
+            });
+
+            handles.push(handle);
+        } else {
+            let handle = tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+                vec![
+                    sync_up_data_file(
+                        asset_blob_cache_clone,
+                        asset_keyring_clone,
+                        &api_client_clone,
+                        &username_clone,
+                        update_asset_tx_clone,
+                        &file_path,
+                        &asset_name,
+                        sync_new_files,
+                        debug,
+                    )
+                    .await,
+                ]
+            });
+
+            handles.push(handle);
+        }
     }
 
     // Collect results
     let mut results = Vec::new();
     for handle in join_all(handles).await {
         match handle {
-            Ok(result) => results.push(result),
+            Ok(result) => results.extend(result),
             Err(e) => {
                 eprintln!("A sync task panicked: {}", e);
             }
@@ -1136,6 +1777,10 @@ pub async fn sync_up(
         .iter()
         .filter(|r| matches!(r.action, SyncUpAction::Updated) && r.success)
         .count();
+    let moved = results
+        .iter()
+        .filter(|r| matches!(r.action, SyncUpAction::Moved) && r.success)
+        .count();
     let skipped = results
         .iter()
         .filter(|r| matches!(r.action, SyncUpAction::Skipped))
@@ -1147,8 +1792,8 @@ pub async fn sync_up(
     let failed = results.iter().filter(|r| !r.success).count();
 
     println!(
-        "Sync up complete: {} created, {} updated, {} unchanged, {} skipped (new), {} failed",
-        created, updated, skipped, skipped_new, failed
+        "Sync up complete: {} created, {} updated, {} moved, {} unchanged, {} skipped (new), {} failed",
+        created, updated, moved, skipped, skipped_new, failed
     );
 
     Ok(results)
@@ -1157,7 +1802,6 @@ pub async fn sync_up(
 /// Syncs a single data file up to the remote server.
 ///
 /// TODO:
-/// - Add support for moves
 /// - Clear xattrs if anything unexpected (or missing)
 /// - Atomic xattr updates (modifying bit?)
 async fn sync_up_data_file(
@@ -1547,6 +2191,121 @@ fn update_hash_xattrs(file_path: &str, hash: &str) {
     }
 }
 
+/// Syncs a moved file up to the remote server.
+///
+/// Detects that a file was moved locally (via xattr asset_name mismatch),
+/// performs the remote move, and then optionally syncs content if it also changed.
+async fn sync_up_move(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    update_asset_tx: tokio::sync::mpsc::Sender<WorkerAssetMsg>,
+    file_path: &str,
+    old_asset_name: &str,
+    new_asset_name: &str,
+    debug: bool,
+) -> Vec<SyncUpResult> {
+    if debug {
+        let _ = config::write_to_debug_log(format!(
+            "sync_up_move: moving '{}' -> '{}' (file: '{}')\n",
+            old_asset_name, new_asset_name, file_path
+        ));
+    }
+
+    use crate::api::types::asset::AssetMoveArg;
+
+    // Perform the remote move
+    let move_result = api_client
+        .asset_move(AssetMoveArg {
+            source_name: old_asset_name.to_string(),
+            target_name: new_asset_name.to_string(),
+        })
+        .await;
+
+    match move_result {
+        Ok(result) => {
+            // Update xattrs with new move result
+            let _ = xattr_set(file_path, "user.hai.asset_name", new_asset_name);
+            let _ = xattr_set(file_path, "user.hai.rev_id", &result.entry.asset.rev_id);
+            let _ = xattr_set(file_path, "user.hai.entry_id", &result.entry.entry_id);
+            let _ = xattr_set(
+                file_path,
+                "user.hai.seq_id",
+                &result.entry.seq_id.to_string(),
+            );
+            if let Some(hash) = &result.entry.asset.hash {
+                update_hash_xattrs(file_path, hash);
+            }
+
+            let mut results = vec![SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: new_asset_name.to_string(),
+                action: SyncUpAction::Moved,
+                success: true,
+                error: None,
+            }];
+
+            // Now check if the content also changed since last sync
+            let existing_hash = xattr_get(file_path, "user.hai.hash")
+                .and_then(|bytes| String::from_utf8(bytes).ok());
+            let existing_decrypted_hash = xattr_get(file_path, "user.hai.decrypted_hash")
+                .and_then(|bytes| String::from_utf8(bytes).ok());
+            let hash_to_compare = existing_decrypted_hash.as_ref().or(existing_hash.as_ref());
+
+            let current_hash = match calculate_file_hash(file_path).await {
+                Ok(hash) => Some(hex::encode(hash)),
+                Err(_) => None,
+            };
+
+            let content_changed = match (&current_hash, hash_to_compare) {
+                (Some(current), Some(existing)) => !current.eq_ignore_ascii_case(existing),
+                _ => true,
+            };
+
+            if content_changed {
+                if debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "sync_up_move: content also changed for '{}', syncing data\n",
+                        file_path
+                    ));
+                }
+
+                let data_result = sync_up_data_file(
+                    asset_blob_cache,
+                    asset_keyring,
+                    api_client,
+                    username,
+                    update_asset_tx,
+                    file_path,
+                    new_asset_name,
+                    false,
+                    debug,
+                )
+                .await;
+
+                results.push(data_result);
+            }
+
+            results
+        }
+        Err(e) => {
+            eprintln!(
+                "Failed to move asset '{}' -> '{}': {}",
+                old_asset_name, new_asset_name, e
+            );
+
+            vec![SyncUpResult {
+                file_path: file_path.to_string(),
+                asset_name: new_asset_name.to_string(),
+                action: SyncUpAction::Moved,
+                success: false,
+                error: Some(format!("Failed to move asset: {}", e)),
+            }]
+        }
+    }
+}
+
 #[allow(dead_code)]
 /// Inner function to sync specific file/asset pairs.
 /// Useful when you already know which files need to be synced.
@@ -1573,7 +2332,7 @@ pub async fn sync_up_pairs(
         let sync_new_files = options.sync_new_files;
 
         // Determine if this is a metadata file based on file path
-        let is_metadata = file_path.ends_with(".metadata");
+        let is_metadata = file_path.ends_with(METADATA_EXTENSION);
 
         let handle = tokio::spawn(async move {
             let _permit = sem_clone.acquire().await.unwrap();

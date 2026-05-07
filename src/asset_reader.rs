@@ -452,7 +452,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
     }
 
     // Download/create files in parallel
-    let sync_res = crate::asset_sync::sync_entries(
+    let sync_res = crate::asset_sync::sync_down_entries(
         asset_blob_cache,
         asset_keyring,
         api_client,
@@ -463,26 +463,17 @@ pub async fn prepare_assets_from_names_as_temp_files(
         false,
     )
     .await;
-    let asset_map = match sync_res {
-        Ok(sync_res) => {
-            let mut asset_map: HashMap<String, Result<NamedTempFile, GetAssetError>> =
-                HashMap::new();
-            for (source, asset_temp_file, _) in sync_res {
-                if let Some(asset_temp_file) = asset_temp_file {
-                    asset_map.insert(source.asset_name.clone(), Ok(asset_temp_file));
-                } else {
-                    asset_map.insert(
-                        source.asset_name.clone(),
-                        Err(GetAssetError::DataFetchFailed),
-                    );
-                }
-            }
-            asset_map
+    let mut asset_map: HashMap<String, Result<NamedTempFile, GetAssetError>> = HashMap::new();
+    for (source, asset_temp_file, _) in sync_res {
+        if let Some(asset_temp_file) = asset_temp_file {
+            asset_map.insert(source.asset_name.clone(), Ok(asset_temp_file));
+        } else {
+            asset_map.insert(
+                source.asset_name.clone(),
+                Err(GetAssetError::DataFetchFailed),
+            );
         }
-        Err(_) => {
-            return Err("failed to sync assets".to_string());
-        }
-    };
+    }
     for (asset_ref, res) in asset_map {
         asset_final_map.insert(asset_ref, res);
     }
