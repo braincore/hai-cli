@@ -3290,6 +3290,7 @@ pub async fn process_cmd(
             source_path,
             target_prefix,
             sync_new_files,
+            dry_run,
         }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
@@ -3322,6 +3323,7 @@ pub async fn process_cmd(
                     sync_new_files,
                     max_concurrent_uploads: 10,
                     debug,
+                    dry_run,
                 },
             )
             .await

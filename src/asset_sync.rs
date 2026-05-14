@@ -1441,6 +1441,7 @@ pub struct SyncUpOptions {
     pub sync_new_files: bool,
     pub max_concurrent_uploads: usize,
     pub debug: bool,
+    pub dry_run: bool,
 }
 
 impl Default for SyncUpOptions {
@@ -1449,6 +1450,7 @@ impl Default for SyncUpOptions {
             sync_new_files: false,
             max_concurrent_uploads: 10,
             debug: false,
+            dry_run: false,
         }
     }
 }
@@ -1509,7 +1511,7 @@ pub async fn sync_up(
     //
     let (effective_source, effective_prefix) = match resolve_haisync(source_dir) {
         Ok(Some(resolution)) => {
-            if let Some(prefix) = target_prefix {
+            let (effective_source, effective_prefix) = if let Some(prefix) = target_prefix {
                 if resolution.state.remote_prefix != prefix {
                     if resolution.is_ancestor {
                         // Ancestor has a different prefix — use the ancestor's sync root
@@ -1548,7 +1550,11 @@ pub async fn sync_up(
                             resolution.state.remote_prefix,
                         )
                     } else {
-                        (source_path.to_string(), resolution.state.remote_prefix)
+                        // If .haisync resolves, use the contents of the parent folder
+                        (
+                            source_path.trim_end_matches('/').to_string(),
+                            resolution.state.remote_prefix,
+                        )
                     }
                 }
             } else {
@@ -1566,9 +1572,14 @@ pub async fn sync_up(
                         resolution.state.remote_prefix,
                     )
                 } else {
-                    (source_path.to_string(), resolution.state.remote_prefix)
+                    // If .haisync resolves, use the contents of the parent folder
+                    (
+                        source_path.trim_end_matches('/').to_string(),
+                        resolution.state.remote_prefix,
+                    )
                 }
-            }
+            };
+            (format!("{}/", effective_source), effective_prefix)
         }
         Ok(None) => {
             // No .haisync found
@@ -1698,6 +1709,13 @@ pub async fn sync_up(
                     old_asset_name, asset_name
                 ));
             }
+            if options.dry_run {
+                println!(
+                    "dry run: move asset '{}' -> '{}'",
+                    old_asset_name, asset_name
+                );
+                continue;
+            }
 
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
@@ -1718,6 +1736,13 @@ pub async fn sync_up(
 
             handles.push(handle);
         } else if is_metadata {
+            if options.dry_run {
+                println!(
+                    "dry run: sync metadata file '{}' -> '{}'",
+                    file_path, asset_name
+                );
+                continue;
+            }
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
 
@@ -1735,6 +1760,13 @@ pub async fn sync_up(
 
             handles.push(handle);
         } else {
+            if options.dry_run {
+                println!(
+                    "dry run: sync data file '{}' -> '{}'",
+                    file_path, asset_name
+                );
+                continue;
+            }
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 vec![

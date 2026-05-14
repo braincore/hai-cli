@@ -626,6 +626,8 @@ pub struct AssetSyncUpCmd {
     pub target_prefix: String,
     /// Whether to sync new files
     pub sync_new_files: bool,
+    /// Whether to do a dry run
+    pub dry_run: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2143,7 +2145,7 @@ fn parse_command(
             }
         }
         "asset-sync-up" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["new"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["new", "dry"]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2151,6 +2153,7 @@ fn parse_command(
                     source_path: prefix,
                     target_prefix: target_path,
                     sync_new_files: options.contains_key("new"),
+                    dry_run: options.contains_key("dry"),
                 })),
                 None => {
                     eprintln!("Usage: /asset-sync-up <source_path> <target_prefix>");
