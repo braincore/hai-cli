@@ -891,11 +891,18 @@ pub fn parse_user_input(
     if input.trim().is_empty() {
         return Some(Cmd::Noop);
     }
-    // EXPERIMENT: Add !!cmd as a short hand for exec. It's not ideal b/c it's
+    // EXPERIMENT: Add $cmd as a short hand for exec. It's not ideal b/c it's
     // similar to the tool notations (! and !?). But, "/e " has proven to be
     // rather awkward to type. The "/" is tough to reach and the " " before the
     // command conflicts with muscle memory from other programs (ipython).
     let input = if let Some(shell_cmd) = input.strip_prefix("!!") {
+        format!("/exec {}", shell_cmd)
+    } else {
+        input.to_string()
+    };
+    // EXPERIMENT: Add `$ <cmd>` as a short hand for `/exec`. Want to preserve
+    // all `!` commmands (including `!!`) for tool use.
+    let input = if let Some(shell_cmd) = input.strip_prefix("$ ") {
         format!("/exec {}", shell_cmd)
     } else {
         input.to_string()
