@@ -808,6 +808,16 @@ fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize, debug: 
     }
 }
 
+fn compute_display_override_for_path(prefix: &str, option: &str) -> Option<String> {
+    let strip_len = prefix.rfind('/').map(|i| i + 1).unwrap_or(0);
+
+    if strip_len > 0 && option.len() > strip_len {
+        Some(option[strip_len..].to_string())
+    } else {
+        None
+    }
+}
+
 impl CmdAndFileCompleter {
     fn simple_completer(&self, prefix: &str, options: &[&str]) -> Vec<Suggestion> {
         let mut completions = Vec::new();
@@ -815,6 +825,7 @@ impl CmdAndFileCompleter {
             if option.starts_with(prefix) {
                 completions.push(Suggestion {
                     value: option.to_string(),
+                    display_override: compute_display_override_for_path(prefix, option),
                     description: None,
                     style: None,
                     extra: None,
@@ -867,6 +878,8 @@ impl CmdAndFileCompleter {
             ));
         }
 
+        let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
+
         // Collect matching files and directories
         let mut completions = Vec::new();
         if let Ok(entries) = fs::read_dir(dir_to_search) {
@@ -909,6 +922,10 @@ impl CmdAndFileCompleter {
 
                     completions.push(Suggestion {
                         value: display_value.clone(),
+                        display_override: compute_display_override_for_path(
+                            &dir_to_search_string,
+                            &display_value,
+                        ),
                         description: None,
                         style: None,
                         extra: None,
@@ -985,6 +1002,8 @@ impl CmdAndFileCompleter {
             ));
         }
 
+        let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
+
         // Collect matching files and directories
         let mut completions = Vec::new();
         if let Ok(entries) = fs::read_dir(dir_to_search) {
@@ -1027,6 +1046,10 @@ impl CmdAndFileCompleter {
 
                     completions.push(Suggestion {
                         value: display_value.clone(),
+                        display_override: compute_display_override_for_path(
+                            &dir_to_search_string,
+                            &display_value,
+                        ),
                         description: None,
                         style: None,
                         extra: None,
@@ -1070,6 +1093,10 @@ impl CmdAndFileCompleter {
                         if pool.mount_point.starts_with(&expanded_asset_prefix) {
                             completions.push(Suggestion {
                                 value: pool.mount_point.clone(),
+                                display_override: compute_display_override_for_path(
+                                    &asset_prefix,
+                                    &pool.mount_point,
+                                ),
                                 description: None,
                                 style: None,
                                 extra: None,
@@ -1115,6 +1142,10 @@ impl CmdAndFileCompleter {
                     {
                         completions.push(Suggestion {
                             value: collapsed_prefixes[collapsed_idx].clone(),
+                            display_override: compute_display_override_for_path(
+                                &asset_prefix,
+                                &collapsed_prefixes[collapsed_idx],
+                            ),
                             description: None,
                             style: None,
                             extra: None,
@@ -1129,7 +1160,11 @@ impl CmdAndFileCompleter {
                         collapsed_idx += 1;
                     }
                     completions.push(Suggestion {
-                        value: entry.name,
+                        value: entry.name.clone(),
+                        display_override: compute_display_override_for_path(
+                            &asset_prefix,
+                            &entry.name,
+                        ),
                         description: None,
                         style: None,
                         extra: None,
@@ -1146,6 +1181,10 @@ impl CmdAndFileCompleter {
                 while collapsed_idx < collapsed_prefixes.len() {
                     completions.push(Suggestion {
                         value: collapsed_prefixes[collapsed_idx].clone(),
+                        display_override: compute_display_override_for_path(
+                            &asset_prefix,
+                            &collapsed_prefixes[collapsed_idx],
+                        ),
                         description: None,
                         style: None,
                         extra: None,
@@ -1205,6 +1244,7 @@ impl CmdAndFileCompleter {
                         if task.task_fqn.starts_with(task_prefix) {
                             completions.push(Suggestion {
                                 value: task.task_fqn.clone(),
+                                display_override: None,
                                 description: None,
                                 style: None,
                                 extra: None,
