@@ -2785,6 +2785,140 @@ async fn handle_client_message(
                 }
             }
         }
+        "asset/folder/collapse" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let collapse_arg: asset::AssetPoolFolderCollapseArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &collapse_arg.prefix,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            match api_client.asset_folder_collapse(collapse_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<(), asset::AssetPoolFolderCollapseError> =
+                        ClientMessageResponse::Ok {
+                            mid: mid.clone(),
+                            result: res,
+                            more: false,
+                        };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/folder/expand" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let expand_arg: asset::AssetPoolFolderExpandArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &expand_arg.prefix,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            match api_client.asset_folder_expand(expand_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<(), asset::AssetPoolFolderExpandError> =
+                        ClientMessageResponse::Ok {
+                            mid: mid.clone(),
+                            result: res,
+                            more: false,
+                        };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
+        "asset/folder/list" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let list_arg: asset::AssetPoolFolderListArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &&AccessRequest::ListPrefix {
+                    prefix: &list_arg.clone().prefix.unwrap_or("".to_string()),
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            match api_client.asset_folder_list(list_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetPoolFolderListResult,
+                        asset::AssetPoolFolderListError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                        more: false,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
         "asset/put" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let asset_arg: asset::AssetPutArg = match serde_json::from_str(&arg.to_string()) {
