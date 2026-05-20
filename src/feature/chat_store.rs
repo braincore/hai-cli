@@ -285,7 +285,12 @@ pub async fn resume_chat_from_db_or_asset(
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             session.input_loaded_tokens += log_entry.tokens;
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                println!("{}[{}]: {}", role_name, i, text.split_once("\n").unwrap().0);
+                println!(
+                    "{}[{}]: {}",
+                    role_name,
+                    i,
+                    text.split_once("\n").unwrap_or((text, "")).0
+                );
                 println!();
             } else if let chat::MessageContent::ImageUrl { image_url } =
                 &log_entry.message.content[0]
