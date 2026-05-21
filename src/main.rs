@@ -34,6 +34,7 @@ mod feature;
 mod line_editor;
 mod loader;
 mod printer;
+mod repl_remote;
 mod session;
 mod term;
 mod term_color;
@@ -216,11 +217,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                     session::CmdInput {
                                         input: format!("/prep {}", stdin_buffer),
                                         source: session::CmdSource::HaiBye(idx as u32),
+                                        reply_channel: None,
                                     }
                                 } else {
                                     session::CmdInput {
                                         input: prompt,
                                         source: session::CmdSource::HaiBye(idx as u32),
+                                        reply_channel: None,
                                     }
                                 }
                         })
@@ -301,6 +304,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     input: account_login_cmd,
                     // Use Internal to avoid printing command
                     source: session::CmdSource::Internal,
+                    reply_channel: None,
                 }],
                 true,
                 false,
@@ -342,6 +346,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 vec![session::CmdInput {
                     input: task_cmd,
                     source: session::CmdSource::User,
+                    reply_channel: None,
                 }],
                 false,
                 false,
@@ -488,6 +493,8 @@ async fn repl(
         "/asset-crypt-recover",
         "/asset-app",
         "/asset-app-revoke-perms",
+        "/asset-open",
+        "/open",
         "/asset-pool-new",
         "/asset-pools",
         "/email",
@@ -663,9 +670,11 @@ async fn repl(
         .await;
     }
 
+    let mut cmd_queue = session.cmd_queue.lock().await;
     for init_cmd in init_cmds.into_iter() {
-        session.cmd_queue.push_back(init_cmd);
+        cmd_queue.push_back(init_cmd);
     }
+    drop(cmd_queue);
 
     if mute_all_but_final_ai_response {
         crate::printer::disable_stdout();
@@ -734,7 +743,7 @@ async fn repl(
         // REPL Read
         // - Either reads from a queue of waiting cmds or from user input.
         //
-        let cmd_input = if let Some(cmd_info) = session.cmd_queue.pop_front() {
+        let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.pop_front() {
             if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
                 if *step_id > 0 {
                     println!();
@@ -804,7 +813,9 @@ async fn repl(
                 );
             }
 
-            let cur_line_editor = line_editor.get_or_insert_with(|| LineEditor::new(incognito));
+            let cur_line_editor = line_editor.get_or_insert_with(|| {
+                LineEditor::new(incognito, session.repl_break_signal.clone())
+            });
             let mut autocomplete_repl_cmds = default_autocomplete_repl_cmds.clone();
             autocomplete_repl_cmds.extend(
                 session
@@ -836,7 +847,13 @@ async fn repl(
                 Ok(Signal::Success(buffer)) => session::CmdInput {
                     input: buffer,
                     source: session::CmdSource::User,
+                    reply_channel: None,
                 },
+                Ok(Signal::ExternalBreak(_buffer)) => {
+                    // WARN: Because the buffer is ignored, this shouldn't be
+                    // used if the user may have pending input.
+                    continue;
+                }
                 Ok(Signal::CtrlC) => {
                     continue;
                 }
@@ -845,11 +862,13 @@ async fn repl(
                         session::CmdInput {
                             input: "!exit".to_string(),
                             source: session::CmdSource::Internal,
+                            reply_channel: None,
                         }
                     } else if matches!(session.repl_mode, ReplMode::Task(..)) {
                         session::CmdInput {
                             input: "/task-end".to_string(),
                             source: session::CmdSource::Internal,
+                            reply_channel: None,
                         }
                     } else {
                         println!("バイバイ！");
@@ -885,7 +904,7 @@ async fn repl(
             continue;
         };
         if exit_when_done
-            && session.cmd_queue.is_empty()
+            && session.cmd_queue.lock().await.is_empty()
             && let cmd::Cmd::Noop = cmd
         {
             wrapup_and_cleanup(&session, update_asset_tx).await;
@@ -952,7 +971,7 @@ async fn repl(
             ctrlc_handler,
             bpe_tokenizer,
             &cmd,
-            &cmd_input,
+            &mut cmd_input,
             force_yes,
             debug,
         )
@@ -960,7 +979,7 @@ async fn repl(
         {
             cmd_processor::ProcessCmdResult::Break => break,
             cmd_processor::ProcessCmdResult::Loop => {
-                if exit_when_done && session.cmd_queue.is_empty() {
+                if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                     wrapup_and_cleanup(&session, update_asset_tx).await;
                     process::exit(0);
                 };
@@ -1045,7 +1064,7 @@ async fn repl(
             println!("{}", "↓↓↓".truecolor(128, 128, 128));
             println!();
 
-            if session.cmd_queue.is_empty() && mute_all_but_final_ai_response {
+            if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_ai_response {
                 // Re-enable printing for the AI response if we're in hai-bye mode and
                 // we've printed all but the last command.
                 crate::printer::enable_stdout();
@@ -1347,8 +1366,8 @@ async fn repl(
                             println!("Tool Interrupted");
                         });
                         let (output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl) {
-                            match tool::execute_hai_repl_tool(&tp.tool, arg, &mut session.cmd_queue)
-                            {
+                            let mut cmd_queue = session.cmd_queue.lock().await;
+                            match tool::execute_hai_repl_tool(&tp.tool, arg, &mut cmd_queue) {
                                 Ok(output_text) => (output_text, None),
                                 Err(e) => {
                                     let err_text = format!("error executing hai-repl tool: {}", e);
@@ -1458,7 +1477,7 @@ async fn repl(
                 }
             }
 
-            if exit_when_done && session.cmd_queue.is_empty() {
+            if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                 wrapup_and_cleanup(&session, update_asset_tx).await;
                 process::exit(0);
             };

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::sync::Arc;
+use std::net::SocketAddr;
+use std::sync::{Arc, atomic::AtomicBool};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -43,6 +44,8 @@ pub enum CmdSource {
     TaskStep(String, Option<String>, u32),
     // Input generated from listen queue (queue_name, index)
     ListenQueue(Option<String>, u32),
+    /// Input generated from gateway
+    Gateway,
 }
 
 impl CmdSource {
@@ -59,6 +62,13 @@ impl CmdSource {
 pub struct CmdInput {
     pub input: String,
     pub source: CmdSource,
+    pub reply_channel: Option<tokio::sync::mpsc::Sender<CmdInputReply>>,
+}
+
+#[derive(Debug)]
+pub enum CmdInputReply {
+    /// (service_name, addr, perm_addr)
+    Gateway(Option<(String, SocketAddr, SocketAddr)>),
 }
 
 #[derive(Debug)]
@@ -78,7 +88,9 @@ pub struct SessionState {
     /// Running counter of tokens loaded from files (this is retained on /reset)
     pub input_loaded_tokens: u32,
     /// Queue of cmds to run
-    pub cmd_queue: VecDeque<CmdInput>,
+    pub cmd_queue: Arc<Mutex<VecDeque<CmdInput>>>,
+    /// Break signal to interrupt repl cmd input
+    pub repl_break_signal: Arc<AtomicBool>,
     /// History stores previous messages
     pub history: Vec<db::LogEntry>,
     /// The program to use to edit assets
@@ -125,15 +137,22 @@ pub struct SessionState {
     )>,
     /// Quick index vars ($0...$N-1)
     pub quick_index_vars: Vec<String>,
-    /// Websocket servers
-    pub gateways: Vec<(
-        bool, // is task step?
-        std::net::SocketAddr,
-        crate::feature::gateway::Clients,
-        CancellationToken,
-    )>,
+    /// Gateway servers
+    pub gateways: Vec<GatewayInfo>,
     // (MCP service, is task step?)
     pub mcps: HashMap<String, (crate::feature::mcp::McpService, bool)>,
+}
+
+#[derive(Debug)]
+pub struct GatewayInfo {
+    pub service_name: String,
+    pub is_task_step: bool,
+    /// Both websocket and http server
+    pub addr: std::net::SocketAddr,
+    pub perm_addr: std::net::SocketAddr,
+    pub clients: crate::feature::gateway::Clients,
+    pub cancel_token: CancellationToken,
+    pub auth_token: String,
 }
 
 impl SessionState {
@@ -172,7 +191,8 @@ impl SessionState {
             },
             input_tokens: 0,
             input_loaded_tokens: 0,
-            cmd_queue: VecDeque::new(),
+            cmd_queue: Arc::new(Mutex::new(VecDeque::new())),
+            repl_break_signal: Arc::new(AtomicBool::new(false)),
             history: vec![],
             editor: default_editor,
             shell: default_shell,
@@ -262,9 +282,9 @@ impl SessionState {
             cancel_token.cancel();
             self.html_output = None;
         }
-        for (is_task_step, _ws_addr, _clients, cancel_token) in &self.gateways {
-            if !task_mode || !*is_task_step {
-                cancel_token.cancel();
+        for gateway in &self.gateways {
+            if !task_mode || !gateway.is_task_step {
+                gateway.cancel_token.cancel();
             }
         }
         self.gateways.clear();
@@ -295,9 +315,9 @@ impl SessionState {
             cancel_token.cancel();
             self.html_output = None;
         }
-        for (is_task_step, _ws_addr, _clients, cancel_token) in &self.gateways {
-            if !task_mode || !*is_task_step {
-                cancel_token.cancel();
+        for gateway in &self.gateways {
+            if !task_mode || !gateway.is_task_step {
+                gateway.cancel_token.cancel();
             }
         }
         self.gateways.clear();
@@ -311,7 +331,7 @@ impl SessionState {
     /// Ends task mode.
     ///
     /// Does not clear the conversation history.
-    pub fn cmd_task_end(&mut self) -> bool {
+    pub async fn cmd_task_end(&mut self) -> bool {
         match self.repl_mode.clone() {
             ReplMode::Task(task_fqn, _, _) => {
                 self.repl_mode = ReplMode::Normal;
@@ -319,10 +339,13 @@ impl SessionState {
                 // Support ending task prematurely while task steps are
                 // being executed by purging any remaining task steps from
                 // the queue.
-                self.cmd_queue.retain(|cmd_input| match &cmd_input.source {
-                    CmdSource::TaskStep(step_task_fqn, _, _) => step_task_fqn != &task_fqn,
-                    _ => true,
-                });
+                self.cmd_queue
+                    .lock()
+                    .await
+                    .retain(|cmd_input| match &cmd_input.source {
+                        CmdSource::TaskStep(step_task_fqn, _, _) => step_task_fqn != &task_fqn,
+                        _ => true,
+                    });
                 crate::term::window_title_reset();
                 true
             }

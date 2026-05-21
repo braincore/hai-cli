@@ -243,7 +243,7 @@ pub async fn resume_chat_from_db_or_asset(
         }
     };
 
-    session.cmd_task_end();
+    session.cmd_task_end().await;
     session.cmd_new().await;
 
     match serde_json::from_slice::<ChatLog>(&chat_log_contents) {

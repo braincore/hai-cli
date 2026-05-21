@@ -1,3 +1,4 @@
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -17,12 +18,19 @@ use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::GetRevisionError;
+use crate::session::{self, CmdInputReply};
 use crate::{
     asset_async_writer, asset_reader,
     feature::asset_crypt::{self, KeyRecipient},
 };
 
 pub const DEV_MODE: &str = "DEV_MODE";
+pub const HAI_TOKEN_COOKIE_NAME: &str = "hai_token";
+
+/// Useful for encoding asset names in cookie names.
+fn encode_cookie_name(name: &str) -> String {
+    URL_SAFE_NO_PAD.encode(name.as_bytes())
+}
 
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
@@ -570,9 +578,14 @@ impl HttpResponse {
         self
     }
 
-    fn auth_cookie(token: &str) -> String {
+    fn auth_cookie(service_name: &str, token: &str) -> String {
         // `Secure` is not set because this is used over localhost
-        format!("hai_token={}; Path=/; HttpOnly; SameSite=Strict", token)
+        format!(
+            "{}_{}={}; Path=/; HttpOnly; SameSite=Strict",
+            HAI_TOKEN_COOKIE_NAME,
+            encode_cookie_name(service_name),
+            token
+        )
     }
 
     async fn write_to(self, stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
@@ -629,6 +642,7 @@ impl HttpResponse {
 /// * `auth_token` - Set the auth token explicitly rather than randomly
 ///   generating one.
 pub async fn launch_gateway(
+    repl_remote: crate::repl_remote::ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -738,6 +752,7 @@ pub async fn launch_gateway(
     let api_client_clone = api_client.clone();
     let username_owned = username.map(|s| s.to_string());
     let service_name_clone = service_name.to_string();
+    let update_asset_tx_clone = update_asset_tx.clone();
     let next_client_id = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
     let cookie_set = Arc::new(AtomicBool::new(false));
@@ -772,7 +787,7 @@ pub async fn launch_gateway(
                     let perm_request_map_inner = perm_request_map_clone.clone();
                     let username_inner = username_owned.clone();
                     let service_name_inner = service_name_clone.clone();
-                    let update_asset_tx_inner = update_asset_tx.clone();
+                    let update_asset_tx_inner = update_asset_tx_clone.clone();
                     let next_client_id_inner = next_client_id.clone();
                     let cookie_set_inner = cookie_set.clone();
 
@@ -781,14 +796,14 @@ pub async fn launch_gateway(
                             stream,
                             peer_addr,
                             perm_addr,
-                            token_clone_inner,
+                            &token_clone_inner,
                             asset_blob_cache_inner,
                             asset_keyring_inner,
                             api_client_clone_inner,
                             clients_inner,
                             perms_inner,
                             perm_request_map_inner,
-                            username_inner,
+                            username_inner.as_deref(),
                             &service_name_inner,
                             update_asset_tx_inner,
                             next_client_id_inner,
@@ -802,6 +817,7 @@ pub async fn launch_gateway(
         }
     });
 
+    let repl_remote_clone = repl_remote.clone();
     let db_clone = db.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
@@ -827,6 +843,7 @@ pub async fn launch_gateway(
                     };
                     let _ = stream.set_nodelay(true);
 
+                    let repl_remote_inner = repl_remote_clone.clone();
                     let db_inner = db_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -839,6 +856,7 @@ pub async fn launch_gateway(
 
                     tokio::spawn(async move {
                         if let Err(e) = handle_perm_http_connection(
+                            repl_remote_inner,
                             db_inner,
                             asset_blob_cache_inner,
                             asset_keyring_inner,
@@ -867,15 +885,15 @@ async fn handle_connection(
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     perm_addr: SocketAddr,
-    token: String,
+    token: &str,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
-    username: Option<String>,
-    #[allow(unused_variables)] service_name: &str,
+    username: Option<&str>,
+    service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
@@ -910,6 +928,7 @@ async fn handle_connection(
             perms,
             perm_request_map,
             username,
+            service_name,
             update_asset_tx,
             next_client_id,
             cookie_set,
@@ -927,6 +946,7 @@ async fn handle_connection(
             asset_keyring,
             perms,
             username,
+            service_name,
             update_asset_tx,
             cookie_set,
         )
@@ -956,21 +976,29 @@ fn extract_cookie_from_raw(raw_headers: &str, cookie_name: &str) -> Option<Strin
 async fn handle_websocket_connection(
     stream: tokio::net::TcpStream,
     perm_addr: &SocketAddr,
-    token: String,
+    token: &str,
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
-    username: Option<String>,
+    username: Option<&str>,
+    service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
     peeked_request: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Check auth from cookie first (if cookie was already set)
-    let cookie_token = extract_cookie_from_raw(peeked_request, "hai_token");
+    let cookie_token = extract_cookie_from_raw(
+        peeked_request,
+        &format!(
+            "{}_{}",
+            HAI_TOKEN_COOKIE_NAME,
+            encode_cookie_name(service_name)
+        ),
+    );
     let cookie_auth_valid = cookie_token.as_ref().map(|t| t == &token).unwrap_or(false);
 
     // If cookie is set and valid, we're authenticated via cookie
@@ -1006,7 +1034,7 @@ async fn handle_websocket_connection(
                         return Ok(());
                     }
                 };
-                if auth_msg.token != Some(token) {
+                if auth_msg.token != Some(token.to_string()) {
                     let _ = ws_stream
                         .send(Message::Text(Utf8Bytes::from(
                             &serde_json::to_string(&ClientMessageAuthResponse::BadToken).unwrap(),
@@ -1126,12 +1154,13 @@ async fn handle_websocket_connection(
 async fn handle_http_connection(
     mut stream: tokio::net::TcpStream,
     peer_addr: &std::net::SocketAddr,
-    token: String,
+    token: &str,
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     perms: Perms,
-    username: Option<String>,
+    username: Option<&str>,
+    service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1153,6 +1182,7 @@ async fn handle_http_connection(
         &api_client,
         perms,
         username,
+        service_name,
         update_asset_tx,
         cookie_set,
     )
@@ -1173,7 +1203,8 @@ async fn handle_http_request(
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
     perms: Perms,
-    username: Option<String>,
+    username: Option<&str>,
+    service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
 ) -> HttpResponse {
@@ -1193,7 +1224,11 @@ async fn handle_http_request(
     }
 
     // Check token from multiple sources: cookie, bearer token, query param
-    let cookie_token = request.cookie("hai_token");
+    let cookie_token = request.cookie(&format!(
+        "{}_{}",
+        HAI_TOKEN_COOKIE_NAME,
+        encode_cookie_name(service_name)
+    ));
     let bearer_token = request.bearer_token();
     let query_token = request.query_param("token");
 
@@ -1311,7 +1346,7 @@ async fn handle_http_request(
     }
 
     if should_set_cookie {
-        response = response.with_cookie(HttpResponse::auth_cookie(expected_token));
+        response = response.with_cookie(HttpResponse::auth_cookie(service_name, expected_token));
     }
 
     response
@@ -1359,7 +1394,7 @@ async fn handle_get(
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
     perms: Perms,
-    username: Option<String>,
+    username: Option<&str>,
 ) -> HttpResponse {
     // Check permission at the start
     if let Err(PermCheckError::Unauthorized) =
@@ -1520,7 +1555,7 @@ async fn handle_put(
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     perms: Perms,
-    username: Option<String>,
+    username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> HttpResponse {
     if let Err(PermCheckError::Unauthorized) =
@@ -1641,7 +1676,7 @@ async fn handle_put_metadata(
     _asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     perms: Perms,
-    _username: Option<String>,
+    _username: Option<&str>,
 ) -> HttpResponse {
     if let Err(PermCheckError::Unauthorized) =
         check_access_async(&perms, &AccessRequest::WriteByName { name: asset_name }).await
@@ -1769,6 +1804,17 @@ pub struct ReplPermRequestResult {
     requested_perms: Vec<Perm>,
     keyring_need_unlock: bool,
     request_id: String,
+    url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplOpenWithArg {
+    asset_app: String,
+    asset: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplOpenWithResult {
     url: String,
 }
 
@@ -2299,6 +2345,42 @@ async fn handle_client_message(
                     result: perm_req_result,
                     more: false,
                 };
+            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
+        "repl/open_with" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let open_with_arg: ReplOpenWithArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let base_url = format!(
+                "http://{}/open?asset_app={}",
+                perm_addr,
+                urlencoding::encode(&open_with_arg.asset_app),
+            );
+            let perm_req_result = if let Some(asset_name) = open_with_arg.asset {
+                ReplOpenWithResult {
+                    url: format!("{}&asset={}", base_url, urlencoding::encode(&asset_name)),
+                }
+            } else {
+                ReplOpenWithResult { url: base_url }
+            };
+            let resp: ClientMessageResponse<ReplOpenWithResult, ()> = ClientMessageResponse::Ok {
+                mid,
+                result: perm_req_result,
+                more: false,
+            };
             let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
             let _ = ws_sink
                 .send(Message::Text(Utf8Bytes::from(&json_string)))
@@ -3086,6 +3168,7 @@ async fn handle_client_message(
 // -- Permissions server
 
 async fn handle_perm_http_connection(
+    repl_remote: crate::repl_remote::ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -3106,7 +3189,60 @@ async fn handle_perm_http_connection(
 
     let response = match request.method.as_str() {
         "GET" => {
-            if request.path.starts_with("/request/") {
+            if request.path == "/open" {
+                let origin = request.header("Origin");
+                let sec_fetch_mode = request
+                    .header("Sec-Fetch-Mode")
+                    .unwrap_or_default()
+                    .to_string();
+                let invalid_origin = origin.is_some();
+                let invalid_sec_fetch_mode = sec_fetch_mode != "navigate" && sec_fetch_mode != "";
+                if invalid_origin || invalid_sec_fetch_mode {
+                    // Prevent JS fetch() from following redirect to stop
+                    // permission escalation. From what I've observed, opening
+                    // a new tab and issuing a GET request does not send an
+                    // Origin.
+                    HttpResponse::unauthorized()
+                } else if let Some(asset_app_name) = request.query_param("asset_app") {
+                    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+                    repl_remote
+                        .push_cmd(crate::session::CmdInput {
+                            input: format!("/asset-app.no_open {}", asset_app_name),
+                            source: session::CmdSource::Gateway,
+                            reply_channel: Some(reply_tx),
+                        })
+                        .await;
+                    repl_remote.signal_break();
+                    match reply_rx.recv().await {
+                        Some(CmdInputReply::Gateway(gateway_res)) => {
+                            if let Some((url, _addr, _perm_addr)) = gateway_res {
+                                if let Some(asset_name) = request.query_param("asset") {
+                                    if url.contains("#") {
+                                        HttpResponse::redirect_temp(&format!(
+                                            "{}&asset={}",
+                                            url,
+                                            urlencoding::encode(&asset_name)
+                                        ))
+                                    } else {
+                                        HttpResponse::redirect_temp(&format!(
+                                            "{}#asset={}",
+                                            url,
+                                            urlencoding::encode(&asset_name)
+                                        ))
+                                    }
+                                } else {
+                                    HttpResponse::redirect_temp(&url)
+                                }
+                            } else {
+                                HttpResponse::internal_error("Failed to start asset app")
+                            }
+                        }
+                        _ => HttpResponse::internal_error("Failed to get response from REPL"),
+                    }
+                } else {
+                    HttpResponse::bad_request("Missing 'asset_app' query parameter")
+                }
+            } else if request.path.starts_with("/request/") {
                 let request_id = &request.path["/request/".len()..];
                 let perm_request_map_unlocked = perm_request_map.lock().await;
                 if let Some((csrf_token, _expiry, requested_perms)) =

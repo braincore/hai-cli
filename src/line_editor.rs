@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use crate::api::client::HaiClient;
 use crate::db::Account;
@@ -36,7 +37,7 @@ impl Drop for LineEditor {
 }
 
 impl LineEditor {
-    pub fn new(incognito: bool) -> LineEditor {
+    pub fn new(incognito: bool, break_signal: Arc<AtomicBool>) -> LineEditor {
         let completion_menu = Box::new(ColumnarMenu::default().with_name("completion_menu"));
 
         let mut insert_keybindings = default_vi_insert_keybindings();
@@ -84,6 +85,7 @@ impl LineEditor {
             reedline = reedline.with_history(history);
         }
         reedline = reedline
+            .with_break_signal(break_signal.clone())
             .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
             .with_edit_mode(Box::new(Vi::new(
                 insert_keybindings,
@@ -620,6 +622,8 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/asset-md-get")
                 || is_cmd_input(line, "/asset-listen")
                 || is_cmd_input(line, "/asset-app")
+                || is_cmd_input(line, "/asset-open")
+                || is_cmd_input(line, "/open")
                 || is_cmd_input(line, "/chat-resume")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);

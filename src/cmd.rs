@@ -160,6 +160,8 @@ pub enum Cmd {
     AssetApp(AssetAppCmd),
     /// Revoke permissions
     AssetAppRevokePerms(AssetAppRevokePermsCmd),
+    /// Open an asset
+    AssetOpen(AssetOpenCmd),
     /// Create a new asset-pool shared between users
     AssetPoolNew(AssetPoolNewCmd),
     /// List asset pools
@@ -746,10 +748,18 @@ pub struct AssetCryptLockCmd {
 pub struct AssetAppCmd {
     /// Name of the asset
     pub asset_name: String,
+    /// Do not open the app in the browser
+    pub no_open: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct AssetAppRevokePermsCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetOpenCmd {
     /// Name of the asset
     pub asset_name: String,
 }
@@ -2333,11 +2343,20 @@ fn parse_command(
             }))
         }
         "asset-app" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["no_open"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("no_open".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let no_open = options.get("no_open").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd { asset_name })),
+                Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd {
+                    asset_name,
+                    no_open,
+                })),
                 None => {
                     eprintln!("Usage: /{cmd_name} <asset_name>");
                     None
@@ -2352,6 +2371,18 @@ fn parse_command(
                 Some(asset_name) => Some(Cmd::AssetAppRevokePerms(AssetAppRevokePermsCmd {
                     asset_name,
                 })),
+                None => {
+                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    None
+                }
+            }
+        }
+        "open" | "asset-open" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetOpen(AssetOpenCmd { asset_name })),
                 None => {
                     eprintln!("Usage: /{cmd_name} <asset_name>");
                     None

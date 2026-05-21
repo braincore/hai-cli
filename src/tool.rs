@@ -237,6 +237,7 @@ pub fn execute_hai_repl_tool(
                 cmd_queue.push_front(session::CmdInput {
                     input: cmd.clone(),
                     source: session::CmdSource::HaiTool(index as u32),
+                    reply_channel: None,
                 });
             }
             let output = format!("Pushed {} command(s) into queue", cmds.len());

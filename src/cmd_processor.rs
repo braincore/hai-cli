@@ -614,7 +614,7 @@ pub async fn process_cmd(
                     // they're uncomfortable with the task and don't want to
                     // proceed.
                     println!("user cancelled input: task initialization aborted");
-                    session.cmd_queue.clear();
+                    session.cmd_queue.lock().await.clear();
                 }
                 return ProcessCmdResult::Loop;
             };
@@ -1130,22 +1130,27 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             }
             if matches!(session.repl_mode, ReplMode::Task(..)) {
+                let mut cmd_queue = session.cmd_queue.lock().await;
                 // If already in task mode, clear the existing session state and start fresh.
-                session.cmd_queue.push_front(session::CmdInput {
+                cmd_queue.push_front(session::CmdInput {
                     // Use the original input in case args are used (e.g. trust=true)
                     input: cmd_input.input.clone(),
                     source: session::CmdSource::Internal,
+                    reply_channel: None,
                 });
-                session.cmd_queue.push_front(session::CmdInput {
+                cmd_queue.push_front(session::CmdInput {
                     input: "/task-end".to_string(),
                     source: session::CmdSource::Internal,
+                    reply_channel: None,
                 });
             } else if let Some((_, haitask)) = get_haitask_from_task_ref(
                 &task_ref,
                 session,
                 "task",
                 matches!(cmd_input.source, session::CmdSource::Internal),
-            ) {
+            )
+            .await
+            {
                 if let Some(dependencies) = haitask.dependencies.as_ref() {
                     let dependency_re = Regex::new(
                         r"^\s*([a-zA-Z0-9_\-]+)\s*(>=|<=|=|>|<)\s*([0-9A-Za-z\.\-\+]+)\s*$",
@@ -1266,14 +1271,16 @@ pub async fn process_cmd(
                 );
                 println!("  - /task-end -- Exit task mode (CTRL+D shortcut)");
                 println!();
+                let mut cmd_queue = session.cmd_queue.lock().await;
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
-                    session.cmd_queue.push_front(session::CmdInput {
+                    cmd_queue.push_front(session::CmdInput {
                         input: step.clone(),
                         source: session::CmdSource::TaskStep(
                             haitask.name.clone(),
                             key.clone(),
                             index as u32,
                         ),
+                        reply_channel: None,
                     });
                 }
                 session.repl_mode = ReplMode::Task(haitask.name.clone(), key.clone(), trust);
@@ -1286,15 +1293,19 @@ pub async fn process_cmd(
                 session,
                 "task-include",
                 matches!(cmd_input.source, session::CmdSource::Internal),
-            ) {
+            )
+            .await
+            {
+                let mut cmd_queue = session.cmd_queue.lock().await;
                 for (index, step) in haitask.steps.iter().enumerate().rev() {
-                    session.cmd_queue.push_front(session::CmdInput {
+                    cmd_queue.push_front(session::CmdInput {
                         input: step.clone(),
                         source: session::CmdSource::TaskStep(
                             haitask.name.clone(),
                             key.clone(),
                             index as u32,
                         ),
+                        reply_channel: None,
                     });
                 }
             }
@@ -1338,7 +1349,7 @@ pub async fn process_cmd(
             // their history when they exit. This makes accidentally using
             // /task instead of /task-include an inconvenience rather than
             // fatal.
-            if session.cmd_task_end() {
+            if session.cmd_task_end().await {
                 println!("info: task ended");
             } else {
                 eprintln!("error: not in task mode");
@@ -1612,7 +1623,9 @@ pub async fn process_cmd(
                 session,
                 "task-view",
                 matches!(cmd_input.source, session::CmdSource::Internal),
-            ) {
+            )
+            .await
+            {
                 println!(
                     "Web link: {}/task/{}@{}",
                     session::get_web_base_url(),
@@ -1670,7 +1683,7 @@ pub async fn process_cmd(
             if let Some(editor) = editor.as_deref()
                 && let Some(prog_asset_name) = editor.strip_prefix("@")
             {
-                crate::feature::asset_app::launch_browser(
+                crate::feature::asset_app::start_app_and_launch_browser(
                     session,
                     db.clone(),
                     asset_blob_cache.clone(),
@@ -1680,6 +1693,8 @@ pub async fn process_cmd(
                     is_task_mode_step,
                     prog_asset_name,
                     Some(&asset_name),
+                    false,
+                    true,
                     debug,
                 )
                 .await;
@@ -2058,10 +2073,15 @@ pub async fn process_cmd(
                 && asset_list_res.collapsed_prefixes.len() == 1
                 && let Some(collapsed_prefix) = asset_list_res.collapsed_prefixes.first()
             {
-                session.cmd_queue.push_front(session::CmdInput {
-                    input: format!("/asset-list {}", collapsed_prefix),
-                    source: session::CmdSource::Internal,
-                });
+                session
+                    .cmd_queue
+                    .lock()
+                    .await
+                    .push_front(session::CmdInput {
+                        input: format!("/asset-list {}", collapsed_prefix),
+                        source: session::CmdSource::Internal,
+                        reply_channel: None,
+                    });
                 return ProcessCmdResult::Loop;
             }
 
@@ -4148,7 +4168,10 @@ pub async fn process_cmd(
             println!("╚══════════════════════════════════════════════════════════════╝");
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetApp(cmd::AssetAppCmd { asset_name }) => {
+        cmd::Cmd::AssetApp(cmd::AssetAppCmd {
+            asset_name,
+            no_open,
+        }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 Some(account.username.clone())
             } else {
@@ -4156,7 +4179,7 @@ pub async fn process_cmd(
             };
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
-            crate::feature::asset_app::launch_browser(
+            let start_app_res = crate::feature::asset_app::start_app_and_launch_browser(
                 session,
                 db.clone(),
                 asset_blob_cache.clone(),
@@ -4166,9 +4189,16 @@ pub async fn process_cmd(
                 is_task_mode_step,
                 &asset_name,
                 None,
+                no_open,
+                true,
                 debug,
             )
             .await;
+            if let Some(reply_channel) = &cmd_input.reply_channel {
+                let _ = reply_channel
+                    .send(crate::session::CmdInputReply::Gateway(start_app_res))
+                    .await;
+            }
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetAppRevokePerms(cmd::AssetAppRevokePermsCmd { asset_name }) => {
@@ -4180,6 +4210,73 @@ pub async fn process_cmd(
             let asset_name = resolve_asset_name(&asset_name, session);
             if let Some(username) = username {
                 let _ = crate::db::clear_gateway_perms(&*db.lock().await, &username, &asset_name);
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetOpen(cmd::AssetOpenCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                Some(account.username.clone())
+            } else {
+                None
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+
+            let default_asset_app = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok((md_contents, _asset_entry)) => md_contents.as_ref().and_then(|md| {
+                    let contents: std::borrow::Cow<'_, str> = String::from_utf8_lossy(md);
+                    let json: serde_json::Value = serde_json::from_str(&contents).ok()?;
+                    let open_with_entry =
+                        crate::feature::asset_app::get_best_match_open_with_entry(&json);
+                    if let Some(crate::feature::asset_app::OpenWithEntry {
+                        handler:
+                            crate::feature::asset_app::OpenWithHandler::AssetApp {
+                                asset_name: asset_app_name,
+                            },
+                        ..
+                    }) = open_with_entry
+                    {
+                        Some(asset_app_name)
+                    } else {
+                        None
+                    }
+                }),
+                Err(_) => None,
+            };
+
+            if let Some(default_asset_app) = default_asset_app {
+                crate::feature::asset_app::start_app_and_launch_browser(
+                    session,
+                    db.clone(),
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    username.as_deref(),
+                    update_asset_tx.clone(),
+                    is_task_mode_step,
+                    &default_asset_app,
+                    Some(&asset_name),
+                    false,
+                    true,
+                    debug,
+                )
+                .await;
+            } else {
+                session
+                    .cmd_queue
+                    .lock()
+                    .await
+                    .push_front(session::CmdInput {
+                        input: format!("/asset-edit {}", asset_name),
+                        source: session::CmdSource::Internal,
+                        reply_channel: None,
+                    });
             }
             ProcessCmdResult::Loop
         }
@@ -4208,6 +4305,7 @@ pub async fn process_cmd(
         cmd::Cmd::Gateway(cmd::GatewayCmd { auth_token }) => {
             let api_client = mk_api_client(Some(session));
             let _ = crate::feature::gateway::launch_gateway(
+                crate::repl_remote::ReplRemote::from_session(session),
                 db.clone(),
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
@@ -4300,10 +4398,15 @@ pub async fn process_cmd(
                     match answer.trim().parse::<usize>() {
                         Ok(i) if i < asset_list_res.entries.len() => {
                             let asset_name = &asset_list_res.entries[i].name;
-                            session.cmd_queue.push_front(session::CmdInput {
-                                input: format!("/chat-resume {}", asset_name),
-                                source: session::CmdSource::Internal,
-                            });
+                            session
+                                .cmd_queue
+                                .lock()
+                                .await
+                                .push_front(session::CmdInput {
+                                    input: format!("/chat-resume {}", asset_name),
+                                    source: session::CmdSource::Internal,
+                                    reply_channel: None,
+                                });
                             break;
                         }
                         _ => {
@@ -4655,10 +4758,15 @@ pub async fn process_cmd(
             println!("╚══════════════════════════════════════════════════════════════╝");
             println!();
 
-            session.cmd_queue.push_front(session::CmdInput {
-                input: "/boot-setup".to_string(),
-                source: session::CmdSource::Internal,
-            });
+            session
+                .cmd_queue
+                .lock()
+                .await
+                .push_front(session::CmdInput {
+                    input: "/boot-setup".to_string(),
+                    source: session::CmdSource::Internal,
+                    reply_channel: None,
+                });
 
             ProcessCmdResult::Loop
         }
@@ -5378,15 +5486,18 @@ pub async fn process_cmd(
             )
             .expect("failed to pop from queue");
             if let Some(cmds) = cmds {
+                let mut cmd_queue = session.cmd_queue.lock().await;
                 for (index, cmd) in cmds.iter().enumerate().rev() {
-                    session.cmd_queue.push_front(session::CmdInput {
+                    cmd_queue.push_front(session::CmdInput {
                         input: cmd.clone(),
                         source: session::CmdSource::ListenQueue(queue_name.clone(), index as u32),
+                        reply_channel: None,
                     });
                 }
-                session.cmd_queue.push_front(session::CmdInput {
+                cmd_queue.push_front(session::CmdInput {
                     input: "/new".to_string(),
                     source: session::CmdSource::Internal,
+                    reply_channel: None,
                 });
             }
             ProcessCmdResult::Loop
@@ -5728,7 +5839,7 @@ pub async fn shell_exec_with_asset_substitution(
 // --
 
 /// If None returned, it will have also printed an error message to stderr.
-fn get_haitask_from_task_ref(
+async fn get_haitask_from_task_ref(
     task_ref: &str,
     session: &mut SessionState,
     task_cmd: &str,
@@ -5774,14 +5885,24 @@ fn get_haitask_from_task_ref(
             eprintln!("error: failed to fetch task");
         } else {
             // Queue up a fetch task and then try again.
-            session.cmd_queue.push_front(session::CmdInput {
-                input: format!("/{} {}", task_cmd, task_ref),
-                source: session::CmdSource::Internal,
-            });
-            session.cmd_queue.push_front(session::CmdInput {
-                input: format!("/task-fetch {}", task_ref),
-                source: session::CmdSource::Internal,
-            });
+            session
+                .cmd_queue
+                .lock()
+                .await
+                .push_front(session::CmdInput {
+                    input: format!("/{} {}", task_cmd, task_ref),
+                    source: session::CmdSource::Internal,
+                    reply_channel: None,
+                });
+            session
+                .cmd_queue
+                .lock()
+                .await
+                .push_front(session::CmdInput {
+                    input: format!("/task-fetch {}", task_ref),
+                    source: session::CmdSource::Internal,
+                    reply_channel: None,
+                });
         }
         None
     } else if task_ref.starts_with(".") || task_ref.starts_with("/") || task_ref.starts_with("~") {
