@@ -354,17 +354,19 @@ pub async fn flush_asset_updates(update_asset_tx: &tokio::sync::mpsc::Sender<Wor
 
 // --
 
-/// Sets the metadata field `key` to `value` for the asset.
+/// Sets multiple metadata fields at once for the asset.
+///
+/// Each item in `keys` is a `(key, value)` pair. If `value` is `Some`, the key
+/// is set to that value; if `None`, the key is removed.
 ///
 /// This function is necessary because the API only supports setting the entire
 /// metadata object at once, rather than individual fields.
 ///
 /// On error, prints reason.
-pub async fn asset_metadata_set_key(
+pub async fn asset_metadata_set_keys(
     api_client: &HaiClient,
     asset_name: &str,
-    key: &str,
-    value: Option<serde_json::Value>,
+    keys: &[(&str, Option<serde_json::Value>)],
 ) -> Result<AssetEntry, ()> {
     use crate::api::types::asset::AssetGetArg;
     match api_client
@@ -389,32 +391,40 @@ pub async fn asset_metadata_set_key(
             } else {
                 serde_json::json!({})
             };
-            // Check if the current value is the same as the target value
+
+            // Check if any key actually needs updating
             let needs_update = if let Some(map) = md_json.as_object() {
-                match (&value, map.get(key)) {
-                    (Some(target_value), Some(current_value)) => target_value != current_value,
-                    (None, None) => false,
-                    _ => true,
-                }
+                keys.iter()
+                    .any(|(key, value)| match (value, map.get(*key)) {
+                        (Some(target_value), Some(current_value)) => target_value != current_value,
+                        (None, None) => false,
+                        _ => true,
+                    })
             } else {
-                // If metadata is not a map, we'll need to update
-                value.is_some()
+                // If metadata is not a map, we'll need to update if any value is being set
+                keys.iter().any(|(_, value)| value.is_some())
             };
+
             if !needs_update {
                 return Ok(res.entry);
             }
+
             if let Some(map) = md_json.as_object_mut() {
-                if let Some(value) = value {
-                    map.insert(key.to_string(), value);
-                } else {
-                    map.remove(key);
+                for (key, value) in keys {
+                    if let Some(value) = value {
+                        map.insert(key.to_string(), value.clone());
+                    } else {
+                        map.remove(*key);
+                    }
                 }
             } else {
                 eprintln!("unexpected: metadata is not a map");
                 return Err(());
             }
+
             let md_contents =
                 serde_json::to_string(&md_json).expect("failed to serialize metadata");
+
             use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
             // NOTE/FUTURE: Better to switch to reject conflict-policy and
             // refetch the metadata on rejection.
@@ -438,6 +448,21 @@ pub async fn asset_metadata_set_key(
             Err(())
         }
     }
+}
+
+/// Sets the metadata field `key` to `value` for the asset.
+///
+/// This is a convenience wrapper around [`asset_metadata_set_keys`] for setting
+/// a single key.
+///
+/// On error, prints reason.
+pub async fn asset_metadata_set_key(
+    api_client: &HaiClient,
+    asset_name: &str,
+    key: &str,
+    value: Option<serde_json::Value>,
+) -> Result<AssetEntry, ()> {
+    asset_metadata_set_keys(api_client, asset_name, &[(key, value)]).await
 }
 
 /// Merges source and target metadata objects.

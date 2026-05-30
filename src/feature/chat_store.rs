@@ -136,15 +136,28 @@ lesson (e.g. "understanding").\n\n{}"#,
     // Wait for write to complete before setting metadata
     asset_async_writer::flush_asset_updates(&update_asset_tx).await;
 
-    if let Some(chat_title) = chat_title {
-        let _ = asset_async_writer::asset_metadata_set_key(
-            &api_client,
-            &chat_log_asset_name,
-            "title",
-            Some(serde_json::Value::String(chat_title)),
-        )
-        .await;
+    let mut metadata_keys: Vec<(&str, Option<serde_json::Value>)> = vec![(
+        "open_with",
+        Some(serde_json::json!([
+            {
+                "handler": {
+                    "type": "asset_app",
+                    "asset_name": "/hai/app/chatlog"
+                }
+            }
+        ])),
+    )];
+
+    if let Some(chat_title) = chat_title.as_ref() {
+        metadata_keys.push(("title", Some(serde_json::Value::String(chat_title.clone()))));
     }
+
+    let _ = asset_async_writer::asset_metadata_set_keys(
+        &api_client,
+        &chat_log_asset_name,
+        &metadata_keys,
+    )
+    .await;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
