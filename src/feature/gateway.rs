@@ -458,6 +458,15 @@ impl HttpRequest {
     }
 }
 
+/// URL is prettier if / and + are not percent-encoded. They're common in asset
+/// names.
+fn encode_asset_fragment(asset_name: &str) -> String {
+    urlencoding::encode(asset_name)
+        .to_string()
+        .replace("%2F", "/")
+        .replace("%2B", "+")
+}
+
 struct HttpResponse {
     status: u16,
     status_text: &'static str,
@@ -2367,11 +2376,11 @@ async fn handle_client_message(
             let base_url = format!(
                 "http://{}/open?asset_app={}",
                 perm_addr,
-                urlencoding::encode(&open_with_arg.asset_app),
+                encode_asset_fragment(&open_with_arg.asset_app),
             );
             let perm_req_result = if let Some(asset_name) = open_with_arg.asset {
                 ReplOpenWithResult {
-                    url: format!("{}&asset={}", base_url, urlencoding::encode(&asset_name)),
+                    url: format!("{}&asset={}", base_url, encode_asset_fragment(&asset_name)),
                 }
             } else {
                 ReplOpenWithResult { url: base_url }
@@ -3221,13 +3230,13 @@ async fn handle_perm_http_connection(
                                         HttpResponse::redirect_temp(&format!(
                                             "{}&asset={}",
                                             url,
-                                            urlencoding::encode(&asset_name)
+                                            encode_asset_fragment(&asset_name)
                                         ))
                                     } else {
                                         HttpResponse::redirect_temp(&format!(
                                             "{}#asset={}",
                                             url,
-                                            urlencoding::encode(&asset_name)
+                                            encode_asset_fragment(&asset_name)
                                         ))
                                     }
                                 } else {

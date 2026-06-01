@@ -157,7 +157,9 @@ pub fn get_asset_app_url(
     let mut fragment_params: Vec<(&str, &str)> = Vec::new();
     let encoded_target;
     if let Some(ref target) = target_asset_name {
-        encoded_target = urlencoding::encode(target);
+        encoded_target = urlencoding::encode(target)
+            .replace("%2F", "/")
+            .replace("%2B", "+");
         fragment_params.push(("asset", &encoded_target));
     }
     if !localhost_serves_asset_app {
