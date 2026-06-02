@@ -100,6 +100,7 @@ pub async fn send_to_anthropic(
     use_effort: Option<&config::AnthropicEffort>,
     use_automatic_caching: bool,
     temperature: Option<f32>,
+    temperature_deprecated: bool,
     history: &[chat::Message],
     tool_policy: Option<&tool::ToolPolicy>,
     shell: &str,
@@ -209,6 +210,9 @@ pub async fn send_to_anthropic(
                 // API requires thinking to be set to 1 if thinking is enabled.
                 request_obj.insert("temperature".to_string(), json!(1));
             }
+        }
+        if temperature_deprecated {
+            request_obj.remove("temperature");
         }
         if let Some(effort) = use_effort {
             request_obj.insert(

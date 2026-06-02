@@ -1770,11 +1770,16 @@ pub async fn prompt_ai(
             };
             let use_thinking46 = match anthropic_model {
                 config::AnthropicModel::Opus46(opts)
+                | config::AnthropicModel::Sonnet46(opts)
                 | config::AnthropicModel::Opus47(opts)
-                | config::AnthropicModel::Opus48(opts)
-                | config::AnthropicModel::Sonnet46(opts) => opts.thinking,
+                | config::AnthropicModel::Opus48(opts) => opts.thinking,
                 _ => None,
             };
+            // Opus 4.7+ deprecated temperature
+            let temperature_deprecated = matches!(
+                anthropic_model,
+                config::AnthropicModel::Opus47(_) | config::AnthropicModel::Opus48(_)
+            );
             let use_effort = match anthropic_model {
                 config::AnthropicModel::Opus46(opts)
                 | config::AnthropicModel::Opus47(opts)
@@ -1792,6 +1797,7 @@ pub async fn prompt_ai(
                 use_effort,
                 session.prompt_cache,
                 session.ai_temperature,
+                temperature_deprecated,
                 msg_history,
                 tool_policy.as_ref(),
                 &session.shell,
