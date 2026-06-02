@@ -23,7 +23,7 @@ A REPL for hackers using LLMs.
 - 💾 Auto-saves last conversation for easy resumption.
 - ☁ Store and share data on the cloud for easy access by AIs.
 - 📧 Get emails from AI—send notifications or share data.
-- 🛠 Open source: Apache License 2.0
+- 🔍 Source available: Know what's running on your machine.
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
 ## Video Walkthrough ([YouTube](https://www.youtube.com/watch?v=F6qAy8PF2WU))

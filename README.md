@@ -37,7 +37,7 @@ Or, you can dive in and rely on `hai -h` (CLI), `/help` (REPL), and
 - ☁ Store and share data on the cloud for easy access by AIs. Supports
   selective end-to-end encryption.
 - 📧 Get emails from AI—send notifications or share data.
-- 🛠 Open source: Apache License 2.0
+- 🔍 Source available: Know what's running on your machine.
 - 💻 Supports Linux and macOS. Windows needs testing (help!).
 
 ## Installation
