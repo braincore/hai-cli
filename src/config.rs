@@ -90,7 +90,13 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     opts.remove(0);
     match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
-        "deepseek" | "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
+        "deepseek" | "deepseek4" | "deepseek4flash" | "ds4" | "ds4f" | "ds" => Some(
+            AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Flash(parse_deepseek_v4_opts(opts))),
+        ),
+        "deepseek4pro" | "ds4p" | "dsp" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Pro(
+            parse_deepseek_v4_opts(opts),
+        ))),
+        "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
         "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
         "flash" | "flash3" | "geminiflash" | "gemini3flash" => Some(AiModel::Google(
             GoogleModel::Gemini3Flash(parse_gemini_opts(opts)),
@@ -331,6 +337,41 @@ pub fn parse_gpt5_opts(opts: Vec<&str>, support_gpt52: bool) -> Gpt5Options {
     }
 }
 
+pub fn parse_deepseek_v4_opts(opts: Vec<&str>) -> DeepSeekV4Options {
+    let mut reasoning_effort = None;
+    for opt in opts {
+        let mut kv = opt.split('=');
+        let key = match kv.next() {
+            Some(k) => k,
+            None => continue,
+        };
+        let value = match kv.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        match key {
+            "r" | "reasoning" => {
+                reasoning_effort = match value {
+                    "n" | "none" => Some(OpenAiReasoningEffort::None),
+                    "min" | "minimal" => Some(OpenAiReasoningEffort::Minimal),
+                    "l" | "low" => Some(OpenAiReasoningEffort::Low),
+                    "m" | "medium" => Some(OpenAiReasoningEffort::Medium),
+                    "h" | "high" => Some(OpenAiReasoningEffort::High),
+                    "xh" | "xhigh" => Some(OpenAiReasoningEffort::Xhigh),
+                    _ => {
+                        println!("ignoring unknown reasoning effort: {}", value);
+                        continue;
+                    }
+                };
+            }
+            _ => {
+                println!("ignoring unknown option: {}", key);
+            }
+        }
+    }
+    DeepSeekV4Options { reasoning_effort }
+}
+
 pub fn parse_gemini_opts(opts: Vec<&str>) -> GeminiOptions {
     let mut thinking_level = None;
     for opt in opts {
@@ -507,6 +548,14 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
         AiModel::DeepSeek(model) => match model {
             DeepSeekModel::DeepSeekChat => "deepseek-chat".to_string(),
             DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner".to_string(),
+            DeepSeekModel::DeepSeekV4Flash(opts) => {
+                let base = "deepseek-v4-flash".to_string();
+                append_deepseek_v4_opts(base, opts)
+            }
+            DeepSeekModel::DeepSeekV4Pro(opts) => {
+                let base = "deepseek-v4-pro".to_string();
+                append_deepseek_v4_opts(base, opts)
+            }
             DeepSeekModel::Other(name) => format!("deepseek/{}", name),
         },
 
@@ -644,6 +693,15 @@ fn append_gpt5_opts(base: String, opts: &Gpt5Options) -> String {
     if let Some(ref verbosity) = opts.verbosity {
         result.push_str(",verbosity=");
         result.push_str(verbosity_to_string(verbosity));
+    }
+    result
+}
+
+fn append_deepseek_v4_opts(base: String, opts: &DeepSeekV4Options) -> String {
+    let mut result = base;
+    if let Some(ref reasoning_effort) = opts.reasoning_effort {
+        result.push_str(",reasoning=");
+        result.push_str(reasoning_effort_to_string(reasoning_effort));
     }
     result
 }
@@ -867,9 +925,16 @@ pub enum AnthropicEffort {
 }
 
 #[derive(Debug)]
+pub struct DeepSeekV4Options {
+    pub reasoning_effort: Option<OpenAiReasoningEffort>,
+}
+
+#[derive(Debug)]
 pub enum DeepSeekModel {
     DeepSeekChat,
     DeepSeekReasoner,
+    DeepSeekV4Flash(DeepSeekV4Options),
+    DeepSeekV4Pro(DeepSeekV4Options),
     Other(String),
 }
 
@@ -991,6 +1056,8 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
         AiModel::DeepSeek(model) => match model {
             DeepSeekModel::DeepSeekChat => "deepseek-chat",
             DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner",
+            DeepSeekModel::DeepSeekV4Flash(_) => "deepseek-v4-flash",
+            DeepSeekModel::DeepSeekV4Pro(_) => "deepseek-v4-pro",
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
@@ -1086,8 +1153,14 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Other(name) => name.clone(),
         },
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => "deepseek-chat".to_string(),
-            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner".to_string(),
+            DeepSeekModel::DeepSeekChat => "deepseek-v4-flash".to_string(),
+            DeepSeekModel::DeepSeekReasoner => "deepseek-v4-flash".to_string(),
+            DeepSeekModel::DeepSeekV4Flash(opts) => {
+                format!("deepseek-v4-flash{}", get_deepseek_v4_opts_display(opts))
+            }
+            DeepSeekModel::DeepSeekV4Pro(opts) => {
+                format!("deepseek-v4-pro{}", get_deepseek_v4_opts_display(opts))
+            }
             DeepSeekModel::Other(name) => name.clone(),
         },
         AiModel::Google(model) => match model {
@@ -1229,6 +1302,26 @@ pub fn get_gemini_opts_display(opts: &GeminiOptions) -> String {
     }
 }
 
+pub fn get_deepseek_v4_opts_display(opts: &DeepSeekV4Options) -> String {
+    let mut parts = Vec::new();
+    if let Some(ref r) = opts.reasoning_effort {
+        let r_str = match r {
+            OpenAiReasoningEffort::None => "none",
+            OpenAiReasoningEffort::Minimal => "none", // Unexpected
+            OpenAiReasoningEffort::Low
+            | OpenAiReasoningEffort::Medium
+            | OpenAiReasoningEffort::High => "h",
+            OpenAiReasoningEffort::Xhigh => "xh",
+        };
+        parts.push(format!("r={}", r_str));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("({})", parts.join(","))
+    }
+}
+
 #[derive(Debug)]
 pub struct AiModelCapability {
     pub image: bool,
@@ -1241,20 +1334,9 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             image: true,
             tool: true,
         },
-        AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => AiModelCapability {
-                image: false,
-                // DeepSeek says it's unstable, but enable it anyway
-                tool: true,
-            },
-            DeepSeekModel::DeepSeekReasoner => AiModelCapability {
-                image: false,
-                tool: true,
-            },
-            DeepSeekModel::Other(_) => AiModelCapability {
-                image: false,
-                tool: true,
-            },
+        AiModel::DeepSeek(_) => AiModelCapability {
+            image: false,
+            tool: true,
         },
         AiModel::Google(_) => AiModelCapability {
             image: true,
@@ -1335,7 +1417,10 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         }
         AiModel::DeepSeek(model) => matches!(
             model,
-            DeepSeekModel::DeepSeekChat | DeepSeekModel::DeepSeekReasoner
+            DeepSeekModel::DeepSeekChat
+                | DeepSeekModel::DeepSeekReasoner
+                | DeepSeekModel::DeepSeekV4Flash(_)
+                | DeepSeekModel::DeepSeekV4Pro(_)
         ),
         AiModel::Google(model) => matches!(
             model,
@@ -1407,8 +1492,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Other(_) => None,
         },
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => Some((270, 1100)),
-            DeepSeekModel::DeepSeekReasoner => Some((550, 2190)),
+            DeepSeekModel::DeepSeekChat => Some((140, 280)),
+            DeepSeekModel::DeepSeekReasoner => Some((140, 280)),
+            DeepSeekModel::DeepSeekV4Flash(_) => Some((140, 280)),
+            DeepSeekModel::DeepSeekV4Pro(_) => Some((435, 870)),
             DeepSeekModel::Other(_) => None,
         },
         AiModel::Google(model) => match model {
@@ -1758,7 +1845,9 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             thinking: None,
         }))
     } else if get_deepseek_api_key(cfg).is_some() {
-        AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)
+        AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Flash(DeepSeekV4Options {
+            reasoning_effort: None,
+        }))
     } else if get_google_api_key(cfg).is_some() {
         AiModel::Google(GoogleModel::Gemini3Flash(GeminiOptions {
             thinking_level: None,

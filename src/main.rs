@@ -585,6 +585,8 @@ async fn repl(
         "gemini25pro",
         "gemini3pro",
         "deepseek",
+        "deepseek4-flash",
+        "deepseek4-pro",
         "v3",
         "r1",
         "grok",
@@ -1645,6 +1647,10 @@ pub async fn prompt_ai(
                 config::AiModel::Google(
                     config::GoogleModel::Gemini3Flash(opts) | config::GoogleModel::Gemini3Pro(opts),
                 ) => &opts.thinking_level,
+                config::AiModel::DeepSeek(
+                    config::DeepSeekModel::DeepSeekV4Flash(opts)
+                    | config::DeepSeekModel::DeepSeekV4Pro(opts),
+                ) => &opts.reasoning_effort,
                 _ => &None,
             };
             let openai_verbosity = match &session.ai {
