@@ -212,6 +212,7 @@ pub async fn send_to_anthropic(
             }
         }
         if temperature_deprecated {
+            // Opus 4.7+ deprecated temperature
             request_obj.remove("temperature");
         }
         if let Some(effort) = use_effort {

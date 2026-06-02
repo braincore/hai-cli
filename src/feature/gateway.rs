@@ -3259,10 +3259,17 @@ async fn handle_perm_http_connection(
                 {
                     drop(perm_request_map_unlocked);
 
-                    // Build existing permissions section
+                    // Build existing permissions section (collapsed by default, shown below requested)
                     let existing_perms = perms.lock().await;
+                    let existing_count = existing_perms.len();
                     let existing_section = if existing_perms.is_empty() {
-                        r#"<div class="existing"><div class="section-label">Existing permissions</div><div class="existing-empty">None granted yet.</div></div>"#.to_string()
+                        r#"<details class="existing">
+                    <summary class="existing-summary">
+                        <span class="existing-summary-label">Existing permissions</span>
+                        <span class="existing-count">0</span>
+                    </summary>
+                    <div class="existing-body"><div class="existing-empty">None granted yet.</div></div>
+                    </details>"#.to_string()
                     } else {
                         let mut items = String::new();
                         for perm in existing_perms.iter() {
@@ -3272,7 +3279,14 @@ async fn handle_perm_http_connection(
                             ));
                         }
                         format!(
-                            r#"<div class="existing"><div class="section-label">Existing permissions</div>{items}</div>"#,
+                            r#"<details class="existing">
+                    <summary class="existing-summary">
+                        <span class="existing-summary-label">Existing permissions</span>
+                        <span class="existing-count">{existing_count}</span>
+                        <span class="existing-chevron">▾</span>
+                    </summary>
+                    <div class="existing-body">{items}</div>
+                    </details>"#,
                         )
                     };
 
@@ -3384,9 +3398,18 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', san
 .btn {{ display: block; width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; margin-top: 32px; }}
 .btn:hover {{ background: var(--accent-hover); }}
 .btn:active {{ transform: scale(0.98); }}
-.existing {{ margin-bottom: 36px; }}
+.existing {{ margin-top: 32px; margin-bottom: 0; }}
 .existing-item {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; opacity: 0.65; }}
 .existing-empty {{ font-size: 13px; color: var(--text2); padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }}
+.existing-summary {{ display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; list-style: none; user-select: none; transition: background 0.15s; }}
+.existing-summary:hover {{ background: var(--surface2); }}
+.existing-summary::-webkit-details-marker {{ display: none; }}
+.existing-summary-label {{ font-size: 13px; font-weight: 500; flex: 1; }}
+.existing-count {{ font-size: 11px; font-weight: 600; background: var(--surface2); color: var(--text2); padding: 2px 8px; border-radius: 10px; min-width: 20px; text-align: center; }}
+.existing-chevron {{ font-size: 20px; color: var(--text2); transition: transform 0.2s; }}
+details[open] .existing-chevron {{ transform: rotate(180deg); }}
+.existing-body {{ margin-top: 6px; }}
+.existing-body .existing-item {{ opacity: 0.65; }}
 .remember {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-top: 16px; cursor: pointer; transition: background 0.15s; }}
 .remember:hover {{ background: var(--surface2); }}
 .remember-info {{ display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }}
@@ -3409,7 +3432,6 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', san
         <h1><span class="app-name">{service_name_escaped}</span> is requesting permissions</h1>
         <p>Toggle off anything you don't want to grant.</p>
     </div>
-    {existing_section}
     <form id="f">
         <input type="hidden" name="csrf_token" value="{csrf_token_escaped}">
         {keyring_section}
@@ -3427,6 +3449,7 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', san
                 <span class="track"><span class="knob"></span></span>
             </div>
         </label>
+        {existing_section}
         <button class="btn" type="submit">Grant selected</button>
     </form>
 </div>
