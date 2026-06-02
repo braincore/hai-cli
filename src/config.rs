@@ -171,7 +171,13 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "opus45" => Some(AiModel::Anthropic(AnthropicModel::Opus45(
             parse_anthropic_opts(opts),
         ))),
-        "opus" | "opus46" => Some(AiModel::Anthropic(AnthropicModel::Opus46(
+        "opus46" => Some(AiModel::Anthropic(AnthropicModel::Opus46(
+            parse_anthropic46_opts(opts),
+        ))),
+        "opus47" => Some(AiModel::Anthropic(AnthropicModel::Opus47(
+            parse_anthropic46_opts(opts),
+        ))),
+        "opus" | "opus48" => Some(AiModel::Anthropic(AnthropicModel::Opus48(
             parse_anthropic46_opts(opts),
         ))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
@@ -458,6 +464,14 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Opus46(opts) => {
                 let base = "opus-4.6".to_string();
+                append_anthropic46_opts(base, opts)
+            }
+            AnthropicModel::Opus47(opts) => {
+                let base = "opus-4.7".to_string();
+                append_anthropic46_opts(base, opts)
+            }
+            AnthropicModel::Opus48(opts) => {
+                let base = "opus-4.8".to_string();
                 append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
@@ -828,6 +842,8 @@ pub enum AnthropicModel {
     Opus41(bool),               // If true, enables thinking
     Opus45(bool),               // If true, enables thinking
     Opus46(Anthropic46Options), // If true, enables thinking
+    Opus47(Anthropic46Options), // If true, enables thinking
+    Opus48(Anthropic46Options), // If true, enables thinking
     Sonnet35,
     Sonnet37(bool),               // If true, enables thinking
     Sonnet4(bool),                // If true, enables thinking
@@ -963,6 +979,8 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Opus41(_) => "claude-opus-4-1-20250805",
             AnthropicModel::Opus45(_) => "claude-opus-4-5-20251101",
             AnthropicModel::Opus46(_) => "claude-opus-4-6",
+            AnthropicModel::Opus47(_) => "claude-opus-4-7",
+            AnthropicModel::Opus48(_) => "claude-opus-4-8",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
@@ -1048,6 +1066,12 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Opus45(true) => "opus-4.5(t)".to_string(),
             AnthropicModel::Opus46(opts) => {
                 format!("opus-4.6{}", get_anthropic46_opts_display(opts))
+            }
+            AnthropicModel::Opus47(opts) => {
+                format!("opus-4.7{}", get_anthropic46_opts_display(opts))
+            }
+            AnthropicModel::Opus48(opts) => {
+                format!("opus-4.8{}", get_anthropic46_opts_display(opts))
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
@@ -1300,6 +1324,8 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Opus41(_)
                     | AnthropicModel::Opus45(_)
                     | AnthropicModel::Opus46(_)
+                    | AnthropicModel::Opus47(_)
+                    | AnthropicModel::Opus48(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
@@ -1369,8 +1395,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Haiku35 => Some((800, 4000)),
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
-            AnthropicModel::Opus45(_) => Some((5000, 25000)),
-            AnthropicModel::Opus46(_) => Some((5000, 25000)),
+            AnthropicModel::Opus45(_)
+            | AnthropicModel::Opus46(_)
+            | AnthropicModel::Opus47(_)
+            | AnthropicModel::Opus48(_) => Some((5000, 25000)),
             AnthropicModel::Sonnet35
             | AnthropicModel::Sonnet37(_)
             | AnthropicModel::Sonnet4(_)

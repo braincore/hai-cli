@@ -564,6 +564,8 @@ async fn repl(
         "opus41",
         "opus45",
         "opus46",
+        "opus47",
+        "opus48",
         "sonnet",
         "sonnet35",
         "sonnet37",
@@ -1757,15 +1759,17 @@ pub async fn prompt_ai(
                 _ => false,
             };
             let use_thinking46 = match anthropic_model {
-                config::AnthropicModel::Opus46(opts) | config::AnthropicModel::Sonnet46(opts) => {
-                    opts.thinking
-                }
+                config::AnthropicModel::Opus46(opts)
+                | config::AnthropicModel::Opus47(opts)
+                | config::AnthropicModel::Opus48(opts)
+                | config::AnthropicModel::Sonnet46(opts) => opts.thinking,
                 _ => None,
             };
             let use_effort = match anthropic_model {
-                config::AnthropicModel::Opus46(opts) | config::AnthropicModel::Sonnet46(opts) => {
-                    opts.effort.as_ref()
-                }
+                config::AnthropicModel::Opus46(opts)
+                | config::AnthropicModel::Opus47(opts)
+                | config::AnthropicModel::Opus48(opts)
+                | config::AnthropicModel::Sonnet46(opts) => opts.effort.as_ref(),
                 _ => None,
             };
             anthropic::send_to_anthropic(
