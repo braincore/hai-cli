@@ -40,11 +40,11 @@ supports all the capabilities (images, tools) utilized in the conversation.
 
 | Provider   | Notable Models (Not Comprehensive)      |
 |------------|-----------------------------------------|
-| OpenAI     | gpt-5.2 (`g52`), gpt-5.2-chat (`g52c`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`), gpt-4.1 (`41`), gpt-4.1-mini (`41m`), gpt-4.1-nano (`41n`) |
+| OpenAI     | gpt-5.5 (`g55`), gpt-5.2-chat (`g52c`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`) |
 |            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
-| Anthropic  | sonnet-4 (`sonnet`), sonnet-4-thinking (`sonnet-thinking`), opus-4 (`opus`), opus-4-thinking (`opus-thinking`), haiku-3.5 (`haiku`) |
-| Google     | gemini-3-pro (`gemini3pro`), gemini-3-flash (`flash3`), gemini-2.5-pro (`gemini25pro`) |
-| DeepSeek   | deepseek-reasoner (`r1`), deepseek-chat (`v3`) |
+| Anthropic  | opus-4.8 (`opus`), opus-4-thinking (`opus-thinking`), sonnet-4.6 (`sonnet`), haiku-3.5 (`haiku`) |
+| Google     | gemini-3.1-pro (`geminipro`), gemini-3.5-flash (`flash`) |
+| DeepSeek   | v4-pro (`ds4p`), v4-flash (`ds4f`) |
 | xAI        | grok-4                                         |
 | Ollama     | gemma3:27b, gpt-oss:20b, llama3.2, llama3.2-vision |
 
