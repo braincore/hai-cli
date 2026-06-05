@@ -498,6 +498,7 @@ async fn repl(
         "/asset-pool-new",
         "/asset-pools",
         "/email",
+        "/notif",
         "/fns",
         "/std",
         "/mcp-add",

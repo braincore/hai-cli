@@ -94,3 +94,48 @@ union EmailRecipientSendError
         :route:`email_recipient/verify`."
     limit_exceeded
         "The active account has sent too many emails to this recipient."
+
+# --
+
+route push_notif/add_device(PushNotifAddDeviceArg, Void, Void)
+    "For devices to report the token to use to push notifications to them."
+
+struct PushNotifAddDeviceArg
+    device_token String(min_length=1)
+    platform PushNotifPlatform
+        union
+            ios Int32(min_value=-1024, max_value=1024)
+                "Optionally set with iOS authorization status value."
+            android
+            web
+    expo_token String(min_length=1)?
+    device_info String?
+        "Optionally set this to something that will help identify the device in
+        the future."
+
+# --
+
+route push_notif/remove_device(PushNotifRemoveDeviceArg, Void, Void)
+    "To unlink a token from a device to disable push notifications."
+
+struct PushNotifRemoveDeviceArg
+    device_token String(min_length=1)
+
+# --
+
+route push_notif/send(PushNotifSendArg, Void, PushNotifSendError)
+    "Send a push notification to self."
+
+    attrs
+        auth = "user"
+
+struct PushNotifSendArg
+    title String(min_length=1, max_length=512)
+        "The title of the push notif."
+    body String(max_length=2048)?
+        "The optional body of the push notif."
+
+union PushNotifSendError
+    no_active_devices
+    limit_exceeded
+        "The active account has sent too many push notifications."

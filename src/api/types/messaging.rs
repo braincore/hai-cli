@@ -861,3 +861,506 @@ impl ::std::fmt::Display for EmailRecipientVerifyError {
         write!(f, "{:?}", *self)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct PushNotifAddDeviceArg {
+    pub device_token: String,
+    pub platform: PushNotifPlatform,
+    pub expo_token: Option<String>,
+    /// Optionally set this to something that will help identify the device in the future.
+    pub device_info: Option<String>,
+}
+
+impl PushNotifAddDeviceArg {
+    pub fn new(device_token: String, platform: PushNotifPlatform) -> Self {
+        PushNotifAddDeviceArg {
+            device_token,
+            platform,
+            expo_token: None,
+            device_info: None,
+        }
+    }
+
+    pub fn with_expo_token(mut self, value: String) -> Self {
+        self.expo_token = Some(value);
+        self
+    }
+
+    pub fn with_device_info(mut self, value: String) -> Self {
+        self.device_info = Some(value);
+        self
+    }
+}
+
+const PUSH_NOTIF_ADD_DEVICE_ARG_FIELDS: &[&str] =
+    &["device_token", "platform", "expo_token", "device_info"];
+impl PushNotifAddDeviceArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<PushNotifAddDeviceArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<PushNotifAddDeviceArg>, V::Error> {
+        let mut field_device_token = None;
+        let mut field_platform = None;
+        let mut field_expo_token = None;
+        let mut field_device_info = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "device_token" => {
+                    if field_device_token.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("device_token"));
+                    }
+                    field_device_token = Some(map.next_value()?);
+                }
+                "platform" => {
+                    if field_platform.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("platform"));
+                    }
+                    field_platform = Some(map.next_value()?);
+                }
+                "expo_token" => {
+                    if field_expo_token.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("expo_token"));
+                    }
+                    field_expo_token = Some(map.next_value()?);
+                }
+                "device_info" => {
+                    if field_device_info.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("device_info"));
+                    }
+                    field_device_info = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = PushNotifAddDeviceArg {
+            device_token: field_device_token
+                .ok_or_else(|| ::serde::de::Error::missing_field("device_token"))?,
+            platform: field_platform
+                .ok_or_else(|| ::serde::de::Error::missing_field("platform"))?,
+            expo_token: field_expo_token.and_then(Option::flatten),
+            device_info: field_device_info.and_then(Option::flatten),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("device_token", &self.device_token)?;
+        s.serialize_field("platform", &self.platform)?;
+        if let Some(val) = &self.expo_token {
+            s.serialize_field("expo_token", val)?;
+        }
+        if let Some(val) = &self.device_info {
+            s.serialize_field("device_info", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for PushNotifAddDeviceArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = PushNotifAddDeviceArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a PushNotifAddDeviceArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                PushNotifAddDeviceArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "PushNotifAddDeviceArg",
+            PUSH_NOTIF_ADD_DEVICE_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for PushNotifAddDeviceArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("PushNotifAddDeviceArg", 4)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum PushNotifPlatform {
+    /// Optionally set with iOS authorization status value.
+    Ios(i32),
+    Android,
+    Web,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for PushNotifPlatform {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = PushNotifPlatform;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a PushNotifPlatform structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "ios" => match map.next_key()? {
+                        Some("ios") => PushNotifPlatform::Ios(map.next_value()?),
+                        None => return Err(de::Error::missing_field("ios")),
+                        _ => return Err(de::Error::unknown_field(tag, VARIANTS)),
+                    },
+                    "android" => PushNotifPlatform::Android,
+                    "web" => PushNotifPlatform::Web,
+                    _ => PushNotifPlatform::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["ios", "android", "web", "other"];
+        deserializer.deserialize_struct("PushNotifPlatform", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for PushNotifPlatform {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            PushNotifPlatform::Ios(ref x) => {
+                // primitive
+                let mut s = serializer.serialize_struct("PushNotifPlatform", 2)?;
+                s.serialize_field(".tag", "ios")?;
+                s.serialize_field("ios", x)?;
+                s.end()
+            }
+            PushNotifPlatform::Android => {
+                // unit
+                let mut s = serializer.serialize_struct("PushNotifPlatform", 1)?;
+                s.serialize_field(".tag", "android")?;
+                s.end()
+            }
+            PushNotifPlatform::Web => {
+                // unit
+                let mut s = serializer.serialize_struct("PushNotifPlatform", 1)?;
+                s.serialize_field(".tag", "web")?;
+                s.end()
+            }
+            PushNotifPlatform::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct PushNotifRemoveDeviceArg {
+    pub device_token: String,
+}
+
+impl PushNotifRemoveDeviceArg {
+    pub fn new(device_token: String) -> Self {
+        PushNotifRemoveDeviceArg { device_token }
+    }
+}
+
+const PUSH_NOTIF_REMOVE_DEVICE_ARG_FIELDS: &[&str] = &["device_token"];
+impl PushNotifRemoveDeviceArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<PushNotifRemoveDeviceArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<PushNotifRemoveDeviceArg>, V::Error> {
+        let mut field_device_token = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "device_token" => {
+                    if field_device_token.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("device_token"));
+                    }
+                    field_device_token = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = PushNotifRemoveDeviceArg {
+            device_token: field_device_token
+                .ok_or_else(|| ::serde::de::Error::missing_field("device_token"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("device_token", &self.device_token)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for PushNotifRemoveDeviceArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = PushNotifRemoveDeviceArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a PushNotifRemoveDeviceArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                PushNotifRemoveDeviceArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "PushNotifRemoveDeviceArg",
+            PUSH_NOTIF_REMOVE_DEVICE_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for PushNotifRemoveDeviceArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("PushNotifRemoveDeviceArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct PushNotifSendArg {
+    /// The title of the push notif.
+    pub title: String,
+    /// The optional body of the push notif.
+    pub body: Option<String>,
+}
+
+impl PushNotifSendArg {
+    pub fn new(title: String) -> Self {
+        PushNotifSendArg { title, body: None }
+    }
+
+    pub fn with_body(mut self, value: String) -> Self {
+        self.body = Some(value);
+        self
+    }
+}
+
+const PUSH_NOTIF_SEND_ARG_FIELDS: &[&str] = &["title", "body"];
+impl PushNotifSendArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<PushNotifSendArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<PushNotifSendArg>, V::Error> {
+        let mut field_title = None;
+        let mut field_body = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "title" => {
+                    if field_title.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("title"));
+                    }
+                    field_title = Some(map.next_value()?);
+                }
+                "body" => {
+                    if field_body.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("body"));
+                    }
+                    field_body = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = PushNotifSendArg {
+            title: field_title.ok_or_else(|| ::serde::de::Error::missing_field("title"))?,
+            body: field_body.and_then(Option::flatten),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("title", &self.title)?;
+        if let Some(val) = &self.body {
+            s.serialize_field("body", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for PushNotifSendArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = PushNotifSendArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a PushNotifSendArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                PushNotifSendArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "PushNotifSendArg",
+            PUSH_NOTIF_SEND_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for PushNotifSendArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("PushNotifSendArg", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum PushNotifSendError {
+    NoActiveDevices,
+    /// The active account has sent too many push notifications.
+    LimitExceeded,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for PushNotifSendError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = PushNotifSendError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a PushNotifSendError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "no_active_devices" => PushNotifSendError::NoActiveDevices,
+                    "limit_exceeded" => PushNotifSendError::LimitExceeded,
+                    _ => PushNotifSendError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["no_active_devices", "limit_exceeded", "other"];
+        deserializer.deserialize_struct("PushNotifSendError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for PushNotifSendError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            PushNotifSendError::NoActiveDevices => {
+                // unit
+                let mut s = serializer.serialize_struct("PushNotifSendError", 1)?;
+                s.serialize_field(".tag", "no_active_devices")?;
+                s.end()
+            }
+            PushNotifSendError::LimitExceeded => {
+                // unit
+                let mut s = serializer.serialize_struct("PushNotifSendError", 1)?;
+                s.serialize_field(".tag", "limit_exceeded")?;
+                s.end()
+            }
+            PushNotifSendError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for PushNotifSendError {}
+
+impl ::std::fmt::Display for PushNotifSendError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            PushNotifSendError::LimitExceeded => {
+                f.write_str("The active account has sent too many push notifications.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}

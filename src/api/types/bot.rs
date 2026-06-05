@@ -409,6 +409,7 @@ impl ::serde::ser::Serialize for BotInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct GetActiveResult {
+    /// Unset if there isn't an active bot machine.
     pub bot: Option<BotInfo>,
 }
 

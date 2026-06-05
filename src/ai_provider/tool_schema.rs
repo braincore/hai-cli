@@ -396,6 +396,8 @@ Assets:
 
 /email <subject><NEWLINE><body> - Send an email to user.
                           - Use a newline after `subject` to specify a multi-line email body.
+/notif <title><NEWLINE><body> - Send a push notification to user.
+                          - Use a newline after `title` to specify a multi-line notification body.
 
 --
 

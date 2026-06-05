@@ -176,6 +176,8 @@ pub enum Cmd {
     ChatSave(ChatSaveCmd),
     /// Send an email
     Email(EmailCmd),
+    /// Send a notification
+    Notif(NotifCmd),
     /// Execute AI-defined function
     FnExec(FnExecCmd),
     /// List all AI-defined functions
@@ -793,6 +795,14 @@ pub struct EmailCmd {
     /// Subject of the email
     pub subject: String,
     /// Body of the email
+    pub body: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NotifCmd {
+    /// Title of the notification
+    pub title: String,
+    /// Body of the notification
     pub body: Option<String>,
 }
 
@@ -2450,6 +2460,19 @@ fn parse_command(
                 Some(subject) => Some(Cmd::Email(EmailCmd { subject, body })),
                 None => {
                     eprintln!("Usage: /email <subject> [<NEWLINE><body>]");
+                    None
+                }
+            }
+        }
+        "notif" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            let (cmd_arg, body) = split_arg_and_optional_body(remaining);
+            match parse_one_arg_catchall(&cmd_arg) {
+                Some(title) => Some(Cmd::Notif(NotifCmd { title, body })),
+                None => {
+                    eprintln!("Usage: /notif <title> [<NEWLINE><body>]");
                     None
                 }
             }

@@ -4504,6 +4504,38 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::Notif(cmd::NotifCmd { title, body }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            use api::types::messaging::{PushNotifSendArg, PushNotifSendError};
+            let msg_res = match api_client
+                .messaging_push_notif_send(PushNotifSendArg { title, body })
+                .await
+            {
+                Ok(_) => "ok".to_string(),
+                Err(e) => {
+                    let err_msg = match e {
+                        RequestError::Route(PushNotifSendError::NoActiveDevices) => {
+                            "error: no registered device; please set up the mobile app".to_string()
+                        }
+                        _ => format!("error: failed to send notification: {}", e),
+                    };
+                    eprintln!("{}", err_msg);
+                    err_msg
+                }
+            };
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &msg_res,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Fns => {
             if session.ai_defined_fns.is_empty() {
                 println!("No AI-defined functions available.");
@@ -5711,6 +5743,15 @@ MCPs (Experimental):
                                    Ex: `/mcp-add git V=1 uvx -q mcp-server-git`
                                    New command is created to invoke with:
                                    `/mcp_<name> <tool_name> <json_arg>`
+
+--
+
+Messaging:
+
+/email <subject><NEWLINE><body>  - Send an email to default address.
+                                   Requires setup with `/task hai/add-email`
+/notif <title><NEWLINE><body>    - Send a push notification to mobile app.
+                                   Requires setup with mobile app.
 
 --
 

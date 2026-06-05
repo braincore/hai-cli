@@ -454,4 +454,12 @@ impl HaiClient {
         self.mk_api_request::<_, _, _>("/messaging/email_recipient/send", &arg)
             .await
     }
+
+    pub async fn messaging_push_notif_send(
+        &self,
+        arg: messaging::PushNotifSendArg,
+    ) -> Result<(), RequestError<messaging::PushNotifSendError>> {
+        self.mk_api_request::<_, _, _>("/messaging/push_notif/send", &arg)
+            .await
+    }
 }

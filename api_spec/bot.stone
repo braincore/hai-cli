@@ -58,8 +58,10 @@ union GetError
 # --
 
 route get_active(Void, GetActiveResult, Void)
+    "Get active bot machine if available."
     attrs
         auth = "user"
 
 struct GetActiveResult
     bot BotInfo?
+        "Unset if there isn't an active bot machine."
