@@ -18,6 +18,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as BASE64};
 pub struct BootArg {
     pub pub_key_id: String,
     pub pub_key: String,
+    /// The version of `hai` to install on the machine.
+    pub hai_version: Option<String>,
 }
 
 impl BootArg {
@@ -25,11 +27,17 @@ impl BootArg {
         BootArg {
             pub_key_id,
             pub_key,
+            hai_version: None,
         }
+    }
+
+    pub fn with_hai_version(mut self, value: String) -> Self {
+        self.hai_version = Some(value);
+        self
     }
 }
 
-const BOOT_ARG_FIELDS: &[&str] = &["pub_key_id", "pub_key"];
+const BOOT_ARG_FIELDS: &[&str] = &["pub_key_id", "pub_key", "hai_version"];
 impl BootArg {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -43,6 +51,7 @@ impl BootArg {
     ) -> Result<Option<BootArg>, V::Error> {
         let mut field_pub_key_id = None;
         let mut field_pub_key = None;
+        let mut field_hai_version = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -59,6 +68,12 @@ impl BootArg {
                     }
                     field_pub_key = Some(map.next_value()?);
                 }
+                "hai_version" => {
+                    if field_hai_version.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("hai_version"));
+                    }
+                    field_hai_version = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -72,6 +87,7 @@ impl BootArg {
             pub_key_id: field_pub_key_id
                 .ok_or_else(|| ::serde::de::Error::missing_field("pub_key_id"))?,
             pub_key: field_pub_key.ok_or_else(|| ::serde::de::Error::missing_field("pub_key"))?,
+            hai_version: field_hai_version.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -83,6 +99,9 @@ impl BootArg {
         use serde::ser::SerializeStruct;
         s.serialize_field("pub_key_id", &self.pub_key_id)?;
         s.serialize_field("pub_key", &self.pub_key)?;
+        if let Some(val) = &self.hai_version {
+            s.serialize_field("hai_version", val)?;
+        }
         Ok(())
     }
 }
@@ -109,7 +128,7 @@ impl ::serde::ser::Serialize for BootArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("BootArg", 2)?;
+        let mut s = serializer.serialize_struct("BootArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

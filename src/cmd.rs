@@ -189,7 +189,7 @@ pub enum Cmd {
     /// Call an MCP tool
     McpToolCall(McpToolCallCmd),
     /// Boot hai bot
-    BotBoot,
+    BotBoot(BotBootCmd),
     /// Get active hai bot info
     BotGetActive,
     /// Probe hai bot
@@ -833,6 +833,11 @@ pub struct McpToolCallCmd {
     pub name: String,
     pub tool_name: String,
     pub json_arg: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct BotBootCmd {
+    pub hai_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2541,7 +2546,9 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            Some(Cmd::BotBoot)
+            Some(Cmd::BotBoot(BotBootCmd {
+                hai_version: parse_one_arg_catchall(remaining),
+            }))
         }
         "bot-get-active" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

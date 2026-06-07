@@ -4738,7 +4738,7 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::BotBoot => {
+        cmd::Cmd::BotBoot(cmd::BotBootCmd { hai_version }) => {
             let username = if let Some(account) = &session.account {
                 account.username.clone()
             } else {
@@ -4768,6 +4768,7 @@ pub async fn process_cmd(
                 .bot_boot(BootArg {
                     pub_key: pub_key.clone(),
                     pub_key_id: key_id.clone(),
+                    hai_version,
                 })
                 .await
             {

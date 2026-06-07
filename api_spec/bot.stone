@@ -9,6 +9,8 @@ route boot(BootArg, BootResult, BootError)
 struct BootArg
     pub_key_id String(min_length=1)
     pub_key String(min_length=1)
+    hai_version String(min_length=1)?
+        "The version of `hai` to install on the machine."
 
 struct BootResult
     bot BotInfo
