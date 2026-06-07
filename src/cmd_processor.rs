@@ -4763,7 +4763,7 @@ pub async fn process_cmd(
                 .lock()
                 .await
                 .push_front(session::CmdInput {
-                    input: "/boot-setup".to_string(),
+                    input: "/bot-setup".to_string(),
                     source: session::CmdSource::Internal,
                     reply_channel: None,
                 });
