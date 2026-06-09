@@ -1,6 +1,6 @@
 [package]
 name = "hai-cli"
-version = "1.26.1"
+version = "2.0.0-beta.1"
 authors = ["Ken Elkabany <ken@elkabany.com>"]
 edition = "2024"
 license-file = "LICENSE"
