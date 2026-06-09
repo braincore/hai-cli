@@ -10,7 +10,7 @@ use std::fs::{File, read_to_string};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use termion::raw::IntoRawMode;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::sync::{Notify, RwLock};
@@ -18,6 +18,66 @@ use zeroize::Zeroizing;
 
 use crate::api::types::asset::AssetEntry;
 use crate::{config, db};
+
+// --
+
+/// RAII guard so raw mode is always disabled, even on early return/panic
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn new() -> std::io::Result<Self> {
+        crossterm::terminal::enable_raw_mode()?;
+        Ok(RawModeGuard)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(unix)]
+fn read_stdin_nonblocking(buf: &mut [u8]) -> std::io::Result<Option<usize>> {
+    use std::io::Read;
+    use std::os::unix::io::AsRawFd;
+
+    let stdin = std::io::stdin();
+    let fd = stdin.as_raw_fd();
+
+    // set O_NONBLOCK
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+
+    let result = stdin.lock().read(buf);
+
+    // restore blocking
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
+
+    match result {
+        Ok(n) => Ok(Some(n)),
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(windows)]
+fn read_stdin_nonblocking(buf: &mut [u8]) -> std::io::Result<Option<usize>> {
+    use std::io::Read;
+    use windows_sys::Win32::System::Console::{
+        GetNumberOfConsoleInputEvents, GetStdHandle, STD_INPUT_HANDLE,
+    };
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    let mut count: u32 = 0;
+    let ok = unsafe { GetNumberOfConsoleInputEvents(handle, &mut count) };
+    if ok == 0 || count == 0 {
+        return Ok(None); // nothing waiting
+    }
+
+    let n = std::io::stdin().lock().read(buf)?;
+    Ok(Some(n))
+}
 
 // --
 
@@ -158,7 +218,7 @@ impl Session {
     ) -> Result<u32, Box<dyn std::error::Error>> {
         let mut channel = self.handle.channel_open_session().await?;
 
-        let (w, h) = termion::terminal_size()?;
+        let (w, h) = crossterm::terminal::size()?;
 
         channel
             .request_pty(
@@ -174,25 +234,13 @@ impl Session {
         channel.exec(true, command).await?;
 
         let code;
-        let mut stdin = tokio_fd::AsyncFd::try_from(0)?;
-        let mut stdout = tokio_fd::AsyncFd::try_from(1)?;
-        let mut buf = vec![0; 1024];
+        let mut stdout = tokio::io::stdout();
         let mut stdin_closed = false;
 
-        let _raw_term = std::io::stdout().into_raw_mode()?;
+        let _raw_term = RawModeGuard::new()?;
 
         loop {
             tokio::select! {
-                r = stdin.read(&mut buf), if !stdin_closed => {
-                    match r {
-                        Ok(0) => {
-                            stdin_closed = true;
-                            channel.eof().await?;
-                        },
-                        Ok(n) => channel.data(&buf[..n]).await?,
-                        Err(e) => return Err(e.into()),
-                    };
-                },
                 Some(msg) = channel.wait() => {
                     match msg {
                         ChannelMsg::Data { ref data } => {
@@ -201,12 +249,24 @@ impl Session {
                         }
                         ChannelMsg::ExitStatus { exit_status } => {
                             code = exit_status;
-                            if !stdin_closed {
-                                channel.eof().await?;
-                            }
+                            if !stdin_closed { channel.eof().await?; }
                             break;
                         }
                         _ => {}
+                    }
+                },
+
+                _ = tokio::time::sleep(Duration::from_millis(5)), if !stdin_closed => {
+                    let mut buf = [0u8; 1024];
+                    match read_stdin_nonblocking(&mut buf)? {
+                        Some(0) => {
+                            stdin_closed = true;
+                            channel.eof().await?;
+                        }
+                        Some(n) => {
+                            channel.data(&buf[..n]).await?;
+                        }
+                        None => {} // nothing waiting, just loop
                     }
                 },
             }
