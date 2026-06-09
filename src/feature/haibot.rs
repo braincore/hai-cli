@@ -450,16 +450,17 @@ async fn kill_process(pid: u32, force: bool) -> Result<(), Box<dyn std::error::E
 
     #[cfg(windows)]
     {
-        let mut args = vec!["/PID", &pid.to_string()];
+        let pid_str = pid.to_string();
+        let mut args = vec!["/PID", pid_str.as_str()];
         if force {
             args.push("/F");
         }
 
-        let output = Command::new("taskkill").args(&args).output()?;
+        let output = Command::new("taskkill").args(&args).output().await?; // <-- added .await
 
         // If graceful failed, try forceful on Windows
         if !output.status.success() && !force {
-            return kill_process(pid, true);
+            return Box::pin(kill_process(pid, true)).await; // <-- added .await
         }
 
         if !output.status.success() {
@@ -513,6 +514,7 @@ async fn is_process_running(pid: u32) -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
     use std::process::{Command, Stdio};
 
@@ -539,7 +541,7 @@ fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
-fn spawn_background(config: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -547,14 +549,10 @@ fn spawn_background(config: Option<String>) -> Result<(), Box<dyn std::error::Er
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
     let exe = std::env::current_exe()?;
-    let log_file = File::create(get_hai_dir().join("bot.log"))?;
+    let log_file = File::create(config::get_bot_log_path())?;
 
     let mut cmd = Command::new(exe);
     cmd.arg("bot").arg("start");
-
-    if let Some(cfg) = config {
-        cmd.arg("-c").arg(cfg);
-    }
 
     let child = cmd
         .stdin(Stdio::null())
