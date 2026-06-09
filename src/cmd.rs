@@ -558,6 +558,8 @@ pub struct AssetRevisionsCmd {
     pub asset_name: String,
     /// Number of revisions to show
     pub count: Option<u32>,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1987,9 +1989,15 @@ fn parse_command(
             }
         }
         "asset-revisions" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_two_arg_one_optional_catchall(remaining) {
                 Some((asset_name, count_str)) => {
                     let count = if let Some(count_str) = count_str {
@@ -1997,16 +2005,24 @@ fn parse_command(
                             Ok(count) => Some(count),
                             Err(_) => {
                                 eprintln!("Usage: /asset-revisions <name> [<count>]");
+                                eprintln!("Options:");
+                                eprintln!("  .n=BOOL   Show line numbers (default: false)");
                                 return None;
                             }
                         }
                     } else {
                         None
                     };
-                    Some(Cmd::AssetRevisions(AssetRevisionsCmd { asset_name, count }))
+                    Some(Cmd::AssetRevisions(AssetRevisionsCmd {
+                        asset_name,
+                        count,
+                        show_line_numbers: n,
+                    }))
                 }
                 None => {
                     eprintln!("Usage: /asset-revisions <name> [<count>]");
+                    eprintln!("Options:");
+                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }

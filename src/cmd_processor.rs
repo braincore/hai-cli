@@ -903,20 +903,11 @@ pub async fn process_cmd(
                             eprintln!("error: could not read file: {:?}: {:?}", file_path, e)
                         }
                         if let Ok(file_contents) = std::str::from_utf8(&buffer) {
-                            let mut file_contents_with_delimeters = format!(
-                                "<<<<<< BEGIN_FILE: {}{} >>>>>>\n{}\n<<<<<< END_FILE: {} >>>>>>",
-                                file_path.to_string_lossy(),
-                                if show_line_numbers {
-                                    " (with line numbers)"
-                                } else {
-                                    ""
-                                },
-                                if show_line_numbers {
-                                    add_line_numbers(file_contents)
-                                } else {
-                                    file_contents.to_string()
-                                },
-                                file_path.to_string_lossy()
+                            let mut file_contents_with_delimeters = add_content_delimiters(
+                                "FILE",
+                                file_contents,
+                                &file_path.to_string_lossy(),
+                                show_line_numbers,
                             );
                             if first_file {
                                 // If this is the first file, inject the /load
@@ -2349,20 +2340,11 @@ pub async fn process_cmd(
 
                         match String::from_utf8(decrypted_asset_contents) {
                             Ok(asset_contents_string) => {
-                                let asset_contents_with_delimeters = format!(
-                                    "<<<<<< BEGIN_ASSET: {}{} >>>>>>\n{}\n<<<<<< END_ASSET: {} >>>>>>",
-                                    asset_name,
-                                    if show_line_numbers {
-                                        " (with line numbers)"
-                                    } else {
-                                        ""
-                                    },
-                                    if show_line_numbers {
-                                        add_line_numbers(&asset_contents_string)
-                                    } else {
-                                        asset_contents_string.clone()
-                                    },
-                                    asset_name,
+                                let asset_contents_with_delimeters = add_content_delimiters(
+                                    "ASSET",
+                                    &asset_contents_string,
+                                    &asset_name,
+                                    show_line_numbers,
                                 );
 
                                 let asset_token_count = session_history_add_user_text_entry(
@@ -2400,136 +2382,22 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd { asset_name, count }) => {
+        cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd {
+            asset_name,
+            count,
+            show_line_numbers,
+        }) => {
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
 
             use crate::api::types::asset::{
-                AssetCreatedBy, AssetEntryOp, AssetMetadataInfo, AssetRevision,
                 AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
             };
 
-            async fn print_revision(
-                asset_blob_cache: Arc<AssetBlobCache>,
-                api_client: &HaiClient,
-                revision: &AssetRevision,
-                session: &mut SessionState,
-                bpe_tokenizer: &tiktoken_rs::CoreBPE,
-                is_task_mode_step: bool,
-            ) {
-                println!("Revision ID: {}", revision.asset.rev_id);
-                if let AssetCreatedBy::User(user) = &revision.asset.created_by {
-                    println!("By: {}", user.username);
-                }
-                println!(
-                    "Op: {}",
-                    match revision.op {
-                        AssetEntryOp::Add => {
-                            "add"
-                        }
-                        AssetEntryOp::Push => {
-                            "push"
-                        }
-                        AssetEntryOp::Delete => {
-                            "delete"
-                        }
-                        AssetEntryOp::Edit => {
-                            "edit"
-                        }
-                        AssetEntryOp::Fork => {
-                            "fork"
-                        }
-                        AssetEntryOp::Metadata => {
-                            "metadata"
-                        }
-                        AssetEntryOp::Move => {
-                            "move"
-                        }
-                        AssetEntryOp::Other => {
-                            "other"
-                        }
-                    }
-                );
-                let md_contents = if let Some(AssetMetadataInfo {
-                    url: Some(metadata_url),
-                    ..
-                }) = revision.metadata.as_ref()
-                    && let Some(md_contents_bin) = asset_reader::get_asset_raw(metadata_url).await
-                {
-                    let md_contents =
-                        std::str::from_utf8(&md_contents_bin).expect("invalid metadata");
-                    println!("Metadata: {}", md_contents);
-                    session_history_add_user_text_entry(
-                        &md_contents,
-                        session,
-                        bpe_tokenizer,
-                        (is_task_mode_step, LogEntryRetentionPolicy::None),
-                    );
-                    Some(md_contents_bin)
-                } else {
-                    None
-                };
-                if let Some(data_url) = revision.asset.url.as_ref()
-                    && let Some(contents_bin) = asset_reader::get_asset_raw(data_url).await
-                {
-                    let decrypted_asset_contents = if let Some(md_contents) = md_contents
-                        && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
-                            &md_contents,
-                            session
-                                .account
-                                .as_ref()
-                                .map(|a| KeyRecipient::User(a.username.clone()))
-                                .as_ref(),
-                        ) {
-                        match asset_crypt::get_symmetric_key_ez(
-                            asset_blob_cache.clone(),
-                            session.asset_keyring.clone(),
-                            &api_client,
-                            &rec_key_info,
-                        )
-                        .await
-                        {
-                            Ok(sym_info) => {
-                                let enc_content =
-                                    crypt::EncryptedContent::from_bytes(&contents_bin).unwrap();
-                                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
-                            }
-                            Err(e) => {
-                                eprintln!("error: failed to get encryption key: {}", e);
-                                return;
-                            }
-                        }
-                    } else {
-                        contents_bin.clone()
-                    };
-                    match std::str::from_utf8(&decrypted_asset_contents) {
-                        Ok(contents) => {
-                            println!("{}", contents);
-                            session_history_add_user_text_entry(
-                                contents,
-                                session,
-                                bpe_tokenizer,
-                                (is_task_mode_step, LogEntryRetentionPolicy::None),
-                            );
-                        }
-                        Err(_) => {
-                            let msg = format!("[binary data: {} bytes]", contents_bin.len());
-                            println!("{}", msg);
-                            session_history_add_user_text_entry(
-                                &msg,
-                                session,
-                                bpe_tokenizer,
-                                (is_task_mode_step, LogEntryRetentionPolicy::None),
-                            );
-                        }
-                    };
-                }
-                println!();
-            }
             let mut remaining = count;
             let mut revision_cursor = match api_client
                 .asset_revision_iter(AssetRevisionIterArg {
-                    entry_ref: EntryRef::Name(asset_name),
+                    entry_ref: EntryRef::Name(asset_name.clone()),
                     limit: 1,
                     direction: RevisionIterDirection::Older,
                 })
@@ -2551,6 +2419,8 @@ pub async fn process_cmd(
                         print_revision(
                             asset_blob_cache.clone(),
                             &api_client,
+                            &asset_name,
+                            show_line_numbers,
                             &revision,
                             session,
                             bpe_tokenizer,
@@ -2608,6 +2478,8 @@ pub async fn process_cmd(
                                 print_revision(
                                     asset_blob_cache.clone(),
                                     &api_client,
+                                    &asset_name,
+                                    show_line_numbers,
                                     &revision,
                                     session,
                                     bpe_tokenizer,
@@ -3546,7 +3418,7 @@ pub async fn process_cmd(
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
 
-            use api::types::asset::{AssetRevision, AssetRevisionGetArg, EntryRef};
+            use api::types::asset::{AssetRevisionGetArg, EntryRef};
             let revision_get_res = match api_client
                 .asset_revision_get(AssetRevisionGetArg {
                     entry_ref: EntryRef::Name(asset_name.to_string()),
@@ -3610,57 +3482,10 @@ pub async fn process_cmd(
                         .push((metadata_temp_file, is_task_mode_step));
                 }
             }
-            fn format_revision(revision: &AssetRevision) -> String {
-                let mut output = String::new();
-
-                // Operation
-                let op_str = match revision.op {
-                    AssetEntryOp::Add => "Add",
-                    AssetEntryOp::Fork => "Fork",
-                    AssetEntryOp::Edit => "Edit",
-                    AssetEntryOp::Push => "Push",
-                    AssetEntryOp::Delete => "Delete",
-                    AssetEntryOp::Metadata => "Metadata",
-                    AssetEntryOp::Move => "Move",
-                    AssetEntryOp::Other => "Other",
-                };
-                output.push_str(&format!("Operation: {}\n", op_str));
-
-                // Asset Info
-                output.push_str("\nAsset:\n");
-                output.push_str(&format!("  Rev ID:     {}\n", revision.asset.rev_id));
-                output.push_str(&format!("  Created By: {:?}\n", revision.asset.created_by));
-                output.push_str(&format!("  Size:       {} bytes\n", revision.asset.size));
-                if let Some(hash) = &revision.asset.hash {
-                    output.push_str(&format!("  Hash:       {}\n", hash));
-                }
-
-                // Metadata Info (if present)
-                if let Some(metadata) = &revision.metadata {
-                    output.push_str("\nMetadata:\n");
-                    output.push_str(&format!("  Rev ID:     {}\n", metadata.rev_id));
-                    output.push_str(&format!("  Created By: {:?}\n", metadata.created_by));
-                    output.push_str(&format!("  Size:       {} bytes\n", metadata.size));
-                    if let Some(hash) = &metadata.hash {
-                        output.push_str(&format!("  Hash:       {}\n", hash));
-                    }
-                    if let Some(title) = &metadata.title {
-                        output.push_str(&format!("  Title:      {}\n", title));
-                    }
-                    if let Some(content_type) = &metadata.content_type {
-                        output.push_str(&format!("  Content Type: {}\n", content_type));
-                    }
-                    if let Some(encrypted) = &metadata.content_encrypted {
-                        output.push_str(&format!("  Encrypted:  {:?}\n", encrypted));
-                    }
-                }
-
-                output
-            }
-
-            let msg = format!("Revision: {}", format_revision(&revision_get_res.revision));
-            println!("{}", msg);
-            all_msgs.push(msg);
+            let revision_header = mk_revision_header(&revision_get_res.revision);
+            println!("\n{}", revision_header);
+            all_msgs.push("".to_string());
+            all_msgs.push(revision_header);
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
                 &all_msgs.join("\n"),
@@ -6157,4 +5982,182 @@ fn add_line_numbers(file_contents: &str) -> String {
         .map(|(i, line)| format!("{:>width$} | {}", i + 1, line))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// --
+
+/// Adds delimiters around content to clearly indicate the source and
+/// boundaries of the content to LLMs.
+fn add_content_delimiters(
+    source_type: &str,
+    contents: &str,
+    path: &str,
+    show_line_numbers: bool,
+) -> String {
+    format!(
+        "<<<<<< BEGIN_{}: {}{} >>>>>>\n{}\n<<<<<< END_{}: {} >>>>>>",
+        source_type.to_uppercase(),
+        path,
+        if show_line_numbers {
+            " (with line numbers)"
+        } else {
+            ""
+        },
+        if show_line_numbers {
+            add_line_numbers(contents)
+        } else {
+            contents.to_string()
+        },
+        source_type.to_uppercase(),
+        path,
+    )
+}
+
+// --
+
+fn mk_revision_header(revision: &crate::api::types::asset::AssetRevision) -> String {
+    let mut output = vec![format!("Revision ID: {}", revision.asset.rev_id)];
+
+    // Operation
+    let op_str = match revision.op {
+        AssetEntryOp::Add => "add",
+        AssetEntryOp::Push => "push",
+        AssetEntryOp::Delete => "delete",
+        AssetEntryOp::Edit => "edit",
+        AssetEntryOp::Fork => "fork",
+        AssetEntryOp::Metadata => "metadata",
+        AssetEntryOp::Move => "move",
+        AssetEntryOp::Other => "other",
+    };
+    output.push(format!("Operation: {}", op_str));
+
+    // Asset info
+    output.push("\nAsset info:".to_string());
+    output.push(format!("  Rev ID:     {}", revision.asset.rev_id));
+    output.push(format!("  Created By: {:?}", revision.asset.created_by));
+    output.push(format!("  Size:       {} bytes", revision.asset.size));
+    if let Some(hash) = &revision.asset.hash {
+        output.push(format!("  Hash:       {}", hash));
+    }
+
+    // Metadata info (if present)
+    if let Some(metadata) = &revision.metadata {
+        output.push("\nMetadata info:".to_string());
+        output.push(format!("  Rev ID:     {}", metadata.rev_id));
+        output.push(format!("  Created By: {:?}", metadata.created_by));
+        output.push(format!("  Size:       {} bytes", metadata.size));
+        if let Some(hash) = &metadata.hash {
+            output.push(format!("  Hash:       {}", hash));
+        }
+        if let Some(title) = &metadata.title {
+            output.push(format!("  Title:      {}", title));
+        }
+        if let Some(content_type) = &metadata.content_type {
+            output.push(format!("  Content Type: {}", content_type));
+        }
+        if let Some(encrypted) = &metadata.content_encrypted {
+            output.push(format!("  Encrypted:  {:?}", encrypted));
+        }
+    }
+    output.join("\n")
+}
+
+async fn print_revision(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    asset_name: &str,
+    show_line_numbers: bool,
+    revision: &crate::api::types::asset::AssetRevision,
+    session: &mut SessionState,
+    bpe_tokenizer: &tiktoken_rs::CoreBPE,
+    is_task_mode_step: bool,
+) {
+    let mut revision_header = mk_revision_header(revision);
+    let md_contents = if let Some(crate::api::types::asset::AssetMetadataInfo {
+        url: Some(metadata_url),
+        ..
+    }) = revision.metadata.as_ref()
+        && let Some(md_contents_bin) = asset_reader::get_asset_raw(metadata_url).await
+    {
+        let md_contents = std::str::from_utf8(&md_contents_bin).expect("invalid metadata");
+        let md_json: serde_json::Value =
+            serde_json::from_str(md_contents).unwrap_or_else(|_| serde_json::json!(md_contents));
+        let md_formatted = serde_json::to_string_pretty(&md_json).expect("json format");
+        revision_header = format!("{}\n\nMetadata: {}", revision_header, md_formatted);
+        Some(md_contents_bin)
+    } else {
+        None
+    };
+    println!("{}\n", revision_header);
+    session_history_add_user_text_entry(
+        &revision_header,
+        session,
+        bpe_tokenizer,
+        (is_task_mode_step, LogEntryRetentionPolicy::None),
+    );
+    if let Some(data_url) = revision.asset.url.as_ref()
+        && let Some(contents_bin) = asset_reader::get_asset_raw(data_url).await
+    {
+        let decrypted_asset_contents = if let Some(md_contents) = md_contents
+            && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
+                &md_contents,
+                session
+                    .account
+                    .as_ref()
+                    .map(|a| KeyRecipient::User(a.username.clone()))
+                    .as_ref(),
+            ) {
+            match asset_crypt::get_symmetric_key_ez(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &rec_key_info,
+            )
+            .await
+            {
+                Ok(sym_info) => {
+                    let enc_content = crypt::EncryptedContent::from_bytes(&contents_bin).unwrap();
+                    crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
+                }
+                Err(e) => {
+                    eprintln!("error: failed to get encryption key: {}", e);
+                    return;
+                }
+            }
+        } else {
+            contents_bin.clone()
+        };
+        match std::str::from_utf8(&decrypted_asset_contents) {
+            Ok(contents) => {
+                if show_line_numbers {
+                    println!("{}", add_line_numbers(contents));
+                } else {
+                    println!("{}", contents);
+                }
+                let contents_with_delimiters = add_content_delimiters(
+                    "REVISION",
+                    contents,
+                    &format!("{}@{}", asset_name, revision.asset.rev_id),
+                    show_line_numbers,
+                );
+                session_history_add_user_text_entry(
+                    &contents_with_delimiters,
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
+            }
+            Err(_) => {
+                let msg = format!("[binary data: {} bytes]", contents_bin.len());
+                println!("{}", msg);
+                session_history_add_user_text_entry(
+                    &msg,
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
+            }
+        };
+    }
+    println!();
 }
