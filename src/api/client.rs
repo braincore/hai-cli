@@ -300,17 +300,8 @@ impl HaiClient {
     pub async fn asset_entry_acl_set(
         &self,
         arg: asset::AssetEntryAclSetArg,
-    ) -> Result<asset::AssetEntryAcl, RequestError<asset::AssetEntryAclSetError>> {
+    ) -> Result<asset::AssetEntryAclSetResult, RequestError<asset::AssetEntryAclSetError>> {
         self.mk_api_request::<_, _, _>("/asset/entry/acl/set", &arg)
-            .await
-    }
-
-    #[allow(dead_code)]
-    pub async fn asset_entry_acl_get(
-        &self,
-        arg: asset::AssetEntryAclGetArg,
-    ) -> Result<asset::AssetEntryAcl, RequestError<asset::AssetEntryAclGetError>> {
-        self.mk_api_request::<_, _, _>("/asset/entry/acl/get", &arg)
             .await
     }
 

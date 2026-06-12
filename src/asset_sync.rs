@@ -408,10 +408,13 @@ pub async fn sync_down(
         return Ok(());
     }
 
-    // Filter out any .haisync entries from the server
     entries.retain(|entry| {
+        // Filter out any .haisync entries from the server
         !entry.name.ends_with(HAISYNC_FILENAME)
             && !entry.name.contains(&format!("/{}", HAISYNC_FILENAME))
+            // HEP 63: Filter out entries with redactions since their entries
+            // are incomplete.
+            && entry.redactions.is_some()
     });
 
     println!("Syncing {} entries...", entries.len());
