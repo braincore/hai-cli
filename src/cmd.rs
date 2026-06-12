@@ -132,8 +132,10 @@ pub enum Cmd {
     AssetSyncDown(AssetSyncDownCmd),
     /// Syncs assets up to the cloud
     AssetSyncUp(AssetSyncUpCmd),
-    /// Grant permission to an asset
-    AssetAcl(AssetAclCmd),
+    /// Get ACL for an asset
+    AssetAclGet(AssetAclGetCmd),
+    /// Set ACL for an asset
+    AssetAclSet(AssetAclSetCmd),
     /// Get metadata for asset
     AssetMdGet(AssetMdGetCmd),
     /// Set metadata for asset
@@ -653,27 +655,42 @@ pub struct AssetRevisionTempCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct AssetAclGetCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum AssetAcePrincipal {
+    Everyone,
+    User(String),
+}
+
+#[derive(Clone, Debug)]
 pub enum AssetAcePermission {
     ReadData,
     ReadRevisions,
+    WriteData,
     PushData,
 }
 
 #[derive(Clone, Debug)]
-pub enum AssetAceType {
+pub enum AssetAceEffect {
     Allow,
     Deny,
-    Default,
+    Inherit,
 }
 
 #[derive(Clone, Debug)]
-pub struct AssetAclCmd {
+pub struct AssetAclSetCmd {
     /// Name of the asset
     pub asset_name: String,
+    /// Principal
+    pub ace_principal: AssetAcePrincipal,
     /// Permission to grant
     pub ace_permission: AssetAcePermission,
     /// Permission to grant
-    pub ace_type: AssetAceType,
+    pub ace_effect: AssetAceEffect,
 }
 
 #[derive(Clone, Debug)]
@@ -2209,35 +2226,74 @@ fn parse_command(
                 }
             }
         }
-        "asset-acl" => {
+        "asset-acl-get" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
-            match parse_two_arg_catchall(remaining) {
-                Some((asset_name, acl_cmd)) => {
-                    if let Some((ace_type, ace_perm)) = acl_cmd.split_once(":") {
-                        let asset_ace_type = match ace_type {
-                            "allow" => AssetAceType::Allow,
-                            "deny" => AssetAceType::Deny,
-                            "default" => AssetAceType::Default,
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetAclGet(AssetAclGetCmd { asset_name })),
+                None => {
+                    eprintln!("Usage: /asset-acl-get <name>");
+                    None
+                }
+            }
+        }
+        "asset-acl-set" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_three_arg_catchall(remaining) {
+                Some((asset_name, principal_raw, acl_cmd)) => {
+                    let asset_ace_principal = if principal_raw == "everyone" {
+                        AssetAcePrincipal::Everyone
+                    } else if let Some((kind, username)) = principal_raw.split_once(":") {
+                        match kind.trim() {
+                            "user" => {
+                                let username = username.trim();
+                                if username.is_empty() {
+                                    eprintln!(
+                                        "error: user principal requires a username: try `user:<username>`"
+                                    );
+                                    return None;
+                                }
+                                AssetAcePrincipal::User(username.to_string())
+                            }
                             _ => {
-                                eprintln!("error: unknown type: try allow, deny, default");
+                                eprintln!(
+                                    "error: unknown principal: try `everyone` or `user:<username>`"
+                                );
+                                return None;
+                            }
+                        }
+                    } else {
+                        eprintln!("error: unknown principal: try `everyone` or `user:<username>`");
+                        return None;
+                    };
+                    if let Some((ace_effect_raw, ace_perm_raw)) = acl_cmd.split_once(":") {
+                        let asset_ace_effect = match ace_effect_raw {
+                            "allow" => AssetAceEffect::Allow,
+                            "deny" => AssetAceEffect::Deny,
+                            "inherit" => AssetAceEffect::Inherit,
+                            _ => {
+                                eprintln!("error: unknown type: try allow, deny, inherit");
                                 return None;
                             }
                         };
-                        let asset_ace_perm = match ace_perm {
+                        let asset_ace_perm = match ace_perm_raw {
                             "read-data" => AssetAcePermission::ReadData,
                             "read-revisions" => AssetAcePermission::ReadRevisions,
+                            "write-data" => AssetAcePermission::WriteData,
                             "push-data" => AssetAcePermission::PushData,
                             _ => {
                                 eprintln!("error: unknown permission");
                                 return None;
                             }
                         };
-                        Some(Cmd::AssetAcl(AssetAclCmd {
+                        Some(Cmd::AssetAclSet(AssetAclSetCmd {
                             asset_name,
+                            ace_principal: asset_ace_principal,
                             ace_permission: asset_ace_perm,
-                            ace_type: asset_ace_type,
+                            ace_effect: asset_ace_effect,
                         }))
                     } else {
                         eprintln!("error: bad format: try `allow:read-data`");
@@ -2245,7 +2301,9 @@ fn parse_command(
                     }
                 }
                 None => {
-                    eprintln!("Usage: /asset-acl <asset_name> <allow|deny|default>:<acl>");
+                    eprintln!(
+                        "Usage: /asset-acl-set <asset_name> <principal> <allow|deny|inherit>:<acl>"
+                    );
                     None
                 }
             }

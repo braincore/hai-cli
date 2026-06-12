@@ -3495,10 +3495,44 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetAcl(cmd::AssetAclCmd {
+        cmd::Cmd::AssetAclGet(cmd::AssetAclGetCmd { asset_name }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+            use api::types::asset::AssetGetArg;
+            let output = match api_client
+                .asset_get(AssetGetArg {
+                    name: asset_name.to_owned(),
+                })
+                .await
+            {
+                Ok(res) => {
+                    let output = format_asset_acl(&res.entry.asset, None);
+                    println!("{}", output);
+                    output
+                }
+                Err(err) => {
+                    eprintln!("error: {}", err);
+                    err.to_string()
+                }
+            };
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &output,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAclSet(cmd::AssetAclSetCmd {
             asset_name,
+            ace_principal,
             ace_permission,
-            ace_type,
+            ace_effect,
         }) => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
@@ -3506,17 +3540,26 @@ pub async fn process_cmd(
             }
             let asset_name = resolve_asset_name(&asset_name, session);
             let api_client = mk_api_client(Some(session));
-            let api_ace_type = match ace_type {
-                cmd::AssetAceType::Allow => AceType::Allow,
-                cmd::AssetAceType::Deny => AceType::Deny,
-                cmd::AssetAceType::Default => AceType::Default,
+            use api::types::asset::{
+                AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
             };
-            use api::types::asset::{AceType, AssetEntryAclSetArg, EntryRef};
+            let api_ace_principal = match ace_principal {
+                cmd::AssetAcePrincipal::User(ref username) => {
+                    AssetAcePrincipal::User(username.clone())
+                }
+                cmd::AssetAcePrincipal::Everyone => AssetAcePrincipal::Everyone,
+            };
+            let api_ace_effect = match ace_effect {
+                cmd::AssetAceEffect::Allow => AceEffectSet::Allow,
+                cmd::AssetAceEffect::Deny => AceEffectSet::Deny,
+                cmd::AssetAceEffect::Inherit => AceEffectSet::Inherit,
+            };
             let _ = api_client
                 .asset_entry_acl_set(AssetEntryAclSetArg {
                     entry_ref: EntryRef::Name(asset_name.to_owned()),
+                    principal: api_ace_principal,
                     read_data: if matches!(ace_permission, cmd::AssetAcePermission::ReadData) {
-                        Some(api_ace_type.clone())
+                        Some(api_ace_effect.clone())
                     } else {
                         None
                     },
@@ -3524,12 +3567,17 @@ pub async fn process_cmd(
                         ace_permission,
                         cmd::AssetAcePermission::ReadRevisions
                     ) {
-                        Some(api_ace_type.clone())
+                        Some(api_ace_effect.clone())
+                    } else {
+                        None
+                    },
+                    write_data: if matches!(ace_permission, cmd::AssetAcePermission::WriteData) {
+                        Some(api_ace_effect.clone())
                     } else {
                         None
                     },
                     push_data: if matches!(ace_permission, cmd::AssetAcePermission::PushData) {
-                        Some(api_ace_type.clone())
+                        Some(api_ace_effect.clone())
                     } else {
                         None
                     },
@@ -5523,10 +5571,6 @@ Assets (Experimental):
 /asset-listen <name> [<cursor>]  - Blocks until a change to an asset. On a change, prints out
                                    information about the asset. If cursor is set, begins listening
                                    at that specific revision to ensure no changes are missed.
-/asset-acl <name> <ace>          - Changes ACL on an asset
-                                   `ace` is formatted as `type:permission`
-                                   type: allow, deny, default
-                                   permission: read-data, read-revisions, push-data
 /asset-push <name>               - Push data into an asset. See pushed data w/ `/asset-revisions`
 /asset-import <n> <p>            - Imports local <path> into asset with <name>
 /asset-export <n> <p>            - Exports asset with name to local <path>
@@ -5538,6 +5582,13 @@ Assets (Experimental):
 /asset-remove <name>             - Removes an asset
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>
+/asset-acl-get <name>            - List ACL on an asset
+/asset-acl-set <name> <principal> <ace>
+                                 - Change ACL on an asset
+                                   `principal` can be `everyone` or `user:<username>`
+                                   `ace` is formatted as `<effect>:<permission>`
+                                   effect: allow, deny, inherit
+                                   permission: read-data, read-revisions, push-data
 /asset-md-get <name>             - Get the metadata of an asset
 /asset-md-set <name> <md>        - Set metadata for an asset. Must be a JSON object.
 /asset-md-set-key <name> <k> <v> - Set key to JSON value.
@@ -6027,6 +6078,7 @@ fn mk_revision_header(revision: &crate::api::types::asset::AssetRevision) -> Str
         AssetEntryOp::Fork => "fork",
         AssetEntryOp::Metadata => "metadata",
         AssetEntryOp::Move => "move",
+        AssetEntryOp::Acl => "acl",
         AssetEntryOp::Other => "other",
     };
     output.push(format!("Operation: {}", op_str));
@@ -6039,6 +6091,8 @@ fn mk_revision_header(revision: &crate::api::types::asset::AssetRevision) -> Str
     if let Some(hash) = &revision.asset.hash {
         output.push(format!("  Hash:       {}", hash));
     }
+
+    output.push(format_asset_acl(&revision.asset, Some("  ACL:        ")));
 
     // Metadata info (if present)
     if let Some(metadata) = &revision.metadata {
@@ -6160,4 +6214,34 @@ async fn print_revision(
         };
     }
     println!();
+}
+
+fn format_asset_acl(asset: &crate::api::types::asset::AssetInfo, prefix: Option<&str>) -> String {
+    let mut output_lines = Vec::new();
+    asset.acl.iter().for_each(|ace| {
+        let line = format!(
+            "{}Principal: {}, read-data: {}, read-revisions: {}, write-data: {}, push-data: {}",
+            prefix.unwrap_or(""),
+            match ace.principal {
+                api::types::asset::AssetAcePrincipal::User(ref username) =>
+                    format!("User:{}", username.clone()),
+                api::types::asset::AssetAcePrincipal::Everyone => "Everyone".to_string(),
+                _ => return,
+            },
+            ace.read_data
+                .as_ref()
+                .map_or("Inherit".to_string(), |effect| format!("{:?}", effect)),
+            ace.read_revisions
+                .as_ref()
+                .map_or("Inherit".to_string(), |effect| format!("{:?}", effect)),
+            ace.write_data
+                .as_ref()
+                .map_or("Inherit".to_string(), |effect| format!("{:?}", effect)),
+            ace.push_data
+                .as_ref()
+                .map_or("Inherit".to_string(), |effect| format!("{:?}", effect)),
+        );
+        output_lines.push(line);
+    });
+    output_lines.join("\n")
 }

@@ -29,7 +29,12 @@ struct AssetEntry
     metadata AssetMetadataInfo?
     total_size UInt64
         "The total size of all revisions of a given asset and metadata. This is
-        important because a user's quota is based on the sum of all revisions."
+        important because a user's quota is based on the sum of all revisions.
+        Access-restricted assets have a size of 0."
+    redactions AssetRedactions?
+        "Set if any fields in this entry were redacted due to access
+        restrictions. Entries with redactions should not be cached, and missing
+        or zero values may reflect restricted access rather than actual state."
 
 struct AssetInfo
     rev_id String(min_length=1)
@@ -37,27 +42,34 @@ struct AssetInfo
     size UInt64
         "Number of bytes. Deleted assets have a size of 0."
     hash String?
-        "SHA-256 hash of the content. Unset if it's a deletion."
+        "SHA-256 hash of the content. Unset for deletions or when access is
+        restricted."
     url String?
-        "A url to the asset data that expires in 24 hours. Unset if it's a
-        deletion."
+        "A url to the asset data that expires in 24 hours. Unset for deletions
+        or when access is restricted."
+    acl List(AssetAce)
+        "Some access control entries may be omitted if access is restricted."
 
 union AssetCreatedBy
     # Only one variant. In anticipation of assets by system operations.
     user AssetCreatedByUser
         struct
             username String(min_length=1)
+    redacted
+        "Set when access is restricted."
 
 struct AssetMetadataInfo
     rev_id String(min_length=1)
     created_by AssetCreatedBy
     size UInt64
-        "Number of bytes. Deleted assets have a size of 0."
+        "Number of bytes. Deleted and access-restricted assets have a size of
+        0."
     hash String?
-        "SHA-256 hash of the content. Unset if it's a deletion."
+        "SHA-256 hash of the content. Unset for deletions or when access is
+        restricted."
     url String?
-        "A url to the asset data that expires in 24 hours. Unset if it's a
-        deletion."
+        "A url to the asset data that expires in 24 hours. Unset for deletions
+        or when access is restricted."
     title String?
         "If the metadata specified a `title` key with string value, this is a
         reproduction of it truncated to 64-chars."
@@ -68,6 +80,9 @@ struct AssetMetadataInfo
         "Set if the metadata specified an `encrypted` key."
         struct
             "Empty placeholder for future proofing."
+
+struct AssetRedactions
+    content Boolean
 
 union AssetPutError
     bad_name
@@ -91,6 +106,8 @@ union AssetEntryOp
     metadata
         "Metadata for asset was added, modified, or removed."
     move
+    acl
+        "Asset ACL was changed."
 
 # --
 
@@ -435,43 +452,57 @@ struct AssetPushTextArg
 
 # --
 
-route entry/acl/set(AssetEntryAclSetArg, AssetEntryAcl, AssetEntryAclSetError)
-    "For now, this applies to the `everyone` implicit group and overrides the
-    asset-pool permission."
-
-union AceType
-    "Access Control Entry (ACE)"
+union AceEffect
     allow
     deny
-    default
+
+union AceEffectSet
+    "For setting an ace effect"
+    allow
+    deny
+    inherit
+        "Fall back to the asset-pool permission for this principal."
+
+union AssetAcePrincipal
+    everyone
+    user String
+        "Set to the user's username."
+
+struct AssetAce
+    "A single Access Control Entry: the permissions granted to one principal."
+
+    principal AssetAcePrincipal
+        "Who the ACE applies to."
+    read_data AceEffect?
+        "Unset if permission is inherited."
+    read_revisions AceEffect?
+        "Unset if permission is inherited."
+    write_data AceEffect?
+        "Unset if permission is inherited."
+    push_data AceEffect?
+        "Unset if permission is inherited."
+
+route entry/acl/set(AssetEntryAclSetArg, AssetEntryAclSetResult, AssetEntryAclSetError)
+    "Sets the ACL on a specific asset entry which are distinct from asset-pool
+    permissions. Asset ACLs take precedence over asset-pool permissions.
+
+    Asset ACLs are viewable in :field:`AssetInfo.acl`"
 
 struct AssetEntryAclSetArg
     entry_ref EntryRef
-    read_data AceType?
-    push_data AceType?
-    read_revisions AceType?
+    principal AssetAcePrincipal
+    read_data AceEffectSet?
+    read_revisions AceEffectSet?
+    write_data AceEffectSet?
+    push_data AceEffectSet?
 
 union AssetEntryAclSetError
     bad_entry_ref
     no_permission
+    bad_principal
 
-struct AssetEntryAcl
-    read_data AceType
-    push_data AceType
-    read_revisions AceType
-
-# --
-
-route entry/acl/get(AssetEntryAclGetArg, AssetEntryAcl, AssetEntryAclGetError)
-    "Gets the acl associated with an asset. The acl specifies overrides of the
-    asset-pool permission."
-
-struct AssetEntryAclGetArg
-    entry_ref EntryRef
-
-union AssetEntryAclGetError
-    bad_entry_ref
-    no_permission
+struct AssetEntryAclSetResult
+    entry AssetEntry
 
 # --
 

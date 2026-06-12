@@ -387,6 +387,13 @@ Assets:
 /asset-remove <name>    - Removes an asset
 /asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst> - Copies an asset from <src> to <dst>
+/asset-acl-get <name> - List ACL on an asset
+/asset-acl-set <name> <principal> <ace>
+                      - Change ACL on an asset
+                        `principal` can be `everyone` or `user:<username>`
+                        `ace` is formatted as `<effect>:<permission>`
+                        effect: allow, deny, inherit
+                        permission: read-data, read-revisions, push-data
 /asset-md-get <name>    - Get the JSON-object metadata of an asset
 /asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object
 /asset-md-set-key <name> <k> <v> - Set key to JSON value
