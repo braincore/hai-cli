@@ -128,6 +128,7 @@ pub async fn get_asset_and_metadata(
 pub enum GetRevisionError {
     BadEntryRef,
     BadRevId,
+    NoPermission,
     Deleted,
     DataFetchFailed,
 }
@@ -165,7 +166,7 @@ pub async fn get_asset_and_metadata_revision(
             }
             RequestError::Route(e) => match e {
                 AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
-                AssetRevisionGetError::NoPermission => Err(GetRevisionError::BadEntryRef),
+                AssetRevisionGetError::NoPermission => Err(GetRevisionError::NoPermission),
                 AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
                 _ => Err(GetRevisionError::DataFetchFailed),
             },

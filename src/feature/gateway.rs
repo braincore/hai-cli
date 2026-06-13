@@ -1510,6 +1510,7 @@ async fn handle_get(
                 }
                 Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
                 Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
+                Err(GetRevisionError::NoPermission) => return HttpResponse::forbidden(),
                 Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
                 Err(GetRevisionError::DataFetchFailed) => {
                     return HttpResponse::bad_request("Invalid URL encoding");
