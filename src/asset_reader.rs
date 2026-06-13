@@ -705,19 +705,28 @@ pub type AssetExtendedFetchMap = HashMap<String, Result<AssetFetchResult, GetAss
 /// A tuple containing:
 /// - A map of asset names to their data and optional metadata
 /// - A map of glob patterns to their expanded asset names (for callers that need this info)
+/// - A list of asset names that were skipped due to content restrictions.
 pub async fn fetch_assets_from_names_in_memory_extended(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_names_or_globs: &[String],
     max_concurrent_downloads: usize,
     download_metadata: bool,
-) -> Result<(AssetExtendedFetchMap, HashMap<String, Vec<String>>), String> {
+) -> Result<
+    (
+        AssetExtendedFetchMap,
+        HashMap<String, Vec<String>>,
+        Vec<String>,
+    ),
+    String,
+> {
     // Track expanded globs for caller reference
     let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
 
     // Collect unique assets to process
     let mut seen_assets: HashSet<String> = HashSet::new();
     let mut assets_to_fetch: Vec<AssetEntry> = Vec::new();
+    let mut assets_skipped_content_restrictions = Vec::new();
 
     let mut asset_fetch_failures = Vec::new();
 
@@ -733,10 +742,15 @@ pub async fn fetch_assets_from_names_in_memory_extended(
 
             // Queue each matched asset for download
             for matched_asset_entry in &matched_asset_entries {
-                if !seen_assets.contains(&matched_asset_entry.name) {
-                    seen_assets.insert(matched_asset_entry.name.clone());
-                    assets_to_fetch.push(matched_asset_entry.clone());
+                if seen_assets.contains(&matched_asset_entry.name) {
+                    continue;
                 }
+                if matched_asset_entry.redactions.is_some() {
+                    assets_skipped_content_restrictions.push(matched_asset_entry.name.clone());
+                    continue;
+                }
+                seen_assets.insert(matched_asset_entry.name.clone());
+                assets_to_fetch.push(matched_asset_entry.clone());
             }
 
             expanded_globs.insert(
@@ -751,7 +765,13 @@ pub async fn fetch_assets_from_names_in_memory_extended(
             if !seen_assets.contains(asset_ref) {
                 seen_assets.insert(asset_ref.clone());
                 match get_asset_entry(api_client, asset_ref, false).await {
-                    Ok(get_res) => assets_to_fetch.push(get_res.entry),
+                    Ok(get_res) => {
+                        if get_res.entry.redactions.is_some() {
+                            assets_skipped_content_restrictions.push(get_res.entry.name.clone());
+                        } else {
+                            assets_to_fetch.push(get_res.entry);
+                        }
+                    }
                     Err(e) => {
                         asset_fetch_failures.push((asset_ref.clone(), e));
                     }
@@ -785,7 +805,11 @@ pub async fn fetch_assets_from_names_in_memory_extended(
         asset_final_map.insert(asset_ref, Err(e));
     }
 
-    Ok((asset_final_map, expanded_globs))
+    Ok((
+        asset_final_map,
+        expanded_globs,
+        assets_skipped_content_restrictions,
+    ))
 }
 
 #[derive(Debug, Clone)]

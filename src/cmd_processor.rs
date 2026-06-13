@@ -2271,13 +2271,26 @@ pub async fn process_cmd(
             )
             .await
             {
-                Ok((asset_map, _)) => {
+                Ok((asset_map, _, assets_skipped_content_restrictions)) => {
                     session_history_add_user_text_entry(
                         raw_user_input,
                         session,
                         bpe_tokenizer,
                         (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
                     );
+                    for asset_name in &assets_skipped_content_restrictions {
+                        let err_msg = format!(
+                            "error: asset '{}' skipped due to content restrictions.",
+                            asset_name
+                        );
+                        eprintln!("{}", err_msg);
+                        session_history_add_user_text_entry(
+                            &err_msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                        );
+                    }
                     for (asset_name, fetch_res) in &asset_map {
                         let decrypted_asset_contents = match fetch_res {
                             Ok(asset_reader::AssetFetchResult {
