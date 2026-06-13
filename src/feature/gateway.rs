@@ -110,6 +110,12 @@ impl Perm {
                 AccessRequest::ReadByEntryId { entry_id: req_id },
             ) => entry_id == *req_id && perm.read,
 
+            // Entry ID match for write
+            (
+                Perm::AssetEntryId { entry_id, perm },
+                AccessRequest::WriteByEntryId { entry_id: req_id },
+            ) => entry_id == *req_id && perm.write,
+
             // Prefix match for read by name
             (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
                 name.starts_with(prefix)
@@ -233,6 +239,8 @@ pub enum AccessRequest<'a> {
     WriteByName { name: &'a str },
     /// Read a specific asset by entry_id
     ReadByEntryId { entry_id: &'a str },
+    /// Write a specific asset by entry_id
+    WriteByEntryId { entry_id: &'a str },
     /// List assets under a prefix
     ListPrefix { prefix: &'a str },
     /// Prompt LLM
@@ -3167,6 +3175,65 @@ async fn handle_client_message(
                 return;
             } else {
                 send_bad_request_error(ws_sink, "Failed to update asset").await;
+            }
+        }
+        "asset/entry/acl/set" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let acl_arg: asset::AssetEntryAclSetArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match acl_arg.entry_ref {
+                asset::EntryRef::Name(ref name) => {
+                    if let Err(PermCheckError::Unauthorized) =
+                        check_access_async(&perms, &AccessRequest::WriteByName { name }).await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                asset::EntryRef::EntryId(ref entry_id) => {
+                    if let Err(PermCheckError::Unauthorized) = check_access_async(
+                        &perms,
+                        &AccessRequest::WriteByEntryId { entry_id: entry_id },
+                    )
+                    .await
+                    {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                _ => {
+                    send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                    return;
+                }
+            }
+            match api_client.asset_entry_acl_set(acl_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetEntryAclSetResult,
+                        asset::AssetEntryAclSetError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                        more: false,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
             }
         }
         _other => {
