@@ -9,8 +9,8 @@ use tokio::sync::{Mutex, Semaphore};
 
 use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset::{
-    AssetEntry, AssetGetArg, AssetGetError, AssetGetResult, AssetMetadataInfo, AssetRevision,
-    AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
+    AssetEntry, AssetGetArg, AssetGetError, AssetGetResult, AssetKind, AssetMetadataInfo,
+    AssetRevision, AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
 use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
@@ -706,6 +706,7 @@ pub type AssetExtendedFetchMap = HashMap<String, Result<AssetFetchResult, GetAss
 /// - A map of asset names to their data and optional metadata
 /// - A map of glob patterns to their expanded asset names (for callers that need this info)
 /// - A list of asset names that were skipped due to content restrictions.
+/// - A list of asset names that were skipped b/c they're folders.
 pub async fn fetch_assets_from_names_in_memory_extended(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
@@ -717,6 +718,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
         AssetExtendedFetchMap,
         HashMap<String, Vec<String>>,
         Vec<String>,
+        Vec<String>,
     ),
     String,
 > {
@@ -727,6 +729,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
     let mut seen_assets: HashSet<String> = HashSet::new();
     let mut assets_to_fetch: Vec<AssetEntry> = Vec::new();
     let mut assets_skipped_content_restrictions = Vec::new();
+    let mut assets_skipped_folders = Vec::new();
 
     let mut asset_fetch_failures = Vec::new();
 
@@ -749,6 +752,10 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                     assets_skipped_content_restrictions.push(matched_asset_entry.name.clone());
                     continue;
                 }
+                if matches!(matched_asset_entry.asset.kind, AssetKind::Folder) {
+                    assets_skipped_folders.push(matched_asset_entry.name.clone());
+                    continue;
+                }
                 seen_assets.insert(matched_asset_entry.name.clone());
                 assets_to_fetch.push(matched_asset_entry.clone());
             }
@@ -768,6 +775,8 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                     Ok(get_res) => {
                         if get_res.entry.redactions.is_some() {
                             assets_skipped_content_restrictions.push(get_res.entry.name.clone());
+                        } else if matches!(get_res.entry.asset.kind, AssetKind::Folder) {
+                            assets_skipped_folders.push(get_res.entry.name.clone());
                         } else {
                             assets_to_fetch.push(get_res.entry);
                         }
@@ -809,6 +818,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
         asset_final_map,
         expanded_globs,
         assets_skipped_content_restrictions,
+        assets_skipped_folders,
     ))
 }
 

@@ -12,7 +12,7 @@ use crate::api::{
     client::HaiClient,
     types::asset::{
         AssetEntry, AssetEntryIterArg, AssetEntryIterError, AssetEntryIterNextArg, AssetEntryOp,
-        AssetInfo, AssetMetadataInfo, AssetRevision,
+        AssetInfo, AssetKind, AssetMetadataInfo, AssetRevision,
     },
 };
 use crate::asset_cache::AssetBlobCache;
@@ -409,8 +409,11 @@ pub async fn sync_down(
     }
 
     entries.retain(|entry| {
-        // Filter out any .haisync entries from the server
-        !entry.name.ends_with(HAISYNC_FILENAME)
+        // HEP 64: Ignore folder-as-asset entries. For now, only create folders
+        // as needed to deal with file/blob entries.
+        matches!(entry.asset.kind, AssetKind::Blob)
+            // Filter out any .haisync entries from the server
+            && !entry.name.ends_with(HAISYNC_FILENAME)
             && !entry.name.contains(&format!("/{}", HAISYNC_FILENAME))
             // HEP 63: Filter out entries with redactions since their entries
             // are incomplete.
@@ -846,6 +849,8 @@ pub async fn sync_down_entries(
             let ff_entries = fast_forward_entries(entries);
             ff_entries
                 .into_iter()
+                // Ignore folder entries; only blob/file entries are synced.
+                .filter(|entry| matches!(entry.asset.kind, AssetKind::Blob))
                 .map(|entry| AssetSourceMinimal {
                     asset: entry.asset,
                     asset_name: entry.name,

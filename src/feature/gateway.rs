@@ -2891,6 +2891,52 @@ async fn handle_client_message(
                 }
             }
         }
+        "asset/folder/create" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let folder_create_arg: asset::AssetFolderCreateArg =
+                match serde_json::from_str(&arg.to_string()) {
+                    Ok(arg) => arg,
+                    Err(_e) => {
+                        send_bad_request_error(
+                            ws_sink,
+                            &format!("Invalid argument for {}", route.as_str()),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            if let Err(PermCheckError::Unauthorized) = check_access_async(
+                &perms,
+                &AccessRequest::WriteByName {
+                    name: &folder_create_arg.name,
+                },
+            )
+            .await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            match api_client.asset_folder_create(folder_create_arg).await {
+                Ok(res) => {
+                    let resp_ok: ClientMessageResponse<
+                        asset::AssetFolderCreateResult,
+                        asset::AssetFolderCreateError,
+                    > = ClientMessageResponse::Ok {
+                        mid: mid.clone(),
+                        result: res,
+                        more: false,
+                    };
+                    let json_string =
+                        serde_json::to_string(&resp_ok).expect("Failed to re-serialize response");
+                    let _ = ws_sink
+                        .send(Message::Text(Utf8Bytes::from(&json_string)))
+                        .await;
+                }
+                Err(e) => {
+                    send_error_response(ws_sink, mid, e).await;
+                }
+            }
+        }
         "asset/folder/collapse" => {
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let collapse_arg: asset::AssetPoolFolderCollapseArg =

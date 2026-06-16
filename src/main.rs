@@ -485,6 +485,7 @@ async fn repl(
         "/asset-md-set",
         "/asset-md-set-key",
         "/asset-md-del-key",
+        "/asset-folder-new",
         "/asset-folder-collapse",
         "/asset-folder-expand",
         "/asset-folder-list",

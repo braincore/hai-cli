@@ -2027,14 +2027,14 @@ pub async fn process_cmd(
                 (prefix, None)
             };
             use crate::api::types::asset::{
-                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg, EntryListOrder,
+                AssetEntryListArg, AssetEntryListError, AssetEntryListNextArg, AssetKind,
+                EntryListOrder,
             };
             let api_client = mk_api_client(Some(session));
 
-            let mut entries = vec![];
             let mut asset_list_res = match api_client
                 .asset_entry_list(AssetEntryListArg {
-                    prefix: Some(prefix),
+                    prefix: Some(prefix.clone()),
                     limit: 200,
                     order: EntryListOrder::Asc,
                 })
@@ -2054,71 +2054,33 @@ pub async fn process_cmd(
                 }
             };
 
-            // NOTE(UX win): If there are no entries but there is exactly one
-            // collapsed prefix, it's likely that the user is trying to list
-            // the contents of that collapsed prefix. In this case,
-            // automatically list the contents of the collapsed prefix to save
-            // the user from having to re-type the command with the collapsed
-            // prefix.
-            if asset_list_res.entries.is_empty()
-                && asset_list_res.collapsed_prefixes.len() == 1
-                && let Some(collapsed_prefix) = asset_list_res.collapsed_prefixes.first()
+            // NOTE(UX win): If there is one entry that matches exactly the
+            // prefix, it's likely that the user is trying to list the
+            // contents of the folder. In this case, automatically list the
+            // contents of the folder to save the user from having to re-type
+            // the command with a trailing slash.
+            if asset_list_res.entries.len() == 1
+                && matches!(asset_list_res.entries[0].asset.kind, AssetKind::Folder)
+                && asset_list_res.entries[0].name == prefix
             {
                 session
                     .cmd_queue
                     .lock()
                     .await
                     .push_front(session::CmdInput {
-                        input: format!("/asset-list {}", collapsed_prefix),
+                        input: format!("/asset-list {}/", prefix),
                         source: session::CmdSource::Internal,
                         reply_channel: None,
                     });
                 return ProcessCmdResult::Loop;
             }
 
-            let mut asset_list_output = vec![];
-            let collapsed_prefixes = asset_list_res.collapsed_prefixes.clone();
-            let mut collapsed_idx = 0;
-            let mut quick_index = 0;
-            let mut new_quick_index_vars = vec![];
-
+            // Collect all entries (folders are embedded in the correct sort order).
+            let mut entries = vec![];
             if asset_list_res.has_more {
                 println!("[Listing assets in lexicographic (byte-order) due to size]");
                 loop {
                     entries.extend_from_slice(&asset_list_res.entries);
-                    let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
-                    for entry in &asset_list_res.entries {
-                        // Print all collapsed prefixes that come before this entry
-                        while collapsed_idx < collapsed_prefixes.len()
-                            && collapsed_prefixes[collapsed_idx] < entry.name
-                        {
-                            let include_collapsed_prefix = match pattern.as_ref() {
-                                None => true,
-                                Some(p) => p.matches(&collapsed_prefixes[collapsed_idx]),
-                            };
-                            if include_collapsed_prefix {
-                                asset_list_output.push(print_folder(
-                                    &collapsed_prefixes[collapsed_idx],
-                                    Some((quick_index, digits)),
-                                ));
-                                new_quick_index_vars
-                                    .push(collapsed_prefixes[collapsed_idx].clone());
-                                quick_index += 1;
-                            }
-                            collapsed_idx += 1;
-                        }
-                        let include_entry = match pattern.as_ref() {
-                            None => true,
-                            Some(p) => p.matches(&entry.name),
-                        };
-                        if include_entry {
-                            asset_list_output
-                                .push(print_asset_entry(entry, Some((quick_index, digits))));
-                            new_quick_index_vars.push(entry.name.clone());
-                            quick_index += 1;
-                        }
-                    }
-
                     if !asset_list_res.has_more {
                         break;
                     }
@@ -2140,49 +2102,25 @@ pub async fn process_cmd(
                 // If all entries are fetched in one-go, sort them.
                 entries.extend_from_slice(&asset_list_res.entries);
                 entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
-                let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
-                for entry in &entries {
-                    // Print all collapsed prefixes that come before this entry
-                    while collapsed_idx < collapsed_prefixes.len()
-                        && collapsed_prefixes[collapsed_idx] < entry.name
-                    {
-                        let include_collapsed_prefix = match pattern.as_ref() {
-                            None => true,
-                            Some(p) => p.matches(&collapsed_prefixes[collapsed_idx]),
-                        };
-                        if include_collapsed_prefix {
-                            asset_list_output.push(print_folder(
-                                &collapsed_prefixes[collapsed_idx],
-                                Some((quick_index, digits)),
-                            ));
-                            new_quick_index_vars.push(collapsed_prefixes[collapsed_idx].clone());
-                            quick_index += 1;
-                        }
-                        collapsed_idx += 1;
-                    }
-                    let include_entry = match pattern.as_ref() {
-                        None => true,
-                        Some(p) => p.matches(&entry.name),
-                    };
-                    if include_entry {
-                        asset_list_output
-                            .push(print_asset_entry(entry, Some((quick_index, digits))));
-                        new_quick_index_vars.push(entry.name.clone());
-                        quick_index += 1;
-                    }
-                }
             }
 
-            // Print any remaining collapsed prefixes that come after all entries
-            let digits = count_digits((entries.len() + collapsed_prefixes.len()) as u32);
-            while collapsed_idx < collapsed_prefixes.len() {
-                asset_list_output.push(print_folder(
-                    &collapsed_prefixes[collapsed_idx],
-                    Some((quick_index, digits)),
-                ));
-                new_quick_index_vars.push(collapsed_prefixes[collapsed_idx].clone());
+            let digits = count_digits(entries.len() as u32);
+            let mut asset_list_output = vec![];
+            let mut new_quick_index_vars = vec![];
+            let mut quick_index = 0;
+            for entry in &entries {
+                let matches = pattern.as_ref().map_or(true, |p| p.matches(&entry.name));
+                if !matches {
+                    continue;
+                }
+                let line = if matches!(entry.asset.kind, AssetKind::Folder) {
+                    print_folder(&entry.name, Some((quick_index, digits)))
+                } else {
+                    print_asset_entry(entry, Some((quick_index, digits)))
+                };
+                asset_list_output.push(line);
+                new_quick_index_vars.push(entry.name.clone());
                 quick_index += 1;
-                collapsed_idx += 1;
             }
 
             let asset_list_output = asset_list_output.join("\n");
@@ -2271,7 +2209,7 @@ pub async fn process_cmd(
             )
             .await
             {
-                Ok((asset_map, _, assets_skipped_content_restrictions)) => {
+                Ok((asset_map, _, assets_skipped_content_restrictions, assets_skipped_folders)) => {
                     session_history_add_user_text_entry(
                         raw_user_input,
                         session,
@@ -2281,6 +2219,19 @@ pub async fn process_cmd(
                     for asset_name in &assets_skipped_content_restrictions {
                         let err_msg = format!(
                             "error: asset '{}' skipped due to content restrictions.",
+                            asset_name
+                        );
+                        eprintln!("{}", err_msg);
+                        session_history_add_user_text_entry(
+                            &err_msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                        );
+                    }
+                    for asset_name in &assets_skipped_folders {
+                        let err_msg = format!(
+                            "error: asset '{}' skipped because it is a folder.",
                             asset_name
                         );
                         eprintln!("{}", err_msg);
@@ -3725,6 +3676,26 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetFolderNew(cmd::AssetFolderNewCmd { name }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let name = resolve_asset_name(&name, session);
+
+            use api::types::asset::AssetFolderCreateArg;
+            let api_client = mk_api_client(Some(session));
+            match api_client
+                .asset_folder_create(AssetFolderCreateArg { name })
+                .await
+            {
+                Ok(_res) => {}
+                Err(e) => {
+                    eprintln!("error: failed to create folder: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetFolderCollapse(cmd::AssetFolderCollapseCmd { prefix }) => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
@@ -3809,6 +3780,24 @@ pub async fn process_cmd(
             .await
             {
                 Ok((enc_key_id, sign_key_id, recovery_code)) => {
+                    api_client
+                        .asset_folder_create(api::types::asset::AssetFolderCreateArg {
+                            name: "keys".to_string(),
+                        })
+                        .await
+                        .map_err(|e| {
+                            eprintln!("error: failed to create keys folder: {}", e);
+                        })
+                        .ok();
+                    api_client
+                        .asset_folder_create(api::types::asset::AssetFolderCreateArg {
+                            name: format!("/{}/keys", username),
+                        })
+                        .await
+                        .map_err(|e| {
+                            eprintln!("error: failed to create public keys folder: {}", e);
+                        })
+                        .ok();
                     println!();
                     println!("╔══════════════════════════════════════════════════════════════╗");
                     println!("║                    KEY SETUP COMPLETE                        ║");
@@ -4356,6 +4345,18 @@ pub async fn process_cmd(
                 debug,
             )
             .await;
+            // Ensure the chat folder exists for better organization.
+            // Not ideal that an attempt to create it is made each time even if
+            // it's a no-op.
+            api_client
+                .asset_folder_create(api::types::asset::AssetFolderCreateArg {
+                    name: "chat".to_string(),
+                })
+                .await
+                .map_err(|e| {
+                    eprintln!("error: failed to create chat folder: {}", e);
+                })
+                .ok();
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Email(cmd::EmailCmd { subject, body }) => {

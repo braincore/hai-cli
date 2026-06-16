@@ -38,6 +38,10 @@ struct AssetEntry
 
 struct AssetInfo
     rev_id String(min_length=1)
+    kind AssetKind
+        union
+            blob
+            folder
     created_by AssetCreatedBy
     size UInt64
         "Number of bytes. Deleted and access-restricted assets have a size of
@@ -111,7 +115,8 @@ union AssetPutError
     bad_name
     no_permission
     name_conflict
-        "Only returned if conflict policy is set to reject."
+        "Only returned if conflict policy is set to reject or replacing a
+        folder."
     name_prefix_conflict
         "Returned if the :field:`AssetPutArg.name` would make this new asset
         a directory prefix of an existing asset, or would make an existing
@@ -167,6 +172,8 @@ struct AssetReplaceResult
 union AssetReplaceError
     bad_entry_id
     no_permission
+    bad_asset_kind
+        "The replacement target is a folder."
     bad_rev_id
     old_rev_id
         "Revision ID is no longer the most recent for the asset."
@@ -243,8 +250,8 @@ union AssetGetError
 # --
 
 route entry/list(AssetEntryListArg, AssetEntryListResult, AssetEntryListError)
-    "List up to 100 entries. Not recommended for general usage but handy for
-    auto-completion where completeness isn't crticial."
+    "List entries in lexicographic (byte-order) sorting. Use for folder listing
+    and auto-complete."
 
     attrs
         auth = "user_optional"
@@ -264,7 +271,10 @@ struct AssetEntryListResult
     cursor String(min_length=1)
     has_more Boolean
     collapsed_prefixes List(String)
-        "In lexicographic (byte-order) sorting."
+        "DEPRECATED: Folders are now a part of :field:`entries`. In
+        lexicographic (byte-order) sorting."
+    parent_folders List(AssetEntry)
+        "Sorted by depth, shallowest first."
 
 union AssetEntryListError
     empty
@@ -275,8 +285,7 @@ union AssetEntryListError
 # --
 
 route entry/list/next(AssetEntryListNextArg, AssetEntryListResult, AssetEntryListNextError)
-    "List up to 100 entries. Not recommended for general usage but handy for
-    auto-completion where completeness isn't crticial."
+    "Continue listing using the previously obtained cursor."
 
     attrs
         auth = "user_optional"
@@ -312,7 +321,7 @@ struct AssetEntryIterResult
     cursor String(min_length=1)
     has_more Boolean
     collapsed_prefixes List(String)
-        "In lexicographic (byte-order) sorting."
+        "DEPRECATED. In lexicographic (byte-order) sorting."
 
 union AssetEntryIterError
     empty
@@ -523,3 +532,34 @@ union AssetMetadataPutError
     over_quota
     bad_metadata
         "Metadata must be valid JSON."
+
+# --
+
+route folder/create(AssetFolderCreateArg, AssetFolderCreateResult, AssetFolderCreateError)
+    "Create a folder asset. No-op if the folder already exists.
+
+    Blob asset names can contain slashes. These slashes are purely
+    decorative and do NOT imply the existence of associated folder assets.
+
+    Folder assets must be created explicitly using this route. When listed
+    via :route:`entry/list`, folders automatically collapse their asset
+    subtrees. Otherwise, folders behave much like blobs—for example, they
+    support associated metadata."
+
+struct AssetFolderCreateArg
+    name String(min_length=1, max_length=2048)
+
+struct AssetFolderCreateResult
+    entry AssetEntry
+
+union AssetFolderCreateError
+    bad_name
+    no_permission
+    name_conflict
+        "Returned if there's an existing asset with this name that isn't a
+        folder."
+    name_prefix_conflict
+        "Returned if the :field:`AssetFolderCreateArg.name` would make this new
+        asset a directory prefix of an existing asset, or would make an
+        existing asset simultaneously a file and directory."
+    over_quota

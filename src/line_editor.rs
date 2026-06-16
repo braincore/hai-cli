@@ -394,6 +394,9 @@ fn is_cmd_input(line: &str, cmd: &str) -> bool {
         || line.starts_with(&format!("{}.", cmd))
 }
 
+/// Splits the line into two parts: command word and everything else as a
+/// single argument.
+///
 /// # Arguments
 ///
 /// - `line` -  The input line to process.
@@ -418,6 +421,9 @@ fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
     (cmd_word, arg_prefix, arg_index)
 }
 
+/// Splits the line into three meaningful parts: command word, all the
+/// arguments in the middle, and finally the last argument.
+///
 /// # Arguments
 ///
 /// - `line` - The input line to process.
@@ -659,6 +665,21 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, false)
+            } else if is_cmd_input(line, "/asset-folder-new") {
+                let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "completer init (folder-new): {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
+                        line,
+                        cmd_word,
+                        arg_index,
+                        arg_prefix,
+                        line.find(arg_prefix).unwrap()
+                    ));
+                }
+                let mut completions = self.asset_folder_completer(arg_prefix);
+                realign_suggestions(&mut completions, arg_index, self.debug);
+                (completions, true)
             } else if is_cmd_input(line, "/exec")
                 || line.starts_with("!!")
                 || is_cmd_input(line, "!!")
@@ -1098,7 +1119,7 @@ impl CmdAndFileCompleter {
                             completions.push(Suggestion {
                                 value: pool.mount_point.clone(),
                                 display_override: compute_display_override_for_path(
-                                    &asset_prefix,
+                                    &expanded_asset_prefix,
                                     &pool.mount_point,
                                 ),
                                 description: None,
@@ -1126,7 +1147,7 @@ impl CmdAndFileCompleter {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
                 AssetEntryListArg {
-                    prefix: Some(expanded_asset_prefix),
+                    prefix: Some(expanded_asset_prefix.clone()),
                     limit: 100,
                     order: EntryListOrder::Asc,
                 },
@@ -1136,37 +1157,12 @@ impl CmdAndFileCompleter {
             Ok(res) => {
                 let mut completions = Vec::new();
                 let mut sorted_entries = res.entries;
-                let collapsed_prefixes = res.collapsed_prefixes.clone();
-                let mut collapsed_idx = 0;
                 sorted_entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
                 for entry in sorted_entries {
-                    // Return collapsed prefixes that come before this entry
-                    while collapsed_idx < collapsed_prefixes.len()
-                        && collapsed_prefixes[collapsed_idx] < entry.name
-                    {
-                        completions.push(Suggestion {
-                            value: collapsed_prefixes[collapsed_idx].clone(),
-                            display_override: compute_display_override_for_path(
-                                &asset_prefix,
-                                &collapsed_prefixes[collapsed_idx],
-                            ),
-                            description: None,
-                            style: None,
-                            extra: None,
-                            // Replace entirety of existing contents
-                            span: Span {
-                                start: 0,
-                                end: asset_prefix.len(),
-                            },
-                            append_whitespace: false,
-                            match_indices: None,
-                        });
-                        collapsed_idx += 1;
-                    }
                     completions.push(Suggestion {
                         value: entry.name.clone(),
                         display_override: compute_display_override_for_path(
-                            &asset_prefix,
+                            &expanded_asset_prefix,
                             &entry.name,
                         ),
                         description: None,
@@ -1181,18 +1177,133 @@ impl CmdAndFileCompleter {
                         match_indices: None,
                     });
                 }
-                // Return any remaining collapsed prefixes that come after all entries
-                while collapsed_idx < collapsed_prefixes.len() {
+                completions
+            }
+            Err(e) => {
+                eprintln!("error: could not fetch list of matching assets: {}", e);
+                vec![]
+            }
+        }
+    }
+
+    fn asset_folder_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
+        let expanded_asset_prefix =
+            crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
+
+        // Pool completion: same behavior as asset_completer — you can't make a
+        // folder at the pool-mount level via path components, so just defer to
+        // pool listing here.
+        if asset_prefix.starts_with("/s/") && asset_prefix.matches('/').count() == 2 {
+            let result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.api_client.asset_pool_list(()))
+            });
+            match result {
+                Ok(res) => {
+                    let mut sorted_pools = res.pools;
+                    sorted_pools.sort_by(|a, b| numeric_sort::cmp(&a.mount_point, &b.mount_point));
+                    let mut completions = Vec::new();
+                    for pool in sorted_pools {
+                        if pool.mount_point.starts_with(&expanded_asset_prefix) {
+                            completions.push(Suggestion {
+                                value: pool.mount_point.clone(),
+                                display_override: compute_display_override_for_path(
+                                    &expanded_asset_prefix,
+                                    &pool.mount_point,
+                                ),
+                                description: None,
+                                style: None,
+                                extra: None,
+                                span: Span {
+                                    start: 0,
+                                    end: asset_prefix.len(),
+                                },
+                                append_whitespace: false,
+                                match_indices: None,
+                            });
+                        }
+                    }
+                    return completions;
+                }
+                Err(_) => {
+                    eprintln!("error: failed to list asset pools");
+                    return vec![];
+                }
+            }
+        }
+
+        use crate::api::types::asset::{AssetEntryListArg, EntryListOrder};
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
+                AssetEntryListArg {
+                    prefix: Some(expanded_asset_prefix.clone()),
+                    limit: 100,
+                    order: EntryListOrder::Asc,
+                },
+            ))
+        });
+
+        match result {
+            Ok(res) => {
+                // Collect candidate "path component" prefixes across all entries,
+                // deduplicating. For a blob "a/b/c/d" we want "a", "a/b", "a/b/c"
+                // but NOT "a/b/c/d" (can't make a folder on top of a blob).
+                //
+                // For a real folder entry "a/b/c" we can include the full name
+                // "a/b/c" since it's already a folder-ish thing (a valid path
+                // component to nest under), as well as its ancestors.
+                let mut seen = std::collections::HashSet::new();
+                let mut candidates: Vec<String> = Vec::new();
+
+                for entry in &res.entries {
+                    let name = &entry.name;
+
+                    // Split into components, ignoring any trailing slash.
+                    let trimmed = name.trim_end_matches('/');
+                    let components: Vec<&str> = trimmed.split('/').collect();
+                    if components.is_empty() {
+                        continue;
+                    }
+
+                    // If this entry is a blob, the final component is a real blob
+                    // name and is NOT a valid folder target. If it's a folder,
+                    // the final component IS a valid target.
+                    use crate::api::types::asset::AssetKind;
+                    let include_last = matches!(entry.asset.kind, AssetKind::Folder);
+
+                    let last_idx = components.len() - 1;
+                    let mut accum = String::new();
+                    for (i, comp) in components.iter().enumerate() {
+                        if i > 0 {
+                            accum.push('/');
+                        }
+                        accum.push_str(comp);
+
+                        // Skip the final component for blobs.
+                        if i == last_idx && !include_last {
+                            continue;
+                        }
+
+                        if accum.starts_with(&expanded_asset_prefix) {
+                            if seen.insert(accum.clone()) {
+                                candidates.push(accum.clone());
+                            }
+                        }
+                    }
+                }
+
+                candidates.sort_by(|a, b| numeric_sort::cmp(a, b));
+
+                let mut completions = Vec::new();
+                for cand in candidates {
                     completions.push(Suggestion {
-                        value: collapsed_prefixes[collapsed_idx].clone(),
+                        value: cand.clone(),
                         display_override: compute_display_override_for_path(
-                            &asset_prefix,
-                            &collapsed_prefixes[collapsed_idx],
+                            &expanded_asset_prefix,
+                            &cand,
                         ),
                         description: None,
                         style: None,
                         extra: None,
-                        // Replace entirety of existing contents
                         span: Span {
                             start: 0,
                             end: asset_prefix.len(),
@@ -1200,7 +1311,6 @@ impl CmdAndFileCompleter {
                         append_whitespace: false,
                         match_indices: None,
                     });
-                    collapsed_idx += 1;
                 }
                 completions
             }

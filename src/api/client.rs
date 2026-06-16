@@ -345,6 +345,14 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_folder_create(
+        &self,
+        arg: asset::AssetFolderCreateArg,
+    ) -> Result<asset::AssetFolderCreateResult, RequestError<asset::AssetFolderCreateError>> {
+        self.mk_api_request::<_, _, _>("/asset/folder/create", &arg)
+            .await
+    }
+
     pub async fn asset_folder_collapse(
         &self,
         arg: asset::AssetPoolFolderCollapseArg,

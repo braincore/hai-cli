@@ -1491,7 +1491,7 @@ pub struct AssetEntryIterResult {
     pub entries: Vec<AssetEntry>,
     pub cursor: String,
     pub has_more: bool,
-    /// In lexicographic (byte-order) sorting.
+    /// DEPRECATED. In lexicographic (byte-order) sorting.
     pub collapsed_prefixes: Vec<String>,
 }
 
@@ -2015,8 +2015,10 @@ pub struct AssetEntryListResult {
     pub entries: Vec<AssetEntry>,
     pub cursor: String,
     pub has_more: bool,
-    /// In lexicographic (byte-order) sorting.
+    /// DEPRECATED: Folders are now a part of `entries`. In lexicographic (byte-order) sorting.
     pub collapsed_prefixes: Vec<String>,
+    /// Sorted by depth, shallowest first.
+    pub parent_folders: Vec<AssetEntry>,
 }
 
 impl AssetEntryListResult {
@@ -2025,18 +2027,25 @@ impl AssetEntryListResult {
         cursor: String,
         has_more: bool,
         collapsed_prefixes: Vec<String>,
+        parent_folders: Vec<AssetEntry>,
     ) -> Self {
         AssetEntryListResult {
             entries,
             cursor,
             has_more,
             collapsed_prefixes,
+            parent_folders,
         }
     }
 }
 
-const ASSET_ENTRY_LIST_RESULT_FIELDS: &[&str] =
-    &["entries", "cursor", "has_more", "collapsed_prefixes"];
+const ASSET_ENTRY_LIST_RESULT_FIELDS: &[&str] = &[
+    "entries",
+    "cursor",
+    "has_more",
+    "collapsed_prefixes",
+    "parent_folders",
+];
 impl AssetEntryListResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2052,6 +2061,7 @@ impl AssetEntryListResult {
         let mut field_cursor = None;
         let mut field_has_more = None;
         let mut field_collapsed_prefixes = None;
+        let mut field_parent_folders = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2080,6 +2090,12 @@ impl AssetEntryListResult {
                     }
                     field_collapsed_prefixes = Some(map.next_value()?);
                 }
+                "parent_folders" => {
+                    if field_parent_folders.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("parent_folders"));
+                    }
+                    field_parent_folders = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2096,6 +2112,8 @@ impl AssetEntryListResult {
                 .ok_or_else(|| ::serde::de::Error::missing_field("has_more"))?,
             collapsed_prefixes: field_collapsed_prefixes
                 .ok_or_else(|| ::serde::de::Error::missing_field("collapsed_prefixes"))?,
+            parent_folders: field_parent_folders
+                .ok_or_else(|| ::serde::de::Error::missing_field("parent_folders"))?,
         };
         Ok(Some(result))
     }
@@ -2109,6 +2127,7 @@ impl AssetEntryListResult {
         s.serialize_field("cursor", &self.cursor)?;
         s.serialize_field("has_more", &self.has_more)?;
         s.serialize_field("collapsed_prefixes", &self.collapsed_prefixes)?;
+        s.serialize_field("parent_folders", &self.parent_folders)?;
         Ok(())
     }
 }
@@ -2139,7 +2158,7 @@ impl ::serde::ser::Serialize for AssetEntryListResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryListResult", 4)?;
+        let mut s = serializer.serialize_struct("AssetEntryListResult", 5)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -2540,6 +2559,301 @@ impl ::serde::ser::Serialize for AssetEntrySearchResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetFolderCreateArg {
+    pub name: String,
+}
+
+impl AssetFolderCreateArg {
+    pub fn new(name: String) -> Self {
+        AssetFolderCreateArg { name }
+    }
+}
+
+const ASSET_FOLDER_CREATE_ARG_FIELDS: &[&str] = &["name"];
+impl AssetFolderCreateArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetFolderCreateArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetFolderCreateArg>, V::Error> {
+        let mut field_name = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetFolderCreateArg {
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("name", &self.name)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetFolderCreateArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetFolderCreateArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetFolderCreateArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetFolderCreateArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetFolderCreateArg",
+            ASSET_FOLDER_CREATE_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetFolderCreateArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetFolderCreateArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetFolderCreateError {
+    BadName,
+    NoPermission,
+    /// Returned if there's an existing asset with this name that isn't a folder.
+    NameConflict,
+    /// Returned if the [`AssetFolderCreateArg::name`](AssetFolderCreateArg) would make this new
+    /// asset a directory prefix of an existing asset, or would make an existing asset
+    /// simultaneously a file and directory.
+    NamePrefixConflict,
+    OverQuota,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetFolderCreateError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetFolderCreateError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetFolderCreateError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_name" => AssetFolderCreateError::BadName,
+                    "no_permission" => AssetFolderCreateError::NoPermission,
+                    "name_conflict" => AssetFolderCreateError::NameConflict,
+                    "name_prefix_conflict" => AssetFolderCreateError::NamePrefixConflict,
+                    "over_quota" => AssetFolderCreateError::OverQuota,
+                    _ => AssetFolderCreateError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "bad_name",
+            "no_permission",
+            "name_conflict",
+            "name_prefix_conflict",
+            "over_quota",
+            "other",
+        ];
+        deserializer.deserialize_struct("AssetFolderCreateError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetFolderCreateError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetFolderCreateError::BadName => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetFolderCreateError", 1)?;
+                s.serialize_field(".tag", "bad_name")?;
+                s.end()
+            }
+            AssetFolderCreateError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetFolderCreateError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetFolderCreateError::NameConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetFolderCreateError", 1)?;
+                s.serialize_field(".tag", "name_conflict")?;
+                s.end()
+            }
+            AssetFolderCreateError::NamePrefixConflict => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetFolderCreateError", 1)?;
+                s.serialize_field(".tag", "name_prefix_conflict")?;
+                s.end()
+            }
+            AssetFolderCreateError::OverQuota => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetFolderCreateError", 1)?;
+                s.serialize_field(".tag", "over_quota")?;
+                s.end()
+            }
+            AssetFolderCreateError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetFolderCreateError {}
+
+impl ::std::fmt::Display for AssetFolderCreateError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetFolderCreateError::NameConflict => f.write_str(
+                "Returned if there's an existing asset with this name that isn't a folder.",
+            ),
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetFolderCreateResult {
+    pub entry: AssetEntry,
+}
+
+impl AssetFolderCreateResult {
+    pub fn new(entry: AssetEntry) -> Self {
+        AssetFolderCreateResult { entry }
+    }
+}
+
+const ASSET_FOLDER_CREATE_RESULT_FIELDS: &[&str] = &["entry"];
+impl AssetFolderCreateResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetFolderCreateResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetFolderCreateResult>, V::Error> {
+        let mut field_entry = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry" => {
+                    if field_entry.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry"));
+                    }
+                    field_entry = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetFolderCreateResult {
+            entry: field_entry.ok_or_else(|| ::serde::de::Error::missing_field("entry"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry", &self.entry)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetFolderCreateResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetFolderCreateResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetFolderCreateResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetFolderCreateResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetFolderCreateResult",
+            ASSET_FOLDER_CREATE_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetFolderCreateResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetFolderCreateResult", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetGetArg {
     pub name: String,
 }
@@ -2789,6 +3103,7 @@ impl ::serde::ser::Serialize for AssetGetResult {
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetInfo {
     pub rev_id: String,
+    pub kind: AssetKind,
     pub created_by: AssetCreatedBy,
     /// Number of bytes. Deleted and access-restricted assets have a size of 0.
     pub size: u64,
@@ -2802,9 +3117,16 @@ pub struct AssetInfo {
 }
 
 impl AssetInfo {
-    pub fn new(rev_id: String, created_by: AssetCreatedBy, size: u64, acl: Vec<AssetAce>) -> Self {
+    pub fn new(
+        rev_id: String,
+        kind: AssetKind,
+        created_by: AssetCreatedBy,
+        size: u64,
+        acl: Vec<AssetAce>,
+    ) -> Self {
         AssetInfo {
             rev_id,
+            kind,
             created_by,
             size,
             acl,
@@ -2824,7 +3146,7 @@ impl AssetInfo {
     }
 }
 
-const ASSET_INFO_FIELDS: &[&str] = &["rev_id", "created_by", "size", "acl", "hash", "url"];
+const ASSET_INFO_FIELDS: &[&str] = &["rev_id", "kind", "created_by", "size", "acl", "hash", "url"];
 impl AssetInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2837,6 +3159,7 @@ impl AssetInfo {
         optional: bool,
     ) -> Result<Option<AssetInfo>, V::Error> {
         let mut field_rev_id = None;
+        let mut field_kind = None;
         let mut field_created_by = None;
         let mut field_size = None;
         let mut field_acl = None;
@@ -2851,6 +3174,12 @@ impl AssetInfo {
                         return Err(::serde::de::Error::duplicate_field("rev_id"));
                     }
                     field_rev_id = Some(map.next_value()?);
+                }
+                "kind" => {
+                    if field_kind.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("kind"));
+                    }
+                    field_kind = Some(map.next_value()?);
                 }
                 "created_by" => {
                     if field_created_by.is_some() {
@@ -2893,6 +3222,7 @@ impl AssetInfo {
         }
         let result = AssetInfo {
             rev_id: field_rev_id.ok_or_else(|| ::serde::de::Error::missing_field("rev_id"))?,
+            kind: field_kind.ok_or_else(|| ::serde::de::Error::missing_field("kind"))?,
             created_by: field_created_by
                 .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
             size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
@@ -2909,6 +3239,7 @@ impl AssetInfo {
     ) -> Result<(), S::Error> {
         use serde::ser::SerializeStruct;
         s.serialize_field("rev_id", &self.rev_id)?;
+        s.serialize_field("kind", &self.kind)?;
         s.serialize_field("created_by", &self.created_by)?;
         s.serialize_field("size", &self.size)?;
         s.serialize_field("acl", &self.acl)?;
@@ -2944,9 +3275,72 @@ impl ::serde::ser::Serialize for AssetInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetInfo", 6)?;
+        let mut s = serializer.serialize_struct("AssetInfo", 7)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetKind {
+    Blob,
+    Folder,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetKind {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetKind;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetKind structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "blob" => AssetKind::Blob,
+                    "folder" => AssetKind::Folder,
+                    _ => AssetKind::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["blob", "folder", "other"];
+        deserializer.deserialize_struct("AssetKind", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetKind {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetKind::Blob => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetKind", 1)?;
+                s.serialize_field(".tag", "blob")?;
+                s.end()
+            }
+            AssetKind::Folder => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetKind", 1)?;
+                s.serialize_field(".tag", "folder")?;
+                s.end()
+            }
+            AssetKind::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
     }
 }
 
@@ -5597,7 +5991,7 @@ impl ::serde::ser::Serialize for AssetPutArg {
 pub enum AssetPutError {
     BadName,
     NoPermission,
-    /// Only returned if conflict policy is set to reject.
+    /// Only returned if conflict policy is set to reject or replacing a folder.
     NameConflict,
     /// Returned if the [`AssetPutArg::name`](AssetPutArg) would make this new asset a directory
     /// prefix of an existing asset, or would make an existing asset simultaneously a file and
@@ -5695,9 +6089,9 @@ impl ::std::error::Error for AssetPutError {}
 impl ::std::fmt::Display for AssetPutError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
-            AssetPutError::NameConflict => {
-                f.write_str("Only returned if conflict policy is set to reject.")
-            }
+            AssetPutError::NameConflict => f.write_str(
+                "Only returned if conflict policy is set to reject or replacing a folder.",
+            ),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -6396,6 +6790,8 @@ impl ::serde::ser::Serialize for AssetReplaceArg {
 pub enum AssetReplaceError {
     BadEntryId,
     NoPermission,
+    /// The replacement target is a folder.
+    BadAssetKind,
     BadRevId,
     /// Revision ID is no longer the most recent for the asset.
     OldRevId,
@@ -6423,6 +6819,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetReplaceError {
                 let value = match tag {
                     "bad_entry_id" => AssetReplaceError::BadEntryId,
                     "no_permission" => AssetReplaceError::NoPermission,
+                    "bad_asset_kind" => AssetReplaceError::BadAssetKind,
                     "bad_rev_id" => AssetReplaceError::BadRevId,
                     "old_rev_id" => AssetReplaceError::OldRevId,
                     "over_quota" => AssetReplaceError::OverQuota,
@@ -6435,6 +6832,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetReplaceError {
         const VARIANTS: &[&str] = &[
             "bad_entry_id",
             "no_permission",
+            "bad_asset_kind",
             "bad_rev_id",
             "old_rev_id",
             "over_quota",
@@ -6459,6 +6857,12 @@ impl ::serde::ser::Serialize for AssetReplaceError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetReplaceError", 1)?;
                 s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetReplaceError::BadAssetKind => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetReplaceError", 1)?;
+                s.serialize_field(".tag", "bad_asset_kind")?;
                 s.end()
             }
             AssetReplaceError::BadRevId => {
@@ -6491,6 +6895,7 @@ impl ::std::error::Error for AssetReplaceError {}
 impl ::std::fmt::Display for AssetReplaceError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
+            AssetReplaceError::BadAssetKind => f.write_str("The replacement target is a folder."),
             AssetReplaceError::OldRevId => {
                 f.write_str("Revision ID is no longer the most recent for the asset.")
             }

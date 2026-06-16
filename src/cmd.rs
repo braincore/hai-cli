@@ -144,6 +144,8 @@ pub enum Cmd {
     AssetMdSetKey(AssetMdSetKeyCmd),
     /// Delete key in asset metadata
     AssetMdDelKey(AssetMdDelKeyCmd),
+    /// New asset folder
+    AssetFolderNew(AssetFolderNewCmd),
     /// Collapse asset folder
     AssetFolderCollapse(AssetFolderCollapseCmd),
     /// Expand asset folder
@@ -727,6 +729,12 @@ pub struct AssetMdDelKeyCmd {
 
     /// Top-level key of metadata to delete
     pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetFolderNewCmd {
+    /// Name of the folder asset
+    pub name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2361,6 +2369,18 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-md-del-key <asset_name> <key>");
+                    None
+                }
+            }
+        }
+        "asset-folder-new" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(name) => Some(Cmd::AssetFolderNew(AssetFolderNewCmd { name })),
+                None => {
+                    eprintln!("Usage: /asset-folder-new <name>");
                     None
                 }
             }
