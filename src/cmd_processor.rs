@@ -3825,7 +3825,7 @@ pub async fn process_cmd(
                     println!("║  • Anyone with the recovery code can decrypt your data       ║");
                     println!("╚══════════════════════════════════════════════════════════════╝");
                     println!();
-                    println!("Assets you create in `vault/` will be encrypted.");
+                    println!("New private assets will be encrypted.");
                 }
                 Err(crate::feature::asset_crypt::CryptSetupError::Abort) => {
                     eprintln!("error: aborting key setup");
