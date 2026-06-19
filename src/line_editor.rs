@@ -1101,6 +1101,8 @@ impl CmdAndFileCompleter {
         completions
     }
 
+    /// # Arguments
+    /// * `asset_prefix` - The prefix of the asset to complete.
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix =
             crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
@@ -1156,11 +1158,21 @@ impl CmdAndFileCompleter {
         match result {
             Ok(res) => {
                 let mut completions = Vec::new();
+                let only_one_entry = res.entries.len() == 1;
                 let mut sorted_entries = res.entries;
                 sorted_entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
                 for entry in sorted_entries {
+                    let value = if only_one_entry
+                        && matches!(
+                            entry.asset.kind,
+                            crate::api::types::asset::AssetKind::Folder
+                        ) {
+                        format!("{}/", entry.name.clone())
+                    } else {
+                        entry.name.clone()
+                    };
                     completions.push(Suggestion {
-                        value: entry.name.clone(),
+                        value,
                         display_override: compute_display_override_for_path(
                             &expanded_asset_prefix,
                             &entry.name,
@@ -1173,7 +1185,13 @@ impl CmdAndFileCompleter {
                             start: 0,
                             end: asset_prefix.len(),
                         },
-                        append_whitespace: true,
+                        // If it matches a folder, don't append a whitespace
+                        // because it's likely the user wants to traverse into
+                        // that folder.
+                        append_whitespace: !matches!(
+                            entry.asset.kind,
+                            crate::api::types::asset::AssetKind::Folder
+                        ),
                         match_indices: None,
                     });
                 }
@@ -1186,6 +1204,12 @@ impl CmdAndFileCompleter {
         }
     }
 
+    /// Provides completion for both explicit and implicit folders.
+    ///
+    /// Explicit folders are entries with kind=Folder. Implicit folders are
+    /// "path components" of blob entries that don't have a corresponding
+    /// folder entry. For example, if "a/b/c" is a blob entry, then "a" and
+    /// "a/b" are implicit folders.
     fn asset_folder_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix =
             crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
