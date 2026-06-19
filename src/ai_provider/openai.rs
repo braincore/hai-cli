@@ -103,10 +103,7 @@ pub async fn send_to_openai(
         // Reasoning models & gpt-5 do not support temperature
         if !model.starts_with("o")
             && !model.starts_with("gpt-5-")
-            && !model.starts_with("gpt-5.1-")
-            && !model.starts_with("gpt-5.1-chat")
-            && !model.starts_with("gpt-5.2-")
-            && !model.starts_with("gpt-5.2-chat")
+            && !model.starts_with("gpt-5.")
         {
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
