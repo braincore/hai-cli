@@ -159,7 +159,7 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt54nano" | "g54nano" | "g54n" | "54n" => Some(AiModel::OpenAi(OpenAiModel::Gpt54Nano(
             parse_gpt5_opts(opts, false),
         ))),
-        "gpt55" | "g55" => Some(AiModel::OpenAi(OpenAiModel::Gpt55(parse_gpt5_opts(
+        "gpt" | "gpt55" | "g55" => Some(AiModel::OpenAi(OpenAiModel::Gpt55(parse_gpt5_opts(
             opts, false,
         )))),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),

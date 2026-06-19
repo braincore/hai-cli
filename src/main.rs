@@ -537,6 +537,7 @@ async fn repl(
         "4om",
         "chatgpt-4o",
         "gemma3",
+        "gpt",
         "gpt-41",
         "gpt-41-mini",
         "gpt-41-nano",
