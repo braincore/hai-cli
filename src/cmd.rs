@@ -41,10 +41,14 @@ pub enum Cmd {
     PrintVars,
     /// Set a haivar variable
     SetVar(SetVarCmd),
-    /// Load files into conversation
-    Load(LoadCmd),
+    /// Read files into conversation
+    FileRead(FileReadCmd),
+    /// Read file(s) into the conversation and print it
+    FileCat(FileCatCmd),
+    /// Write file
+    FileWrite(FileWriteCmd),
     /// Load URL into conversation
-    LoadUrl(LoadUrlCmd),
+    HttpGet(HttpGetCmd),
     /// Add pinned message to conversation
     Pin(PinCmd),
     /// Add a message without triggering an AI response
@@ -86,25 +90,23 @@ pub enum Cmd {
     /// Search for tasks in the repo
     TaskSearch(TaskSearchCmd),
     /// View the task config without running it
-    TaskView(TaskViewCmd),
+    TaskCat(TaskCatCmd),
     /// List all versions of a task
     TaskVersions(TaskVersionsCmd),
-    /// Edit an asset (create if does not exist)
+    /// Create or edit an asset
     Asset(AssetCmd),
-    /// Create a new asset
-    AssetNew(AssetNewCmd),
-    /// Edit an asset
-    AssetEdit(AssetEditCmd),
     /// Push into an asset
     AssetPush(AssetPushCmd),
     /// List assets with matching prefix
     AssetList(AssetListCmd),
     /// Search assets semantically
     AssetSearch(AssetSearchCmd),
-    /// Load an asset into the convo
-    AssetLoad(AssetLoadCmd),
-    /// View an asset
-    AssetView(AssetViewCmd),
+    /// Read an asset into the convo
+    AssetRead(AssetReadCmd),
+    /// Write an asset
+    AssetWrite(AssetWriteCmd),
+    /// Read an asset into the convo and print it
+    AssetCat(AssetCatCmd),
     /// Get link to an asset
     AssetLink(AssetLinkCmd),
     /// Remove an asset
@@ -315,7 +317,7 @@ pub struct SetVarCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct LoadCmd {
+pub struct FileReadCmd {
     /// Path or glob pattern to load files from
     pub path: String,
     /// Whether to include line numbers
@@ -323,7 +325,25 @@ pub struct LoadCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct LoadUrlCmd {
+pub struct FileCatCmd {
+    /// Path or glob pattern to load files from
+    pub path: String,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileWriteCmd {
+    /// Path to write file to
+    pub path: String,
+    /// Contents to write to the file
+    pub contents: Option<String>,
+    /// Whether to omit contents from the conversation history
+    pub suppress_body: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct HttpGetCmd {
     /// URL to load from
     pub url: String,
     /// Do not extract article and convert HTML to markdown
@@ -484,7 +504,7 @@ pub struct TaskSearchCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct TaskViewCmd {
+pub struct TaskCatCmd {
     /// Task fqn or local path (prefix with ./ or /)
     pub task_ref: String,
 }
@@ -502,20 +522,9 @@ pub struct AssetCmd {
 
     /// Override of default editor
     pub editor: Option<String>,
-}
 
-#[derive(Clone, Debug)]
-pub struct AssetNewCmd {
-    /// Name of the asset (can include / for "foldering")
-    pub asset_name: String,
-    pub contents: Option<String>,
-    pub encrypt: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssetEditCmd {
-    /// Name of the asset
-    pub asset_name: String,
+    /// Whether to create the asset if it does not exist
+    pub no_create: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -541,7 +550,7 @@ pub struct AssetSearchCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct AssetLoadCmd {
+pub struct AssetReadCmd {
     /// Name of the asset
     pub asset_names: Vec<String>,
     /// Whether to include line numbers
@@ -549,7 +558,19 @@ pub struct AssetLoadCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct AssetViewCmd {
+pub struct AssetWriteCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Contents to write
+    pub contents: Option<String>,
+    /// Whether to encrypt the asset
+    pub encrypt: bool,
+    /// Whether to omit contents from the conversation history
+    pub suppress_body: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCatCmd {
     /// Name of the asset
     pub asset_names: Vec<String>,
     /// Whether to include line numbers
@@ -1476,7 +1497,7 @@ fn parse_command(
                 }
             }
         }
-        "load" | "l" => {
+        "file-read" | "load" | "l" => {
             if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
@@ -1487,19 +1508,72 @@ fn parse_command(
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(path) => Some(Cmd::Load(LoadCmd {
+                Some(path) => Some(Cmd::FileRead(FileReadCmd {
                     path,
                     show_line_numbers: n,
                 })),
                 None => {
-                    eprintln!("Usage: /load <glob path>");
+                    eprintln!("Usage: /file-read <glob path>");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }
         }
-        "load-url" => {
+        "file-cat" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            match parse_one_arg_catchall(remaining) {
+                Some(path) => Some(Cmd::FileCat(FileCatCmd {
+                    path,
+                    show_line_numbers: n,
+                })),
+                None => {
+                    eprintln!("Usage: /file-cat <glob path>");
+                    eprintln!("Options:");
+                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    None
+                }
+            }
+        }
+        "file-write" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["suppress_body"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([("suppress_body".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let suppress_body = options
+                .get("suppress_body")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            match parse_one_arg(&cmd_arg) {
+                Some(path) => Some(Cmd::FileWrite(FileWriteCmd {
+                    path,
+                    contents,
+                    suppress_body,
+                })),
+                None => {
+                    eprintln!("Usage: /file-write <path> [<NEWLINE><body>]");
+                    eprintln!("Options:");
+                    eprintln!(
+                        "  .suppress_body=BOOL   Omit contents from conversation history (default: false)"
+                    );
+                    None
+                }
+            }
+        }
+        "http-get" | "load-url" => {
             if !validate_options_and_print_err(cmd_name, &options, &["raw", "n"]) {
                 return None;
             }
@@ -1514,13 +1588,13 @@ fn parse_command(
             let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(url) => Some(Cmd::LoadUrl(LoadUrlCmd {
+                Some(url) => Some(Cmd::HttpGet(HttpGetCmd {
                     url,
                     raw,
                     show_line_numbers: n,
                 })),
                 None => {
-                    eprintln!("Usage: /load-url <url>");
+                    eprintln!("Usage: /http-get <url>");
                     eprintln!("Options:");
                     eprintln!(
                         "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
@@ -1845,12 +1919,12 @@ fn parse_command(
                 }
             }
         }
-        "task-view" | "task-cat" => {
+        "task-cat" | "task-view" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
-                Some(task_ref) => Some(Cmd::TaskView(TaskViewCmd { task_ref })),
+                Some(task_ref) => Some(Cmd::TaskCat(TaskCatCmd { task_ref })),
                 None => {
                     eprintln!("Usage: /{} <task_ref>", cmd_name);
                     None
@@ -1870,48 +1944,29 @@ fn parse_command(
             }
         }
         "asset" | "a" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["no_create"]) {
                 return None;
             }
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((asset_name, editor)) => Some(Cmd::Asset(AssetCmd { asset_name, editor })),
-                None => {
-                    eprintln!("Usage: /asset <name>");
-                    None
-                }
-            }
-        }
-        "asset-new" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["encrypt"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("encrypt".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([("no_create".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
-            let encrypt = options.get("encrypt").map(|v| v == "true").unwrap_or(false);
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            match parse_one_arg(&cmd_arg) {
-                Some(asset_name) => Some(Cmd::AssetNew(AssetNewCmd {
+            let no_create = options
+                .get("no_create")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            match parse_two_arg_one_optional_catchall(remaining) {
+                Some((asset_name, editor)) => Some(Cmd::Asset(AssetCmd {
                     asset_name,
-                    contents,
-                    encrypt,
+                    editor,
+                    no_create,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-new <name> [<NEWLINE><body>]");
-                    None
-                }
-            }
-        }
-        "asset-edit" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetEdit(AssetEditCmd { asset_name })),
-                None => {
-                    eprintln!("Usage: /asset-edit <name>");
+                    eprintln!("Usage: /asset <name>");
+                    eprintln!(
+                        "  .no_create=BOOL   Do not create if does not exist (default: false)"
+                    );
                     None
                 }
             }
@@ -1967,7 +2022,7 @@ fn parse_command(
                 }
             }
         }
-        "asset-load" => {
+        "read" | "asset-read" | "asset-load" => {
             if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
@@ -1978,19 +2033,55 @@ fn parse_command(
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetLoad(AssetLoadCmd {
+                Some(args) => Some(Cmd::AssetRead(AssetReadCmd {
                     asset_names: args,
                     show_line_numbers: n,
                 })),
                 _ => {
-                    eprintln!("Usage: /asset-load <name> [<name> ...]");
+                    eprintln!("Usage: /asset-read <name> [<name> ...]");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }
         }
-        "asset-view" => {
+        "write" | "asset-write" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["encrypt", "suppress_body"]) {
+                return None;
+            }
+            let expected_types = HashMap::from([
+                ("encrypt".to_string(), OptionType::Bool),
+                ("suppress_body".to_string(), OptionType::Bool),
+            ]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let encrypt = options.get("encrypt").map(|v| v == "true").unwrap_or(false);
+            let suppress_body = options
+                .get("suppress_body")
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            match parse_one_arg(&cmd_arg) {
+                Some(asset_name) => Some(Cmd::AssetWrite(AssetWriteCmd {
+                    asset_name,
+                    contents,
+                    encrypt,
+                    suppress_body,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-write <name> <multi-line body>]");
+                    eprintln!("Options:");
+                    eprintln!("  .encrypt=BOOL   Force encryption of the asset (default: false)");
+                    eprintln!(
+                        "  .suppress_body=BOOL   Omit contents from conversation history (default: false)"
+                    );
+                    None
+                }
+            }
+        }
+        "cat" | "asset-cat" | "asset-view" => {
             if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
                 return None;
             }
@@ -2001,12 +2092,12 @@ fn parse_command(
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetView(AssetViewCmd {
+                Some(args) => Some(Cmd::AssetCat(AssetCatCmd {
                     asset_names: args,
                     show_line_numbers: n,
                 })),
                 _ => {
-                    eprintln!("Usage: /asset-view <name> [<name> ...]");
+                    eprintln!("Usage: /asset-cat <name> [<name> ...]");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
                     None

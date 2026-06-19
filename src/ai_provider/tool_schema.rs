@@ -245,7 +245,7 @@ Do not call this tool twice in one go, just use multiple elements in `cmds`.
 
 Each hai-command can start with "/" or "!" (ask AI to use a tool). The behavior
 without either prefix is for the message to be prompted to the AI. Some commands
-can span multiple lines (e.g. /asset-new).
+can span multiple lines (e.g. /asset-write).
 
 You can return 0 cmds or as many as you like. The AI will execute them in the
 order they are given. Each successive command has access to the outputs of the
@@ -286,10 +286,15 @@ Available Commands:
 
 --
 
-/load <glob path>     - Load files into the conversation (e.g., `/load src/**/*.py`)
+/file-read <glob>     - Load files into the conversation (e.g., `/load src/**/*.py`)
                         Supports text files or PNG/JPG images
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-/load-url <url>       - Load the URL into the conversation
+/file-write <path> <multi-line body>
+                      - Create/replace a file at `path`. This is a MULTI-line command.
+                        Use a newline after `path` to write arbitrary multi-line content to the file.
+/file-cat <glob>      - Load file(s) into the conversation and print it
+                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+/http-get <url>       - Load the URL into the conversation
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                         .raw=BOOL Return raw content rather than extracting markdown (default: false)
 /exec <cmd>           - Executes a shell command and adds the output to this conversation.
@@ -360,22 +365,23 @@ Assets:
 - Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
 
-/asset-new <name><NEWLINE><body> - Create/replace a `doc` asset. This is a MULTI-line command.
-                           - Use a newline after `name` to write arbitrary multi-line content to the asset.
-
+/asset <name> - Opens an asset in their configured editor for interactive editing by the user.
 /asset-list <prefix>    - List assets with the given (optional) prefix. Supports globs.
 /asset-search <query>   - Search for assets semantically
                           .path=STRING   Specify the asset-pool to search (default: none)
-/asset-load <name> [<name> ...]   - Load asset(s) into the conversation
+/asset-read <name> [<name> ...]   - Load asset(s) into the conversation
                                     .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-/asset-view <name> [<name> ...]   - Print asset(s) contents and loads into the conversation
+/asset-write <name> <multi-line body>
+                        - Create/replace an asset with `name`. This is a MULTI-line command.
+                          Use a newline after `name` to write arbitrary multi-line content.
+/asset-cat <name> [<name> ...]   - Load asset(s) into the conversation and print it
                                     .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-link <name>      - Prints link to asset (valid for 24hr) and loads into the conversation
 /asset-revisions <name> <count> - Lists <count> number of revisions of an asset
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
                                   information about the asset. If cursor is set, begins listening
                                   at that specific revision to ensure no changes are missed.
-/asset-push <name><NEWLINE><body> - Push data as a new asset revision.
+/asset-push <name> <multi-line body> - Push data as a new asset revision.
                             - Use a newline after `name` to push arbitrary multi-line content.
                             - This is for pushing data like logs or messages that operate in an
                               append-only fashion. The content will be stored as a new revision
@@ -405,9 +411,9 @@ Assets:
 
 --
 
-/email <subject><NEWLINE><body> - Send an email to default address.
+/email <subject> <multi-line body> - Send an email to default address.
                           - Use a newline after `subject` to specify a multi-line email body.
-/notif <title><NEWLINE><body> - Send a push notification to mobile app.
+/notif <title> <multi-line body> - Send a push notification to mobile app.
                           - Use a newline after `title` to specify a multi-line notification body.
 
 --
@@ -417,7 +423,7 @@ Tasks
                           .key=STRING   Namespace the cache (default: none)
                           .trust=BOOL   Do not prompt for user confirmations (default: false)
 /task-search <query>    - Search for tasks in the repository
-/task-view <name/path>  - View a task without loading it from repo or file path
+/task-cat <name/path>   - Print a task without loading it from repo or file path
 /task-versions <name>   - List all versions of a task in the repo
 /task-publish <path>    - Publish task to repo (requires /account-login)
 
@@ -440,12 +446,12 @@ Usage guideline for command options:
 /<cmd>.<opt>=10 (set number)
 /<cmd>.<opt1>.<opt2>="" (multi-option specification)
 
-Usage guideline for <NEWLINE>:
+Usage guideline for <multi-line body>:
 
-Example of /asset-new
+Example of /asset-write
 
 ```
-/asset-new path/to/asset/abc
+/asset-write path/to/asset/abc
 contents line 1
 contents line 2
 ```

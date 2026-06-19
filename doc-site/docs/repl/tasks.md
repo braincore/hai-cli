@@ -45,7 +45,7 @@ all bedside manner from the LLM. You can view the task
 Alternatively, you can view the task with:
 
 ```
-/task-view ken/absolute-mode
+/task-cat ken/absolute-mode
 ```
 
 ### Task mode

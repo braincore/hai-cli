@@ -49,7 +49,7 @@ This removes all messages unless the REPL is in task mode.
 ## Reset Chat
 
 Resetting a conversation removes all conversational messages but keeps loaded
-data (`/load`, `/load-url`, `/asset-load`):
+data (`/file-read`, `/asset-read`, `/http-get`):
 
 ```
 /reset
@@ -61,7 +61,7 @@ data (`/load`, `/load-url`, `/asset-load`):
 To load a file into the chat conversation, use:
 
 ```
-/load <path>
+/file-read <path>
 ```
 
 To be vigilant about token usage, check the token count on the status line.
@@ -70,7 +70,7 @@ To load a file and have visible line numbers added (handy when asking the LLM
 to produce patches or refer to specific lines), use:
 
 ```
-/load.n <path>
+/file-read.n <path>
 ```
 
 ## Load a URL
@@ -78,7 +78,7 @@ to produce patches or refer to specific lines), use:
 To load a URL into the chat conversation, use:
 
 ```
-/load-url <url>
+/http-get <url>
 ```
 
 PNG and JPG responses will be rendered in the terminal and can be used with
@@ -88,13 +88,13 @@ HTML responses are automatically converted to markdown for significantly
 improved token efficiency. If this is undesirable, use:
 
 ```
-/load-url.raw <url>
+/http-get.raw <url>
 ```
 
 To have visible line numbers added to assist LLMs with patching, use:
 
 ```
-/load-url.n <url>
+/http-get.n <url>
 ```
 
 ## Execute program and load stdout/stderr

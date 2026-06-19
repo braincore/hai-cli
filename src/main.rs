@@ -442,11 +442,13 @@ async fn repl(
         "/task-forget",
         "/task-purge",
         "/task-search",
-        "/task-view",
+        "/task-cat",
         "/task-include",
         "/task-versions",
-        "/load",
-        "/load-url",
+        "/file-read",
+        "/file-cat",
+        "/file-write",
+        "/http-get",
         "/exec",
         "/prep",
         "/pin",
@@ -459,14 +461,16 @@ async fn repl(
         "/set-key",
         "/set-mask-secrets",
         "/asset",
-        "/asset-new",
-        "/asset-edit",
         "/asset-push",
         "/asset-list",
         "/ls",
         "/asset-search",
-        "/asset-load",
-        "/asset-view",
+        "/asset-read",
+        "/read",
+        "/asset-write",
+        "/write",
+        "/asset-cat",
+        "/cat",
         "/asset-revisions",
         "/asset-link",
         "/asset-import",
@@ -713,7 +717,7 @@ async fn repl(
             update_available_str
         );
         if let Some(version) = newer_client_version {
-            println!("  - changelog: `/asset-view /hai/changelog` or `!!cat @/hai/changelog`");
+            println!("  - changelog: `/cat /hai/changelog` or `!!cat @/hai/changelog`");
             let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {
                 println!(

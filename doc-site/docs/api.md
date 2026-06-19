@@ -22,5 +22,5 @@ requests.
 If you want to read about the details, use:
 
 ```
-/task-view hai/api
+/task-cat hai/api
 ```

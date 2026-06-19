@@ -234,8 +234,20 @@ pub fn execute_hai_repl_tool(
                 cmds.push(format!("!hai {}", _continue));
             }
             for (index, cmd) in cmds.iter().enumerate().rev() {
+                // NOTE: We don't want to write file or asset contents twice to
+                // the conversation history. So, if contents appear as part of
+                // the response to the !hai tool, we assume that's where the
+                // contents will live and we Basically, we don't want to write file
+                // or assets
+                let input = if cmd.starts_with("/asset-write") || cmd.starts_with("/file-write") {
+                    cmd.split_once(' ')
+                        .map(|(base, rest)| format!("{}.omit_content_from_history {}", base, rest))
+                        .unwrap_or_else(|| cmd.clone())
+                } else {
+                    cmd.clone()
+                };
                 cmd_queue.push_front(session::CmdInput {
-                    input: cmd.clone(),
+                    input,
                     source: session::CmdSource::HaiTool(index as u32),
                     reply_channel: None,
                 });

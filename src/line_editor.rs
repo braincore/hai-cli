@@ -557,13 +557,16 @@ impl Completer for CmdAndFileCompleter {
         let (completions, fallback_ok) = if line.starts_with('/') || line.starts_with("!!") {
             if is_cmd_input(line, "/load")
                 || is_cmd_input(line, "/l")
+                || is_cmd_input(line, "/file-read")
+                || is_cmd_input(line, "/file-cat")
+                || is_cmd_input(line, "/file-write")
                 || is_cmd_input(line, "/cd")
                 || is_cmd_input(line, "/task-publish")
                 || is_task_file_path_arg(line, "/t")
                 || is_task_file_path_arg(line, "/task")
                 || is_task_file_path_arg(line, "/task-include")
                 || is_task_file_path_arg(line, "/task-forget")
-                || is_task_file_path_arg(line, "/task-view")
+                || is_task_file_path_arg(line, "/task-cat")
             {
                 let (cmd_word, arg1_prefix) = line
                     .split_once(char::is_whitespace)
@@ -579,7 +582,7 @@ impl Completer for CmdAndFileCompleter {
                 (completions, false)
             } else if is_cmd_input(line, "/task")
                 || is_cmd_input(line, "/t")
-                || is_cmd_input(line, "/task-view")
+                || is_cmd_input(line, "/task-cat")
                 || is_cmd_input(line, "/task-edit")
                 || is_cmd_input(line, "/task-purge")
                 || is_cmd_input(line, "/task-forget")
@@ -646,8 +649,12 @@ impl Completer for CmdAndFileCompleter {
                 let mut completions = self.asset_completer(arg_prefix);
                 realign_suggestions(&mut completions, arg_index, self.debug);
                 (completions, true)
-            } else if is_cmd_input(line, "/asset-load")
+            } else if is_cmd_input(line, "/asset-read")
+                || is_cmd_input(line, "/read")
+                || is_cmd_input(line, "/asset-load")
                 || is_cmd_input(line, "/asset-view")
+                || is_cmd_input(line, "/asset-cat")
+                || is_cmd_input(line, "/cat")
                 || is_cmd_input(line, "/asset-move")
                 || is_cmd_input(line, "/asset-copy")
             {

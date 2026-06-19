@@ -857,7 +857,11 @@ pub async fn process_cmd(
 
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Load(cmd::LoadCmd {
+        cmd::Cmd::FileRead(cmd::FileReadCmd {
+            path,
+            show_line_numbers,
+        })
+        | cmd::Cmd::FileCat(cmd::FileCatCmd {
             path,
             show_line_numbers,
         }) => {
@@ -925,11 +929,15 @@ pub async fn process_cmd(
                                 bpe_tokenizer,
                                 (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
                             );
-                            println!(
-                                "Loaded: {} ({} tokens)",
-                                &file_path.to_string_lossy(),
-                                token_count.to_formatted_string(&Locale::en)
-                            );
+                            if matches!(cmd, cmd::Cmd::FileCat(_)) {
+                                println!("{}", file_contents);
+                            } else {
+                                println!(
+                                    "Loaded: {} ({} tokens)",
+                                    &file_path.to_string_lossy(),
+                                    token_count.to_formatted_string(&Locale::en)
+                                );
+                            }
                             newly_loaded_tokens += token_count;
                         } else {
                             // Not a text file, try opening as image
@@ -963,16 +971,67 @@ pub async fn process_cmd(
                             }
                         }
                     }
-                    println!(
-                        "Total tokens loaded: {}",
-                        newly_loaded_tokens.to_formatted_string(&Locale::en)
-                    );
+                    if !matches!(cmd, cmd::Cmd::FileCat(_)) {
+                        println!(
+                            "Total tokens loaded: {}",
+                            newly_loaded_tokens.to_formatted_string(&Locale::en)
+                        );
+                    }
                 }
                 Err(e) => println!("Error: {:?}", e),
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::LoadUrl(cmd::LoadUrlCmd {
+        cmd::Cmd::FileWrite(cmd::FileWriteCmd {
+            path,
+            contents,
+            suppress_body,
+        }) => {
+            let write_target_deref = haivar::replace_haivars(&path, &cfg.haivars);
+            let write_target = match shellexpand::full(&write_target_deref) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            match fs::write(&write_target, contents.clone().unwrap_or("".to_string())) {
+                Ok(_) => {
+                    if suppress_body {
+                        session_history_add_user_text_entry(
+                            &raw_user_input,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                        );
+                    } else {
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &contents.unwrap_or("".to_string()),
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                    }
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "error: could not write to file: {:?}: {:?}",
+                        write_target, e
+                    );
+                    eprintln!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::HttpGet(cmd::HttpGetCmd {
             url,
             raw,
             show_line_numbers,
@@ -1608,11 +1667,11 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::TaskView(cmd::TaskViewCmd { task_ref }) => {
+        cmd::Cmd::TaskCat(cmd::TaskCatCmd { task_ref }) => {
             if let Some((config, haitask)) = get_haitask_from_task_ref(
                 &task_ref,
                 session,
-                "task-view",
+                "task-cat",
                 matches!(cmd_input.source, session::CmdSource::Internal),
             )
             .await
@@ -1662,7 +1721,11 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::Asset(cmd::AssetCmd { asset_name, editor }) => {
+        cmd::Cmd::Asset(cmd::AssetCmd {
+            asset_name,
+            editor,
+            no_create,
+        }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -1744,6 +1807,10 @@ pub async fn process_cmd(
                             }
                         }
                         Err(asset_reader::GetAssetError::BadName) => {
+                            if no_create {
+                                eprintln!("error: asset does not exist: {}", asset_name);
+                                return ProcessCmdResult::Loop;
+                            }
                             let akm_info = match asset_crypt::choose_akm_for_asset(
                                 asset_blob_cache.clone(),
                                 session.asset_keyring.clone(),
@@ -1794,164 +1861,6 @@ pub async fn process_cmd(
                 .await;
                 ProcessCmdResult::Loop
             }
-        }
-        cmd::Cmd::AssetNew(cmd::AssetNewCmd {
-            asset_name,
-            contents,
-            encrypt,
-        }) => {
-            let username = if let Some(account) = session.account.as_ref() {
-                account.username.clone()
-            } else {
-                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
-                return ProcessCmdResult::Loop;
-            };
-            let asset_name = resolve_asset_name(&asset_name, session);
-            if !asset_helper::is_likely_valid_asset_name(&asset_name) {
-                // A client-side check is performed because interactive editors
-                // like vim sometimes swallow the error message which means a
-                // user won't be aware that their new asset didn't save.
-                eprintln!("error: invalid name");
-                return ProcessCmdResult::Loop;
-            } else if encrypt && asset_name.starts_with("/") {
-                eprintln!("error: cannot create encrypted asset in the public pool");
-                return ProcessCmdResult::Loop;
-            }
-            let api_client = mk_api_client(Some(session));
-            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
-                asset_blob_cache.clone(),
-                session.asset_keyring.clone(),
-                api_client.clone(),
-                Some(&KeyRecipient::User(username.clone())),
-                &asset_name,
-                encrypt,
-            )
-            .await
-            {
-                Ok(akm_info) => akm_info,
-                Err(e) => {
-                    match e {
-                        asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
-                        }
-                    }
-                    return ProcessCmdResult::Loop;
-                }
-            };
-
-            if let Some(contents) = contents {
-                let _ = update_asset_tx
-                    .send(asset_async_writer::WorkerAssetMsg::Update(
-                        asset_async_writer::WorkerAssetUpdate {
-                            asset_name: asset_name.clone(),
-                            asset_entry_ref: None,
-                            new_contents: contents.clone().into_bytes(),
-                            is_push: false,
-                            api_client: api_client.clone(),
-                            one_shot: true,
-                            akm_info: akm_info.clone(),
-                            reply_channel: None,
-                        },
-                    ))
-                    .await;
-            } else {
-                let _ = asset_editor::edit_with_editor_api(
-                    &api_client,
-                    &session.shell,
-                    &session.editor,
-                    &[],
-                    &asset_name,
-                    None,
-                    None,
-                    false,
-                    update_asset_tx,
-                    akm_info,
-                    debug,
-                )
-                .await;
-            }
-            ProcessCmdResult::Loop
-        }
-        cmd::Cmd::AssetEdit(cmd::AssetEditCmd { asset_name }) => {
-            let username = if let Some(account) = session.account.as_ref() {
-                account.username.clone()
-            } else {
-                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
-                return ProcessCmdResult::Loop;
-            };
-            let asset_name = resolve_asset_name(&asset_name, session);
-            let api_client = mk_api_client(Some(session));
-            // NOTE: Possible improvement is to only fetch `metadata` if
-            // `content_encrypted` is set.
-            let (asset_contents, md_contents, asset_entry) =
-                match asset_reader::get_asset_and_metadata(
-                    asset_blob_cache.clone(),
-                    &api_client,
-                    &asset_name,
-                    false,
-                )
-                .await
-                .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
-                {
-                    Ok(asset_get_res) => asset_get_res,
-                    Err(asset_reader::GetAssetError::BadName) => {
-                        eprintln!("error: bad asset name: {}", asset_name);
-                        return ProcessCmdResult::Loop;
-                    }
-                    Err(asset_reader::GetAssetError::DataFetchFailed) => {
-                        eprintln!("error: failed to get asset data: {}", asset_name);
-                        return ProcessCmdResult::Loop;
-                    }
-                };
-            let akm_info = match asset_crypt::choose_akm_for_asset(
-                asset_blob_cache.clone(),
-                session.asset_keyring.clone(),
-                api_client.clone(),
-                Some(&KeyRecipient::User(username.clone())),
-                &asset_crypt::extract_key_recipients_from_shared_asset_name(&asset_name, &username),
-                md_contents.as_deref(),
-                None,
-            )
-            .await
-            {
-                Ok(akm_info) => akm_info,
-                Err(e) => {
-                    match e {
-                        asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
-                        }
-                    }
-                    return ProcessCmdResult::Loop;
-                }
-            };
-
-            let decrypted_asset_contents = if let Some(akm_info) = &akm_info {
-                let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
-                crypt::decrypt_content(&enc_content, &akm_info.unlocked_akm.sym_key_info.aes_key)
-                    .unwrap()
-            } else {
-                asset_contents.clone()
-            };
-            let asset_entry_ref = asset_entry
-                .as_ref()
-                .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
-            let _ = asset_editor::edit_with_editor_api(
-                &api_client,
-                &session.shell,
-                &session.editor,
-                &decrypted_asset_contents,
-                &asset_name,
-                asset_entry_ref,
-                asset_entry
-                    .and_then(|entry| entry.metadata)
-                    .and_then(|md| md.content_type),
-                false,
-                update_asset_tx,
-                akm_info,
-                debug,
-            )
-            .await;
-            ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetPush(cmd::AssetPushCmd {
             asset_name,
@@ -2186,11 +2095,11 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetLoad(cmd::AssetLoadCmd {
+        cmd::Cmd::AssetRead(cmd::AssetReadCmd {
             asset_names,
             show_line_numbers,
         })
-        | cmd::Cmd::AssetView(cmd::AssetViewCmd {
+        | cmd::Cmd::AssetCat(cmd::AssetCatCmd {
             asset_names,
             show_line_numbers,
         }) => {
@@ -2317,7 +2226,7 @@ pub async fn process_cmd(
                                     bpe_tokenizer,
                                     (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
                                 );
-                                if matches!(cmd, cmd::Cmd::AssetLoad(_)) {
+                                if matches!(cmd, cmd::Cmd::AssetRead(_)) {
                                     println!(
                                         "Loaded: {} ({} tokens)",
                                         asset_name, asset_token_count
@@ -2343,6 +2252,84 @@ pub async fn process_cmd(
                     eprintln!("error: {}", e);
                     return ProcessCmdResult::Loop;
                 }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetWrite(cmd::AssetWriteCmd {
+            asset_name,
+            contents,
+            encrypt,
+            suppress_body,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            if !asset_helper::is_likely_valid_asset_name(&asset_name) {
+                // A client-side check is performed because interactive editors
+                // like vim sometimes swallow the error message which means a
+                // user won't be aware that their new asset didn't save.
+                eprintln!("error: invalid name");
+                return ProcessCmdResult::Loop;
+            } else if encrypt && asset_name.starts_with("/") {
+                eprintln!("error: cannot create encrypted asset in the public pool");
+                return ProcessCmdResult::Loop;
+            }
+            let api_client = mk_api_client(Some(session));
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.clone())),
+                &asset_name,
+                encrypt,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let _ = update_asset_tx
+                .send(asset_async_writer::WorkerAssetMsg::Update(
+                    asset_async_writer::WorkerAssetUpdate {
+                        asset_name: asset_name.clone(),
+                        asset_entry_ref: None,
+                        new_contents: contents.clone().unwrap_or("".to_string()).into_bytes(),
+                        is_push: false,
+                        api_client: api_client.clone(),
+                        one_shot: true,
+                        akm_info: akm_info.clone(),
+                        reply_channel: None,
+                    },
+                ))
+                .await;
+            // WARN: Ideally, the conversation history should be updated once
+            // the write is complete.
+            if suppress_body {
+                session_history_add_user_text_entry(
+                    &raw_user_input,
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                );
+            } else {
+                session_history_add_user_cmd_and_reply_entries(
+                    raw_user_input,
+                    &contents.unwrap_or("".to_string()),
+                    session,
+                    bpe_tokenizer,
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
+                );
             }
             ProcessCmdResult::Loop
         }
@@ -4148,7 +4135,7 @@ pub async fn process_cmd(
                     .lock()
                     .await
                     .push_front(session::CmdInput {
-                        input: format!("/asset-edit {}", asset_name),
+                        input: format!("/asset.no_create {}", asset_name),
                         source: session::CmdSource::Internal,
                         reply_channel: None,
                     });
@@ -5052,7 +5039,7 @@ pub async fn process_cmd(
             } else {
                 Some(email_answer.trim().to_string())
             };
-            println!("Read our terms of service: `/asset-view /hai/terms-of-service`");
+            println!("Read our terms of service: `/cat /hai/terms-of-service`");
             let terms_answer = term::ask_question_default_empty("Accept? (Type 'yes')", false);
             if terms_answer != "y" && terms_answer != "yes" {
                 eprintln!("Awkward...");
@@ -5245,7 +5232,7 @@ pub async fn process_cmd(
                             whois_lines.push(task.task_fqn.to_string());
                         }
                         whois_lines.push("".to_string());
-                        whois_lines.push("Use `/task-view <task_name>` to learn more".to_string());
+                        whois_lines.push("Use `/task-cat <task_name>` to learn more".to_string());
                     }
                     let whois_output = whois_lines.join("\n");
                     println!("{}", whois_output);
@@ -5486,7 +5473,7 @@ const HELP_MSG: &str = r##"Available Commands:
                                .key=STRING   Namespace the cache (default: none)
                                .trust=BOOL   Do not prompt for user confirmations (default: false)
 /task-search <query>         - Search for tasks in the repository
-/task-view <name|path>       - View a task without loading it from repo or file path
+/task-cat <name|path>        - View a task without loading it from repo or file path
 /task-versions <name>        - List all versions of a task in the repository
 /task-end                    - End task mode (CTRL+D works too)
 /task-update <name>          - Update task to latest version
@@ -5498,10 +5485,15 @@ const HELP_MSG: &str = r##"Available Commands:
 
 --
 
-/l /load <glob path>         - Load files into the conversation (e.g., `/load src/**/*.py`)
+/file-read <glob path>       - Load files into the conversation (e.g., `/load src/**/*.py`)
                                Supports text files or PNG/JPG images
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-/load-url <url>              - Load url into the conversation
+/file-write <path> <multi-line body>
+                             - Create/replace a file at `path`. This is a MULTI-line command.
+                               Use a newline after `path` to write arbitrary multi-line content to the file.
+/file-cat <glob path>        - Load file(s) into the conversation and print it
+                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+/http-get <url>              - Load url into the conversation
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                                .raw=BOOL  Return raw content rather than extracting markdown (default: false)
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
@@ -5570,14 +5562,16 @@ Assets (Experimental):
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
 
 /a /asset <name> [<editor>]      - Open asset in editor (create if does not exist)
-/asset-new <name>                - Create a new asset and open editor
-/asset-edit <name>               - Open existing asset in editor
 /ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
 /asset-search <query>            - Search for assets semantically
                                    .path=STRING   Specify the asset-pool to search (default: none)
-/asset-load <name> [<name> ...]  - Load asset(s) into the conversation
+/asset-read <name> [<name> ...]  - Load asset(s) into the conversation
                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-/asset-view <name> [<name> ...]  - Print asset(s) contents and loads it into the conversation
+/asset-write <name> <multi-line body>
+                                 - Create/replace an asset with `name`. This is a MULTI-line command.
+                                   Use a newline after `name` to write arbitrary multi-line content.
+/cat /asset-cat <name> [<name> ...]
+                                 - Load asset(s) into the conversation and print it
                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /asset-link <name>               - Prints link to asset (valid for 24hr) and loads it into the conversation
 /asset-revisions <name> [<n>]    - Lists revisions of an asset one at a time, waiting for user input

@@ -7,7 +7,7 @@ temporarily making assets available locally, and revision control.
 
 ## Create an asset
 
-To create or open an existing asset, use:
+To create or open an existing asset in an editor, use:
 
 ```
 /asset <name>
@@ -40,7 +40,8 @@ To use another editor:
 To load an asset into a conversation, use:
 
 ```
-/asset-load <name> [<name> ...]
+/asset-read <name> [<name> ...]
+/read <name> [<name> ...]
 ```
 
 !!!tip "Tab complete for asset names"
@@ -49,11 +50,12 @@ To load an asset into a conversation, use:
 To load an asset and print its contents in the repl, use:
 
 ```
-/asset-view <name> [<name> ...]
+/asset-cat <name> [<name> ...]
+/cat <name> [<name> ...]
 ```
 
-Similar local files loaded with `/load`, loaded assets are retained after a
-`/reset`.
+Similar to local files loaded with `/file-read`, loaded assets are retained
+after a `/reset`.
 
 Asset names support glob patterns (`*`, `?`, `[...]`) for matching multiple
 assets at once.
@@ -62,7 +64,7 @@ To load an asset and have visible line numbers added (handy when asking the LLM
 to produce patches or refer to specific lines), use:
 
 ```
-/load.n <path>
+/asset-read.n <path>
 ```
 
 ## Listing assets
@@ -242,7 +244,7 @@ For example, substituting your username you can create a public file:
 Any other user can view it with:
 
 ```
-/asset-view /<username>/public.txt
+/asset-cat /<username>/public.txt
 ```
 
 !!!tip "Public assets shortcut"

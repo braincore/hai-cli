@@ -101,10 +101,7 @@ pub async fn send_to_openai(
             );
         }
         // Reasoning models & gpt-5 do not support temperature
-        if !model.starts_with("o")
-            && !model.starts_with("gpt-5-")
-            && !model.starts_with("gpt-5.")
-        {
+        if !model.starts_with("o") && !model.starts_with("gpt-5-") && !model.starts_with("gpt-5.") {
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
         if let Some(tp) = tool_policy {

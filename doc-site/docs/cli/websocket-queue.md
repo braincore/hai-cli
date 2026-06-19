@@ -30,7 +30,7 @@ Connect to the WebSocket and send a JSON payload like:
 {
   ".tag": "push",
   "cmds": [
-    "/load-url <url-populated-by-requester>",
+    "/http-get <url-populated-by-requester>",
     "Key takeaways?",
   ]
 }
