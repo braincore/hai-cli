@@ -144,14 +144,19 @@ pub enum GetRevisionError {
 ///   the asset is encrypted.
 ///
 /// # Returns
-/// If returns None, responsible for printing error msg.
+/// `Ok((data_contents, metadata_contents, revision))` on success, where
+/// `data_contents` and `metadata_contents` are optional byte vectors
+/// containing the asset data and metadata respectively, and `revision` is the
+/// fetched `AssetRevision`.
+///
+/// `data_contents` is None when the entry contains no data (e.g. Folder).
 pub async fn get_asset_and_metadata_revision(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     rev_id: Option<&str>,
     only_fetch_metadata_if_necessary: bool,
-) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetRevision), GetRevisionError> {
+) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, AssetRevision), GetRevisionError> {
     let revision_get_res = match api_client
         .asset_revision_get(AssetRevisionGetArg {
             entry_ref: EntryRef::Name(asset_name.to_string()),
@@ -173,18 +178,24 @@ pub async fn get_asset_and_metadata_revision(
         },
     }?;
 
+    if matches!(
+        revision_get_res.revision.op,
+        crate::api::types::asset::AssetEntryOp::Delete
+    ) {
+        return Err(GetRevisionError::Deleted);
+    }
+
     let data_contents = if let Some(data_url) = revision_get_res.revision.asset.url.as_ref()
         && let Some(hash) = revision_get_res.revision.asset.hash.as_ref()
     {
         match asset_blob_cache.get_or_download(data_url, hash).await {
-            Ok(contents) => contents,
+            Ok(contents) => Some(contents),
             Err(_) => {
-                eprintln!("error: failed to fetch asset data");
                 return Err(GetRevisionError::DataFetchFailed);
             }
         }
     } else {
-        return Err(GetRevisionError::Deleted);
+        None
     };
     let metadata_contents = if let Some(AssetMetadataInfo {
         url: Some(metadata_url),
@@ -201,7 +212,6 @@ pub async fn get_asset_and_metadata_revision(
                 {
                     Ok(contents) => contents,
                     Err(_) => {
-                        eprintln!("error: failed to fetch asset metadata");
                         return Err(GetRevisionError::DataFetchFailed);
                     }
                 },

@@ -1468,7 +1468,15 @@ async fn handle_get(
                 !return_metadata,
             )
             .await
-            {
+            .and_then(|(data, md, rev)| {
+                if matches!(rev.asset.kind, crate::api::types::asset::AssetKind::Folder)
+                    && !return_metadata
+                {
+                    Err(GetRevisionError::BadEntryRef)
+                } else {
+                    Ok((data, md, rev))
+                }
+            }) {
                 Ok((data, md, rev)) => (data, md, rev, asset_name.to_string()),
                 Err(
                     GetRevisionError::BadEntryRef
@@ -1533,7 +1541,7 @@ async fn handle_get(
         } else {
             return HttpResponse::not_found();
         }
-    } else {
+    } else if let Some(data_contents) = data_contents {
         match asset_crypt::maybe_decrypt_asset_contents(
             asset_blob_cache.clone(),
             asset_keyring.clone(),
@@ -1560,6 +1568,8 @@ async fn handle_get(
                 return HttpResponse::internal_error("Failed to decrypt asset");
             }
         }
+    } else {
+        return HttpResponse::no_content();
     };
 
     HttpResponse::ok(decrypted_contents, &content_type)
