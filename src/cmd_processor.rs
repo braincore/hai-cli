@@ -5586,6 +5586,9 @@ Assets (Experimental):
                                    information about the asset. If cursor is set, begins listening
                                    at that specific revision to ensure no changes are missed.
 /asset-push <name>               - Push data into an asset. See pushed data w/ `/asset-revisions`
+                                   This is for pushing data like logs or messages that operate in an
+                                   append-only fashion. The content will be stored as a new revision
+                                   each time and the history can be viewed with `/asset-revisions`.
 /asset-import <n> <p>            - Imports local <path> into asset with <name>
 /asset-export <n> <p>            - Exports asset with name to local <path>
 /asset-temp <name> [<count>]     - Exports asset to a temporary file.

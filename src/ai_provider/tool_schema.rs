@@ -375,8 +375,12 @@ Assets:
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
                                   information about the asset. If cursor is set, begins listening
                                   at that specific revision to ensure no changes are missed.
-/asset-push <name><NEWLINE><body> - Push data into an asset. See pushed data w/ `/asset-revisions`
+/asset-push <name><NEWLINE><body> - Push data as a new asset revision.
                             - Use a newline after `name` to push arbitrary multi-line content.
+                            - This is for pushing data like logs or messages that operate in an
+                              append-only fashion. The content will be stored as a new revision
+                              each time and the history can be viewed with `/asset-revisions`.
+                              This is not for editing or replacing an asset.
 /asset-import <name> <path>   - Imports local <path> into asset with <name>
 /asset-export <name> <path>   - Exports asset with name to local <path>
 /asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
