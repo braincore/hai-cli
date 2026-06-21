@@ -448,6 +448,7 @@ async fn repl(
         "/file-read",
         "/file-cat",
         "/file-write",
+        "/file-patch",
         "/http-get",
         "/exec",
         "/prep",
@@ -471,6 +472,8 @@ async fn repl(
         "/write",
         "/asset-cat",
         "/cat",
+        "/asset-patch",
+        "/patch",
         "/asset-revisions",
         "/asset-link",
         "/asset-import",
@@ -776,7 +779,7 @@ async fn repl(
                 print_step(&step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
-                // being written by `/asset-new`.
+                // being written by `/asset-write`.
                 let step_badge = format!("!hai-tool[{}]:", index);
                 let display_input =
                     if cmd_info.input.starts_with("/asset") && cmd_info.input.contains('\n') {

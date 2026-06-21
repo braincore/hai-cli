@@ -47,6 +47,8 @@ pub enum Cmd {
     FileCat(FileCatCmd),
     /// Write file
     FileWrite(FileWriteCmd),
+    /// Patch a file by replacing an exact string
+    FilePatch(FilePatchCmd),
     /// Load URL into conversation
     HttpGet(HttpGetCmd),
     /// Add pinned message to conversation
@@ -107,6 +109,8 @@ pub enum Cmd {
     AssetWrite(AssetWriteCmd),
     /// Read an asset into the convo and print it
     AssetCat(AssetCatCmd),
+    /// Patch an asset by replacing an exact string
+    AssetPatch(AssetPatchCmd),
     /// Get link to an asset
     AssetLink(AssetLinkCmd),
     /// Remove an asset
@@ -343,6 +347,16 @@ pub struct FileWriteCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct FilePatchCmd {
+    /// Path to file to patch
+    pub path: String,
+    /// The exact string to replace in the asset
+    pub search: String,
+    /// The string to replace with
+    pub replace: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct HttpGetCmd {
     /// URL to load from
     pub url: String,
@@ -575,6 +589,16 @@ pub struct AssetCatCmd {
     pub asset_names: Vec<String>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetPatchCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// The exact string to replace in the asset
+    pub search: String,
+    /// The string to replace with
+    pub replace: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1573,6 +1597,52 @@ fn parse_command(
                 }
             }
         }
+        "file-patch" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+
+            fn print_file_patch_usage() {
+                eprintln!("Usage: /file-patch <name>");
+                eprintln!("  <search string>");
+                eprintln!("  =======");
+                eprintln!("  <replace string>");
+                eprintln!();
+                eprintln!("The divider is the line with the LONGEST run of '=' characters.");
+                eprintln!("Use a single '=' for simple edits, or more (e.g. 100) if your");
+                eprintln!("search/replace text contains lines of '=' that would collide.");
+            }
+
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            let contents = match contents {
+                Some(c) => c,
+                None => {
+                    print_file_patch_usage();
+                    return None;
+                }
+            };
+
+            let path = match parse_one_arg(&cmd_arg) {
+                Some(name) => name,
+                None => {
+                    print_file_patch_usage();
+                    return None;
+                }
+            };
+
+            match split_search_replace(&contents) {
+                Ok((search, replace)) => Some(Cmd::FilePatch(FilePatchCmd {
+                    path,
+                    search,
+                    replace,
+                })),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    print_file_patch_usage();
+                    None
+                }
+            }
+        }
         "http-get" | "load-url" => {
             if !validate_options_and_print_err(cmd_name, &options, &["raw", "n"]) {
                 return None;
@@ -2100,6 +2170,52 @@ fn parse_command(
                     eprintln!("Usage: /asset-cat <name> [<name> ...]");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    None
+                }
+            }
+        }
+        "asset-patch" | "patch" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+
+            fn print_asset_patch_usage() {
+                eprintln!("Usage: /asset-patch <name>");
+                eprintln!("  <search string>");
+                eprintln!("  =======");
+                eprintln!("  <replace string>");
+                eprintln!();
+                eprintln!("The divider is the line with the LONGEST run of '=' characters.");
+                eprintln!("Use a single '=' for simple edits, or more (e.g. 100) if your");
+                eprintln!("search/replace text contains lines of '=' that would collide.");
+            }
+
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            let contents = match contents {
+                Some(c) => c,
+                None => {
+                    print_asset_patch_usage();
+                    return None;
+                }
+            };
+
+            let asset_name = match parse_one_arg(&cmd_arg) {
+                Some(name) => name,
+                None => {
+                    print_asset_patch_usage();
+                    return None;
+                }
+            };
+
+            match split_search_replace(&contents) {
+                Ok((search, replace)) => Some(Cmd::AssetPatch(AssetPatchCmd {
+                    asset_name,
+                    search,
+                    replace,
+                })),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    print_asset_patch_usage();
                     None
                 }
             }
@@ -3494,6 +3610,59 @@ fn validate_option_types(
     Ok(())
 }
 
+/// Splits a multi-line body into (search, replace) using the line that
+/// consists solely of `=` characters and has the LONGEST run of them as
+/// the divider. This lets a single `=` work in simple cases, while longer
+/// runs act as an escape hatch when the search/replace text itself
+/// contains lines of `=`.
+fn split_search_replace(body: &str) -> Result<(String, String), String> {
+    // A candidate divider is a line that, after trimming, is non-empty
+    // and consists entirely of '=' characters.
+    let mut longest: Option<(usize, usize)> = None; // (eq_count, line_index)
+    let mut tie = false;
+
+    let lines: Vec<&str> = body.lines().collect();
+
+    for (i, line) in lines.iter().enumerate() {
+        if !line.is_empty() && line.chars().all(|c| c == '=') {
+            let count = line.len();
+            match longest {
+                Some((bc, _)) if count > bc => {
+                    longest = Some((count, i));
+                    tie = false;
+                }
+                Some((bc, _)) if count == bc => {
+                    tie = true;
+                }
+                None => {
+                    longest = Some((count, i));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let (_, divider_idx) = longest.ok_or_else(|| {
+        "No divider found. Separate <search> and <replace> with a line of \
+         '=' characters (e.g. =======)."
+            .to_string()
+    })?;
+    if tie {
+        return Err("Ambiguous divider: multiple lines share the longest run \
+                    of '='. Make the intended divider strictly longer."
+            .to_string());
+    }
+
+    let search = lines[..divider_idx].join("\n");
+    let replace = lines[divider_idx + 1..].join("\n");
+
+    if search.is_empty() {
+        return Err("Search string is empty (nothing before the divider).".to_string());
+    }
+
+    Ok((search, replace))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4203,5 +4372,30 @@ mod tests {
             }
             _ => panic!("Failed to parse /task command properly"),
         }
+    }
+
+    #[test]
+    fn test_split_search_replace() {
+        let (s, r) = split_search_replace("foo\n=======\nbar").unwrap();
+        assert_eq!(s, "foo");
+        assert_eq!(r, "bar");
+
+        let (s, r) = split_search_replace("foo\n=\nbar").unwrap();
+        assert_eq!(s, "foo");
+        assert_eq!(r, "bar");
+
+        // Test longest wins when content has equals
+        let body = "a\n===\nb\n=======\nc\n===\nd";
+        let (s, r) = split_search_replace(body).unwrap();
+        assert_eq!(s, "a\n===\nb");
+        assert_eq!(r, "c\n===\nd");
+
+        // Test multi-line is preserved
+        let (s, r) = split_search_replace("l1\nl2\n=======\nr1\nr2").unwrap();
+        assert_eq!(s, "l1\nl2");
+        assert_eq!(r, "r1\nr2");
+
+        // Try no divider
+        assert!(split_search_replace("just text").is_err());
     }
 }

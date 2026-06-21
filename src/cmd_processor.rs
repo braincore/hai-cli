@@ -1002,7 +1002,7 @@ pub async fn process_cmd(
                             &raw_user_input,
                             session,
                             bpe_tokenizer,
-                            (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
                         );
                     } else {
                         session_history_add_user_cmd_and_reply_entries(
@@ -1029,6 +1029,93 @@ pub async fn process_cmd(
                     );
                 }
             }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::FilePatch(cmd::FilePatchCmd {
+            path,
+            search,
+            replace,
+        }) => {
+            let patch_target_deref = haivar::replace_haivars(&path, &cfg.haivars);
+            let patch_target = match shellexpand::full(&patch_target_deref) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let msg = match fs::File::open(&patch_target) {
+                Ok(mut file) => {
+                    // Read the file contents into a buffer
+                    let mut buffer = Vec::new();
+                    match file.read_to_end(&mut buffer) {
+                        Ok(_) => match std::str::from_utf8(&buffer) {
+                            Ok(file_contents) => {
+                                match search_and_replace(&file_contents, &search, &replace, 10) {
+                                    ReplaceResult::Success(new_contents) => {
+                                        match fs::write(&patch_target, new_contents) {
+                                            Ok(_) => "ok".to_string(),
+                                            Err(e) => {
+                                                let msg = format!(
+                                                    "error: could not write to file: {:?}: {:?}",
+                                                    patch_target, e
+                                                );
+                                                eprintln!("{}", msg);
+                                                msg
+                                            }
+                                        }
+                                    }
+                                    ReplaceResult::NoMatch => {
+                                        let msg = "error: no matches found".to_string();
+                                        eprintln!("{}", msg);
+                                        msg
+                                    }
+                                    ReplaceResult::MultipleMatches(expanded_matches) => {
+                                        let mut msg = format!(
+                                            "error: search string isn't unique (found {} matches)",
+                                            expanded_matches.len()
+                                        );
+                                        for expanded_match in expanded_matches {
+                                            msg.push_str("<<<<<<< START EXPANDED MATCH\n");
+                                            msg.push_str(&expanded_match);
+                                            msg.push_str("\n>>>>>>> END EXPANDED MATCH\n");
+                                        }
+                                        eprintln!("{}", msg);
+                                        msg
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "error: file is not valid utf-8: {:?}: {}",
+                                    patch_target, e
+                                );
+                                eprintln!("{}", msg);
+                                msg
+                            }
+                        },
+                        Err(e) => {
+                            let msg =
+                                format!("error: could not read file: {:?}: {}", patch_target, e);
+                            eprintln!("{}", msg);
+                            msg
+                        }
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("error: could not open file: {:?}: {}", patch_target, e);
+                    eprintln!("{}", msg);
+                    msg
+                }
+            };
+
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &msg,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::HttpGet(cmd::HttpGetCmd {
@@ -2320,7 +2407,7 @@ pub async fn process_cmd(
                     &raw_user_input,
                     session,
                     bpe_tokenizer,
-                    (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                    (is_task_mode_step, LogEntryRetentionPolicy::None),
                 );
             } else {
                 session_history_add_user_cmd_and_reply_entries(
@@ -2331,6 +2418,135 @@ pub async fn process_cmd(
                     (is_task_mode_step, LogEntryRetentionPolicy::None),
                 );
             }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetPatch(cmd::AssetPatchCmd {
+            asset_name,
+            search,
+            replace,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let api_client = mk_api_client(Some(session));
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let (decrypted_asset_contents, asset_entry, akm_info) =
+                match asset_reader::get_asset_and_metadata(
+                    asset_blob_cache.clone(),
+                    &api_client,
+                    &asset_name,
+                    true,
+                )
+                .await
+                .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
+                {
+                    Ok((asset_contents, md_contents, asset_entry)) => {
+                        let akm_info = match asset_crypt::choose_akm_for_asset(
+                            asset_blob_cache.clone(),
+                            session.asset_keyring.clone(),
+                            api_client.clone(),
+                            Some(&KeyRecipient::User(username.clone())),
+                            &asset_crypt::extract_key_recipients_from_shared_asset_name(
+                                &asset_name,
+                                &username,
+                            ),
+                            md_contents.as_deref(),
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(akm_info) => akm_info,
+                            Err(e) => {
+                                match e {
+                                    asset_crypt::AkmSelectionError::Abort(msg) => {
+                                        eprintln!("error: {}", msg);
+                                    }
+                                }
+                                return ProcessCmdResult::Loop;
+                            }
+                        };
+
+                        if let Some(akm_info) = &akm_info {
+                            let enc_content =
+                                crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                            (
+                                crypt::decrypt_content(
+                                    &enc_content,
+                                    &akm_info.unlocked_akm.sym_key_info.aes_key,
+                                )
+                                .unwrap(),
+                                asset_entry,
+                                Some(akm_info.clone()),
+                            )
+                        } else {
+                            (asset_contents.to_vec(), asset_entry, None)
+                        }
+                    }
+                    Err(asset_reader::GetAssetError::BadName) => {
+                        eprintln!("error: asset does not exist: {}", asset_name);
+                        return ProcessCmdResult::Loop;
+                    }
+                    Err(_) => return ProcessCmdResult::Loop,
+                };
+            let decrypted_asset_contents_str = match String::from_utf8(decrypted_asset_contents) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: asset contents are not valid UTF-8: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let asset_entry_ref = asset_entry
+                .as_ref()
+                .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
+            let msg = match search_and_replace(&decrypted_asset_contents_str, &search, &replace, 10)
+            {
+                ReplaceResult::Success(new_contents) => {
+                    let _ = update_asset_tx
+                        .send(asset_async_writer::WorkerAssetMsg::Update(
+                            asset_async_writer::WorkerAssetUpdate {
+                                asset_name: asset_name.clone(),
+                                asset_entry_ref: asset_entry_ref,
+                                new_contents: new_contents.into_bytes(),
+                                is_push: false,
+                                api_client: api_client.clone(),
+                                one_shot: true,
+                                akm_info: akm_info.clone(),
+                                reply_channel: None,
+                            },
+                        ))
+                        .await;
+                    "ok".to_string()
+                }
+                ReplaceResult::NoMatch => {
+                    let msg = "error: no matches found".to_string();
+                    eprintln!("{}", msg);
+                    msg
+                }
+                ReplaceResult::MultipleMatches(expanded_matches) => {
+                    let mut msg = format!(
+                        "error: search string isn't unique (found {} matches)",
+                        expanded_matches.len()
+                    );
+                    for expanded_match in expanded_matches {
+                        msg.push_str("<<<<<<< START EXPANDED MATCH\n");
+                        msg.push_str(&expanded_match);
+                        msg.push_str("\n>>>>>>> END EXPANDED MATCH\n");
+                    }
+                    eprintln!("{}", msg);
+                    msg
+                }
+            };
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &msg,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetRevisions(cmd::AssetRevisionsCmd {
@@ -5436,6 +5652,91 @@ pub async fn process_cmd(
     }
 }
 
+// --
+
+pub enum ReplaceResult {
+    /// New content with replacement
+    Success(String),
+    /// No matches found
+    NoMatch,
+    /// Multiple matches found
+    MultipleMatches(Vec<String>),
+}
+
+pub fn search_and_replace(
+    content: &str,
+    search: &str,
+    replace: &str,
+    context_lines: usize,
+) -> ReplaceResult {
+    if search.is_empty() {
+        return ReplaceResult::NoMatch;
+    }
+
+    // Find all match positions where the match spans entire line(s):
+    // - the match must start at the start of a line (col 0, including indentation)
+    // - the match must end at the end of a line (at a newline or end of content)
+    let matches: Vec<usize> = content
+        .match_indices(search)
+        .filter(|&(idx, _)| {
+            // Check start: must be at start of content or right after a newline
+            let starts_at_line = idx == 0 || content.as_bytes()[idx - 1] == b'\n';
+
+            // Check end: must be at end of content or right before a newline
+            let end = idx + search.len();
+            let ends_at_line = end == content.len() || content.as_bytes()[end] == b'\n';
+
+            starts_at_line && ends_at_line
+        })
+        .map(|(idx, _)| idx)
+        .collect();
+
+    match matches.len() {
+        0 => ReplaceResult::NoMatch,
+        1 => {
+            let idx = matches[0];
+            let mut new_content =
+                String::with_capacity(content.len() - search.len() + replace.len());
+            new_content.push_str(&content[..idx]);
+            new_content.push_str(replace);
+            new_content.push_str(&content[idx + search.len()..]);
+            ReplaceResult::Success(new_content)
+        }
+        // More than one match found
+        _ => {
+            let lines: Vec<&str> = content.lines().collect();
+
+            // Build byte offset -> line number mapping
+            let mut line_starts: Vec<usize> = vec![0];
+            for (i, line) in lines.iter().enumerate() {
+                if i < lines.len() - 1 {
+                    line_starts.push(line_starts.last().unwrap() + line.len() + 1);
+                }
+            }
+
+            let contexts: Vec<String> = matches
+                .iter()
+                .map(|&byte_offset| {
+                    let match_line = line_starts
+                        .iter()
+                        .position(|&start| start > byte_offset)
+                        .map(|p| p - 1)
+                        .unwrap_or(lines.len() - 1);
+
+                    let start_line = match_line.saturating_sub(context_lines);
+                    let end_line = (match_line + context_lines + 1).min(lines.len());
+
+                    lines[start_line..end_line].join("\n")
+                })
+                .collect();
+
+            ReplaceResult::MultipleMatches(contexts)
+        }
+    }
+}
+
+// --
+
 const HELP_MSG: &str = r##"Available Commands:
 
 /? /h /help                  - Show this help menu
@@ -5491,6 +5792,27 @@ const HELP_MSG: &str = r##"Available Commands:
 /file-write <path> <multi-line body>
                              - Create/replace a file at `path`. This is a MULTI-line command.
                                Use a newline after `path` to write arbitrary multi-line content to the file.
+/file-patch <path> <multi-line body>
+                             - Apply a search/replace patch to an existing file. This is a MULTI-line command.
+                               The body contains a search block and a replace block separated by a delimiter line.
+                               The search block must match full lines.
+
+                               The delimiter is the LONGEST run of `=` characters appearing on its own line in the
+                               body, so it can be disambiguated from any legitimate `=` runs in your content.
+                               The search block must match EXACTLY ONE location in the asset, or the patch fails.
+
+                               Format:
+                                 /file-patch path/to/file
+                                 <search text>
+                                 =======
+                                 <replace text>
+
+                               Tips:
+                                 - When typing manually, a single `=` works as the delimiter (as long as your
+                                   content has no `=` lines).
+                                 - LLMs should default to 7 (`=======`), and use a longer run if the content
+                                   itself contains lines of `=`.
+                                 - Use /file-read or /file-cat to grab exact text for building the search block.
 /file-cat <glob path>        - Load file(s) into the conversation and print it
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /http-get <url>              - Load url into the conversation
@@ -5573,6 +5895,28 @@ Assets (Experimental):
 /cat /asset-cat <name> [<name> ...]
                                  - Load asset(s) into the conversation and print it
                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+/asset-patch <name> <multi-line body>
+                                 - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
+                                   The body contains a search block and a replace block separated by a delimiter line.
+                                   The search block must match full lines.
+
+                                   The delimiter is the LONGEST run of `=` characters appearing on its own line in the
+                                   body, so it can be disambiguated from any legitimate `=` runs in your content.
+                                   The search block must match EXACTLY ONE location in the asset, or the patch fails.
+
+                                   Format:
+                                       /asset-patch path/to/file
+                                       <search text>
+                                       =======
+                                       <replace text>
+
+                                   Tips:
+                                       - When typing manually, a single `=` works as the delimiter (as long as your
+                                         content has no `=` lines).
+                                       - LLMs should default to 7 (`=======`), and use a longer run if the content
+                                         itself contains lines of `=`.
+                                       - Use /asset-read or /asset-cat to grab exact text and line context for
+                                         building the search block.
 /asset-link <name>               - Prints link to asset (valid for 24hr) and loads it into the conversation
 /asset-revisions <name> [<n>]    - Lists revisions of an asset one at a time, waiting for user input
                                    If `n` is set, displays `n` revisions without needing user input

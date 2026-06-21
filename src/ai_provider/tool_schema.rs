@@ -292,6 +292,27 @@ Available Commands:
 /file-write <path> <multi-line body>
                       - Create/replace a file at `path`. This is a MULTI-line command.
                         Use a newline after `path` to write arbitrary multi-line content to the file.
+/file-patch <path> <multi-line body>
+    - Apply a search/replace patch to an existing file. This is a MULTI-line command.
+      The body contains a search block and a replace block separated by a delimiter line.
+      The search block must match full lines.
+
+      The delimiter is the LONGEST run of `=` characters appearing on its own line in the
+      body, so it can be disambiguated from any legitimate `=` runs in your content.
+      The search block must match EXACTLY ONE location in the asset, or the patch fails.
+
+      Format:
+          /file-patch path/to/file
+          <search text>
+          =======
+          <replace text>
+
+      Tips:
+          - When typing manually, a single `=` works as the delimiter (as long as your
+            content has no `=` lines).
+          - LLMs should default to 7 (`=======`), and use a longer run if the content
+            itself contains lines of `=`.
+          - Use /file-read or /file-cat to grab exact text for building the search block.
 /file-cat <glob>      - Load file(s) into the conversation and print it
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
 /http-get <url>       - Load the URL into the conversation
@@ -376,6 +397,28 @@ Assets:
                           Use a newline after `name` to write arbitrary multi-line content.
 /asset-cat <name> [<name> ...]   - Load asset(s) into the conversation and print it
                                     .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+/asset-patch <name> <multi-line body>
+    - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
+    The body contains a search block and a replace block separated by a delimiter line.
+    The search block must match full lines.
+
+    The delimiter is the LONGEST run of `=` characters appearing on its own line in the
+    body, so it can be disambiguated from any legitimate `=` runs in your content.
+    The search block must match EXACTLY ONE location in the asset, or the patch fails.
+
+    Format:
+        /asset-patch path/to/file
+        <search text>
+        =======
+        <replace text>
+
+    Tips:
+        - When typing manually, a single `=` works as the delimiter (as long as your
+            content has no `=` lines).
+        - LLMs should default to 7 (`=======`), and use a longer run if the content
+            itself contains lines of `=`.
+        - Use /asset-read or /asset-cat with .n=true to grab exact text and line context
+        for building the search block.
 /asset-link <name>      - Prints link to asset (valid for 24hr) and loads into the conversation
 /asset-revisions <name> <count> - Lists <count> number of revisions of an asset
 /asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
