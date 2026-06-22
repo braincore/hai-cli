@@ -590,3 +590,35 @@ Paths within shared asset pools behave just like other assets.
 
 End-to-end encryption is **required** and must be setup for each user before an
 asset can be created. Otherwise, a key not found error will be returned.
+
+## Commands for LLMs
+
+These commands are primarily useful for programmatic use by an LLM.
+
+### Write
+
+```
+/asset-write <name>
+<body>
+```
+
+Unlike `/asset`, this does not open an interactive editor. The body can span
+multiple lines.
+
+### Patch
+
+```
+/asset-patch <name>
+<search>
+=======
+<replace>
+```
+
+Applies a search/replace patch to an existing asset. The body contains a search
+block and a replace block separated by a delimiter line.
+
+The search block must match full lines and EXACTLY ONE location in the asset.
+
+The delimiter is the LONGEST run of `=` characters appearing on its own line in
+the body, so it can be disambiguated from any legitimate `=` runs in your
+content.

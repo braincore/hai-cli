@@ -295,11 +295,10 @@ Available Commands:
 /file-patch <path> <multi-line body>
     - Apply a search/replace patch to an existing file. This is a MULTI-line command.
       The body contains a search block and a replace block separated by a delimiter line.
-      The search block must match full lines.
+      The search block must match full lines and EXACTLY ONE location in the asset.
 
       The delimiter is the LONGEST run of `=` characters appearing on its own line in the
       body, so it can be disambiguated from any legitimate `=` runs in your content.
-      The search block must match EXACTLY ONE location in the asset, or the patch fails.
 
       Format:
           /file-patch path/to/file
@@ -400,11 +399,10 @@ Assets:
 /asset-patch <name> <multi-line body>
     - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
     The body contains a search block and a replace block separated by a delimiter line.
-    The search block must match full lines.
+    The search block must match full lines and EXACTLY ONE location in the asset.
 
     The delimiter is the LONGEST run of `=` characters appearing on its own line in the
     body, so it can be disambiguated from any legitimate `=` runs in your content.
-    The search block must match EXACTLY ONE location in the asset, or the patch fails.
 
     Format:
         /asset-patch path/to/file
