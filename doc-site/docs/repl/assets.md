@@ -494,10 +494,12 @@ End-to-end lets you store assets with full confidence that only you have access
 to the data. Even a full compromise of hai's server-side asset storage does not
 change this.
 
-To use it:
+To setup end-to-end encryption, you will need to set an encryption password
+that's separate from your account password. Run:
 
-1. `/asset-crypt-setup` - set up an encryption key with password
-2. `/asset vault/<name>` - create private assets with the `vault/` prefix
+```
+/asset-crypt-setup
+```
 
 Commands that use encrypted assets will transparently decrypt and encrypt the
 data.
@@ -536,17 +538,6 @@ To lock a key and require the password again:
 
 Omitting `<key_id>` locks all keys. This removes the password from memory (and
 the OS keyring if enabled).
-
-### Bleeding edge
-
-If you'd like to encrypt private assets outside of `vault`, use:
-
-```
-/asset-new(encrypt) <name>
-```
-
-The plan is to make encryption the default for all private assets once this
-feature graduates from experimental status.
 
 ### Moves and copies
 
