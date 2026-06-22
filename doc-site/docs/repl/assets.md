@@ -338,7 +338,7 @@ Asset references support glob patterns (`*`, `?`, `[...]`) for matching multiple
 assets at once.
 
 ```
-[0] !!cat @data/*.txt
+[0] !!cat @@data/*.txt
 ```
 
 This expands to all `.txt` files in the `data/` folder, downloading each to a
@@ -347,10 +347,10 @@ temporary file.
 More examples:
 
 ```
-[0] !!wc -l @logs/2024-*.log
-[0] !!cat @chapters/part_?.md > @full-book.md
-[0] !!grep "error" @logs/[0-9][0-9][0-9].log
-[0] !!grep -l "TODO" @hai-cli/**/*.rs
+[0] !!wc -l @@logs/2024-*.log
+[0] !!cat @@chapters/part_?.md > @@full-book.md
+[0] !!grep "error" @@logs/[0-9][0-9][0-9].log
+[0] !!grep -l "TODO" @@hai-cli/**/*.rs
 ```
 
 !!!warning "Glob Limitations"
@@ -358,7 +358,7 @@ More examples:
     with output redirections (`>` or `>>`) will result in an error.
 
 !!!warning "Limitations"
-    The implementation uses simple string substitution to replace `@asset`
+    The implementation uses simple string substitution to replace `@@asset`
     markers with temporary files. Complex shell operations involving quotes or
     escapes around asset references may not work as expected.
 
@@ -371,7 +371,7 @@ new asset with the same name as the original but with a random suffix.
 An easy way to see the difference is to:
 
 ```
-!!diff @file @file(suffix)
+!!diff @@file @@file(suffix)
 ```
 
 ## Metadata
