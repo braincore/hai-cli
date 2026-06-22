@@ -429,12 +429,12 @@ task: `/task hai/email-asset-updates`
 Note that the API exposes a websockets interface that pushes notifications when
 changes occur.
 
-## Collapsing Folders
+## Folders
 
-The underlying asset store uses a key-value structure. While asset keys may
-contain forward slashes to resemble directory paths, these are purely cosmetic.
+While asset keys may contain forward slashes to resemble directory paths, these
+are by default purely cosmetic.
 
-By default, when listing your assets, they appear as a flat list:
+When listing assets, they appear as a flat list:
 
 ```
 [0] /ls
@@ -445,30 +445,15 @@ a/b/d
 a/b/e/f
 ```
 
-To make browsing easier, you can choose to "collapse" specific folders:
-
-- `/asset-folder-collapse <path>` - Collapse a folder when listing a parent prefix.
-- `/asset-folder-expand <path>` - Uncollapse a folder when listing a parent prefix.
-  **Note** that all folders are expanded by default.
-- `/asset-folder-list [<prefix>]` - List all collapsed folders with the given
-  path prefix.
-
-Collapsing the `a/b` folder:
+To collapse sub-trees, you can create an explicit folder:
 
 ```
-[1] /asset-collapse a/b
+[0] /asset-folder-new a/b
+[1] /ls
+a/b 📁
 ```
 
-Now, listing the root shows the collapsed folder:
-
-```
-[2] /ls
-```
-```
-a/b📁
-```
-
-To view the contents of the collapsed folder, list it directly:
+To view the contents of a folder, list it directly:
 
 ```
 [3] /ls a/b/
@@ -479,7 +464,16 @@ a/b/d
 a/b/e/f
 ```
 
-There's a limit of 100 collapsed folders each for your private and public assets.
+To remove a folder, remove it like any other asset:
+
+```
+/asset-remove a/b
+```
+
+### Folder Metadata
+
+Just like assets, folders can have [metadata](#metadata) attached using the
+same set of commands.
 
 ## Quota
 
