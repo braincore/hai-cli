@@ -138,6 +138,8 @@ pub enum Cmd {
     AssetSyncDown(AssetSyncDownCmd),
     /// Syncs assets up to the cloud
     AssetSyncUp(AssetSyncUpCmd),
+    /// Print local changes to assets
+    AssetSyncDiff(AssetSyncDiffCmd),
     /// Get ACL for an asset
     AssetAclGet(AssetAclGetCmd),
     /// Set ACL for an asset
@@ -683,6 +685,12 @@ pub struct AssetSyncUpCmd {
     pub sync_new_files: bool,
     /// Whether to do a dry run
     pub dry_run: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetSyncDiffCmd {
+    /// Path to diff against
+    pub path: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2428,15 +2436,37 @@ fn parse_command(
             if !validate_options_and_print_err(cmd_name, &options, &["new", "dry"]) {
                 return None;
             }
+            let expected_types = HashMap::from([
+                ("new".to_string(), OptionType::Bool),
+                ("dry".to_string(), OptionType::Bool),
+            ]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let new = options.get("new").map(|v| v == "true").unwrap_or(false);
+            let dry = options.get("dry").map(|v| v == "true").unwrap_or(false);
             match parse_two_arg_catchall(remaining) {
                 Some((prefix, target_path)) => Some(Cmd::AssetSyncUp(AssetSyncUpCmd {
                     source_path: prefix,
                     target_prefix: target_path,
-                    sync_new_files: options.contains_key("new"),
-                    dry_run: options.contains_key("dry"),
+                    sync_new_files: new,
+                    dry_run: dry,
                 })),
                 None => {
                     eprintln!("Usage: /asset-sync-up <source_path> <target_prefix>");
+                    None
+                }
+            }
+        }
+        "asset-sync-diff" => {
+            if !validate_options_and_print_err(cmd_name, &options, &["", ""]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(path) => Some(Cmd::AssetSyncDiff(AssetSyncDiffCmd { path })),
+                None => {
+                    eprintln!("Usage: /asset-sync-diff <path>");
                     None
                 }
             }

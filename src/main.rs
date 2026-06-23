@@ -482,6 +482,7 @@ async fn repl(
         "/asset-revision-temp",
         "/asset-sync-down",
         "/asset-sync-up",
+        "/asset-sync-diff",
         "/asset-listen",
         "/asset-acl-get",
         "/asset-acl-set",

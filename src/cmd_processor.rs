@@ -3388,7 +3388,7 @@ pub async fn process_cmd(
             .await
             {
                 Ok(sync_results) => {
-                    for res in sync_results {
+                    for res in &sync_results {
                         if matches!(res.action, asset_sync::SyncUpAction::Skipped) {
                             continue;
                         }
@@ -3400,15 +3400,119 @@ pub async fn process_cmd(
                             if res.success {
                                 "ok".to_string()
                             } else {
-                                res.error.unwrap_or_default()
+                                res.error.clone().unwrap_or_default()
                             },
                         )
                     }
+
+                    // Print summary
+                    let created = sync_results
+                        .iter()
+                        .filter(|r| {
+                            matches!(r.action, asset_sync::SyncUpAction::Created) && r.success
+                        })
+                        .count();
+                    let updated = sync_results
+                        .iter()
+                        .filter(|r| {
+                            matches!(r.action, asset_sync::SyncUpAction::Updated) && r.success
+                        })
+                        .count();
+                    let moved = sync_results
+                        .iter()
+                        .filter(|r| {
+                            matches!(r.action, asset_sync::SyncUpAction::Moved) && r.success
+                        })
+                        .count();
+                    let skipped = sync_results
+                        .iter()
+                        .filter(|r| matches!(r.action, asset_sync::SyncUpAction::Skipped))
+                        .count();
+                    let skipped_new = sync_results
+                        .iter()
+                        .filter(|r| matches!(r.action, asset_sync::SyncUpAction::SkippedNew))
+                        .count();
+                    let failed = sync_results.iter().filter(|r| !r.success).count();
+
+                    println!(
+                        "Sync up complete: {} created, {} updated, {} moved, {} unchanged, {} skipped (new), {} failed",
+                        created, updated, moved, skipped, skipped_new, failed
+                    );
                 }
                 Err(e) => {
                     eprintln!("error: failed to sync up: {}", e);
                 }
             }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetSyncDiff(cmd::AssetSyncDiffCmd { path }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let path_style = detect_path_style(&path);
+            let path = match shellexpand::full(&path) {
+                Ok(s) => s.into_owned(),
+                Err(e) => {
+                    eprintln!("error: undefined path variable: {}", e.var_name);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let api_client = mk_api_client(Some(session));
+            let mut all_msgs = vec![];
+            match asset_sync::sync_up(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                &api_client,
+                &username,
+                update_asset_tx,
+                &path,
+                None,
+                asset_sync::SyncUpOptions {
+                    sync_new_files: true,
+                    max_concurrent_uploads: 1,
+                    debug,
+                    dry_run: true,
+                },
+            )
+            .await
+            {
+                Ok(sync_results) => {
+                    for result in &sync_results {
+                        if !result.dry_run {
+                            panic!("sync_up should be in dry_run mode for AssetSyncDiff");
+                        }
+                        if matches!(
+                            result.action,
+                            asset_sync::SyncUpAction::Skipped
+                                | asset_sync::SyncUpAction::SkippedNew
+                        ) {
+                            continue;
+                        }
+                        let msg = format!(
+                            "{:<10}: {}",
+                            result.action,
+                            simplify_path(&result.file_path, &path_style)
+                        );
+                        println!("{}", msg);
+                        all_msgs.push(msg);
+                    }
+                }
+                Err(e) => {
+                    let msg = format!("error: failed to sync diff: {}", e);
+                    eprintln!("{}", msg);
+                    all_msgs.push(msg);
+                }
+            }
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &all_msgs.join("\n"),
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
@@ -5737,6 +5841,61 @@ pub fn search_and_replace(
 
 // --
 
+#[allow(dead_code)]
+fn detect_style_and_simplify_path(stylist: &str, path: &str) -> String {
+    let style = detect_path_style(stylist);
+    simplify_path(path, &style)
+}
+
+enum PathStyle {
+    Relative, // user typed "src/ab" or "./src/ab" or "../ab"
+    Tilde,    // user typed "~/src/ab"
+    Absolute, // user typed "/Users/ken/src/ab"
+}
+
+fn detect_path_style(input: &str) -> PathStyle {
+    if input.starts_with('~') {
+        PathStyle::Tilde
+    } else if input.starts_with('/') {
+        PathStyle::Absolute
+    } else {
+        PathStyle::Relative
+    }
+}
+
+fn simplify_path(abs_path: &str, style: &PathStyle) -> String {
+    let p = std::path::Path::new(abs_path);
+
+    match style {
+        PathStyle::Relative => {
+            if let Ok(cwd) = std::env::current_dir() {
+                if let Ok(rel) = p.strip_prefix(&cwd) {
+                    if rel.as_os_str().is_empty() {
+                        return ".".to_string();
+                    }
+                    return rel.to_string_lossy().into_owned();
+                }
+            }
+            // Not under cwd — leave it absolute rather than forcing it.
+            abs_path.to_string()
+        }
+        PathStyle::Tilde => {
+            if let Ok(home) = std::env::var("HOME") {
+                if let Ok(rest) = p.strip_prefix(&home) {
+                    if rest.as_os_str().is_empty() {
+                        return "~".to_string();
+                    }
+                    return format!("~/{}", rest.to_string_lossy());
+                }
+            }
+            abs_path.to_string()
+        }
+        PathStyle::Absolute => abs_path.to_string(),
+    }
+}
+
+// --
+
 const HELP_MSG: &str = r##"Available Commands:
 
 /? /h /help                  - Show this help menu
@@ -5932,6 +6091,7 @@ Assets (Experimental):
 /asset-revision-temp <n> [<rev>] - Exports revision of asset to a temporary file. `n` is asset name.
 /asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
 /asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
+/asset-sync-diff <path>          - Show what assets have changed locally since last sync-down.
 /asset-remove <name>             - Removes an asset
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>

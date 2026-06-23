@@ -204,6 +204,14 @@ allows for abbreviated syntax the next time:
 
 `-` is resolved to the original `prefix` stored in `.haisync`.
 
+### Track changes
+
+To see what's changed locally since the last sync, use:
+
+```
+/asst-sync-diff <path>
+```
+
 ### Syncing up changes
 
 To sync up changes, use:

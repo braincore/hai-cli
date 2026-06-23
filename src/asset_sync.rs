@@ -1421,6 +1421,7 @@ pub struct SyncUpResult {
     pub success: bool,
     #[allow(dead_code)]
     pub error: Option<String>,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1685,6 +1686,8 @@ pub async fn sync_up(
         ));
     }
 
+    let dry_run = options.dry_run;
+
     // Process files with concurrency control
     let semaphore = Arc::new(Semaphore::new(options.max_concurrent_uploads));
     let mut handles = Vec::new();
@@ -1717,13 +1720,6 @@ pub async fn sync_up(
                     old_asset_name, asset_name
                 ));
             }
-            if options.dry_run {
-                println!(
-                    "dry run: move asset '{}' -> '{}'",
-                    old_asset_name, asset_name
-                );
-                continue;
-            }
 
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
@@ -1737,6 +1733,7 @@ pub async fn sync_up(
                     &file_path,
                     &old_asset_name,
                     &asset_name,
+                    dry_run,
                     debug,
                 )
                 .await
@@ -1744,13 +1741,6 @@ pub async fn sync_up(
 
             handles.push(handle);
         } else if is_metadata {
-            if options.dry_run {
-                println!(
-                    "dry run: sync metadata file '{}' -> '{}'",
-                    file_path, asset_name
-                );
-                continue;
-            }
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
 
@@ -1760,6 +1750,7 @@ pub async fn sync_up(
                         &file_path,
                         &asset_name,
                         sync_new_files,
+                        dry_run,
                         debug,
                     )
                     .await,
@@ -1768,13 +1759,6 @@ pub async fn sync_up(
 
             handles.push(handle);
         } else {
-            if options.dry_run {
-                println!(
-                    "dry run: sync data file '{}' -> '{}'",
-                    file_path, asset_name
-                );
-                continue;
-            }
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 vec![
@@ -1787,6 +1771,7 @@ pub async fn sync_up(
                         &file_path,
                         &asset_name,
                         sync_new_files,
+                        dry_run,
                         debug,
                     )
                     .await,
@@ -1808,34 +1793,6 @@ pub async fn sync_up(
         }
     }
 
-    // Print summary
-    let created = results
-        .iter()
-        .filter(|r| matches!(r.action, SyncUpAction::Created) && r.success)
-        .count();
-    let updated = results
-        .iter()
-        .filter(|r| matches!(r.action, SyncUpAction::Updated) && r.success)
-        .count();
-    let moved = results
-        .iter()
-        .filter(|r| matches!(r.action, SyncUpAction::Moved) && r.success)
-        .count();
-    let skipped = results
-        .iter()
-        .filter(|r| matches!(r.action, SyncUpAction::Skipped))
-        .count();
-    let skipped_new = results
-        .iter()
-        .filter(|r| matches!(r.action, SyncUpAction::SkippedNew))
-        .count();
-    let failed = results.iter().filter(|r| !r.success).count();
-
-    println!(
-        "Sync up complete: {} created, {} updated, {} moved, {} unchanged, {} skipped (new), {} failed",
-        created, updated, moved, skipped, skipped_new, failed
-    );
-
     Ok(results)
 }
 
@@ -1853,6 +1810,7 @@ async fn sync_up_data_file(
     file_path: &str,
     asset_name: &str,
     sync_new_files: bool,
+    dry_run: bool,
     debug: bool,
 ) -> SyncUpResult {
     // Check if this file was originally synced down (has xattrs)
@@ -1876,12 +1834,16 @@ async fn sync_up_data_file(
                 file_path
             ));
         }
+        if dry_run {
+            println!("new:  {}", file_path)
+        }
         return SyncUpResult {
             file_path: file_path.to_string(),
             asset_name: asset_name.to_string(),
             action: SyncUpAction::SkippedNew,
             success: true,
             error: None,
+            dry_run,
         };
     }
 
@@ -1895,6 +1857,7 @@ async fn sync_up_data_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Failed to calculate hash: {}", e)),
+                dry_run,
             };
         }
     };
@@ -1917,6 +1880,7 @@ async fn sync_up_data_file(
                 action: SyncUpAction::Skipped,
                 success: true,
                 error: None,
+                dry_run,
             };
         }
     }
@@ -1931,6 +1895,7 @@ async fn sync_up_data_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Failed to read file: {}", e)),
+                dry_run,
             };
         }
     };
@@ -1958,6 +1923,7 @@ async fn sync_up_data_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Decryption key error")),
+                dry_run,
             };
         }
     };
@@ -1981,6 +1947,21 @@ async fn sync_up_data_file(
                 file_path, asset_name
             ));
         }
+    }
+
+    if dry_run {
+        return SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_update {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: true,
+            error: None,
+            dry_run: true,
+        };
     }
 
     // Send update through the async writer channel
@@ -2010,6 +1991,7 @@ async fn sync_up_data_file(
             },
             success: false,
             error: Some(format!("Failed to send update: {}", e)),
+            dry_run: false,
         };
     }
 
@@ -2038,6 +2020,7 @@ async fn sync_up_data_file(
                 },
                 success: true,
                 error: None,
+                dry_run: false,
             }
         }
         Ok(Err(e)) => SyncUpResult {
@@ -2050,6 +2033,7 @@ async fn sync_up_data_file(
             },
             success: false,
             error: Some(format!("Asset save error: {:?}", e)),
+            dry_run: false,
         },
         Err(e) => SyncUpResult {
             file_path: file_path.to_string(),
@@ -2061,6 +2045,7 @@ async fn sync_up_data_file(
             },
             success: false,
             error: Some(format!("Reply channel error: {}", e)),
+            dry_run: false,
         },
     }
 }
@@ -2071,6 +2056,7 @@ async fn sync_up_metadata_file(
     file_path: &str,
     asset_name: &str,
     sync_new_files: bool,
+    dry_run: bool,
     debug: bool,
 ) -> SyncUpResult {
     // Check if this metadata file was originally synced down
@@ -2098,6 +2084,7 @@ async fn sync_up_metadata_file(
             action: SyncUpAction::SkippedNew,
             success: true,
             error: None,
+            dry_run,
         };
     }
 
@@ -2111,6 +2098,7 @@ async fn sync_up_metadata_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Failed to calculate hash: {}", e)),
+                dry_run,
             };
         }
     };
@@ -2130,6 +2118,7 @@ async fn sync_up_metadata_file(
                 action: SyncUpAction::Skipped,
                 success: true,
                 error: None,
+                dry_run,
             };
         }
     }
@@ -2144,6 +2133,7 @@ async fn sync_up_metadata_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Failed to read file: {}", e)),
+                dry_run,
             };
         }
     };
@@ -2164,9 +2154,25 @@ async fn sync_up_metadata_file(
                 action: SyncUpAction::Skipped,
                 success: false,
                 error: Some(format!("Failed to parse metadata JSON: {}", e)),
+                dry_run,
             };
         }
     };
+
+    if dry_run {
+        return SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: asset_name.to_string(),
+            action: if is_previously_synced {
+                SyncUpAction::Updated
+            } else {
+                SyncUpAction::Created
+            },
+            success: true,
+            error: None,
+            dry_run: true,
+        };
+    }
 
     // Metadata always uses put with override
     match api_client
@@ -2199,6 +2205,7 @@ async fn sync_up_metadata_file(
                 action,
                 success: true,
                 error: None,
+                dry_run,
             }
         }
         Err(e) => SyncUpResult {
@@ -2211,6 +2218,7 @@ async fn sync_up_metadata_file(
             },
             success: false,
             error: Some(format!("API error: {}", e)),
+            dry_run,
         },
     }
 }
@@ -2244,6 +2252,7 @@ async fn sync_up_move(
     file_path: &str,
     old_asset_name: &str,
     new_asset_name: &str,
+    dry_run: bool,
     debug: bool,
 ) -> Vec<SyncUpResult> {
     if debug {
@@ -2251,6 +2260,17 @@ async fn sync_up_move(
             "sync_up_move: moving '{}' -> '{}' (file: '{}')\n",
             old_asset_name, new_asset_name, file_path
         ));
+    }
+
+    if dry_run {
+        return vec![SyncUpResult {
+            file_path: file_path.to_string(),
+            asset_name: new_asset_name.to_string(),
+            action: SyncUpAction::Moved,
+            success: true,
+            error: None,
+            dry_run: true,
+        }];
     }
 
     use crate::api::types::asset::AssetMoveArg;
@@ -2284,6 +2304,7 @@ async fn sync_up_move(
                 action: SyncUpAction::Moved,
                 success: true,
                 error: None,
+                dry_run: false,
             }];
 
             // Now check if the content also changed since last sync
@@ -2320,6 +2341,7 @@ async fn sync_up_move(
                     file_path,
                     new_asset_name,
                     false,
+                    dry_run,
                     debug,
                 )
                 .await;
@@ -2341,6 +2363,7 @@ async fn sync_up_move(
                 action: SyncUpAction::Moved,
                 success: false,
                 error: Some(format!("Failed to move asset: {}", e)),
+                dry_run: false,
             }]
         }
     }
@@ -2370,6 +2393,7 @@ pub async fn sync_up_pairs(
         let sem_clone = Arc::clone(&semaphore);
         let debug = options.debug;
         let sync_new_files = options.sync_new_files;
+        let dry_run = options.dry_run;
 
         // Determine if this is a metadata file based on file path
         let is_metadata = file_path.ends_with(METADATA_EXTENSION);
@@ -2383,6 +2407,7 @@ pub async fn sync_up_pairs(
                     &file_path,
                     &asset_name,
                     sync_new_files,
+                    dry_run,
                     debug,
                 )
                 .await
@@ -2396,6 +2421,7 @@ pub async fn sync_up_pairs(
                     &file_path,
                     &asset_name,
                     sync_new_files,
+                    dry_run,
                     debug,
                 )
                 .await
