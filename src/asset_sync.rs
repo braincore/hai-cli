@@ -417,7 +417,7 @@ pub async fn sync_down(
             && !entry.name.contains(&format!("/{}", HAISYNC_FILENAME))
             // HEP 63: Filter out entries with redactions since their entries
             // are incomplete.
-            && entry.redactions.is_some()
+            && entry.redactions.is_none()
     });
 
     println!("Syncing {} entries...", entries.len());
