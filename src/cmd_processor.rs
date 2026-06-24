@@ -85,18 +85,16 @@ pub async fn process_cmd(
             println!("さようなら！");
             ProcessCmdResult::Break
         }
-        cmd::Cmd::Help(cmd::HelpCmd { history }) => {
-            println!("{}", HELP_MSG);
-            println!();
-            println!("For interactive help: `/task hai/help`");
-            if history {
-                session::session_history_add_user_text_entry(
-                    HELP_MSG,
-                    session,
-                    bpe_tokenizer,
-                    (is_task_mode_step, LogEntryRetentionPolicy::None),
-                );
-            }
+        cmd::Cmd::Help(cmd::HelpCmd { history: _ }) => {
+            let msg = format!("{}\n\nFor interactive help: `/task hai/help`", HELP_MSG);
+            println!("{}", msg);
+            session_history_add_user_cmd_and_reply_entries(
+                &raw_user_input,
+                &msg,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
             ProcessCmdResult::Loop
         }
         cmd::Cmd::Cd(cmd::CdCmd { path }) => {

@@ -244,7 +244,7 @@ pub enum Cmd {
 
 #[derive(Clone, Debug)]
 pub struct HelpCmd {
-    /// Whether to include help message in conversation history
+    /// DEPRECATED: Whether to include help message in conversation history
     pub history: bool,
 }
 
@@ -1318,6 +1318,7 @@ fn parse_command(
             Some(Cmd::Quit)
         }
         "help" | "h" | "?" => {
+            // `history` is DEPRECATED. Output always added to history.
             if !validate_options_and_print_err(cmd_name, &options, &["history"]) {
                 return None;
             }
