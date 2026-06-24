@@ -601,7 +601,7 @@ impl Completer for CmdAndFileCompleter {
                 let completions =
                     self.task_completer(line.len(), cmd_word.len(), arg_prefix, arg_index);
                 (completions, false)
-            } else if is_cmd_input(line, "/ai") {
+            } else if is_cmd_input(line, "/ai") || is_cmd_input(line, "/ai-default") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions = self.simple_completer(
                     arg_prefix,
