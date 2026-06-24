@@ -244,6 +244,7 @@ pub enum Cmd {
 
 #[derive(Clone, Debug)]
 pub struct HelpCmd {
+    #[allow(dead_code)]
     /// DEPRECATED: Whether to include help message in conversation history
     pub history: bool,
 }
@@ -3040,8 +3041,81 @@ fn parse_command(
     }
 }
 
+pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
+    if let Some(mut remaining) = input.strip_prefix('!') {
+        // Try parsing as a tool-command
+        let input = input.trim_end();
+        let user_confirmation = if remaining.starts_with("?") {
+            remaining = &remaining[1..];
+            true
+        } else {
+            false
+        };
+        // If the next char is blank, then we assume the user intends to use a
+        // previous tool so we leave the tool_name empty.
+        let (mut remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
+            eprintln!("error: No tool name specified");
+            return None;
+        } else {
+            let tool_re = get_tool_re();
+            match tool_re.captures(remaining) {
+                Some(captures) => {
+                    if let Some(m) = captures.get(1) {
+                        remaining = &remaining[m.end()..];
+                        (remaining, m.as_str().replace("\\'", "'"))
+                    } else {
+                        eprintln!("error: Bad tool specification");
+                        return None;
+                    }
+                }
+                None => {
+                    eprintln!("error: Bad tool specification");
+                    return None;
+                }
+            }
+        };
+        let force_tool = if remaining.starts_with("?") {
+            remaining = &remaining[1..];
+            false
+        } else {
+            true
+        };
+        let (options, remaining) = if remaining.starts_with('.') {
+            parse_dot_options(remaining)
+        } else {
+            (HashMap::new(), remaining)
+        };
+        if remaining.len() > 0 {
+            eprintln!(
+                "error: Tool specification had unexpected trailing characters: {}",
+                remaining
+            );
+            return None;
+        }
+        parse_tool_command(
+            tool_name.as_str(),
+            user_confirmation,
+            force_tool,
+            None,
+            options.clone(),
+            "",
+            input,
+        )
+        .and_then(|cmd| match cmd {
+            Cmd::ToolMode(tool_mode_cmd) => Some(tool_mode_cmd),
+            _ => {
+                eprintln!("error: Expected a tool mode command, but got a different command");
+                None
+            }
+        })
+    } else {
+        eprintln!("error: invalid tool {}: must start with '!'", input);
+        None
+    }
+}
+
 /// If None is returned, it prints an error usage string.
-fn parse_tool_command(
+pub fn parse_tool_command(
     tool_name: &str,
     user_confirmation: bool,
     force_tool: bool,

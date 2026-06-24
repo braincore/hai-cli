@@ -109,6 +109,8 @@ pub struct SessionState {
     pub asset_keyring: Arc<Mutex<AssetKeyring>>,
     /// Whether the session is in incognito mode (history-less)
     pub incognito: bool,
+    /// The default tool mode to set when starting repl
+    pub default_tool: Option<cmd::ToolModeCmd>,
     /// The last tool that was used (for ! shortcut)
     pub last_tool_cmd: Option<cmd::ToolCmd>,
     /// The tool activated in tool-mode
@@ -180,6 +182,11 @@ impl SessionState {
         } else {
             cfg.default_shell.clone().unwrap_or("bash".into())
         };
+        let default_tool = if let Some(default_tool) = cfg.default_tool.clone() {
+            cmd::parse_tool_command_standalone(&default_tool)
+        } else {
+            None
+        };
 
         SessionState {
             repl_mode,
@@ -201,8 +208,9 @@ impl SessionState {
             account: account.clone(),
             asset_keyring: Arc::new(Mutex::new(AssetKeyring::new(cfg.use_os_keyring))),
             incognito,
+            default_tool: default_tool.clone(),
             last_tool_cmd: None,
-            tool_mode: None,
+            tool_mode: default_tool,
             use_hai_router: HaiRouterState::Off,
             agentic: false,
             prompt_cache: false,

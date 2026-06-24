@@ -44,6 +44,14 @@ Windows where it's `powershell`.
 default_shell = "bash"
 ```
 
+### Default tool
+
+To start the REPL with a default [tool mode](./repl/tools.md#tool-mode), use:
+
+```toml
+default_tool = "!hai?"
+```
+
 ### Check for updates
 
 To disable automatic anonymous version checks when `hai` is launched, set:
