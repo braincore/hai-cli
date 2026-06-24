@@ -228,6 +228,8 @@ pub enum Cmd {
     Whois(WhoisCmd),
     /// See cost of models
     Cost,
+    /// Web search
+    WebSearch(WebSearchCmd),
     /// Pop a message from the listen queue
     QueuePop(QueuePopCmd),
     /// Dumps raw chat history (undocumented)
@@ -942,6 +944,17 @@ pub struct AccountLogoutCmd {
 #[derive(Clone, Debug)]
 pub struct WhoisCmd {
     pub username: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct WebSearchCmd {
+    pub q: String,
+    pub n: u32,
+    pub pd: bool,
+    pub pw: bool,
+    pub pm: bool,
+    pub py: bool,
+    pub range: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2984,6 +2997,55 @@ fn parse_command(
                 Some(username) => Some(Cmd::Whois(WhoisCmd { username })),
                 None => {
                     eprintln!("Usage: /whois username");
+                    None
+                }
+            }
+        }
+        "web-search" => {
+            if !validate_options_and_print_err(
+                cmd_name,
+                &options,
+                &["n", "pd", "pw", "pm", "py", "range"],
+            ) {
+                return None;
+            }
+            let expected_types = HashMap::from([
+                ("n".to_string(), OptionType::Number),
+                ("pd".to_string(), OptionType::Bool),
+                ("pw".to_string(), OptionType::Bool),
+                ("pm".to_string(), OptionType::Bool),
+                ("py".to_string(), OptionType::Bool),
+                ("range".to_string(), OptionType::String),
+            ]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let n = options
+                .get("n")
+                .map(|v| v.parse().unwrap_or(5))
+                .unwrap_or(5);
+            let pd = options.get("pd").map(|v| v == "true").unwrap_or(false);
+            let pw = options.get("pw").map(|v| v == "true").unwrap_or(false);
+            let pm = options.get("pm").map(|v| v == "true").unwrap_or(false);
+            let py = options.get("py").map(|v| v == "true").unwrap_or(false);
+            let range = options.get("range").map(|v| {
+                v.trim_start_matches("\"")
+                    .trim_end_matches("\"")
+                    .to_string()
+            });
+            match parse_one_arg_catchall(remaining) {
+                Some(q) => Some(Cmd::WebSearch(WebSearchCmd {
+                    q,
+                    n,
+                    pd,
+                    pw,
+                    pm,
+                    py,
+                    range,
+                })),
+                None => {
+                    eprintln!("Usage: /web-search <query>");
                     None
                 }
             }

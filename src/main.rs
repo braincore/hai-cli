@@ -529,6 +529,7 @@ async fn repl(
         "/chat-resume",
         "/whois",
         "/hai-router",
+        "/web-search",
         "/cost",
         "/queue-pop",
         "/agentic",

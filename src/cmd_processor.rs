@@ -5573,6 +5573,64 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::WebSearch(cmd::WebSearchCmd {
+            q,
+            n,
+            pd,
+            pw,
+            pm,
+            py,
+            range,
+        }) => {
+            use api::types::web::{BraveFreshness, BraveSearchArg};
+            let client = mk_api_client(Some(session));
+            let freshness = if pd {
+                Some(BraveFreshness::Pd)
+            } else if pw {
+                Some(BraveFreshness::Pw)
+            } else if pm {
+                Some(BraveFreshness::Pm)
+            } else if py {
+                Some(BraveFreshness::Py)
+            } else if let Some(range) = range {
+                Some(BraveFreshness::Custom(range.clone()))
+            } else {
+                None
+            };
+            match client
+                .web_brave_search(BraveSearchArg {
+                    q,
+                    count: n,
+                    freshness,
+                })
+                .await
+            {
+                Ok(res) => {
+                    let mut output = String::new();
+                    for (i, result) in res.grounding.generic.iter().enumerate() {
+                        output.push_str(&format!("{}. {}\n", i + 1, result.title));
+                        output.push_str(&format!("   {}\n", result.url));
+                        for (j, snippet) in result.snippets.iter().enumerate() {
+                            output.push_str(&format!("   {}. {}\n", j + 1, snippet));
+                        }
+                        output.push_str("\n");
+                    }
+
+                    println!("{}", output);
+                    session_history_add_user_cmd_and_reply_entries(
+                        &raw_user_input,
+                        &output,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("error: {}", e);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::Cost => {
             fn print_ai_model_prices(ai: &config::AiModel) {
                 if let Some((input_cost_in_mills_per_million, output_cost_in_mills_per_million)) =
@@ -6140,6 +6198,18 @@ Messaging:
                                    Requires setup with `/task hai/add-email`
 /notif <title><NEWLINE><body>    - Send a push notification to mobile app.
                                    Requires setup with mobile app.
+
+--
+
+Web search:
+
+/web-search <query>             - Search the web for relevant information
+                                  .n=NUMBER Number of results (default: 5)
+                                  .pd=BOOL Results in past day
+                                  .pw=BOOL Results in past 7 days
+                                  .pm=BOOL Results in past month
+                                  .py=BOOL Results in past year
+                                  .range=STRING Results in a specific date range (Ex: "2023-01-01to2023-12-31")
 
 --
 

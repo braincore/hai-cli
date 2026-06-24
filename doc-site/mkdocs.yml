@@ -38,6 +38,7 @@ nav:
     - Stdlib: repl/stdlib.md
     - LLM models: repl/llm-models.md
     - Send email: repl/send-email.md
+    - Web search: repl/web-search.md
     - Account: repl/account.md
     - MCPs: repl/mcps.md
   - CLI:

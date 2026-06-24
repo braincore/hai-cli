@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
-use super::types::{account, asset, bot, messaging, task};
+use super::types::{account, asset, bot, messaging, task, web};
 
 #[derive(Debug, Clone)]
 pub struct HaiClient {
@@ -459,6 +459,14 @@ impl HaiClient {
         arg: messaging::PushNotifSendArg,
     ) -> Result<(), RequestError<messaging::PushNotifSendError>> {
         self.mk_api_request::<_, _, _>("/messaging/push_notif/send", &arg)
+            .await
+    }
+
+    pub async fn web_brave_search(
+        &self,
+        arg: web::BraveSearchArg,
+    ) -> Result<web::BraveSearchResult, RequestError<web::BraveSearchError>> {
+        self.mk_api_request::<_, _, _>("/web/brave_search", &arg)
             .await
     }
 }

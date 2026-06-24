@@ -20,6 +20,7 @@ pub mod common;
 pub mod messaging;
 pub mod notify;
 pub mod task;
+pub mod web;
 pub(crate) fn eat_json_fields<'de, V>(map: &mut V) -> Result<(), V::Error>
 where
     V: ::serde::de::MapAccess<'de>,

@@ -478,6 +478,20 @@ MCPs (Experimental):
                                    New command is created to invoke with:
                                    `/mcp_<name> <tool_name> <json_arg>`
 
+Web search:
+
+/web-search <query>             - Search the web for relevant information
+    .n=NUMBER Number of results (default: 5)
+    .pd=BOOL Results in past day
+    .pw=BOOL Results in past 7 days
+    .pm=BOOL Results in past month
+    .py=BOOL Results in past year
+    .range=STRING Results in a specific date range (Ex: "2023-01-01to2023-12-31")
+
+    The output is too noisy for user consumption so you should
+    recursively prompt yourself (/prompt subcommand) or follow up in
+    agentic mode to analyze the results and give a final answer.
+
 --
 
 Usage guideline for command options:
