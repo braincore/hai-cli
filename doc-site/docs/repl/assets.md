@@ -402,8 +402,8 @@ Your public assets (prefixed by your username `/username/...`) can have ACLs
 set so that an asset can be used as a write-only "asset/document drop".
 
 ```
-/asset-acl /ken/hai-feedback deny:read-data
-/asset-acl /ken/hai-feedback allow:push-data
+/asset-acl-set /ken/hai-feedback everyone deny:read-data
+/asset-acl-set /ken/hai-feedback everyone allow:push-data
 ```
 
 With these ACLs, any user can push data (`/asset-push`) into the
