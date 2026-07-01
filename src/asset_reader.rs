@@ -22,6 +22,15 @@ pub enum GetAssetError {
     DataFetchFailed,
 }
 
+impl std::fmt::Display for GetAssetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GetAssetError::BadName => write!(f, "bad-name"),
+            GetAssetError::DataFetchFailed => write!(f, "data-fetch-failed"),
+        }
+    }
+}
+
 /// If returns None, responsible for printing error msg.
 pub async fn get_asset(
     asset_blob_cache: Arc<AssetBlobCache>,

@@ -356,6 +356,7 @@ pub async fn sync_down(
             .asset_entry_iter(AssetEntryIterArg {
                 prefix: Some(effective_prefix.clone()),
                 limit: 200,
+                include_attachments: false,
             })
             .await
         {

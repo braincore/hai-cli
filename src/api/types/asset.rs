@@ -949,6 +949,9 @@ impl ::serde::ser::Serialize for AssetEntryAclSetArg {
 pub enum AssetEntryAclSetError {
     BadEntryRef,
     NoPermission,
+    /// Returned if [`AssetEntryAclSetArg::entry_ref`](AssetEntryAclSetArg) references an
+    /// attachment. Set ACL on the attachment's parent instead.
+    BadEntryType,
     BadPrincipal,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
@@ -973,6 +976,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
                 let value = match tag {
                     "bad_entry_ref" => AssetEntryAclSetError::BadEntryRef,
                     "no_permission" => AssetEntryAclSetError::NoPermission,
+                    "bad_entry_type" => AssetEntryAclSetError::BadEntryType,
                     "bad_principal" => AssetEntryAclSetError::BadPrincipal,
                     _ => AssetEntryAclSetError::Other,
                 };
@@ -980,7 +984,13 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["bad_entry_ref", "no_permission", "bad_principal", "other"];
+        const VARIANTS: &[&str] = &[
+            "bad_entry_ref",
+            "no_permission",
+            "bad_entry_type",
+            "bad_principal",
+            "other",
+        ];
         deserializer.deserialize_struct("AssetEntryAclSetError", VARIANTS, EnumVisitor)
     }
 }
@@ -1000,6 +1010,12 @@ impl ::serde::ser::Serialize for AssetEntryAclSetError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetEntryAclSetError", 1)?;
                 s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetEntryAclSetError::BadEntryType => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryAclSetError", 1)?;
+                s.serialize_field(".tag", "bad_entry_type")?;
                 s.end()
             }
             AssetEntryAclSetError::BadPrincipal => {
@@ -1122,6 +1138,7 @@ pub struct AssetEntryIterArg {
     /// The maximum number of entries to return at once. For internal reasons, fewer than `limit`
     /// may be returned.
     pub limit: u32,
+    pub include_attachments: bool,
 }
 
 impl Default for AssetEntryIterArg {
@@ -1129,6 +1146,7 @@ impl Default for AssetEntryIterArg {
         AssetEntryIterArg {
             prefix: None,
             limit: 100,
+            include_attachments: false,
         }
     }
 }
@@ -1143,9 +1161,14 @@ impl AssetEntryIterArg {
         self.limit = value;
         self
     }
+
+    pub fn with_include_attachments(mut self, value: bool) -> Self {
+        self.include_attachments = value;
+        self
+    }
 }
 
-const ASSET_ENTRY_ITER_ARG_FIELDS: &[&str] = &["prefix", "limit"];
+const ASSET_ENTRY_ITER_ARG_FIELDS: &[&str] = &["prefix", "limit", "include_attachments"];
 impl AssetEntryIterArg {
     // no _opt deserializer
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
@@ -1153,6 +1176,7 @@ impl AssetEntryIterArg {
     ) -> Result<AssetEntryIterArg, V::Error> {
         let mut field_prefix = None;
         let mut field_limit = None;
+        let mut field_include_attachments = None;
         while let Some(key) = map.next_key::<&str>()? {
             match key {
                 "prefix" => {
@@ -1167,6 +1191,12 @@ impl AssetEntryIterArg {
                     }
                     field_limit = Some(map.next_value()?);
                 }
+                "include_attachments" => {
+                    if field_include_attachments.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("include_attachments"));
+                    }
+                    field_include_attachments = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1176,6 +1206,7 @@ impl AssetEntryIterArg {
         let result = AssetEntryIterArg {
             prefix: field_prefix.and_then(Option::flatten),
             limit: field_limit.unwrap_or(100),
+            include_attachments: field_include_attachments.unwrap_or(false),
         };
         Ok(result)
     }
@@ -1190,6 +1221,9 @@ impl AssetEntryIterArg {
         }
         if self.limit != 100 {
             s.serialize_field("limit", &self.limit)?;
+        }
+        if self.include_attachments {
+            s.serialize_field("include_attachments", &self.include_attachments)?;
         }
         Ok(())
     }
@@ -1221,7 +1255,7 @@ impl ::serde::ser::Serialize for AssetEntryIterArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryIterArg", 2)?;
+        let mut s = serializer.serialize_struct("AssetEntryIterArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -3916,6 +3950,8 @@ pub enum AssetMoveError {
     TargetNamePrefixConflict,
     /// Assets cannot be moved across asset pools.
     AssetPoolMismatch,
+    /// Assets cannot change attachment parents.
+    AttachmentParentMismatch,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -3943,6 +3979,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
                     "target_name_conflict" => AssetMoveError::TargetNameConflict,
                     "target_name_prefix_conflict" => AssetMoveError::TargetNamePrefixConflict,
                     "asset_pool_mismatch" => AssetMoveError::AssetPoolMismatch,
+                    "attachment_parent_mismatch" => AssetMoveError::AttachmentParentMismatch,
                     _ => AssetMoveError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -3956,6 +3993,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
             "target_name_conflict",
             "target_name_prefix_conflict",
             "asset_pool_mismatch",
+            "attachment_parent_mismatch",
             "other",
         ];
         deserializer.deserialize_struct("AssetMoveError", VARIANTS, EnumVisitor)
@@ -4003,6 +4041,12 @@ impl ::serde::ser::Serialize for AssetMoveError {
                 s.serialize_field(".tag", "asset_pool_mismatch")?;
                 s.end()
             }
+            AssetMoveError::AttachmentParentMismatch => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "attachment_parent_mismatch")?;
+                s.end()
+            }
             AssetMoveError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -4017,6 +4061,9 @@ impl ::std::fmt::Display for AssetMoveError {
         match self {
             AssetMoveError::AssetPoolMismatch => {
                 f.write_str("Assets cannot be moved across asset pools.")
+            }
+            AssetMoveError::AttachmentParentMismatch => {
+                f.write_str("Assets cannot change attachment parents.")
             }
             _ => write!(f, "{:?}", *self),
         }
@@ -5576,6 +5623,8 @@ pub enum AssetPushError {
     /// existing asset, or would make an existing asset simultaneously a file and directory.
     NamePrefixConflict,
     OverQuota,
+    /// If creating an attachment of an attachment, set if chain of attachments is too long.
+    AttachmentDepth,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -5602,6 +5651,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
                     "name_conflict" => AssetPushError::NameConflict,
                     "name_prefix_conflict" => AssetPushError::NamePrefixConflict,
                     "over_quota" => AssetPushError::OverQuota,
+                    "attachment_depth" => AssetPushError::AttachmentDepth,
                     _ => AssetPushError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -5614,6 +5664,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
             "name_conflict",
             "name_prefix_conflict",
             "over_quota",
+            "attachment_depth",
             "other",
         ];
         deserializer.deserialize_struct("AssetPushError", VARIANTS, EnumVisitor)
@@ -5655,6 +5706,12 @@ impl ::serde::ser::Serialize for AssetPushError {
                 s.serialize_field(".tag", "over_quota")?;
                 s.end()
             }
+            AssetPushError::AttachmentDepth => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPushError", 1)?;
+                s.serialize_field(".tag", "attachment_depth")?;
+                s.end()
+            }
             AssetPushError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -5668,6 +5725,7 @@ impl ::std::fmt::Display for AssetPushError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
             AssetPushError::NameConflict => f.write_str("Returned in rare instances where the push is responsible for asset creation and the request loses a race with another push."),
+            AssetPushError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -5998,6 +6056,8 @@ pub enum AssetPutError {
     /// directory.
     NamePrefixConflict,
     OverQuota,
+    /// If creating an attachment of an attachment, set if chain of attachments is too long.
+    AttachmentDepth,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -6024,6 +6084,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
                     "name_conflict" => AssetPutError::NameConflict,
                     "name_prefix_conflict" => AssetPutError::NamePrefixConflict,
                     "over_quota" => AssetPutError::OverQuota,
+                    "attachment_depth" => AssetPutError::AttachmentDepth,
                     _ => AssetPutError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -6036,6 +6097,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
             "name_conflict",
             "name_prefix_conflict",
             "over_quota",
+            "attachment_depth",
             "other",
         ];
         deserializer.deserialize_struct("AssetPutError", VARIANTS, EnumVisitor)
@@ -6077,6 +6139,12 @@ impl ::serde::ser::Serialize for AssetPutError {
                 s.serialize_field(".tag", "over_quota")?;
                 s.end()
             }
+            AssetPutError::AttachmentDepth => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPutError", 1)?;
+                s.serialize_field(".tag", "attachment_depth")?;
+                s.end()
+            }
             AssetPutError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -6089,9 +6157,8 @@ impl ::std::error::Error for AssetPutError {}
 impl ::std::fmt::Display for AssetPutError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
-            AssetPutError::NameConflict => f.write_str(
-                "Only returned if conflict policy is set to reject or replacing a folder.",
-            ),
+            AssetPutError::NameConflict => f.write_str("Only returned if conflict policy is set to reject or replacing a folder."),
+            AssetPutError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
             _ => write!(f, "{:?}", *self),
         }
     }

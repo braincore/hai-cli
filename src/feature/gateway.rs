@@ -1297,7 +1297,15 @@ async fn handle_http_request(
     let asset_name = match urlencoding::decode(path) {
         Ok(decoded_path) => match decoded_path.split_once('@') {
             Some((_asset_name, asset_app_name)) => asset_app_name.to_string(),
-            None => decoded_path.to_string(),
+            None => {
+                // Support attachment look ups by ignoring any path construct before the
+                // `:`. This is so that relative paths in the browser using the `:` syntax
+                // can be used to look up attachments.
+                match decoded_path.find(':') {
+                    Some(idx) => decoded_path[idx..].to_string(),
+                    None => decoded_path.to_string(),
+                }
+            }
         },
         Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
     };
@@ -1420,12 +1428,13 @@ async fn handle_get(
         return HttpResponse::forbidden();
     }
 
+    let is_attachment = asset_name.starts_with(':');
     let default_filenames = &["index", "index.html", "README", "README.md"];
 
     let (data_contents, md_contents, asset_revision, resolved_name) = {
         let is_directory_request = asset_name.is_empty() || asset_name.ends_with('/');
 
-        if is_directory_request {
+        if is_directory_request && !is_attachment {
             // Skip exact lookup, go straight to default files
             let base_name = asset_name.trim_end_matches('/');
 
@@ -1482,7 +1491,7 @@ async fn handle_get(
                     GetRevisionError::BadEntryRef
                     | GetRevisionError::BadRevId
                     | GetRevisionError::Deleted,
-                ) if rev_id.is_none() => {
+                ) if rev_id.is_none() && !is_attachment => {
                     // Exact asset not found, try default files
                     let mut found = None;
                     for filename in default_filenames {

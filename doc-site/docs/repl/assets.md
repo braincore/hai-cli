@@ -483,6 +483,64 @@ To remove a folder, remove it like any other asset:
 Just like assets, folders can have [metadata](#metadata) attached using the
 same set of commands.
 
+## Attachments
+
+Attachments are assets that live outside the ordinary asset tree and are
+associated with a parent asset by ID. In practice, this lets a document asset
+bundle together related assets so that they can be moved and reorganized as a
+single unit.
+
+### Using attachments
+
+To work with attachments, use the ordinary suite of asset commands with this
+naming format:
+
+```
+<parent-asset-name>:<attachment-asset-relative-name>
+```
+
+For example, to reference the attachment `map.jpg` on the parent asset
+`trip.md`:
+
+```
+[0] /asset trip.md:map.jpg
+```
+
+An attachment can always be identified by the presence of `:` in the asset
+name.
+
+### Listing attachments
+
+To list all attachments for a given asset, use a trailing `:`:
+
+```
+[1] /asset-list trip.md:
+0. :xGwFHee-eJ9cWQlJw2QEDacTX5FA/map.jpg
+```
+
+!!!note "API attachment format supported"
+    The API uses a slightly different format for attachments:
+
+    ```
+    :<parent-entry-id>/<attachment-asset-relative-name>
+    ```
+
+    Note `:` is at the beginning and the parent's *entry ID* is used instead
+    its name. This format is often returned (see `/asset-list` above) and can
+    be used for all asset commands.
+
+
+### Attachments for attachments
+
+To create an attachment for an attachment, chain `:` as follows:
+
+```
+[2] /asset trip.md:map.jpg:thumbnail.jpg
+```
+
+The above is an example of attaching a thumbnail to an attachment that's an
+image.
+
 ## Quota
 
 Each account gets 1GB of asset storage.
