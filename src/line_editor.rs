@@ -637,6 +637,8 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/asset-app")
                 || is_cmd_input(line, "/asset-open")
                 || is_cmd_input(line, "/open")
+                || is_cmd_input(line, "/asset-attachment-new")
+                || is_cmd_input(line, "/asset-attachment-new-push")
                 || is_cmd_input(line, "/chat-resume")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
@@ -1117,6 +1119,14 @@ impl CmdAndFileCompleter {
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix =
             crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
+        let resolved_asset_prefix = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                crate::cmd_processor::resolve_attachment_asset_name(
+                    &expanded_asset_prefix,
+                    &self.api_client,
+                ),
+            )
+        });
         if asset_prefix.starts_with("/s/") && asset_prefix.matches('/').count() == 2 {
             // If prefix is querying /s/, auto-complete asset pools.
             let result = tokio::task::block_in_place(|| {
@@ -1128,11 +1138,11 @@ impl CmdAndFileCompleter {
                     sorted_pools.sort_by(|a, b| numeric_sort::cmp(&a.mount_point, &b.mount_point));
                     let mut completions = Vec::new();
                     for pool in sorted_pools {
-                        if pool.mount_point.starts_with(&expanded_asset_prefix) {
+                        if pool.mount_point.starts_with(&resolved_asset_prefix) {
                             completions.push(Suggestion {
                                 value: pool.mount_point.clone(),
                                 display_override: compute_display_override_for_path(
-                                    &expanded_asset_prefix,
+                                    &resolved_asset_prefix,
                                     &pool.mount_point,
                                 ),
                                 description: None,
@@ -1160,7 +1170,7 @@ impl CmdAndFileCompleter {
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(self.api_client.asset_entry_list(
                 AssetEntryListArg {
-                    prefix: Some(expanded_asset_prefix.clone()),
+                    prefix: Some(resolved_asset_prefix.clone()),
                     limit: 100,
                     order: EntryListOrder::Asc,
                 },
@@ -1173,20 +1183,36 @@ impl CmdAndFileCompleter {
                 let mut sorted_entries = res.entries;
                 sorted_entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
                 for entry in sorted_entries {
+                    let mut entry_name = entry.name.clone();
+                    // Check if attachment resolution changed the prefix. If
+                    // so, convert it back to the user input format.
+                    if resolved_asset_prefix != expanded_asset_prefix {
+                        // Replace including trailing / since the CLI format replaces it with :
+                        // Example:
+                        // expanded_asset_prefix: `doc.md:`
+                        // resolved_asset_prefix: `:xyz`
+                        // matches: `:xyz/doc.md` -> `doc.md:graph.txt`
+                        entry_name = entry_name
+                            .replace(
+                                &format!("{}/", resolved_asset_prefix),
+                                &expanded_asset_prefix,
+                            )
+                            .replace(&resolved_asset_prefix, &expanded_asset_prefix);
+                    }
                     let value = if only_one_entry
                         && matches!(
                             entry.asset.kind,
                             crate::api::types::asset::AssetKind::Folder
                         ) {
-                        format!("{}/", entry.name.clone())
+                        format!("{}/", entry_name)
                     } else {
-                        entry.name.clone()
+                        entry_name.clone()
                     };
                     completions.push(Suggestion {
                         value,
                         display_override: compute_display_override_for_path(
-                            &expanded_asset_prefix,
-                            &entry.name,
+                            &resolved_asset_prefix,
+                            &entry_name,
                         ),
                         description: None,
                         style: None,

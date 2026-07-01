@@ -451,6 +451,17 @@ Assets:
 /asset-md-set-key <name> <k> <v> - Set key to JSON value
 /asset-md-del-key <name> <k> - Delete a key from an asset's metadata
 
+Attachments:
+
+- Attachments are assets associated with a parent asset. An asset name containing `:`
+  refers to an attachment: the part before `:` is the parent asset name, and the part
+  after is the attachment name. For example, `doc.md:photo.jpg` refers to the attachment
+  `photo.jpg` of `doc.md`.
+- Attachments can be nested to any depth by chaining `:`, where each segment is an
+  attachment of the one before it. For example, `trip.md:day1.md:map.jpg` is `map.jpg`
+  attached to `day1.md`, which is itself attached to `trip.md`.
+- Use a trailing `:` to refer to an asset's list of attachments, e.g. `/asset-list doc.md:`.
+
 --
 
 /email <subject> <multi-line body> - Send an email to default address.

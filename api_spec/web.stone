@@ -6,7 +6,7 @@ route brave_search(BraveSearchArg, BraveSearchResult, BraveSearchError)
 struct BraveSearchArg
     q String(min_length=1)
         "Web search query. Additional parameters include:
-        
+
         Use quotes for exact phrase matching: \"climate change solutions\"
         Exclude terms with minus: javascript -jquery
         Site-specific searches: site:github.com rust tutorials

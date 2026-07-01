@@ -657,6 +657,7 @@ async fn fetch_job_list(
             .asset_entry_iter(AssetEntryIterArg {
                 prefix: Some(prefix.to_string()),
                 limit: 200,
+                include_attachments: false,
             })
             .await
         {

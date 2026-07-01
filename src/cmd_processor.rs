@@ -1817,7 +1817,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             if let Some(editor) = editor.as_deref()
                 && let Some(prog_asset_name) = editor.strip_prefix("@")
@@ -1957,7 +1957,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                 asset_blob_cache.clone(),
@@ -2013,7 +2013,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
-            let prefix = resolve_asset_name(&prefix, session);
+            let prefix = resolve_asset_name(&prefix, session).await;
             let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
                 let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
                 (prefix, Some(pattern))
@@ -2188,10 +2188,12 @@ pub async fn process_cmd(
             asset_names,
             show_line_numbers,
         }) => {
-            let asset_names = asset_names
-                .iter()
-                .map(|name| resolve_asset_name(&name, session))
-                .collect::<Vec<_>>();
+            let asset_names = futures::future::join_all(
+                asset_names
+                    .iter()
+                    .map(|name| resolve_asset_name(name, session)),
+            )
+            .await;
             let api_client = mk_api_client(Some(session));
 
             match asset_reader::fetch_assets_from_names_in_memory_extended(
@@ -2352,7 +2354,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             if !asset_helper::is_likely_valid_asset_name(&asset_name) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
@@ -2430,7 +2432,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             let api_client = mk_api_client(Some(session));
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let (decrypted_asset_contents, asset_entry, akm_info) =
                 match asset_reader::get_asset_and_metadata(
                     asset_blob_cache.clone(),
@@ -2552,7 +2554,7 @@ pub async fn process_cmd(
             count,
             show_line_numbers,
         }) => {
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
 
             use crate::api::types::asset::{
@@ -2667,7 +2669,7 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetFollow(cmd::AssetFollowCmd { asset_name }) => {
             println!("WARN: /asset-follow is for debugging.");
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             use crate::api::types::asset::{
                 AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
             };
@@ -2764,7 +2766,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetListen(cmd::AssetListenCmd { asset_name, cursor }) => {
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             use crate::api::types::asset::{
                 AssetCreatedBy, AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
                 RevisionIterDirection,
@@ -2935,7 +2937,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetLink(cmd::AssetLinkCmd { asset_name }) => {
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetGetArg;
             let asset_data_url = match api_client
@@ -3048,8 +3050,8 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
 
-            let source_asset_name = resolve_asset_name(&source_asset_name, session);
-            let mut target_asset_name = resolve_asset_name(&dest_asset_name, session);
+            let source_asset_name = resolve_asset_name(&source_asset_name, session).await;
+            let mut target_asset_name = resolve_asset_name(&dest_asset_name, session).await;
 
             // If target ends with '/', append the filename from source
             if target_asset_name.ends_with('/') {
@@ -3188,7 +3190,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let target_asset_name = expand_pub_asset_name(&target_asset_name, &session.account);
+            let target_asset_name = resolve_asset_name(&target_asset_name, &session).await;
             let source_file_path = match shellexpand::full(&source_file_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -3252,7 +3254,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let source_asset_name = resolve_asset_name(&source_asset_name, session);
+            let source_asset_name = resolve_asset_name(&source_asset_name, session).await;
             // Special case if target is `.`
             let target_file_path = if target_file_path == "." {
                 match source_asset_name.rsplit('/').next() {
@@ -3514,7 +3516,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
 
             // Collect all messages to log at once
@@ -3684,7 +3686,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
 
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
 
             use api::types::asset::{AssetRevisionGetArg, EntryRef};
@@ -3769,7 +3771,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             use api::types::asset::AssetGetArg;
             let output = match api_client
@@ -3807,7 +3809,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             use api::types::asset::{
                 AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
@@ -3855,7 +3857,7 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::{AssetGetArg, AssetMetadataInfo};
             match api_client.asset_get(AssetGetArg { name: asset_name }).await {
@@ -3900,7 +3902,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
             match api_client
@@ -3934,7 +3936,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let value_json = match serde_json::from_str::<serde_json::Value>(&value) {
                 Ok(value_json) => value_json,
                 Err(e) => {
@@ -3966,7 +3968,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             if asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, &key, None)
                 .await
@@ -3981,12 +3983,273 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        /*cmd::Cmd::AssetAttachmentNew(cmd::AssetAttachmentNewCmd {
+            asset_name,
+            attachment_name,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            let api_client = mk_api_client(Some(session));
+
+            let entry_id =
+                match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                    Ok(res) => res.entry.entry_id,
+                    Err(e) => {
+                        let msg = format!("error: failed to get asset: {}", e);
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                        eprintln!("{}", msg);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+
+            // Base encryption info off of the attachment-parent
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.clone())),
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let data = if let Some(akm_info) = akm_info.as_ref() {
+                crate::feature::asset_crypt::encrypt_asset_with_aes_key(
+                    &akm_info.unlocked_akm.sym_key_info.aes_key,
+                    &"".as_bytes(),
+                )
+            } else {
+                "".bytes().collect()
+            };
+
+            use crate::api::types::asset::{AssetAttachmentPutArg, PutConflictPolicy};
+            match api_client
+                .asset_attachment_put(AssetAttachmentPutArg {
+                    entry_id,
+                    name: attachment_name.clone(),
+                    data,
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => {
+                    if let Some(akm_info) = akm_info {
+                        if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                            &api_client,
+                            &res.entry.name,
+                            &akm_info,
+                        )
+                        .await
+                        {
+                            eprintln!("error: failed to put asset encryption metadata: {}", e);
+                        }
+                    }
+                    let msg = format!(
+                        "attachment '{}' created for asset '{}'",
+                        res.entry.name, asset_name
+                    );
+                    println!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "error: failed to create attachment '{}' for asset '{}': {}",
+                        attachment_name, asset_name, e
+                    );
+                    eprintln!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAttachmentNewPush(cmd::AssetAttachmentNewPushCmd {
+            asset_name,
+            attachment_name,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            let api_client = mk_api_client(Some(session));
+
+            let entry_id =
+                match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                    Ok(res) => res.entry.entry_id,
+                    Err(e) => {
+                        let msg = format!("error: failed to get asset: {}", e);
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                        eprintln!("{}", msg);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+
+            // Base encryption info off of the attachment-parent
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.clone())),
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let data = if let Some(akm_info) = akm_info.as_ref() {
+                crate::feature::asset_crypt::encrypt_asset_with_aes_key(
+                    &akm_info.unlocked_akm.sym_key_info.aes_key,
+                    &"".as_bytes(),
+                )
+            } else {
+                "".bytes().collect()
+            };
+
+            use crate::api::types::asset::AssetAttachmentPushArg;
+            match api_client
+                .asset_attachment_push(AssetAttachmentPushArg {
+                    entry_id,
+                    name: attachment_name.clone(),
+                    data,
+                })
+                .await
+            {
+                Ok(res) => {
+                    if let Some(akm_info) = akm_info {
+                        if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                            &api_client,
+                            &res.entry.name,
+                            &akm_info,
+                        )
+                        .await
+                        {
+                            eprintln!("error: failed to push asset encryption metadata: {}", e);
+                        }
+                    }
+                    let msg = format!(
+                        "attachment '{}' created for asset '{}'",
+                        res.entry.name, asset_name
+                    );
+                    println!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "error: failed to create attachment '{}' for asset '{}': {}",
+                        attachment_name, asset_name, e
+                    );
+                    eprintln!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAttachmentList(cmd::AssetAttachmentListCmd { asset_name }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            let api_client = mk_api_client(Some(session));
+            match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                Ok(res) => {
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    let mut cmd_queue = session.cmd_queue.lock().await;
+                    cmd_queue.push_front(session::CmdInput {
+                        input: format!("/asset-list :{}", res.entry.entry_id),
+                        source: session::CmdSource::Internal,
+                        reply_channel: None,
+                    });
+                }
+                Err(e) => {
+                    let msg = format!("error: failed to get asset: {}", e);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    eprintln!("{}", msg);
+                }
+            }
+            ProcessCmdResult::Loop
+        }*/
         cmd::Cmd::AssetFolderNew(cmd::AssetFolderNewCmd { name }) => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let name = resolve_asset_name(&name, session);
+            let name = resolve_asset_name(&name, session).await;
 
             use api::types::asset::AssetFolderCreateArg;
             let api_client = mk_api_client(Some(session));
@@ -4357,7 +4620,7 @@ pub async fn process_cmd(
             } else {
                 None
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
             let start_app_res = crate::feature::asset_app::start_app_and_launch_browser(
                 session,
@@ -4387,7 +4650,7 @@ pub async fn process_cmd(
             } else {
                 None
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             if let Some(username) = username {
                 let _ = crate::db::clear_gateway_perms(&*db.lock().await, &username, &asset_name);
             }
@@ -4399,7 +4662,7 @@ pub async fn process_cmd(
             } else {
                 None
             };
-            let asset_name = resolve_asset_name(&asset_name, session);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
             let api_client = mk_api_client(Some(session));
 
             let default_asset_app = match asset_reader::get_only_asset_metadata(
@@ -6092,10 +6355,17 @@ Standard Library Functions:
 
 --
 
-Assets (Experimental):
+Assets:
 
 - Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
 - Asset names that begin with `//` are expanded to `/<username>/` automatically.
+- Asset names with `:` within are attachments. The part before the `:` is the parent
+  asset name, and the part after is the attachment name. For example, `doc.md:photo.jpg`
+  refers to the attachment `photo.jpg` of the asset `doc.md`. Attachments can be nested to
+  any depth by chaining `:`, where each segment is an attachment of the one before it —
+  e.g. `trip.md:day1.md:map.jpg` is the attachment `map.jpg` of `day1.md`, which is itself
+  an attachment of `trip.md`. Use a trailing `:` (e.g. `doc.md:`) to refer to the list of
+  an asset's attachments.
 
 /a /asset <name> [<editor>]      - Open asset in editor (create if does not exist)
 /ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
@@ -6544,13 +6814,98 @@ pub async fn shell_exec_interactive(
 
 // --
 
-/// Resolves asset names in two ways:
+/// Resolves asset names in a few ways:
 ///
 /// 1. Expands public asset names (//) to explicitly include the username.
 /// 2. Resolves quick variables ($) to their values in the session.
-fn resolve_asset_name(asset_name: &str, session: &SessionState) -> String {
+/// 3. Resolves the chain of parent asset names in attachment references
+///    `grandparent_asset_name:parent_attachment_relname:attachment_relname`
+///    to their entry_ids, one query per level of attachment depth.
+///    - Passes through the attachment API format:
+///      `:<entry_id>/<attachment_relname>`
+pub async fn resolve_asset_name(asset_name: &str, session: &SessionState) -> String {
     let expanded = expand_asset_name(asset_name, &session.account);
-    resolve_quick_var(&expanded, session).unwrap_or(expanded)
+    let resolved = resolve_quick_var(&expanded, session).unwrap_or(expanded);
+    resolve_attachment_asset_name(&resolved, &mk_api_client(Some(session))).await
+}
+
+pub async fn resolve_attachment_asset_name(asset_name: &str, api_client: &HaiClient) -> String {
+    if !asset_name.contains(':') {
+        // Non-attachment asset name, nothing further to resolve
+        return asset_name.to_string();
+    }
+
+    if asset_name.starts_with(':') {
+        // An asset attachment already in API format, so just return it
+        return asset_name.to_string();
+    }
+
+    use crate::api::types::asset::AssetGetArg;
+
+    // Split into the chain of names: the first is a real asset name, and each
+    // subsequent segment is an attachment relative to the prior asset.
+    //
+    // For API-format compatibility, each set of priors need to be converted
+    // into an entry ID:
+    //
+    // grandparent-asset-name:parent-attachment-name:child-attachment-name
+    // - query grandparent-asset
+    // - query (grandparent-entry-id:parent-attachment-name)
+    // - query (parent-attachment-entry-id:child-attachment-name)
+    let (mut current_name, rest) = asset_name
+        .split_once(':')
+        .map(|(n, r)| (n.to_string(), r))
+        .expect("unexpected missing :");
+    let (segments, last_relname) = match rest.rsplit_once(':') {
+        Some((before_last, last)) => (before_last.split(':').collect::<Vec<&str>>(), last),
+        None => (vec![], rest),
+    };
+
+    for relname in &segments {
+        // Fetch the current asset to obtain its entry_id.
+        let entry_id = match api_client
+            .asset_get(AssetGetArg {
+                name: current_name.to_string(),
+            })
+            .await
+        {
+            Ok(entry) => entry.entry.entry_id,
+            Err(e) => {
+                eprintln!(
+                    "error: failed to fetch asset '{}' to get entry_id: {}",
+                    current_name, e
+                );
+                // Bail out
+                return asset_name.to_string();
+            }
+        };
+        // Build next level
+        current_name = format!(":{}/{}", entry_id, relname);
+    }
+
+    // Final query to get the entry_id of the last segment
+    match api_client
+        .asset_get(AssetGetArg {
+            name: current_name.to_string(),
+        })
+        .await
+    {
+        Ok(res) => {
+            if last_relname.is_empty() {
+                format!(":{}", res.entry.entry_id)
+            } else {
+                format!(":{}/{}", res.entry.entry_id, last_relname)
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "error: failed to fetch asset '{}' to get entry_id: {}",
+                current_name, e
+            );
+            // Bail out
+            return asset_name.to_string();
+        }
+    }
 }
 
 /// If an asset-key begins with `//`, it is converted to the current logged-in
