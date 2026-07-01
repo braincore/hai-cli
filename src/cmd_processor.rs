@@ -3981,6 +3981,267 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetAttachmentNew(cmd::AssetAttachmentNewCmd {
+            asset_name,
+            attachment_name,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+
+            let entry_id =
+                match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                    Ok(res) => res.entry.entry_id,
+                    Err(e) => {
+                        let msg = format!("error: failed to get asset: {}", e);
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                        eprintln!("{}", msg);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+
+            // Base encryption info off of the attachment-parent
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.clone())),
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let data = if let Some(akm_info) = akm_info.as_ref() {
+                crate::feature::asset_crypt::encrypt_asset_with_aes_key(
+                    &akm_info.unlocked_akm.sym_key_info.aes_key,
+                    &"".as_bytes(),
+                )
+            } else {
+                "".bytes().collect()
+            };
+
+            use crate::api::types::asset::{AssetAttachmentPutArg, PutConflictPolicy};
+            match api_client
+                .asset_attachment_put(AssetAttachmentPutArg {
+                    entry_id,
+                    name: attachment_name.clone(),
+                    data,
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => {
+                    if let Some(akm_info) = akm_info {
+                        if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                            &api_client,
+                            &res.entry.name,
+                            &akm_info,
+                        )
+                        .await
+                        {
+                            eprintln!("error: failed to put asset encryption metadata: {}", e);
+                        }
+                    }
+                    let msg = format!(
+                        "attachment '{}' created for asset '{}'",
+                        res.entry.name, asset_name
+                    );
+                    println!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "error: failed to create attachment '{}' for asset '{}': {}",
+                        attachment_name, asset_name, e
+                    );
+                    eprintln!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAttachmentNewPush(cmd::AssetAttachmentNewPushCmd {
+            asset_name,
+            attachment_name,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            };
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+
+            let entry_id =
+                match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                    Ok(res) => res.entry.entry_id,
+                    Err(e) => {
+                        let msg = format!("error: failed to get asset: {}", e);
+                        session_history_add_user_cmd_and_reply_entries(
+                            raw_user_input,
+                            &msg,
+                            session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, LogEntryRetentionPolicy::None),
+                        );
+                        eprintln!("{}", msg);
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+
+            // Base encryption info off of the attachment-parent
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.clone())),
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+
+            let data = if let Some(akm_info) = akm_info.as_ref() {
+                crate::feature::asset_crypt::encrypt_asset_with_aes_key(
+                    &akm_info.unlocked_akm.sym_key_info.aes_key,
+                    &"".as_bytes(),
+                )
+            } else {
+                "".bytes().collect()
+            };
+
+            use crate::api::types::asset::AssetAttachmentPushArg;
+            match api_client
+                .asset_attachment_push(AssetAttachmentPushArg {
+                    entry_id,
+                    name: attachment_name.clone(),
+                    data,
+                })
+                .await
+            {
+                Ok(res) => {
+                    if let Some(akm_info) = akm_info {
+                        if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                            &api_client,
+                            &res.entry.name,
+                            &akm_info,
+                        )
+                        .await
+                        {
+                            eprintln!("error: failed to push asset encryption metadata: {}", e);
+                        }
+                    }
+                    let msg = format!(
+                        "attachment '{}' created for asset '{}'",
+                        res.entry.name, asset_name
+                    );
+                    println!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "error: failed to create attachment '{}' for asset '{}': {}",
+                        attachment_name, asset_name, e
+                    );
+                    eprintln!("{}", msg);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAttachmentList(cmd::AssetAttachmentListCmd { asset_name }) => {
+            if session.account.is_none() {
+                eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::Loop;
+            }
+            let asset_name = resolve_asset_name(&asset_name, session);
+            let api_client = mk_api_client(Some(session));
+            match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                Ok(res) => {
+                    session_history_add_user_text_entry(
+                        raw_user_input,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    let mut cmd_queue = session.cmd_queue.lock().await;
+                    cmd_queue.push_front(session::CmdInput {
+                        input: format!("/asset-list :{}", res.entry.entry_id),
+                        source: session::CmdSource::Internal,
+                        reply_channel: None,
+                    });
+                }
+                Err(e) => {
+                    let msg = format!("error: failed to get asset: {}", e);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &msg,
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    eprintln!("{}", msg);
+                }
+            }
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetFolderNew(cmd::AssetFolderNewCmd { name }) => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);

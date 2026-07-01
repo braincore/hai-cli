@@ -637,6 +637,8 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/asset-app")
                 || is_cmd_input(line, "/asset-open")
                 || is_cmd_input(line, "/open")
+                || is_cmd_input(line, "/asset-attachment-new")
+                || is_cmd_input(line, "/asset-attachment-new-push")
                 || is_cmd_input(line, "/chat-resume")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);

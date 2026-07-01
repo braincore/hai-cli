@@ -483,6 +483,46 @@ To remove a folder, remove it like any other asset:
 Just like assets, folders can have [metadata](#metadata) attached using the
 same set of commands.
 
+## Attachments
+
+Attachments are assets that are NOT in the ordinary asset tree and are
+associated with a parent asset by ID. In practice, this lets a document asset
+bundle together other assets so that they can be moved and reorganized as a
+unit.
+
+To create an attachment:
+
+```
+[0] /asset-attachment-new <parent-name> <attachment-name>
+attachment ':<parent-id>/<attachment-name>' created for asset '<parent-name>'
+```
+
+For example:
+
+```
+[0] /asset-attachment-new trip map.jpg
+attachment ':xGwFHee-eJ9cWQlJw2QEDacTX5FA/map.jpg' created for asset 'trip'
+```
+
+The ordinary suite of asset commands can be used with the attachment including
+setting metadata.
+
+An attachment can always be identified by the `:` prefix in the asset name.
+
+To list all attachments, use:
+
+```
+[1] /asset-attachment-list trip
+0. :xGwFHee-eJ9cWQlJw2QEDacTX5FA/map.jpg
+```
+
+It's the equivalent of `/asset-list` with the `<parent-id>` as the prefix:
+
+```
+[1] /asset-list :xGwFHee-eJ9cWQlJw2QEDacTX5FA
+0. :xGwFHee-eJ9cWQlJw2QEDacTX5FA/map.jpg
+```
+
 ## Quota
 
 Each account gets 1GB of asset storage.

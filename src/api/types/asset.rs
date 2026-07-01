@@ -394,6 +394,717 @@ impl ::serde::ser::Serialize for AssetAcePrincipal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetAttachmentPushArg {
+    pub entry_id: String,
+    /// This is the attachment's name, but not the name of the asset representing the attachment.
+    /// That will have the format: `:<entry_id>/<attachment_name>`
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
+impl AssetAttachmentPushArg {
+    pub fn new(entry_id: String, name: String, data: Vec<u8>) -> Self {
+        AssetAttachmentPushArg {
+            entry_id,
+            name,
+            data,
+        }
+    }
+}
+
+const ASSET_ATTACHMENT_PUSH_ARG_FIELDS: &[&str] = &["entry_id", "name", "data"];
+impl AssetAttachmentPushArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetAttachmentPushArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetAttachmentPushArg>, V::Error> {
+        let mut field_entry_id = None;
+        let mut field_name = None;
+        let mut field_data = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_id" => {
+                    if field_entry_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_id"));
+                    }
+                    field_entry_id = Some(map.next_value()?);
+                }
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                "data" => {
+                    if field_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("data"));
+                    }
+                    field_data = Some(
+                        BASE64
+                            .decode(map.next_value::<String>()?.as_bytes())
+                            .map_err(::serde::de::Error::custom)?,
+                    );
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetAttachmentPushArg {
+            entry_id: field_entry_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_id"))?,
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+            data: field_data.ok_or_else(|| ::serde::de::Error::missing_field("data"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_id", &self.entry_id)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("data", &BASE64.encode(&self.data))?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPushArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetAttachmentPushArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPushArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetAttachmentPushArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetAttachmentPushArg",
+            ASSET_ATTACHMENT_PUSH_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPushArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetAttachmentPushArg", 3)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetAttachmentPushError {
+    BadEntryId,
+    /// Returned if [`AssetAttachmentPutArg::entry_id`](AssetAttachmentPutArg) references a folder
+    /// or other attachment.
+    BadEntryType,
+    PushError(AssetPushError),
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPushError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetAttachmentPushError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPushError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_entry_id" => AssetAttachmentPushError::BadEntryId,
+                    "bad_entry_type" => AssetAttachmentPushError::BadEntryType,
+                    "push_error" => match map.next_key()? {
+                        Some("push_error") => {
+                            AssetAttachmentPushError::PushError(map.next_value()?)
+                        }
+                        None => return Err(de::Error::missing_field("push_error")),
+                        _ => return Err(de::Error::unknown_field(tag, VARIANTS)),
+                    },
+                    _ => AssetAttachmentPushError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_entry_id", "bad_entry_type", "push_error", "other"];
+        deserializer.deserialize_struct("AssetAttachmentPushError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPushError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetAttachmentPushError::BadEntryId => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetAttachmentPushError", 1)?;
+                s.serialize_field(".tag", "bad_entry_id")?;
+                s.end()
+            }
+            AssetAttachmentPushError::BadEntryType => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetAttachmentPushError", 1)?;
+                s.serialize_field(".tag", "bad_entry_type")?;
+                s.end()
+            }
+            AssetAttachmentPushError::PushError(ref x) => {
+                // union or polymporphic struct
+                let mut s = serializer.serialize_struct("AssetAttachmentPushError", 2)?;
+                s.serialize_field(".tag", "push_error")?;
+                s.serialize_field("push_error", x)?;
+                s.end()
+            }
+            AssetAttachmentPushError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetAttachmentPushError {
+    fn source(&self) -> Option<&(dyn ::std::error::Error + 'static)> {
+        match self {
+            AssetAttachmentPushError::PushError(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
+impl ::std::fmt::Display for AssetAttachmentPushError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetAttachmentPushError::PushError(inner) => write!(f, "{}", inner),
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetAttachmentPushTextArg {
+    pub entry_id: String,
+    pub name: String,
+    pub data: String,
+}
+
+impl AssetAttachmentPushTextArg {
+    pub fn new(entry_id: String, name: String, data: String) -> Self {
+        AssetAttachmentPushTextArg {
+            entry_id,
+            name,
+            data,
+        }
+    }
+}
+
+const ASSET_ATTACHMENT_PUSH_TEXT_ARG_FIELDS: &[&str] = &["entry_id", "name", "data"];
+impl AssetAttachmentPushTextArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetAttachmentPushTextArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetAttachmentPushTextArg>, V::Error> {
+        let mut field_entry_id = None;
+        let mut field_name = None;
+        let mut field_data = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_id" => {
+                    if field_entry_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_id"));
+                    }
+                    field_entry_id = Some(map.next_value()?);
+                }
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                "data" => {
+                    if field_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("data"));
+                    }
+                    field_data = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetAttachmentPushTextArg {
+            entry_id: field_entry_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_id"))?,
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+            data: field_data.ok_or_else(|| ::serde::de::Error::missing_field("data"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_id", &self.entry_id)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("data", &self.data)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPushTextArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetAttachmentPushTextArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPushTextArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetAttachmentPushTextArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetAttachmentPushTextArg",
+            ASSET_ATTACHMENT_PUSH_TEXT_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPushTextArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetAttachmentPushTextArg", 3)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetAttachmentPutArg {
+    pub entry_id: String,
+    /// This is the attachment's name, but not the name of the asset representing the attachment.
+    /// That will have the format: `:<entry_id>/<attachment_name>`
+    pub name: String,
+    pub data: Vec<u8>,
+    pub conflict_policy: PutConflictPolicy,
+}
+
+impl AssetAttachmentPutArg {
+    pub fn new(entry_id: String, name: String, data: Vec<u8>) -> Self {
+        AssetAttachmentPutArg {
+            entry_id,
+            name,
+            data,
+            conflict_policy: PutConflictPolicy::Override,
+        }
+    }
+
+    pub fn with_conflict_policy(mut self, value: PutConflictPolicy) -> Self {
+        self.conflict_policy = value;
+        self
+    }
+}
+
+const ASSET_ATTACHMENT_PUT_ARG_FIELDS: &[&str] = &["entry_id", "name", "data", "conflict_policy"];
+impl AssetAttachmentPutArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetAttachmentPutArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetAttachmentPutArg>, V::Error> {
+        let mut field_entry_id = None;
+        let mut field_name = None;
+        let mut field_data = None;
+        let mut field_conflict_policy = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_id" => {
+                    if field_entry_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_id"));
+                    }
+                    field_entry_id = Some(map.next_value()?);
+                }
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                "data" => {
+                    if field_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("data"));
+                    }
+                    field_data = Some(
+                        BASE64
+                            .decode(map.next_value::<String>()?.as_bytes())
+                            .map_err(::serde::de::Error::custom)?,
+                    );
+                }
+                "conflict_policy" => {
+                    if field_conflict_policy.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("conflict_policy"));
+                    }
+                    field_conflict_policy = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetAttachmentPutArg {
+            entry_id: field_entry_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_id"))?,
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+            data: field_data.ok_or_else(|| ::serde::de::Error::missing_field("data"))?,
+            conflict_policy: field_conflict_policy.unwrap_or(PutConflictPolicy::Override),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_id", &self.entry_id)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("data", &BASE64.encode(&self.data))?;
+        if self.conflict_policy != PutConflictPolicy::Override {
+            s.serialize_field("conflict_policy", &self.conflict_policy)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPutArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetAttachmentPutArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPutArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetAttachmentPutArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetAttachmentPutArg",
+            ASSET_ATTACHMENT_PUT_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPutArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetAttachmentPutArg", 4)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetAttachmentPutError {
+    BadEntryId,
+    /// Returned if [`AssetAttachmentPutArg::entry_id`](AssetAttachmentPutArg) references a folder
+    /// or other attachment.
+    BadEntryType,
+    PutError(AssetPutError),
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPutError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetAttachmentPutError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPutError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_entry_id" => AssetAttachmentPutError::BadEntryId,
+                    "bad_entry_type" => AssetAttachmentPutError::BadEntryType,
+                    "put_error" => match map.next_key()? {
+                        Some("put_error") => AssetAttachmentPutError::PutError(map.next_value()?),
+                        None => return Err(de::Error::missing_field("put_error")),
+                        _ => return Err(de::Error::unknown_field(tag, VARIANTS)),
+                    },
+                    _ => AssetAttachmentPutError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_entry_id", "bad_entry_type", "put_error", "other"];
+        deserializer.deserialize_struct("AssetAttachmentPutError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPutError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetAttachmentPutError::BadEntryId => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetAttachmentPutError", 1)?;
+                s.serialize_field(".tag", "bad_entry_id")?;
+                s.end()
+            }
+            AssetAttachmentPutError::BadEntryType => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetAttachmentPutError", 1)?;
+                s.serialize_field(".tag", "bad_entry_type")?;
+                s.end()
+            }
+            AssetAttachmentPutError::PutError(ref x) => {
+                // union or polymporphic struct
+                let mut s = serializer.serialize_struct("AssetAttachmentPutError", 2)?;
+                s.serialize_field(".tag", "put_error")?;
+                s.serialize_field("put_error", x)?;
+                s.end()
+            }
+            AssetAttachmentPutError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetAttachmentPutError {
+    fn source(&self) -> Option<&(dyn ::std::error::Error + 'static)> {
+        match self {
+            AssetAttachmentPutError::PutError(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}
+
+impl ::std::fmt::Display for AssetAttachmentPutError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetAttachmentPutError::PutError(inner) => write!(f, "{}", inner),
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetAttachmentPutTextArg {
+    pub entry_id: String,
+    pub name: String,
+    pub data: String,
+    pub conflict_policy: PutConflictPolicy,
+}
+
+impl AssetAttachmentPutTextArg {
+    pub fn new(entry_id: String, name: String, data: String) -> Self {
+        AssetAttachmentPutTextArg {
+            entry_id,
+            name,
+            data,
+            conflict_policy: PutConflictPolicy::Override,
+        }
+    }
+
+    pub fn with_conflict_policy(mut self, value: PutConflictPolicy) -> Self {
+        self.conflict_policy = value;
+        self
+    }
+}
+
+const ASSET_ATTACHMENT_PUT_TEXT_ARG_FIELDS: &[&str] =
+    &["entry_id", "name", "data", "conflict_policy"];
+impl AssetAttachmentPutTextArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetAttachmentPutTextArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetAttachmentPutTextArg>, V::Error> {
+        let mut field_entry_id = None;
+        let mut field_name = None;
+        let mut field_data = None;
+        let mut field_conflict_policy = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_id" => {
+                    if field_entry_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_id"));
+                    }
+                    field_entry_id = Some(map.next_value()?);
+                }
+                "name" => {
+                    if field_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("name"));
+                    }
+                    field_name = Some(map.next_value()?);
+                }
+                "data" => {
+                    if field_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("data"));
+                    }
+                    field_data = Some(map.next_value()?);
+                }
+                "conflict_policy" => {
+                    if field_conflict_policy.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("conflict_policy"));
+                    }
+                    field_conflict_policy = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetAttachmentPutTextArg {
+            entry_id: field_entry_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_id"))?,
+            name: field_name.ok_or_else(|| ::serde::de::Error::missing_field("name"))?,
+            data: field_data.ok_or_else(|| ::serde::de::Error::missing_field("data"))?,
+            conflict_policy: field_conflict_policy.unwrap_or(PutConflictPolicy::Override),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_id", &self.entry_id)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("data", &self.data)?;
+        if self.conflict_policy != PutConflictPolicy::Override {
+            s.serialize_field("conflict_policy", &self.conflict_policy)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetAttachmentPutTextArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetAttachmentPutTextArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetAttachmentPutTextArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetAttachmentPutTextArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetAttachmentPutTextArg",
+            ASSET_ATTACHMENT_PUT_TEXT_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetAttachmentPutTextArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetAttachmentPutTextArg", 4)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // variants may be added in the future
 pub enum AssetCreatedBy {
     User(AssetCreatedByUser),
@@ -949,6 +1660,9 @@ impl ::serde::ser::Serialize for AssetEntryAclSetArg {
 pub enum AssetEntryAclSetError {
     BadEntryRef,
     NoPermission,
+    /// Returned if [`AssetEntryAclSetArg::entry_ref`](AssetEntryAclSetArg) references an
+    /// attachment. Set ACL on the attachment's parent instead.
+    BadEntryType,
     BadPrincipal,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
@@ -973,6 +1687,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
                 let value = match tag {
                     "bad_entry_ref" => AssetEntryAclSetError::BadEntryRef,
                     "no_permission" => AssetEntryAclSetError::NoPermission,
+                    "bad_entry_type" => AssetEntryAclSetError::BadEntryType,
                     "bad_principal" => AssetEntryAclSetError::BadPrincipal,
                     _ => AssetEntryAclSetError::Other,
                 };
@@ -980,7 +1695,13 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["bad_entry_ref", "no_permission", "bad_principal", "other"];
+        const VARIANTS: &[&str] = &[
+            "bad_entry_ref",
+            "no_permission",
+            "bad_entry_type",
+            "bad_principal",
+            "other",
+        ];
         deserializer.deserialize_struct("AssetEntryAclSetError", VARIANTS, EnumVisitor)
     }
 }
@@ -1000,6 +1721,12 @@ impl ::serde::ser::Serialize for AssetEntryAclSetError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetEntryAclSetError", 1)?;
                 s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetEntryAclSetError::BadEntryType => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryAclSetError", 1)?;
+                s.serialize_field(".tag", "bad_entry_type")?;
                 s.end()
             }
             AssetEntryAclSetError::BadPrincipal => {
@@ -1122,6 +1849,7 @@ pub struct AssetEntryIterArg {
     /// The maximum number of entries to return at once. For internal reasons, fewer than `limit`
     /// may be returned.
     pub limit: u32,
+    pub include_attachments: bool,
 }
 
 impl Default for AssetEntryIterArg {
@@ -1129,6 +1857,7 @@ impl Default for AssetEntryIterArg {
         AssetEntryIterArg {
             prefix: None,
             limit: 100,
+            include_attachments: false,
         }
     }
 }
@@ -1143,9 +1872,14 @@ impl AssetEntryIterArg {
         self.limit = value;
         self
     }
+
+    pub fn with_include_attachments(mut self, value: bool) -> Self {
+        self.include_attachments = value;
+        self
+    }
 }
 
-const ASSET_ENTRY_ITER_ARG_FIELDS: &[&str] = &["prefix", "limit"];
+const ASSET_ENTRY_ITER_ARG_FIELDS: &[&str] = &["prefix", "limit", "include_attachments"];
 impl AssetEntryIterArg {
     // no _opt deserializer
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
@@ -1153,6 +1887,7 @@ impl AssetEntryIterArg {
     ) -> Result<AssetEntryIterArg, V::Error> {
         let mut field_prefix = None;
         let mut field_limit = None;
+        let mut field_include_attachments = None;
         while let Some(key) = map.next_key::<&str>()? {
             match key {
                 "prefix" => {
@@ -1167,6 +1902,12 @@ impl AssetEntryIterArg {
                     }
                     field_limit = Some(map.next_value()?);
                 }
+                "include_attachments" => {
+                    if field_include_attachments.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("include_attachments"));
+                    }
+                    field_include_attachments = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1176,6 +1917,7 @@ impl AssetEntryIterArg {
         let result = AssetEntryIterArg {
             prefix: field_prefix.and_then(Option::flatten),
             limit: field_limit.unwrap_or(100),
+            include_attachments: field_include_attachments.unwrap_or(false),
         };
         Ok(result)
     }
@@ -1190,6 +1932,9 @@ impl AssetEntryIterArg {
         }
         if self.limit != 100 {
             s.serialize_field("limit", &self.limit)?;
+        }
+        if self.include_attachments {
+            s.serialize_field("include_attachments", &self.include_attachments)?;
         }
         Ok(())
     }
@@ -1221,7 +1966,7 @@ impl ::serde::ser::Serialize for AssetEntryIterArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryIterArg", 2)?;
+        let mut s = serializer.serialize_struct("AssetEntryIterArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -3916,6 +4661,8 @@ pub enum AssetMoveError {
     TargetNamePrefixConflict,
     /// Assets cannot be moved across asset pools.
     AssetPoolMismatch,
+    /// Assets cannot change attachment parents.
+    AttachmentParentMismatch,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -3943,6 +4690,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
                     "target_name_conflict" => AssetMoveError::TargetNameConflict,
                     "target_name_prefix_conflict" => AssetMoveError::TargetNamePrefixConflict,
                     "asset_pool_mismatch" => AssetMoveError::AssetPoolMismatch,
+                    "attachment_parent_mismatch" => AssetMoveError::AttachmentParentMismatch,
                     _ => AssetMoveError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -3956,6 +4704,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
             "target_name_conflict",
             "target_name_prefix_conflict",
             "asset_pool_mismatch",
+            "attachment_parent_mismatch",
             "other",
         ];
         deserializer.deserialize_struct("AssetMoveError", VARIANTS, EnumVisitor)
@@ -4003,6 +4752,12 @@ impl ::serde::ser::Serialize for AssetMoveError {
                 s.serialize_field(".tag", "asset_pool_mismatch")?;
                 s.end()
             }
+            AssetMoveError::AttachmentParentMismatch => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "attachment_parent_mismatch")?;
+                s.end()
+            }
             AssetMoveError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -4017,6 +4772,9 @@ impl ::std::fmt::Display for AssetMoveError {
         match self {
             AssetMoveError::AssetPoolMismatch => {
                 f.write_str("Assets cannot be moved across asset pools.")
+            }
+            AssetMoveError::AttachmentParentMismatch => {
+                f.write_str("Assets cannot change attachment parents.")
             }
             _ => write!(f, "{:?}", *self),
         }

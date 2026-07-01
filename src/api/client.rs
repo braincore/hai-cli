@@ -403,6 +403,38 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_attachment_put(
+        &self,
+        arg: asset::AssetAttachmentPutArg,
+    ) -> Result<asset::AssetPutResult, RequestError<asset::AssetAttachmentPutError>> {
+        self.mk_api_request::<_, _, _>("/asset/attachment/put", &arg)
+            .await
+    }
+
+    pub async fn asset_attachment_put_text(
+        &self,
+        arg: asset::AssetAttachmentPutTextArg,
+    ) -> Result<asset::AssetPutResult, RequestError<asset::AssetAttachmentPutError>> {
+        self.mk_api_request::<_, _, _>("/asset/attachment/put_text", &arg)
+            .await
+    }
+
+    pub async fn asset_attachment_push(
+        &self,
+        arg: asset::AssetAttachmentPushArg,
+    ) -> Result<asset::AssetPushResult, RequestError<asset::AssetAttachmentPushError>> {
+        self.mk_api_request::<_, _, _>("/asset/attachment/push", &arg)
+            .await
+    }
+
+    pub async fn asset_attachment_push_text(
+        &self,
+        arg: asset::AssetAttachmentPushTextArg,
+    ) -> Result<asset::AssetPushResult, RequestError<asset::AssetAttachmentPushError>> {
+        self.mk_api_request::<_, _, _>("/asset/attachment/push_text", &arg)
+            .await
+    }
+
     pub async fn asset_pool_create_shared(
         &self,
         arg: asset::AssetPoolCreateSharedArg,

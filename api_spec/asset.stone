@@ -228,6 +228,8 @@ union AssetMoveError
     target_name_prefix_conflict
     asset_pool_mismatch
         "Assets cannot be moved across asset pools."
+    attachment_parent_mismatch
+        "Assets cannot change attachment parents."
 
 # --
 
@@ -315,6 +317,7 @@ struct AssetEntryIterArg
     limit UInt32 = 100
         "The maximum number of entries to return at once. For internal reasons,
         fewer than `limit` may be returned."
+    include_attachments Boolean = false
 
 struct AssetEntryIterResult
     entries List(AssetEntry)
@@ -508,6 +511,9 @@ union AceEffectSet
 union AssetEntryAclSetError
     bad_entry_ref
     no_permission
+    bad_entry_type
+        "Returned if :field:`AssetEntryAclSetArg.entry_ref` references an
+        attachment. Set ACL on the attachment's parent instead."
     bad_principal
 
 struct AssetEntryAclSetResult
@@ -563,3 +569,67 @@ union AssetFolderCreateError
         asset a directory prefix of an existing asset, or would make an
         existing asset simultaneously a file and directory."
     over_quota
+
+# --
+
+route attachment/put(AssetAttachmentPutArg, AssetPutResult, AssetAttachmentPutError)
+    "Put an asset attachment."
+
+struct AssetAttachmentPutArg
+    entry_id String(min_length=1)
+    name String(min_length=1)
+        "This is the attachment's name, but not the name of the asset
+        representing the attachment. That will have the format:
+        `:<entry_id>/<attachment_name>`"
+    data Bytes
+    conflict_policy PutConflictPolicy = override
+
+union AssetAttachmentPutError
+    bad_entry_id
+    bad_entry_type
+        "Returned if :field:`AssetAttachmentPutArg.entry_id` references a
+        folder or other attachment."
+    put_error AssetPutError
+
+# --
+
+route attachment/put_text(AssetAttachmentPutArg, AssetPutResult, AssetAttachmentPutError)
+    "Put an asset attachment that's text. Unlike :route:`attachment/put`, input
+    is a string (not bytes) and therefore does not need to be b64-serialized."
+
+struct AssetAttachmentPutTextArg
+    entry_id String(min_length=1)
+    name String(min_length=1, max_length=2048)
+    data String(max_length=1000000)
+    conflict_policy PutConflictPolicy = override
+
+# --
+
+route attachment/push(AssetAttachmentPushArg, AssetPushResult, AssetAttachmentPushError)
+    "Push an asset attachment."
+
+struct AssetAttachmentPushArg
+    entry_id String(min_length=1)
+    name String(min_length=1)
+        "This is the attachment's name, but not the name of the asset
+        representing the attachment. That will have the format:
+        `:<entry_id>/<attachment_name>`"
+    data Bytes
+
+union AssetAttachmentPushError
+    bad_entry_id
+    bad_entry_type
+        "Returned if :field:`AssetAttachmentPutArg.entry_id` references a
+        folder or other attachment."
+    push_error AssetPushError
+
+# --
+
+route attachment/push_text(AssetAttachmentPushArg, AssetPushResult, AssetAttachmentPushError)
+    "Push an asset attachment that's text. Unlike :route:`attachment/push`, input
+    is a string (not bytes) and therefore does not need to be b64-serialized."
+
+struct AssetAttachmentPushTextArg
+    entry_id String(min_length=1)
+    name String(min_length=1, max_length=2048)
+    data String(max_length=1000000)

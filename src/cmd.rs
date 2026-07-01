@@ -152,6 +152,12 @@ pub enum Cmd {
     AssetMdSetKey(AssetMdSetKeyCmd),
     /// Delete key in asset metadata
     AssetMdDelKey(AssetMdDelKeyCmd),
+    /// Create an attachment for an asset
+    AssetAttachmentNew(AssetAttachmentNewCmd),
+    /// Create a push attachment for an asset
+    AssetAttachmentNewPush(AssetAttachmentNewPushCmd),
+    /// List attachments for an asset
+    AssetAttachmentList(AssetAttachmentListCmd),
     /// New asset folder
     AssetFolderNew(AssetFolderNewCmd),
     /// Collapse asset folder
@@ -785,6 +791,30 @@ pub struct AssetMdDelKeyCmd {
 
     /// Top-level key of metadata to delete
     pub key: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAttachmentNewCmd {
+    /// Name of the parent asset
+    pub asset_name: String,
+
+    /// Name of the attachment
+    pub attachment_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAttachmentNewPushCmd {
+    /// Name of the parent asset
+    pub asset_name: String,
+
+    /// Name of the attachment
+    pub attachment_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAttachmentListCmd {
+    /// Name of the parent asset
+    pub asset_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2621,6 +2651,54 @@ fn parse_command(
                 }
                 None => {
                     eprintln!("Usage: /asset-md-del-key <asset_name> <key>");
+                    None
+                }
+            }
+        }
+        "asset-attachment-new" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, attachment_name)) => {
+                    Some(Cmd::AssetAttachmentNew(AssetAttachmentNewCmd {
+                        asset_name,
+                        attachment_name,
+                    }))
+                }
+                None => {
+                    eprintln!("Usage: /asset-attachment-new <asset_name> <attachment_name>");
+                    None
+                }
+            }
+        }
+        "asset-attachment-new-push" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_two_arg_catchall(remaining) {
+                Some((asset_name, attachment_name)) => {
+                    Some(Cmd::AssetAttachmentNewPush(AssetAttachmentNewPushCmd {
+                        asset_name,
+                        attachment_name,
+                    }))
+                }
+                None => {
+                    eprintln!("Usage: /asset-attachment-new-push <asset_name> <attachment_name>");
+                    None
+                }
+            }
+        }
+        "asset-attachment-list" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg_catchall(remaining) {
+                Some(asset_name) => Some(Cmd::AssetAttachmentList(AssetAttachmentListCmd {
+                    asset_name,
+                })),
+                None => {
+                    eprintln!("Usage: /asset-attachment-list <asset_name>");
                     None
                 }
             }
