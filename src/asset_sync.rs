@@ -411,7 +411,8 @@ pub async fn sync_down(
 
     entries.retain(|entry| {
         // HEP 64: Ignore folder-as-asset entries. For now, only create folders
-        // as needed to deal with file/blob entries.
+        // as needed to deal with file/blob entries. Also ignores log (push)
+        // assets.
         matches!(entry.asset.kind, AssetKind::Blob)
             // Filter out any .haisync entries from the server
             && !entry.name.ends_with(HAISYNC_FILENAME)

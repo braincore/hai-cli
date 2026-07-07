@@ -6462,13 +6462,13 @@ fn abbreviate_number(num: u64) -> String {
 
 // --
 
-use crate::api::types::asset::{AssetEntry, AssetEntryOp};
+use crate::api::types::asset::{AssetEntry, AssetEntryOp, AssetKind};
 
 fn print_asset_entry(entry: &AssetEntry, index: Option<(u32, u32)>) -> String {
     let index_str = index
         .map(|(i, digits)| format!("{:>width$}. ", i, width = digits as usize))
         .unwrap_or("".to_string());
-    let push_symbol = if matches!(entry.op, AssetEntryOp::Push) {
+    let push_symbol = if matches!(entry.asset.kind, AssetKind::Log) {
         "📥"
     } else {
         ""

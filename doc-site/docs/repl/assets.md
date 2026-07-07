@@ -396,23 +396,44 @@ Each asset can have a JSON object associated with it to store metadata:
 If the `title` metadata key is set, it's shown in `/asset-list` and
 `/asset-search` in `[]` brackets.
 
-## Asset Push & ACL
+## Push for logs
+
+Assets can alternatively be created and appended to using `/asset-push`.
+
+`/asset-push` sets up an asset as a log. Unlike ordinary asset writes, older
+revisions are not considered replaced. Instead, each push creates a new log
+entry.
+
+Revision commands (e.g. `/asset-revisions`) can be used to iterate through log
+entries for a given asset.
+
+Once an asset is setup as a log, it cannot be written to as a blob (non-push).
+The reverse is true as well. An explicit removal is required to change types.
+
+## ACL
 
 Your public assets (prefixed by your username `/username/...`) can have ACLs
-set so that an asset can be used as a write-only "asset/document drop".
+set.
+
+A simple use case is to give write permission to another user:
 
 ```
-/asset-acl-set /ken/hai-feedback everyone deny:read-data
-/asset-acl-set /ken/hai-feedback everyone allow:push-data
+/asset-acl-set /ken/doc-collaborate everyone allow:write-data
+/asset-acl-set /ken/doc-collaborate leo allow:write-data
 ```
 
-With these ACLs, any user can push data (`/asset-push`) into the
-`/ken/hai-feedback` asset, but no one except the owner can read what's been
-pushed.
+A more complex use case is to allow pushed data to create a "document drop":
 
-The owner (user `ken` in this example) can read the contents of
-`/ken/hai-feedback` using `/asset-list-revisions` and can access revisions with
-`/asset-get-revision`.
+```
+/asset-acl-set /ken/doc-drop everyone deny:read-data
+/asset-acl-set /ken/doc-drop everyone allow:push-data
+```
+
+With these ACLs set, any user can push data (`/asset-push`) into the
+`/ken/doc-drop` asset, but no one except the owner can read what's been pushed.
+
+The owner (user `ken` in this example) can cursor through dropped documents
+using `/asset-revisions` and create local copies with `/asset-revision-temp`.
 
 ## Listening for changes
 

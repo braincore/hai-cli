@@ -3318,7 +3318,11 @@ impl ::serde::ser::Serialize for AssetInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // variants may be added in the future
 pub enum AssetKind {
+    /// Asset was created by a put.
     Blob,
+    /// Asset was created by a push.
+    Log,
+    /// Asset was created by a folder creation.
     Folder,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
@@ -3342,6 +3346,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetKind {
                 };
                 let value = match tag {
                     "blob" => AssetKind::Blob,
+                    "log" => AssetKind::Log,
                     "folder" => AssetKind::Folder,
                     _ => AssetKind::Other,
                 };
@@ -3349,7 +3354,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetKind {
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["blob", "folder", "other"];
+        const VARIANTS: &[&str] = &["blob", "log", "folder", "other"];
         deserializer.deserialize_struct("AssetKind", VARIANTS, EnumVisitor)
     }
 }
@@ -3363,6 +3368,12 @@ impl ::serde::ser::Serialize for AssetKind {
                 // unit
                 let mut s = serializer.serialize_struct("AssetKind", 1)?;
                 s.serialize_field(".tag", "blob")?;
+                s.end()
+            }
+            AssetKind::Log => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetKind", 1)?;
+                s.serialize_field(".tag", "log")?;
                 s.end()
             }
             AssetKind::Folder => {
@@ -5615,6 +5626,9 @@ impl ::serde::ser::Serialize for AssetPushArg {
 pub enum AssetPushError {
     BadName,
     NoPermission,
+    /// The put is operating as a replace and the target is not the same kind. For example, a blob
+    /// cannot replace a log or folder.
+    BadAssetKind,
     /// Returned in rare instances where the push is responsible for asset creation and the request
     /// loses a race with another push.
     NameConflict,
@@ -5648,6 +5662,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
                 let value = match tag {
                     "bad_name" => AssetPushError::BadName,
                     "no_permission" => AssetPushError::NoPermission,
+                    "bad_asset_kind" => AssetPushError::BadAssetKind,
                     "name_conflict" => AssetPushError::NameConflict,
                     "name_prefix_conflict" => AssetPushError::NamePrefixConflict,
                     "over_quota" => AssetPushError::OverQuota,
@@ -5661,6 +5676,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
         const VARIANTS: &[&str] = &[
             "bad_name",
             "no_permission",
+            "bad_asset_kind",
             "name_conflict",
             "name_prefix_conflict",
             "over_quota",
@@ -5686,6 +5702,12 @@ impl ::serde::ser::Serialize for AssetPushError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetPushError", 1)?;
                 s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetPushError::BadAssetKind => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPushError", 1)?;
+                s.serialize_field(".tag", "bad_asset_kind")?;
                 s.end()
             }
             AssetPushError::NameConflict => {
@@ -5724,6 +5746,7 @@ impl ::std::error::Error for AssetPushError {}
 impl ::std::fmt::Display for AssetPushError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
+            AssetPushError::BadAssetKind => f.write_str("The put is operating as a replace and the target is not the same kind. For example, a blob cannot replace a log or folder."),
             AssetPushError::NameConflict => f.write_str("Returned in rare instances where the push is responsible for asset creation and the request loses a race with another push."),
             AssetPushError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
             _ => write!(f, "{:?}", *self),
@@ -6049,6 +6072,9 @@ impl ::serde::ser::Serialize for AssetPutArg {
 pub enum AssetPutError {
     BadName,
     NoPermission,
+    /// The put is operating as a replace and the target is not the same kind. For example, a blob
+    /// cannot replace a log or folder.
+    BadAssetKind,
     /// Only returned if conflict policy is set to reject or replacing a folder.
     NameConflict,
     /// Returned if the [`AssetPutArg::name`](AssetPutArg) would make this new asset a directory
@@ -6081,6 +6107,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
                 let value = match tag {
                     "bad_name" => AssetPutError::BadName,
                     "no_permission" => AssetPutError::NoPermission,
+                    "bad_asset_kind" => AssetPutError::BadAssetKind,
                     "name_conflict" => AssetPutError::NameConflict,
                     "name_prefix_conflict" => AssetPutError::NamePrefixConflict,
                     "over_quota" => AssetPutError::OverQuota,
@@ -6094,6 +6121,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
         const VARIANTS: &[&str] = &[
             "bad_name",
             "no_permission",
+            "bad_asset_kind",
             "name_conflict",
             "name_prefix_conflict",
             "over_quota",
@@ -6119,6 +6147,12 @@ impl ::serde::ser::Serialize for AssetPutError {
                 // unit
                 let mut s = serializer.serialize_struct("AssetPutError", 1)?;
                 s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetPutError::BadAssetKind => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPutError", 1)?;
+                s.serialize_field(".tag", "bad_asset_kind")?;
                 s.end()
             }
             AssetPutError::NameConflict => {
@@ -6157,6 +6191,7 @@ impl ::std::error::Error for AssetPutError {}
 impl ::std::fmt::Display for AssetPutError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
+            AssetPutError::BadAssetKind => f.write_str("The put is operating as a replace and the target is not the same kind. For example, a blob cannot replace a log or folder."),
             AssetPutError::NameConflict => f.write_str("Only returned if conflict policy is set to reject or replacing a folder."),
             AssetPutError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
             _ => write!(f, "{:?}", *self),
@@ -6857,7 +6892,8 @@ impl ::serde::ser::Serialize for AssetReplaceArg {
 pub enum AssetReplaceError {
     BadEntryId,
     NoPermission,
-    /// The replacement target is a folder.
+    /// The replacement target is not the same kind. For example, a blob cannot replace a log or
+    /// folder.
     BadAssetKind,
     BadRevId,
     /// Revision ID is no longer the most recent for the asset.
@@ -6962,10 +6998,8 @@ impl ::std::error::Error for AssetReplaceError {}
 impl ::std::fmt::Display for AssetReplaceError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
-            AssetReplaceError::BadAssetKind => f.write_str("The replacement target is a folder."),
-            AssetReplaceError::OldRevId => {
-                f.write_str("Revision ID is no longer the most recent for the asset.")
-            }
+            AssetReplaceError::BadAssetKind => f.write_str("The replacement target is not the same kind. For example, a blob cannot replace a log or folder."),
+            AssetReplaceError::OldRevId => f.write_str("Revision ID is no longer the most recent for the asset."),
             _ => write!(f, "{:?}", *self),
         }
     }

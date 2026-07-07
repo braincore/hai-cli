@@ -41,7 +41,11 @@ struct AssetInfo
     kind AssetKind
         union
             blob
+                "Asset was created by a put."
+            log
+                "Asset was created by a push."
             folder
+                "Asset was created by a folder creation."
     created_by AssetCreatedBy
     size UInt64
         "Number of bytes. Deleted and access-restricted assets have a size of
@@ -114,6 +118,9 @@ struct AssetRedactions
 union AssetPutError
     bad_name
     no_permission
+    bad_asset_kind
+        "The put is operating as a replace and the target is not the same kind.
+        For example, a blob cannot replace a log or folder."
     name_conflict
         "Only returned if conflict policy is set to reject or replacing a
         folder."
@@ -176,7 +183,8 @@ union AssetReplaceError
     bad_entry_id
     no_permission
     bad_asset_kind
-        "The replacement target is a folder."
+        "The replacement target is not the same kind. For example, a blob cannot
+        replace a log or folder."
     bad_rev_id
     old_rev_id
         "Revision ID is no longer the most recent for the asset."
@@ -467,6 +475,9 @@ struct AssetPushResult
 union AssetPushError
     bad_name
     no_permission
+    bad_asset_kind
+        "The put is operating as a replace and the target is not the same kind.
+        For example, a blob cannot replace a log or folder."
     name_conflict
         "Returned in rare instances where the push is responsible for asset
         creation and the request loses a race with another push."
