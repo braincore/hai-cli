@@ -5385,6 +5385,13 @@ pub async fn process_cmd(
                         username: res.username,
                         token: res.token,
                     });
+                    println!("\nSetting up your inbox...");
+                    let mut cmd_queue = session.cmd_queue.lock().await;
+                    cmd_queue.push_front(session::CmdInput {
+                        input: "/inbox-setup".to_string(),
+                        source: session::CmdSource::Internal,
+                        reply_channel: None,
+                    });
                 }
                 Err(e) => {
                     eprintln!("error: {}", e);
@@ -5503,6 +5510,39 @@ pub async fn process_cmd(
             println!(
                 "After subscribing, run `/hai-router on`. The 🌐 icon means you're using credits instead of your personal API keys."
             );
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::InboxSetup => {
+            match &session.account {
+                Some(account) => account,
+                None => {
+                    eprintln!(
+                        "You must be logged-in to setup your inbox. Try /account-login or /account-new"
+                    );
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let mut cmd_queue = session.cmd_queue.lock().await;
+            cmd_queue.push_front(session::CmdInput {
+                input: "/asset-md-set-key //inbox content_type \"application/json\"".to_string(),
+                source: session::CmdSource::Internal,
+                reply_channel: None,
+            });
+            cmd_queue.push_front(session::CmdInput {
+                input: "/asset-acl-set //inbox everyone allow:push-data".to_string(),
+                source: session::CmdSource::Internal,
+                reply_channel: None,
+            });
+            cmd_queue.push_front(session::CmdInput {
+                input: "/asset-acl-set //inbox everyone deny:read-data".to_string(),
+                source: session::CmdSource::Internal,
+                reply_channel: None,
+            });
+            cmd_queue.push_front(session::CmdInput {
+                input: "/asset-push //inbox\n{}".to_string(),
+                source: session::CmdSource::Internal,
+                reply_channel: None,
+            });
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AccountLogout(cmd::AccountLogoutCmd { username }) => {

@@ -224,6 +224,8 @@ pub enum Cmd {
     AccountBalance,
     /// Subscribe
     AccountSubscribe,
+    /// Setup inbox
+    InboxSetup,
     /// Get whois info for a user
     Whois(WhoisCmd),
     /// See cost of models
@@ -2988,6 +2990,16 @@ fn parse_command(
                 return None;
             }
             Some(Cmd::AccountSubscribe)
+        }
+        "inbox-setup" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            if parse_one_arg_catchall(remaining).is_some() {
+                eprintln!("Usage: /{cmd_name} takes no arguments");
+                return None;
+            }
+            Some(Cmd::InboxSetup)
         }
         "whois" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {

@@ -527,6 +527,7 @@ async fn repl(
         "/account-logout",
         "/account-balance",
         "/account-subscribe",
+        "/inbox-setup",
         "/chats",
         "/chat-save",
         "/chat-resume",
