@@ -20,7 +20,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 use crate::api::client::HaiClient;
 use crate::db::Account;
-use crate::{HaiRouterState, config};
+use crate::{HaiRouterState, asset_helper, config};
 
 pub struct LineEditor {
     pub reedline: Reedline,
@@ -1117,15 +1117,12 @@ impl CmdAndFileCompleter {
     /// # Arguments
     /// * `asset_prefix` - The prefix of the asset to complete.
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
-        let expanded_asset_prefix =
-            crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
+        let expanded_asset_prefix = asset_helper::expand_asset_name(asset_prefix, &self.account);
         let resolved_asset_prefix = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                crate::cmd_processor::resolve_attachment_asset_name(
-                    &expanded_asset_prefix,
-                    &self.api_client,
-                ),
-            )
+            tokio::runtime::Handle::current().block_on(asset_helper::resolve_attachment_asset_name(
+                &expanded_asset_prefix,
+                &self.api_client,
+            ))
         });
         if asset_prefix.starts_with("/s/") && asset_prefix.matches('/').count() == 2 {
             // If prefix is querying /s/, auto-complete asset pools.
@@ -1248,8 +1245,7 @@ impl CmdAndFileCompleter {
     /// folder entry. For example, if "a/b/c" is a blob entry, then "a" and
     /// "a/b" are implicit folders.
     fn asset_folder_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
-        let expanded_asset_prefix =
-            crate::cmd_processor::expand_asset_name(asset_prefix, &self.account);
+        let expanded_asset_prefix = asset_helper::expand_asset_name(asset_prefix, &self.account);
 
         // Pool completion: same behavior as asset_completer — you can't make a
         // folder at the pool-mount level via path components, so just defer to

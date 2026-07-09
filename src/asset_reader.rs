@@ -13,6 +13,7 @@ use crate::api::types::asset::{
     AssetRevision, AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
+use crate::asset_helper;
 use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
 
 // --
@@ -521,6 +522,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
 pub async fn prepare_assets_from_cmd_as_temp_files(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
+    account: &Option<crate::db::Account>,
     api_client: &HaiClient,
     recipient: Option<KeyRecipient>,
     cmd: &str,
@@ -539,7 +541,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
-        let output_asset = cap[1].to_string();
+        let output_asset = asset_helper::expand_asset_name(&cap[1], account);
         if is_glob_pattern(&output_asset) {
             return Err(format!(
                 "Glob patterns are not allowed in output redirections: @{}",
@@ -550,7 +552,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     }
 
     for cap in append_regex.captures_iter(cmd) {
-        let append_asset = cap[1].to_string();
+        let append_asset = asset_helper::expand_asset_name(&cap[1], account);
         if is_glob_pattern(&append_asset) {
             return Err(format!(
                 "Glob patterns are not allowed in append redirections: @{}",
@@ -568,7 +570,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
         asset_regex
             .captures_iter(&cmd_without_outputs)
-            .map(|cap| cap[1].to_string())
+            .map(|cap| asset_helper::expand_asset_name(&cap[1], account))
             .collect()
     };
 
@@ -578,7 +580,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
-        let asset_path = cap[1].to_string();
+        let asset_path = asset_helper::expand_asset_name(&cap[1], account);
         let is_glob = is_glob_pattern(&asset_path);
 
         if !seen_refs.contains(&asset_path) {

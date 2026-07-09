@@ -107,6 +107,123 @@ pub fn best_guess_content_type(
 
 // --
 
+pub async fn resolve_attachment_asset_name(asset_name: &str, api_client: &HaiClient) -> String {
+    if !asset_name.contains(':') {
+        // Non-attachment asset name, nothing further to resolve
+        return asset_name.to_string();
+    }
+
+    if asset_name.starts_with(':') {
+        // An asset attachment already in API format, so just return it
+        return asset_name.to_string();
+    }
+
+    use crate::api::types::asset::AssetGetArg;
+
+    // Split into the chain of names: the first is a real asset name, and each
+    // subsequent segment is an attachment relative to the prior asset.
+    //
+    // For API-format compatibility, each set of priors need to be converted
+    // into an entry ID:
+    //
+    // grandparent-asset-name:parent-attachment-name:child-attachment-name
+    // - query grandparent-asset
+    // - query (grandparent-entry-id:parent-attachment-name)
+    // - query (parent-attachment-entry-id:child-attachment-name)
+    let (mut current_name, rest) = asset_name
+        .split_once(':')
+        .map(|(n, r)| (n.to_string(), r))
+        .expect("unexpected missing :");
+    let (segments, last_relname) = match rest.rsplit_once(':') {
+        Some((before_last, last)) => (before_last.split(':').collect::<Vec<&str>>(), last),
+        None => (vec![], rest),
+    };
+
+    for relname in &segments {
+        // Fetch the current asset to obtain its entry_id.
+        let entry_id = match api_client
+            .asset_get(AssetGetArg {
+                name: current_name.to_string(),
+            })
+            .await
+        {
+            Ok(entry) => entry.entry.entry_id,
+            Err(e) => {
+                eprintln!(
+                    "error: failed to fetch asset '{}' to get entry_id: {}",
+                    current_name, e
+                );
+                // Bail out
+                return asset_name.to_string();
+            }
+        };
+        // Build next level
+        current_name = format!(":{}/{}", entry_id, relname);
+    }
+
+    // Final query to get the entry_id of the last segment
+    match api_client
+        .asset_get(AssetGetArg {
+            name: current_name.to_string(),
+        })
+        .await
+    {
+        Ok(res) => {
+            if last_relname.is_empty() {
+                format!(":{}", res.entry.entry_id)
+            } else {
+                format!(":{}/{}", res.entry.entry_id, last_relname)
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "error: failed to fetch asset '{}' to get entry_id: {}",
+                current_name, e
+            );
+            // Bail out
+            return asset_name.to_string();
+        }
+    }
+}
+
+/// If an asset-key begins with `//`, it is converted to the current logged-in
+/// user's public asset prefix: /<username>/<path>
+pub fn expand_pub_asset_name(asset_name: &str, account: &Option<crate::db::Account>) -> String {
+    if asset_name.starts_with("//") {
+        if let Some(account) = account {
+            format!("/{}{}", account.username, &asset_name[1..])
+        } else {
+            asset_name.to_string()
+        }
+    } else {
+        asset_name.to_string()
+    }
+}
+
+/// If an asset-key begins with `/s/+`..., the current logged-in user's username
+/// is added: `/s/<username>+...`.
+pub fn expand_shared_pool_asset_name(
+    asset_name: &str,
+    account: &Option<crate::db::Account>,
+) -> String {
+    if asset_name.starts_with("/s/+") {
+        if let Some(account) = account {
+            format!("/s/{}+{}", account.username, &asset_name[4..])
+        } else {
+            asset_name.to_string()
+        }
+    } else {
+        asset_name.to_string()
+    }
+}
+
+/// Expands `//` and `/s/+` prefixes in asset names.
+pub fn expand_asset_name(asset_name: &str, account: &Option<crate::db::Account>) -> String {
+    expand_shared_pool_asset_name(&expand_pub_asset_name(asset_name, account), account)
+}
+
+// --
+
 use crate::api::client::HaiClient;
 use crate::api::types::asset::{
     AssetEntry, AssetEntryListArg, AssetEntryListNextArg, EntryListOrder,

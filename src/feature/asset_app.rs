@@ -6,7 +6,6 @@ use tokio::sync::Mutex;
 use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_helper;
-use crate::cmd_processor::expand_pub_asset_name;
 use crate::feature::gateway;
 use crate::repl_remote::ReplRemote;
 use crate::session::SessionState;
@@ -25,8 +24,9 @@ pub async fn start_app_and_launch_browser(
     reuse_existing_gateway: bool,
     debug: bool,
 ) -> Option<(String, SocketAddr, SocketAddr)> {
-    let prog_asset_name = expand_pub_asset_name(prog_asset_name, &session.account);
-    let target_asset_name = target_asset_name.map(|n| expand_pub_asset_name(n, &session.account));
+    let prog_asset_name = asset_helper::expand_pub_asset_name(prog_asset_name, &session.account);
+    let target_asset_name =
+        target_asset_name.map(|n| asset_helper::expand_pub_asset_name(n, &session.account));
 
     if reuse_existing_gateway {
         if let Some(gateway_info) = session

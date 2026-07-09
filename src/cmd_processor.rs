@@ -499,15 +499,13 @@ pub async fn process_cmd(
                         }
                         (
                             shell_exec_with_asset_substitution(
+                                session,
                                 asset_blob_cache.clone(),
-                                session.asset_keyring.clone(),
                                 update_asset_tx.clone(),
                                 &api_client,
                                 username.as_deref(),
-                                &session.shell,
                                 &command,
                                 interactive,
-                                &session.get_shell_exec_env_vars(),
                             )
                             .await,
                             false,
@@ -516,15 +514,13 @@ pub async fn process_cmd(
                 } else {
                     (
                         shell_exec_with_asset_substitution(
+                            session,
                             asset_blob_cache.clone(),
-                            session.asset_keyring.clone(),
                             update_asset_tx.clone(),
                             &api_client,
                             username.as_deref(),
-                            &session.shell,
                             &command,
                             interactive,
-                            &session.get_shell_exec_env_vars(),
                         )
                         .await,
                         false,
@@ -2138,7 +2134,7 @@ pub async fn process_cmd(
         cmd::Cmd::AssetSearch(cmd::AssetSearchCmd { q, path }) => {
             let path = path
                 .as_ref()
-                .map(|p| expand_pub_asset_name(p, &session.account));
+                .map(|p| asset_helper::expand_pub_asset_name(p, &session.account));
             use crate::api::types::asset::AssetEntrySearchArg;
             let api_client = mk_api_client(Some(session));
             let asset_search_res = match api_client
@@ -2988,7 +2984,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = expand_pub_asset_name(&asset_name, &session.account);
+            let asset_name = asset_helper::expand_pub_asset_name(&asset_name, &session.account);
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetRemoveArg;
             match api_client
@@ -3020,8 +3016,10 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             };
-            let source_asset_name = expand_pub_asset_name(&source_asset_name, &session.account);
-            let dest_asset_name = expand_pub_asset_name(&dest_asset_name, &session.account);
+            let source_asset_name =
+                asset_helper::expand_pub_asset_name(&source_asset_name, &session.account);
+            let dest_asset_name =
+                asset_helper::expand_pub_asset_name(&dest_asset_name, &session.account);
 
             let api_client = mk_api_client(Some(session));
             use crate::api::types::asset::AssetMoveArg;
@@ -3369,7 +3367,10 @@ pub async fn process_cmd(
             let prefix = if prefix == "-" {
                 None
             } else {
-                Some(expand_pub_asset_name(&prefix, &session.account))
+                Some(asset_helper::expand_pub_asset_name(
+                    &prefix,
+                    &session.account,
+                ))
             };
             let target_path = match shellexpand::full(&target_path) {
                 Ok(s) => s.into_owned(),
@@ -3417,7 +3418,10 @@ pub async fn process_cmd(
             let target_prefix = if target_prefix == "-" {
                 None
             } else {
-                Some(expand_pub_asset_name(&target_prefix, &session.account))
+                Some(asset_helper::expand_pub_asset_name(
+                    &target_prefix,
+                    &session.account,
+                ))
             };
             let api_client = mk_api_client(Some(session));
             match asset_sync::sync_up(
@@ -4058,7 +4062,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let prefix = expand_pub_asset_name(&prefix, &session.account);
+            let prefix = asset_helper::expand_pub_asset_name(&prefix, &session.account);
 
             use api::types::asset::AssetPoolFolderCollapseArg;
             let api_client = mk_api_client(Some(session));
@@ -4078,7 +4082,7 @@ pub async fn process_cmd(
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let prefix = expand_pub_asset_name(&prefix, &session.account);
+            let prefix = asset_helper::expand_pub_asset_name(&prefix, &session.account);
 
             use api::types::asset::AssetPoolFolderExpandArg;
             let api_client = mk_api_client(Some(session));
@@ -4100,7 +4104,7 @@ pub async fn process_cmd(
             }
             let prefix = prefix
                 .as_ref()
-                .map(|prefix| expand_pub_asset_name(prefix, &session.account));
+                .map(|prefix| asset_helper::expand_pub_asset_name(prefix, &session.account));
 
             use api::types::asset::AssetPoolFolderListArg;
             let api_client = mk_api_client(Some(session));
@@ -6325,20 +6329,21 @@ Usage guideline for command options:
 // --
 
 pub async fn shell_exec_with_asset_substitution(
+    session: &mut SessionState,
     asset_blob_cache: Arc<AssetBlobCache>,
-    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     api_client: &HaiClient,
     username: Option<&str>,
-    shell: &str,
     cmd: &str,
     interactive: bool,
-    shell_exec_env_vars: &HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    let shell = &session.shell;
+    let shell_exec_env_vars = &session.get_shell_exec_env_vars();
     // NOTE: Increasing concurrent downloads triggers 502 Gateway Timeouts.
     match asset_reader::prepare_assets_from_cmd_as_temp_files(
         asset_blob_cache.clone(),
-        asset_keyring.clone(),
+        session.asset_keyring.clone(),
+        &session.account,
         api_client,
         username.map(|u| KeyRecipient::User(u.to_string())),
         cmd,
@@ -6374,7 +6379,7 @@ pub async fn shell_exec_with_asset_substitution(
                 let username = username.unwrap(); // Checked before execution
                 let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                     asset_blob_cache.clone(),
-                    asset_keyring.clone(),
+                    session.asset_keyring.clone(),
                     api_client.clone(),
                     Some(&KeyRecipient::User(username.to_string())),
                     &output_asset,
@@ -6657,124 +6662,9 @@ pub async fn shell_exec_interactive(
 ///    - Passes through the attachment API format:
 ///      `:<entry_id>/<attachment_relname>`
 pub async fn resolve_asset_name(asset_name: &str, session: &SessionState) -> String {
-    let expanded = expand_asset_name(asset_name, &session.account);
+    let expanded = asset_helper::expand_asset_name(asset_name, &session.account);
     let resolved = resolve_quick_var(&expanded, session).unwrap_or(expanded);
-    resolve_attachment_asset_name(&resolved, &mk_api_client(Some(session))).await
-}
-
-pub async fn resolve_attachment_asset_name(asset_name: &str, api_client: &HaiClient) -> String {
-    if !asset_name.contains(':') {
-        // Non-attachment asset name, nothing further to resolve
-        return asset_name.to_string();
-    }
-
-    if asset_name.starts_with(':') {
-        // An asset attachment already in API format, so just return it
-        return asset_name.to_string();
-    }
-
-    use crate::api::types::asset::AssetGetArg;
-
-    // Split into the chain of names: the first is a real asset name, and each
-    // subsequent segment is an attachment relative to the prior asset.
-    //
-    // For API-format compatibility, each set of priors need to be converted
-    // into an entry ID:
-    //
-    // grandparent-asset-name:parent-attachment-name:child-attachment-name
-    // - query grandparent-asset
-    // - query (grandparent-entry-id:parent-attachment-name)
-    // - query (parent-attachment-entry-id:child-attachment-name)
-    let (mut current_name, rest) = asset_name
-        .split_once(':')
-        .map(|(n, r)| (n.to_string(), r))
-        .expect("unexpected missing :");
-    let (segments, last_relname) = match rest.rsplit_once(':') {
-        Some((before_last, last)) => (before_last.split(':').collect::<Vec<&str>>(), last),
-        None => (vec![], rest),
-    };
-
-    for relname in &segments {
-        // Fetch the current asset to obtain its entry_id.
-        let entry_id = match api_client
-            .asset_get(AssetGetArg {
-                name: current_name.to_string(),
-            })
-            .await
-        {
-            Ok(entry) => entry.entry.entry_id,
-            Err(e) => {
-                eprintln!(
-                    "error: failed to fetch asset '{}' to get entry_id: {}",
-                    current_name, e
-                );
-                // Bail out
-                return asset_name.to_string();
-            }
-        };
-        // Build next level
-        current_name = format!(":{}/{}", entry_id, relname);
-    }
-
-    // Final query to get the entry_id of the last segment
-    match api_client
-        .asset_get(AssetGetArg {
-            name: current_name.to_string(),
-        })
-        .await
-    {
-        Ok(res) => {
-            if last_relname.is_empty() {
-                format!(":{}", res.entry.entry_id)
-            } else {
-                format!(":{}/{}", res.entry.entry_id, last_relname)
-            }
-        }
-        Err(e) => {
-            eprintln!(
-                "error: failed to fetch asset '{}' to get entry_id: {}",
-                current_name, e
-            );
-            // Bail out
-            return asset_name.to_string();
-        }
-    }
-}
-
-/// If an asset-key begins with `//`, it is converted to the current logged-in
-/// user's public asset prefix: /<username>/<path>
-pub fn expand_pub_asset_name(asset_name: &str, account: &Option<crate::db::Account>) -> String {
-    if asset_name.starts_with("//") {
-        if let Some(account) = account {
-            format!("/{}{}", account.username, &asset_name[1..])
-        } else {
-            asset_name.to_string()
-        }
-    } else {
-        asset_name.to_string()
-    }
-}
-
-/// If an asset-key begins with `/s/+`..., the current logged-in user's username
-/// is added: `/s/<username>+...`.
-pub fn expand_shared_pool_asset_name(
-    asset_name: &str,
-    account: &Option<crate::db::Account>,
-) -> String {
-    if asset_name.starts_with("/s/+") {
-        if let Some(account) = account {
-            format!("/s/{}+{}", account.username, &asset_name[4..])
-        } else {
-            asset_name.to_string()
-        }
-    } else {
-        asset_name.to_string()
-    }
-}
-
-/// Expands `//` and `/s/+` prefixes in asset names.
-pub fn expand_asset_name(asset_name: &str, account: &Option<crate::db::Account>) -> String {
-    expand_shared_pool_asset_name(&expand_pub_asset_name(asset_name, account), account)
+    asset_helper::resolve_attachment_asset_name(&resolved, &mk_api_client(Some(session))).await
 }
 
 pub fn resolve_quick_var(asset_name: &str, session: &SessionState) -> Option<String> {
