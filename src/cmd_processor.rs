@@ -1,3 +1,4 @@
+use bstr::ByteSlice;
 use colored::*;
 use glob::glob;
 use num_format::{Locale, ToFormattedString};
@@ -3063,120 +3064,169 @@ pub async fn process_cmd(
             }
 
             let api_client = mk_api_client(Some(session));
-            let (data_contents, source_md_contents, _asset_entry) =
-                match asset_reader::get_asset_and_metadata(
+
+            let mut copy_tasks = vec![(source_asset_name, target_asset_name)];
+
+            while let Some((source_asset_name, target_asset_name)) = copy_tasks.pop() {
+                let (data_contents, source_md_contents, source_asset_entry) =
+                    match asset_reader::get_asset_and_metadata(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &source_asset_name,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => return ProcessCmdResult::Loop,
+                    };
+                let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
                     asset_blob_cache.clone(),
+                    session.asset_keyring.clone(),
                     &api_client,
-                    &source_asset_name,
-                    false,
+                    Some(&KeyRecipient::User(username.clone())),
+                    &data_contents,
+                    source_md_contents.as_deref(),
                 )
                 .await
                 {
                     Ok(res) => res,
-                    Err(_) => return ProcessCmdResult::Loop,
-                };
-            let decrypted_asset_contents = match asset_crypt::maybe_decrypt_asset_contents(
-                asset_blob_cache.clone(),
-                session.asset_keyring.clone(),
-                &api_client,
-                Some(&KeyRecipient::User(username.clone())),
-                &data_contents,
-                source_md_contents.as_deref(),
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    eprintln!("error: failed to decrypt: {}", e);
-                    return ProcessCmdResult::Loop;
-                }
-            };
-
-            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
-                asset_blob_cache.clone(),
-                session.asset_keyring.clone(),
-                api_client.clone(),
-                Some(&KeyRecipient::User(username.clone())),
-                &target_asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(akm_info) => akm_info,
-                Err(e) => {
-                    match e {
-                        asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
-                        }
-                    }
-                    return ProcessCmdResult::Loop;
-                }
-            };
-
-            let _ = update_asset_tx
-                .send(asset_async_writer::WorkerAssetMsg::Update(
-                    asset_async_writer::WorkerAssetUpdate {
-                        asset_name: target_asset_name.clone(),
-                        asset_entry_ref: None,
-                        new_contents: decrypted_asset_contents,
-                        is_push: false,
-                        api_client: api_client.clone(),
-                        one_shot: true,
-                        akm_info: akm_info.clone(),
-                        reply_channel: None,
-                    },
-                ))
-                .await;
-
-            // Wait until copied asset is committed along with metadata if
-            // encryption applicable. That way the subsequent metadata fetch
-            // will have the up-to-date info.
-            asset_async_writer::flush_asset_updates(&update_asset_tx).await;
-
-            let (target_md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
-                asset_blob_cache.clone(),
-                &api_client,
-                &target_asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(_) => return ProcessCmdResult::Loop,
-            };
-
-            let source_md = source_md_contents.as_ref().and_then(|md| {
-                let contents = String::from_utf8_lossy(md);
-                serde_json::from_str::<serde_json::Value>(&contents).ok()
-            });
-
-            let target_md = target_md_contents.as_ref().and_then(|md| {
-                let contents = String::from_utf8_lossy(md);
-                serde_json::from_str::<serde_json::Value>(&contents).ok()
-            });
-
-            if source_md != target_md
-                && let Some(merged_md) = asset_async_writer::metadata_merge(source_md, target_md)
-            {
-                let md_contents =
-                    serde_json::to_string(&merged_md).expect("failed to serialize metadata");
-
-                use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-
-                match api_client
-                    .asset_metadata_put(AssetMetadataPutArg {
-                        name: target_asset_name,
-                        data: md_contents,
-                        conflict_policy: PutConflictPolicy::Override,
-                    })
-                    .await
-                {
-                    Ok(_) => {}
                     Err(e) => {
-                        eprintln!("error: {}", e);
+                        eprintln!("error: failed to decrypt: {}", e);
                         return ProcessCmdResult::Loop;
                     }
+                };
+
+                let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                    asset_blob_cache.clone(),
+                    session.asset_keyring.clone(),
+                    api_client.clone(),
+                    Some(&KeyRecipient::User(username.clone())),
+                    &target_asset_name,
+                    false,
+                )
+                .await
+                {
+                    Ok(akm_info) => akm_info,
+                    Err(e) => {
+                        match e {
+                            asset_crypt::AkmSelectionError::Abort(msg) => {
+                                eprintln!("error: {}", msg);
+                            }
+                        }
+                        return ProcessCmdResult::Loop;
+                    }
+                };
+
+                let _ = update_asset_tx
+                    .send(asset_async_writer::WorkerAssetMsg::Update(
+                        asset_async_writer::WorkerAssetUpdate {
+                            asset_name: target_asset_name.clone(),
+                            asset_entry_ref: None,
+                            new_contents: decrypted_asset_contents.clone(),
+                            is_push: false,
+                            api_client: api_client.clone(),
+                            one_shot: true,
+                            akm_info: akm_info.clone(),
+                            reply_channel: None,
+                        },
+                    ))
+                    .await;
+
+                // Wait until copied asset is committed along with metadata if
+                // encryption applicable. That way the subsequent metadata fetch
+                // will have the up-to-date info.
+                asset_async_writer::flush_asset_updates(&update_asset_tx).await;
+
+                let (target_md_contents, target_asset_entry) =
+                    match asset_reader::get_only_asset_metadata(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &target_asset_name,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => return ProcessCmdResult::Loop,
+                    };
+
+                let source_attachment_id = format!(":{}", source_asset_entry.entry_id);
+                let target_attachment_id = format!(":{}", target_asset_entry.entry_id);
+
+                let source_md = source_md_contents.as_ref().and_then(|md| {
+                    let contents = String::from_utf8_lossy(md)
+                        .replace(&source_attachment_id, &target_attachment_id);
+                    serde_json::from_str::<serde_json::Value>(&contents).ok()
+                });
+
+                let target_md = target_md_contents.as_ref().and_then(|md| {
+                    let contents = String::from_utf8_lossy(md);
+                    serde_json::from_str::<serde_json::Value>(&contents).ok()
+                });
+
+                if source_md != target_md
+                    && let Some(merged_md) =
+                        asset_async_writer::metadata_merge(source_md, target_md)
+                {
+                    let md_contents =
+                        serde_json::to_string(&merged_md).expect("failed to serialize metadata");
+
+                    use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+
+                    match api_client
+                        .asset_metadata_put(AssetMetadataPutArg {
+                            name: target_asset_name.clone(),
+                            data: md_contents,
+                            conflict_policy: PutConflictPolicy::Override,
+                        })
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("error: {}", e);
+                            return ProcessCmdResult::Loop;
+                        }
+                    }
                 }
+
+                match asset_helper::list_all_asset_entries(&api_client, &source_attachment_id).await
+                {
+                    Ok(entries) => {
+                        for entry in entries {
+                            copy_tasks.push((
+                                entry.name.clone(),
+                                entry
+                                    .name
+                                    .replace(&source_attachment_id, &target_attachment_id),
+                            ));
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "error: failed to list attachments for asset: {}",
+                            source_asset_name
+                        );
+                        eprintln!("error: copy is incomplete");
+                    }
+                }
+
+                // Final write of body rewriting the attachment references
+                let _ = update_asset_tx
+                    .send(asset_async_writer::WorkerAssetMsg::Update(
+                        asset_async_writer::WorkerAssetUpdate {
+                            asset_name: target_asset_name.clone(),
+                            asset_entry_ref: None,
+                            new_contents: decrypted_asset_contents
+                                .replace(&source_attachment_id, &target_attachment_id),
+                            is_push: false,
+                            api_client: api_client.clone(),
+                            one_shot: true,
+                            akm_info: akm_info.clone(),
+                            reply_channel: None,
+                        },
+                    ))
+                    .await;
             }
             ProcessCmdResult::Loop
         }

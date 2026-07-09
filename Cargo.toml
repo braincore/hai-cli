@@ -26,6 +26,7 @@ ansi_colours = "1.2.3"
 argon2 = "0.5.3"
 atty = "0.2.14"
 base64 = "0.22.1"
+bstr = "1.12.3"
 bytes = "1.8.0"
 chrono = { version = "0.4.39", features = ["serde"] }
 chrono-tz = "0.10.4"

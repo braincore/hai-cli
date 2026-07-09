@@ -107,6 +107,49 @@ pub fn best_guess_content_type(
 
 // --
 
+use crate::api::client::HaiClient;
+use crate::api::types::asset::{
+    AssetEntry, AssetEntryListArg, AssetEntryListNextArg, EntryListOrder,
+};
+
+/// Lists all asset entries under the given prefix, cursoring through all pages.
+/// Returns the collected entries with no printing or session side effects.
+pub async fn list_all_asset_entries(
+    api_client: &HaiClient,
+    prefix: &str,
+) -> Result<Vec<AssetEntry>, ()> {
+    let mut entries = Vec::new();
+
+    let mut res = api_client
+        .asset_entry_list(AssetEntryListArg {
+            prefix: Some(prefix.to_string()),
+            limit: 200,
+            order: EntryListOrder::Asc,
+        })
+        .await
+        .map_err(|_| ())?;
+
+    loop {
+        entries.extend_from_slice(&res.entries);
+
+        if !res.has_more {
+            break;
+        }
+
+        res = api_client
+            .asset_entry_list_next(AssetEntryListNextArg {
+                cursor: res.cursor,
+                limit: 200,
+            })
+            .await
+            .map_err(|_| ())?;
+    }
+
+    Ok(entries)
+}
+
+// --
+
 #[cfg(test)]
 mod tests {
     #[test]
