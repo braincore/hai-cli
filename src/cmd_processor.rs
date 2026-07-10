@@ -1832,6 +1832,7 @@ pub async fn process_cmd(
                     false,
                     true,
                     debug,
+                    None,
                 )
                 .await;
                 ProcessCmdResult::Loop
@@ -4407,6 +4408,7 @@ pub async fn process_cmd(
         cmd::Cmd::AssetApp(cmd::AssetAppCmd {
             asset_name,
             no_open,
+            dev_mode,
         }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 Some(account.username.clone())
@@ -4428,6 +4430,7 @@ pub async fn process_cmd(
                 no_open,
                 true,
                 debug,
+                dev_mode.as_deref(),
             )
             .await;
             if let Some(reply_channel) = &cmd_input.reply_channel {
@@ -4501,6 +4504,7 @@ pub async fn process_cmd(
                     false,
                     true,
                     debug,
+                    None,
                 )
                 .await;
             } else {
@@ -4553,7 +4557,8 @@ pub async fn process_cmd(
                     .as_deref(),
                 update_asset_tx.clone(),
                 auth_token.clone().as_deref(),
-                crate::feature::gateway::DEV_MODE,
+                crate::feature::gateway::DEV_GATEWAY,
+                None,
             )
             .await;
             ProcessCmdResult::Loop

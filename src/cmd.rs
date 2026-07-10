@@ -837,6 +837,9 @@ pub struct AssetAppCmd {
     pub asset_name: String,
     /// Do not open the app in the browser
     pub no_open: bool,
+    /// Local path to a vite project. When set, `npm run dev` is launched there
+    /// and GET requests under `asset_name` are proxied to the vite dev server.
+    pub dev_mode: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1881,11 +1884,7 @@ fn parse_command(
                 eprintln!("Error: {}", type_error);
                 return None;
             }
-            let key = options.get("key").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let key = options.get("key").map(|v| trim_string_value(v).to_string());
             let trust = options.get("trust").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
                 Some(task_ref) => Some(Cmd::Task(TaskCmd {
@@ -1919,11 +1918,7 @@ fn parse_command(
                 eprintln!("Error: {}", type_error);
                 return None;
             }
-            let key = options.get("key").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let key = options.get("key").map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref, key })),
                 None => {
@@ -1989,11 +1984,7 @@ fn parse_command(
                 eprintln!("Error: {}", type_error);
                 return None;
             }
-            let key = options.get("key").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let key = options.get("key").map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref, key })),
                 None => {
@@ -2102,11 +2093,9 @@ fn parse_command(
                 eprintln!("Error: {}", type_error);
                 return None;
             }
-            let path = options.get("path").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let path = options
+                .get("path")
+                .map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q, path })),
                 None => {
@@ -2706,19 +2695,24 @@ fn parse_command(
             }))
         }
         "asset-app" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["no_open"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["no_open", "dev"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("no_open".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("no_open".to_string(), OptionType::Bool),
+                ("dev".to_string(), OptionType::String),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let no_open = options.get("no_open").map(|v| v == "true").unwrap_or(false);
+            let dev_mode = options.get("dev").map(|v| trim_string_value(v).to_string());
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd {
                     asset_name,
                     no_open,
+                    dev_mode,
                 })),
                 None => {
                     eprintln!("Usage: /{cmd_name} <asset_name>");
@@ -3041,11 +3035,9 @@ fn parse_command(
             let pw = options.get("pw").map(|v| v == "true").unwrap_or(false);
             let pm = options.get("pm").map(|v| v == "true").unwrap_or(false);
             let py = options.get("py").map(|v| v == "true").unwrap_or(false);
-            let range = options.get("range").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let range = options
+                .get("range")
+                .map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(q) => Some(Cmd::WebSearch(WebSearchCmd {
                     q,
@@ -3331,11 +3323,9 @@ pub fn parse_tool_command(
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options.get("name").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let name = options
+                .get("name")
+                .map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
                     tool: tool::Tool::Fn(tool::FnTool {
@@ -3370,11 +3360,9 @@ pub fn parse_tool_command(
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options.get("name").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let name = options
+                .get("name")
+                .map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
                     tool: tool::Tool::Fn(tool::FnTool {
@@ -3409,11 +3397,9 @@ pub fn parse_tool_command(
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options.get("name").map(|v| {
-                v.trim_start_matches("\"")
-                    .trim_end_matches("\"")
-                    .to_string()
-            });
+            let name = options
+                .get("name")
+                .map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Tool(ToolCmd {
                     tool: tool::Tool::Fn(tool::FnTool {
@@ -3734,6 +3720,13 @@ fn validate_options_and_print_err_for_tool(
     } else {
         true
     }
+}
+
+fn trim_string_value(s: &str) -> &str {
+    s.strip_prefix('"')
+        .unwrap_or(s)
+        .strip_suffix('"')
+        .unwrap_or(s)
 }
 
 enum OptionType {

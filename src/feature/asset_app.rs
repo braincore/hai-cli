@@ -23,6 +23,10 @@ pub async fn start_app_and_launch_browser(
     skip_browser_launch: bool,
     reuse_existing_gateway: bool,
     debug: bool,
+    // When set, a local filesystem path to a vite project. `npm run dev` is
+    // launched there and GET requests under `prog_asset_name` are proxied to
+    // the vite dev server.
+    dev_mode: Option<&str>,
 ) -> Option<(String, SocketAddr, SocketAddr)> {
     let prog_asset_name = asset_helper::expand_pub_asset_name(prog_asset_name, &session.account);
     let target_asset_name =
@@ -63,6 +67,7 @@ pub async fn start_app_and_launch_browser(
         &prog_asset_name,
         target_asset_name.as_deref(),
         debug,
+        dev_mode,
     )
     .await
     {
@@ -89,6 +94,12 @@ pub async fn start_app_and_launch_browser(
     }
 }
 
+/// Launches a gateway server (websocket + http) to serve the asset app.
+///
+/// # Arguments
+/// - `local_dev_path`: If set, a local filesystem path to a vite project.
+///   `npm run dev` is launched there and GET requests under `prog_asset_name`
+///   are proxied to the vite dev server.
 pub async fn start_app(
     repl_remote: ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
@@ -100,6 +111,7 @@ pub async fn start_app(
     prog_asset_name: &str,
     target_asset_name: Option<&str>,
     debug: bool,
+    local_dev_path: Option<&str>,
 ) -> Option<(
     String,
     SocketAddr,
@@ -108,6 +120,20 @@ pub async fn start_app(
     tokio_util::sync::CancellationToken,
     String,
 )> {
+    // If local_dev_path set, launches a vite dev server (`npm run dev`) in the
+    // provided project directory on a free port.
+    let vite_proxy = if let Some(vite_project_path) = local_dev_path {
+        match launch_vite_dev_server(vite_project_path, prog_asset_name).await {
+            Some(vite_proxy) => Some(vite_proxy),
+            None => {
+                eprintln!("error: failed to launch vite dev server");
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+
     if let Ok((addr, perm_addr, clients, cancel_token, auth_token)) =
         crate::feature::gateway::launch_gateway(
             repl_remote,
@@ -119,6 +145,7 @@ pub async fn start_app(
             update_asset_tx.clone(),
             None,
             &prog_asset_name,
+            vite_proxy,
         )
         .await
     {
@@ -140,6 +167,89 @@ pub async fn start_app(
     } else {
         None
     }
+}
+
+/// Launches a vite dev server via `npm run dev` in `vite_project_path`.
+///
+/// A free port is chosen automatically and passed to vite. Returns the host
+/// (e.g. "127.0.0.1:5173") once the server is accepting connections, or `None`
+/// if it fails to start.
+///
+/// The spawned process is detached: it inherits stdio and is not tracked for
+/// shutdown.
+async fn launch_vite_dev_server(
+    vite_project_path: &str,
+    asset_app_prefix: &str,
+) -> Option<gateway::ViteProxy> {
+    // Pick a free port by binding to :0 and immediately releasing it. There's
+    // a small race window before vite binds, but --strictPort ensures we fail
+    // loudly rather than silently drifting to another port.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+        let port = listener.local_addr().ok()?.port();
+        drop(listener);
+        port
+    };
+
+    let vite_host = format!("127.0.0.1:{}", port);
+
+    println!(
+        "Launching vite dev server (`npm run dev`) in {} on http://{}",
+        vite_project_path, vite_host
+    );
+
+    // Assumption: generally, canonicalization of the asset prefix is done via
+    // a redirect by the gateway during asset lookup. Vite doesn't do this
+    // redirection, so keep it as consistent as possible, add a trailing slash.
+    let asset_app_prefix = if asset_app_prefix.ends_with('/') {
+        asset_app_prefix.to_string()
+    } else {
+        format!("{}/", asset_app_prefix)
+    };
+
+    let spawn_result = tokio::process::Command::new("npm")
+        .arg("run")
+        .arg("dev")
+        .arg("--")
+        .arg("--base")
+        .arg(asset_app_prefix.clone())
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--strictPort")
+        .current_dir(vite_project_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .spawn();
+
+    let _child = match spawn_result {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("error: failed to spawn `npm run dev`: {}", e);
+            return None;
+        }
+    };
+    // Intentionally detach the child: dropping the handle without waiting lets
+    // it keep running for the duration of the dev session.
+    // FIXME: Remove memory leak by returning proxy process and adding it to
+    // `session.gateways`.
+    std::mem::forget(_child);
+
+    // Wait for vite to start accepting connections (up to ~30s).
+    for _ in 0..150 {
+        if tokio::net::TcpStream::connect(&vite_host).await.is_ok() {
+            return Some(gateway::ViteProxy {
+                host: vite_host,
+                asset_prefix: asset_app_prefix.to_string(),
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    eprintln!("error: timed out waiting for vite dev server to start");
+    None
 }
 
 pub fn get_asset_app_url(

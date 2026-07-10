@@ -24,7 +24,7 @@ use crate::{
     feature::asset_crypt::{self, KeyRecipient},
 };
 
-pub const DEV_MODE: &str = "DEV_MODE";
+pub const DEV_GATEWAY: &str = "DEV_GATEWAY";
 pub const HAI_TOKEN_COOKIE_NAME: &str = "hai_token";
 
 /// Useful for encoding asset names in cookie names.
@@ -647,6 +647,11 @@ impl HttpResponse {
     }
 }
 
+pub struct ViteProxy {
+    pub host: String,
+    pub asset_prefix: String,
+}
+
 /// Launches a gateway server (websocket + http).
 ///
 /// # Arguments
@@ -658,6 +663,9 @@ impl HttpResponse {
 /// * `update_asset_tx` - A channel for sending asset update messages.
 /// * `auth_token` - Set the auth token explicitly rather than randomly
 ///   generating one.
+/// * `vite_proxy` - When set, where GET requests whose asset path begins with
+///   `asset_prefix` are proxied to instead of being served from the asset API.
+///   Vite websocket requests are also proxied.
 pub async fn launch_gateway(
     repl_remote: crate::repl_remote::ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
@@ -668,6 +676,7 @@ pub async fn launch_gateway(
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     auth_token: Option<&str>,
     service_name: &str,
+    vite_proxy: Option<ViteProxy>,
 ) -> std::io::Result<(SocketAddr, SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
     let token = auth_token.map_or_else(
@@ -774,6 +783,8 @@ pub async fn launch_gateway(
 
     let cookie_set = Arc::new(AtomicBool::new(false));
 
+    let vite_proxy = Arc::new(vite_proxy);
+
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -807,6 +818,7 @@ pub async fn launch_gateway(
                     let update_asset_tx_inner = update_asset_tx_clone.clone();
                     let next_client_id_inner = next_client_id.clone();
                     let cookie_set_inner = cookie_set.clone();
+                    let vite_proxy_inner = vite_proxy.clone();
 
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
@@ -825,6 +837,7 @@ pub async fn launch_gateway(
                             update_asset_tx_inner,
                             next_client_id_inner,
                             cookie_set_inner,
+                            vite_proxy_inner,
                         ).await {
                             eprintln!("Connection error from {}: {:?}", peer_addr, e);
                         }
@@ -914,6 +927,7 @@ async fn handle_connection(
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
+    vite_proxy: Arc<Option<ViteProxy>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Peek at the first bytes to read the HTTP request line and headers
     // without consuming them permanently
@@ -933,6 +947,13 @@ async fn handle_connection(
         || peek_str.contains("upgrade: websocket");
 
     if is_websocket {
+        // Check if this is a Vite HMR connection that should be proxied
+        let is_vite_hmr = vite_proxy.is_some()
+            && (peek_str.contains("Sec-WebSocket-Protocol: vite-hmr")
+                || peek_str.contains("sec-websocket-protocol: vite-hmr"));
+        if is_vite_hmr {
+            return handle_vite_websocket_proxy(stream, &vite_proxy).await;
+        }
         // Handle as WebSocket - tokio-tungstenite will read the upgrade request
         handle_websocket_connection(
             stream,
@@ -966,6 +987,7 @@ async fn handle_connection(
             service_name,
             update_asset_tx,
             cookie_set,
+            vite_proxy,
         )
         .await
     }
@@ -988,6 +1010,32 @@ fn extract_cookie_from_raw(raw_headers: &str, cookie_name: &str) -> Option<Strin
         }
     }
     None
+}
+
+async fn handle_vite_websocket_proxy(
+    mut client_stream: tokio::net::TcpStream,
+    vite_proxy: &Arc<Option<ViteProxy>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let vite_host = match vite_proxy.as_ref() {
+        Some(proxy) => proxy.host.clone(),
+        None => return Ok(()),
+    };
+
+    println!(
+        "Proxying WebSocket connection to Vite dev server at {}",
+        vite_host
+    );
+
+    // Connect to Vite dev server
+    let mut vite_stream = tokio::net::TcpStream::connect(vite_host).await?;
+
+    // Just pump bytes in both directions.
+    // The upgrade request is still in client_stream's buffer (we peeked,
+    // didn't consume), so it flows through to Vite naturally, and Vite's 101
+    // response flows back.
+    tokio::io::copy_bidirectional(&mut client_stream, &mut vite_stream).await?;
+
+    Ok(())
 }
 
 async fn handle_websocket_connection(
@@ -1180,6 +1228,7 @@ async fn handle_http_connection(
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
+    vite_proxy: Arc<Option<ViteProxy>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf_reader = BufReader::new(&mut stream);
 
@@ -1202,6 +1251,7 @@ async fn handle_http_connection(
         service_name,
         update_asset_tx,
         cookie_set,
+        vite_proxy,
     )
     .await;
 
@@ -1224,6 +1274,7 @@ async fn handle_http_request(
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
+    vite_proxy: Arc<Option<ViteProxy>>,
 ) -> HttpResponse {
     // Check if origin is allowed for CORS
     let origin = request.header("Origin");
@@ -1296,8 +1347,12 @@ async fn handle_http_request(
     // URL decode the path
     let asset_name = match urlencoding::decode(path) {
         Ok(decoded_path) => match decoded_path.split_once('@') {
-            Some((_asset_name, asset_app_name)) => asset_app_name.to_string(),
-            None => {
+            // Vite proxy: no support for data-first format because @ is used
+            // in some dependency names (e.g. @vite, @react-refresh)
+            Some((_asset_name, asset_app_name)) if vite_proxy.is_none() => {
+                asset_app_name.to_string()
+            }
+            Some(_) | None => {
                 // Support attachment look ups by ignoring any path construct before the
                 // `:`. This is so that relative paths in the browser using the `:` syntax
                 // can be used to look up attachments.
@@ -1325,6 +1380,7 @@ async fn handle_http_request(
                 api_client,
                 perms,
                 username,
+                vite_proxy,
             )
             .await
         }
@@ -1420,7 +1476,22 @@ async fn handle_get(
     api_client: &HaiClient,
     perms: Perms,
     username: Option<&str>,
+    vite_proxy: Arc<Option<ViteProxy>>,
 ) -> HttpResponse {
+    // In dev-mode, proxy GET requests whose asset path matches the configured
+    // prefix to the vite dev server rather than serving them from the asset
+    // store.
+    //
+    // Additionally, always proxy vite's internal HMR / dev-client endpoints
+    // (e.g. `/@vite/client`, `/@react-refresh`) regardless of the prefix,
+    // since these are requested at fixed absolute paths by vite-injected
+    // client code and won't share the app's asset prefix.
+    if let Some(vite_proxy) = vite_proxy.as_ref() {
+        if asset_name.starts_with(&vite_proxy.asset_prefix) {
+            return proxy_get_to_vite_dev_server(&vite_proxy.host, request).await;
+        }
+    }
+
     // Check permission at the start
     if let Err(PermCheckError::Unauthorized) =
         check_access_async(&perms, &AccessRequest::ReadByName { name: asset_name }).await
@@ -1582,6 +1653,62 @@ async fn handle_get(
     };
 
     HttpResponse::ok(decrypted_contents, &content_type)
+}
+
+/// Proxies a GET request to the vite dev server (dev-mode only).
+///
+/// The full request path (including query string) is forwarded to
+/// `http://<vite_host><path>?<query>`. The response body, status, and
+/// content-type are relayed back to the caller.
+async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) -> HttpResponse {
+    let query = request
+        .query_string()
+        .map(|qs| format!("?{}", qs))
+        .unwrap_or_default();
+    let url = format!("http://{}{}{}", vite_host, request.path, query);
+
+    let client = reqwest::Client::new();
+    let mut req = client.get(&url);
+
+    // Forward a few relevant headers so vite/HMR behaves as expected.
+    for header_name in ["accept", "accept-encoding", "user-agent", "if-none-match"] {
+        if let Some(value) = request.header(header_name) {
+            req = req.header(header_name, value);
+        }
+    }
+
+    let resp = match req.send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("error: dev-mode proxy request failed: {}", e);
+            return HttpResponse::internal_error("Dev-mode proxy request failed");
+        }
+    };
+
+    let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    let body = match resp.bytes().await {
+        Ok(bytes) => bytes.to_vec(),
+        Err(e) => {
+            eprintln!("error: failed to read dev-mode proxy response: {}", e);
+            return HttpResponse::internal_error("Failed to read dev-mode proxy response");
+        }
+    };
+
+    HttpResponse {
+        status: status.as_u16(),
+        status_text: status.canonical_reason().unwrap_or("OK"),
+        content_type,
+        body,
+        set_cookie: None,
+        additional_headers: Vec::new(),
+    }
 }
 
 async fn handle_put(
