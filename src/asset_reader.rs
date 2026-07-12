@@ -514,6 +514,9 @@ pub async fn prepare_assets_from_names_as_temp_files(
 /// 5. Handles append operations (>>) by downloading existing assets first
 /// 6. Rewrites the shell command to use the local file paths
 ///
+/// NOTE: Care is taken to detect asset-names that have added trailing
+/// characters. For example, a semicolon that indicates the end of a shell cmd.
+///
 /// Returns:
 /// * A tuple containing:
 ///   - The modified command with @assets replaced by file paths
@@ -541,7 +544,10 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
-        let output_asset = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+            continue;
+        };
+        let output_asset = asset_helper::expand_asset_name(asset_name, account);
         if is_glob_pattern(&output_asset) {
             return Err(format!(
                 "Glob patterns are not allowed in output redirections: @{}",
@@ -552,7 +558,10 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     }
 
     for cap in append_regex.captures_iter(cmd) {
-        let append_asset = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+            continue;
+        };
+        let append_asset = asset_helper::expand_asset_name(asset_name, account);
         if is_glob_pattern(&append_asset) {
             return Err(format!(
                 "Glob patterns are not allowed in append redirections: @{}",
@@ -570,7 +579,10 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
         asset_regex
             .captures_iter(&cmd_without_outputs)
-            .map(|cap| asset_helper::expand_asset_name(&cap[1], account))
+            .filter_map(|cap| {
+                let asset_name = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true)?;
+                Some(asset_helper::expand_asset_name(asset_name, account))
+            })
             .collect()
     };
 
@@ -580,7 +592,10 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
-        let asset_path = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+            continue;
+        };
+        let asset_path = asset_helper::expand_asset_name(asset_name, account);
         let is_glob = is_glob_pattern(&asset_path);
 
         if !seen_refs.contains(&asset_path) {

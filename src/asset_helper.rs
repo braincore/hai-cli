@@ -46,6 +46,25 @@ pub fn is_likely_valid_asset_name(name: &str, id_okay: bool) -> bool {
     true
 }
 
+/// Given a raw captured asset name (from the naive regex that stops at
+/// whitespace), progressively trim trailing characters until the name is
+/// likely valid.
+pub fn trim_to_likely_valid_asset_name(raw: &str, id_okay: bool) -> Option<&str> {
+    // The naive regex already stops at whitespace, so `raw` has none.
+    // We just need to peel off trailing shell punctuation like `;`, `,`, etc.
+    let mut candidate = raw;
+    while !candidate.is_empty() {
+        if is_likely_valid_asset_name(candidate, id_okay) {
+            return Some(candidate);
+        }
+        // Drop the last char and retry.
+        let mut chars = candidate.char_indices();
+        let last = chars.next_back().map(|(i, _)| i)?;
+        candidate = &candidate[..last];
+    }
+    None
+}
+
 /// Constructs the publicly accessible URL for an asset.
 pub fn get_public_asset_url(asset_name: &str) -> Option<String> {
     let (username, asset_path) = if asset_name.starts_with("/")
