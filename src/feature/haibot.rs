@@ -1623,7 +1623,7 @@ fn resolve_schedule(job: &JobConfig) -> Option<ResolvedSchedule> {
     }
 
     if let Some(ref asset_name) = job.asset_change {
-        if crate::asset_helper::is_likely_valid_asset_name(asset_name) {
+        if crate::asset_helper::is_likely_valid_asset_name(asset_name, true) {
             return Some(ResolvedSchedule::AssetChange(asset_name.clone()));
         } else {
             log_scheduler(&format!(

@@ -2353,7 +2353,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             let asset_name = resolve_asset_name(&asset_name, session).await;
-            if !asset_helper::is_likely_valid_asset_name(&asset_name) {
+            if !asset_helper::is_likely_valid_asset_name(&asset_name, true) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
                 // user won't be aware that their new asset didn't save.

@@ -2,16 +2,15 @@ use regex::Regex;
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub fn get_invalid_asset_name_re() -> &'static Regex {
+fn get_invalid_asset_name_re() -> &'static Regex {
     static ASSET_NAME_RE: OnceLock<Regex> = OnceLock::new();
-    ASSET_NAME_RE.get_or_init(|| {
-        Regex::new(r##"(?://{1,})|[\[@+!#\$%^&\*<>,?\\|}{~:;\[\]\s"'=`]"##).unwrap()
-    })
+    ASSET_NAME_RE
+        .get_or_init(|| Regex::new(r##"(?://+)|[\[\]@+!#$%^&*<>,?\\|}{~:;'"=`\s]"##).unwrap())
 }
 
 /// Checks for whitespace, control chars, and symbols.
 /// Does not check for confusable homoglyphs.
-pub fn is_likely_valid_asset_name(name: &str) -> bool {
+pub fn is_likely_valid_asset_name(name: &str, id_okay: bool) -> bool {
     if name.is_empty() {
         return false;
     }
@@ -31,6 +30,14 @@ pub fn is_likely_valid_asset_name(name: &str) -> bool {
         }
     } else {
         name
+    };
+
+    // For id-based names, a leading ':' is allowed. Strip it before running
+    // the regex so the pattern can remain unchanged.
+    let to_validate = if id_okay {
+        to_validate.strip_prefix(':').unwrap_or(to_validate)
+    } else {
+        to_validate
     };
 
     if !to_validate.is_empty() && get_invalid_asset_name_re().is_match(to_validate) {
