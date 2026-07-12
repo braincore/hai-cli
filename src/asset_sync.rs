@@ -851,7 +851,7 @@ pub async fn sync_down_entries(
             let ff_entries = fast_forward_entries(entries);
             ff_entries
                 .into_iter()
-                // Ignore folder entries; only blob/file entries are synced.
+                // Ignore folder & log entries; only blob/file entries are synced.
                 .filter(|entry| matches!(entry.asset.kind, AssetKind::Blob))
                 .map(|entry| AssetSourceMinimal {
                     asset: entry.asset,
