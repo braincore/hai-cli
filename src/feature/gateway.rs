@@ -1957,6 +1957,8 @@ pub struct ReplPermGetResult {
     keyring_need_unlock: bool,
 }
 
+// --
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplPermRequestArg {
     perms: Vec<Perm>,
@@ -1971,6 +1973,8 @@ pub struct ReplPermRequestResult {
     url: String,
 }
 
+// --
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplOpenWithArg {
     asset_app: String,
@@ -1980,6 +1984,49 @@ pub struct ReplOpenWithArg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplOpenWithResult {
     url: String,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplCryptSignArg {
+    message: String, // b64
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplCryptSignResult {
+    signer_key_id: String, // u:<username>:<key_id>
+    signature: String,     // hex
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplCryptSignError {
+    BadMessage,
+    BadKey,
+    KeyLocked,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplCryptVerifyArg {
+    message: String,       // b64
+    signer_key_id: String, // u:<username>:<key_id>
+    signature: String,     // hex
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplCryptVerifyResult {
+    is_valid: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplCryptVerifyError {
+    BadMessage,
+    BadKey,
+    BadSignature,
 }
 
 // --
@@ -2018,6 +2065,10 @@ enum ClientMessageResponse<T, U> {
         error: String,
     },
     HttpError {
+        mid: u64,
+        error: String,
+    },
+    GatewayError {
         mid: u64,
         error: String,
     },
@@ -2117,6 +2168,24 @@ async fn send_bad_authorization_error(
     error: &str,
 ) {
     let resp_err = ClientMessageResponse::<(), String>::AuthorizationError {
+        mid,
+        error: error.to_string(),
+    };
+    let json_string = serde_json::to_string(&resp_err).expect("Failed to re-serialize response");
+    let _ = ws_sink
+        .send(Message::Text(Utf8Bytes::from(&json_string)))
+        .await;
+}
+
+async fn send_bad_gateway_error(
+    ws_sink: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        Message,
+    >,
+    mid: u64,
+    error: &str,
+) {
+    let resp_err = ClientMessageResponse::<(), String>::GatewayError {
         mid,
         error: error.to_string(),
     };
@@ -2545,6 +2614,195 @@ async fn handle_client_message(
                 result: perm_req_result,
                 more: false,
             };
+            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
+        "repl/crypt/sign" => {
+            let Some(username) = username else {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            };
+
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let crypt_sign_arg: ReplCryptSignArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let message_bytes = match URL_SAFE_NO_PAD.decode(&crypt_sign_arg.message) {
+                Ok(bytes) => bytes,
+                Err(_e) => {
+                    send_response::<ReplCryptSignResult, ReplCryptSignError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplCryptSignError::BadMessage)),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let sign_result = match asset_crypt::sign_message_using_ed25519_key(
+                asset_blob_cache,
+                asset_keyring,
+                api_client,
+                username,
+                &message_bytes,
+            )
+            .await
+            {
+                Ok((signing_key_id, signature)) => ReplCryptSignResult {
+                    signer_key_id: format!("u:{}:{}", username, signing_key_id),
+                    signature: hex::encode(signature),
+                },
+                Err(sign_err) => {
+                    let e = match sign_err {
+                        asset_crypt::SignMessageError::InvalidKey
+                        | asset_crypt::SignMessageError::KeyNotFound => {
+                            RequestError::Route(ReplCryptSignError::BadKey)
+                        }
+                        asset_crypt::SignMessageError::BadPassword => {
+                            RequestError::Route(ReplCryptSignError::KeyLocked)
+                        }
+                        asset_crypt::SignMessageError::FetchFailed => {
+                            send_bad_gateway_error(
+                                ws_sink,
+                                mid,
+                                "Bad gateway: fetch failed (transient)",
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    send_response::<ReplCryptSignResult, ReplCryptSignError>(
+                        ws_sink,
+                        mid,
+                        Err(e),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let resp: ClientMessageResponse<ReplCryptSignResult, ()> = ClientMessageResponse::Ok {
+                mid,
+                result: sign_result,
+                more: false,
+            };
+            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
+            let _ = ws_sink
+                .send(Message::Text(Utf8Bytes::from(&json_string)))
+                .await;
+        }
+        "repl/crypt/verify" => {
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let crypt_verify_arg: ReplCryptVerifyArg = match serde_json::from_str(&arg.to_string())
+            {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let message_bytes = match URL_SAFE_NO_PAD.decode(&crypt_verify_arg.message) {
+                Ok(bytes) => bytes,
+                Err(_e) => {
+                    send_response::<ReplCryptVerifyResult, ReplCryptVerifyError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplCryptVerifyError::BadMessage)),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let signature_bytes = match hex::decode(&crypt_verify_arg.signature) {
+                Ok(bytes) => {
+                    let bytes: [u8; 64] = match bytes.try_into() {
+                        Ok(arr) => arr,
+                        Err(_e) => {
+                            send_response::<ReplCryptVerifyResult, ReplCryptVerifyError>(
+                                ws_sink,
+                                mid,
+                                Err(RequestError::Route(ReplCryptVerifyError::BadSignature)),
+                                false,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    bytes
+                }
+                Err(_e) => {
+                    send_response::<ReplCryptVerifyResult, ReplCryptVerifyError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplCryptVerifyError::BadSignature)),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let verify_result = match asset_crypt::verify_signature_using_ed25519_key(
+                asset_blob_cache,
+                api_client,
+                &crypt_verify_arg.signer_key_id,
+                &message_bytes,
+                &signature_bytes,
+            )
+            .await
+            {
+                Ok(is_valid) => ReplCryptVerifyResult { is_valid },
+                Err(verify_err) => {
+                    let e = match verify_err {
+                        asset_crypt::VerifySignatureError::InvalidKey
+                        | asset_crypt::VerifySignatureError::KeyNotFound => {
+                            RequestError::Route(ReplCryptVerifyError::BadKey)
+                        }
+                        asset_crypt::VerifySignatureError::FetchFailed => {
+                            send_bad_gateway_error(
+                                ws_sink,
+                                mid,
+                                "Bad gateway: fetch failed (transient)",
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                    send_response::<ReplCryptVerifyResult, ReplCryptVerifyError>(
+                        ws_sink,
+                        mid,
+                        Err(e),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            let resp: ClientMessageResponse<ReplCryptVerifyResult, ()> =
+                ClientMessageResponse::Ok {
+                    mid,
+                    result: verify_result,
+                    more: false,
+                };
             let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
             let _ = ws_sink
                 .send(Message::Text(Utf8Bytes::from(&json_string)))

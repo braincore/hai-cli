@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ssh_key::{LineEnding, PrivateKey};
 use std::{fmt::Debug, sync::Arc};
 use tokio::sync::Mutex;
@@ -1587,6 +1587,138 @@ pub fn extract_key_recipients_from_shared_asset_name(
 }
 
 // --
+
+pub enum SignMessageError {
+    KeyNotFound,
+    FetchFailed,
+    InvalidKey,
+    BadPassword,
+}
+
+/// # Returns
+/// (signer_key_id, signature)
+/// where `signer_key_id` is `u:<username>:<key_id>``
+pub async fn sign_message_using_ed25519_key(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    message: &[u8],
+) -> Result<(String, [u8; 64]), SignMessageError> {
+    // Fetch signing public key
+    let verifying_key_asset_name = format!("/{username}/keys/sign.pub");
+    let verifying_key_pub_data = match asset_reader::get_asset(
+        asset_blob_cache.clone(),
+        &api_client,
+        &verifying_key_asset_name,
+        true,
+    )
+    .await
+    {
+        Ok((data, _entry)) => data,
+        Err(e) => match e {
+            GetAssetError::BadName => {
+                return Err(SignMessageError::KeyNotFound);
+            }
+            GetAssetError::DataFetchFailed => {
+                return Err(SignMessageError::FetchFailed);
+            }
+        },
+    };
+
+    if verifying_key_pub_data.len() != 32 {
+        return Err(SignMessageError::InvalidKey);
+    }
+    let mut verifying_key_pub_bytes = [0u8; 32];
+    verifying_key_pub_bytes.copy_from_slice(&verifying_key_pub_data);
+    let verifying_key = VerifyingKey::from_bytes(&verifying_key_pub_bytes)
+        .map_err(|_e| SignMessageError::InvalidKey)?;
+    let signing_key_id = crypt::format_key_id(&crypt::derive_signing_key_id(&verifying_key));
+
+    let mut asset_keyring_locked = asset_keyring.lock().await;
+    let signing_key = match asset_keyring_locked
+        .get_or_unlock_signing_key_with_prompt(
+            asset_blob_cache,
+            api_client,
+            &RecipientKeyIdParts {
+                recipient: KeyRecipient::User(username.to_string()),
+                key_id: signing_key_id.clone(),
+                key_type: KeyType::Signing,
+            },
+        )
+        .await
+    {
+        Ok(secret) => secret,
+        Err(e) => {
+            eprintln!("error: failed to unlock keyring: {}", e);
+            return Err(SignMessageError::BadPassword);
+        }
+    };
+    let signature = signing_key.sign(message);
+    let digest: [u8; 64] = signature.to_bytes();
+
+    Ok((signing_key_id, digest))
+}
+
+pub enum VerifySignatureError {
+    KeyNotFound,
+    FetchFailed,
+    InvalidKey,
+}
+
+pub async fn verify_signature_using_ed25519_key(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    signer_key_id: &str,
+    message: &[u8],
+    signature_bytes: &[u8; 64],
+) -> Result<bool, VerifySignatureError> {
+    // Fetch signing public key
+    let (username, signing_key_id) =
+        parse_signer_key_id(signer_key_id).map_err(|_e| VerifySignatureError::InvalidKey)?;
+    let verifying_key_asset_name = format!("/{username}/keys/sign_{signing_key_id}.pub");
+    let verifying_key_pub_data = match asset_reader::get_asset(
+        asset_blob_cache.clone(),
+        &api_client,
+        &verifying_key_asset_name,
+        true,
+    )
+    .await
+    {
+        Ok((data, _entry)) => data,
+        Err(e) => match e {
+            GetAssetError::BadName => {
+                return Err(VerifySignatureError::KeyNotFound);
+            }
+            GetAssetError::DataFetchFailed => {
+                return Err(VerifySignatureError::FetchFailed);
+            }
+        },
+    };
+
+    if verifying_key_pub_data.len() != 32 {
+        return Err(VerifySignatureError::InvalidKey);
+    }
+    let mut verifying_key_pub_bytes = [0u8; 32];
+    verifying_key_pub_bytes.copy_from_slice(&verifying_key_pub_data);
+    let verifying_key = VerifyingKey::from_bytes(&verifying_key_pub_bytes)
+        .map_err(|_e| VerifySignatureError::InvalidKey)?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    Ok(verifying_key.verify(message, &signature).is_ok())
+}
+
+/// Parse "u:username:key_id" format into (username, key_id)
+fn parse_signer_key_id(s: &str) -> Result<(String, String), String> {
+    if let Some(rest) = s.strip_prefix("u:") {
+        let parts: Vec<&str> = rest.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    Err(format!("Invalid signer_key_id format: {}", s))
+}
+
+///
 
 pub enum SshKeyGenerationError {
     KeyNotFound,
