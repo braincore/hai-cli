@@ -503,6 +503,34 @@ impl EncryptKeyInfo {
 }
 
 #[derive(Clone, Debug)]
+/// Container for a user's public verifying key.
+pub struct VerifyingKeyInfo {
+    #[allow(dead_code)]
+    pub verify_key: VerifyingKey,
+
+    /// The ID of the signing key, which can be used for look up in their
+    /// private asset filesystem tree.
+    pub verify_key_id: String,
+
+    pub recipient: KeyRecipient,
+}
+
+impl VerifyingKeyInfo {
+    #[allow(dead_code)]
+    pub fn recipient_key_id(&self) -> String {
+        self.recipient.recipient_key_id(&self.verify_key_id)
+    }
+
+    pub fn recipient_key_id_parts(&self) -> RecipientKeyIdParts {
+        RecipientKeyIdParts {
+            recipient: self.recipient.clone(),
+            key_id: self.verify_key_id.clone(),
+            key_type: KeyType::Signing,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 /// Container for the information that gets stored as an object in the
 /// `encrypted.keys` field of an encrypted asset's metadata.
 pub struct RecipientKeyInfo {
@@ -610,11 +638,60 @@ pub async fn get_encryption_key(
 
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
         Ok((key_contents, key_id, _md_contents, _entry)) => {
-            let recipient_pub = PublicKey::from(<[u8; 32]>::try_from(&key_contents[..]).unwrap());
+            let recipient_pub = PublicKey::from(
+                <[u8; 32]>::try_from(&key_contents[..]).map_err(|_| "Invalid key".to_string())?,
+            );
             if crypt::format_key_id(&crypt::derive_encryption_key_id(&recipient_pub)) == key_id {
                 Ok(Some(EncryptKeyInfo {
                     enc_key: recipient_pub,
                     enc_key_id: key_id,
+                    recipient: KeyRecipient::User(username.to_string()),
+                }))
+            } else {
+                Err("key ID mismatch".to_string())
+            }
+        }
+        Err(e) => match e {
+            GetKeyError::NoKey => Ok(None),
+            GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
+            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+        },
+    }
+}
+
+/// Retrieve the user's signing verification key.
+///
+/// # Arguments
+/// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
+/// * `api_client` - An instance of HaiClient to interact with the API.
+/// * `recipient` - The recipient for whom to retrieve the signing key.
+/// * `key_id` - Optional key ID to specify a particular signing key.
+///
+pub async fn get_verifying_key(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    recipient: &KeyRecipient,
+    key_id: Option<&str>,
+) -> Result<Option<VerifyingKeyInfo>, String> {
+    let (key_path, username) = match recipient {
+        KeyRecipient::User(username) => {
+            if let Some(key_id) = key_id {
+                (format!("/{username}/keys/sign_{key_id}.pub"), username)
+            } else {
+                (format!("/{username}/keys/sign.pub"), username)
+            }
+        }
+    };
+    match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
+        Ok((key_contents, key_id, _md_contents, _entry)) => {
+            let mut verifying_key_pub_bytes = [0u8; 32];
+            verifying_key_pub_bytes.copy_from_slice(&key_contents);
+            let verifying_key = VerifyingKey::from_bytes(&verifying_key_pub_bytes)
+                .map_err(|_e| "Invalid key".to_string())?;
+            if crypt::format_key_id(&crypt::derive_signing_key_id(&verifying_key)) == key_id {
+                Ok(Some(VerifyingKeyInfo {
+                    verify_key: verifying_key,
+                    verify_key_id: key_id,
                     recipient: KeyRecipient::User(username.to_string()),
                 }))
             } else {
@@ -904,12 +981,12 @@ pub enum GetKeyError {
     DataFetchFailed,
 }
 
-/// Retrieve the user's asset encryption key.
+/// Retrieve a user's key.
 ///
 /// # Arguments
 /// * `asset_blob_cache` - An instance of AssetBlobCache for caching assets.
 /// * `api_client` - An instance of HaiClient to interact with the API.
-/// * `key_id` - Optional key ID to specify a particular encryption key.
+/// * `key_id` - Optional key ID to specify a particular key.
 ///
 /// # Returns
 /// A Result containing an Option with a tuple of key data, key ID, metadata JSON,

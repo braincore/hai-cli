@@ -18,6 +18,7 @@ use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::GetRevisionError;
+use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
 use crate::session::{self, CmdInputReply};
 use crate::{
     asset_async_writer, asset_reader,
@@ -2420,41 +2421,16 @@ async fn handle_client_message(
             // Check if any existing permissions require keyring access.
             let perm_requires_keyring: bool =
                 perms_guard.iter().any(|perm| perm.requires_keyring());
-            // Perm requires it and a user has a keyring key.
-            let unlocked_keyring_required =
-                if perm_requires_keyring && let Some(username) = username {
-                    asset_crypt::get_encryption_key(
-                        asset_blob_cache.clone(),
-                        api_client,
-                        &KeyRecipient::User(username.to_string()),
-                        None,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    None
-                };
 
-            let keyring_need_unlock =
-                if let Some(unlocked_keyring_required) = unlocked_keyring_required {
-                    if asset_keyring
-                        .lock()
-                        .await
-                        .can_unlock_decrypt_key(
-                            asset_blob_cache.clone(),
-                            api_client,
-                            &unlocked_keyring_required.recipient_key_id_parts(),
-                        )
-                        .await
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                };
+            let keyring_need_unlock = perm_requires_keyring
+                && does_keyring_need_unlock(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client,
+                    username,
+                )
+                .await
+                .is_some();
 
             let perm_get_result = ReplPermGetResult {
                 perms: perms_guard.clone(),
@@ -2522,41 +2498,16 @@ async fn handle_client_message(
                 .perms
                 .iter()
                 .any(|perm| perm.requires_keyring());
-            // Perm requires it and a user has a keyring key.
-            let unlocked_keyring_required =
-                if perm_requires_keyring && let Some(username) = username {
-                    asset_crypt::get_encryption_key(
-                        asset_blob_cache.clone(),
-                        api_client,
-                        &KeyRecipient::User(username.to_string()),
-                        None,
-                    )
-                    .await
-                    .ok()
-                    .flatten()
-                } else {
-                    None
-                };
 
-            let keyring_need_unlock =
-                if let Some(unlocked_keyring_required) = unlocked_keyring_required {
-                    if asset_keyring
-                        .lock()
-                        .await
-                        .can_unlock_decrypt_key(
-                            asset_blob_cache.clone(),
-                            api_client,
-                            &unlocked_keyring_required.recipient_key_id_parts(),
-                        )
-                        .await
-                    {
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                };
+            let keyring_need_unlock = perm_requires_keyring
+                && does_keyring_need_unlock(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client,
+                    username,
+                )
+                .await
+                .is_some();
 
             let perms_guard = perms.lock().await;
             let new_requested_perms = perm_req_arg
@@ -3830,40 +3781,15 @@ async fn handle_perm_http_connection(
                     let perm_requires_keyring: bool =
                         requested_perms.iter().any(|perm| perm.requires_keyring());
 
-                    let unlocked_keyring_required =
-                        if perm_requires_keyring && let Some(username) = username {
-                            asset_crypt::get_encryption_key(
-                                asset_blob_cache.clone(),
-                                api_client,
-                                &KeyRecipient::User(username.to_string()),
-                                None,
-                            )
-                            .await
-                            .ok()
-                            .flatten()
-                        } else {
-                            None
-                        };
-
-                    let keyring_need_unlock =
-                        if let Some(ref unlocked_keyring_required) = unlocked_keyring_required {
-                            if asset_keyring
-                                .lock()
-                                .await
-                                .can_unlock_decrypt_key(
-                                    asset_blob_cache.clone(),
-                                    api_client,
-                                    &unlocked_keyring_required.recipient_key_id_parts(),
-                                )
-                                .await
-                            {
-                                false
-                            } else {
-                                true
-                            }
-                        } else {
-                            false
-                        };
+                    let keyring_need_unlock = perm_requires_keyring
+                        && does_keyring_need_unlock(
+                            asset_blob_cache.clone(),
+                            asset_keyring.clone(),
+                            api_client,
+                            username,
+                        )
+                        .await
+                        .is_some();
 
                     // Build keyring section
                     let keyring_section = if keyring_need_unlock {
@@ -4090,39 +4016,28 @@ document.getElementById('f').onsubmit = e => {{
                             let any_granted_requires_keyring =
                                 perm_req.grant.iter().any(|perm| perm.requires_keyring());
 
-                            let unlocked_keyring_required =
-                                if any_granted_requires_keyring && let Some(username) = username {
-                                    asset_crypt::get_encryption_key(
-                                        asset_blob_cache.clone(),
-                                        api_client,
-                                        &KeyRecipient::User(username.to_string()),
-                                        None,
-                                    )
-                                    .await
-                                    .ok()
-                                    .flatten()
-                                } else {
-                                    None
-                                };
+                            let perms_guard = perms.lock().await;
+                            // Check if any existing permissions require keyring access.
+                            let existing_perm_requires_keyring: bool =
+                                perms_guard.iter().any(|perm| perm.requires_keyring());
+                            drop(perms_guard);
 
-                            let keyring_need_unlock = if let Some(ref unlocked_keyring_required) =
-                                unlocked_keyring_required
+                            let keyring_need_unlock = if !any_granted_requires_keyring
+                                && !existing_perm_requires_keyring
                             {
-                                !asset_keyring
-                                    .lock()
-                                    .await
-                                    .can_unlock_decrypt_key(
-                                        asset_blob_cache.clone(),
-                                        api_client,
-                                        &unlocked_keyring_required.recipient_key_id_parts(),
-                                    )
-                                    .await
+                                None
                             } else {
-                                false
+                                does_keyring_need_unlock(
+                                    asset_blob_cache.clone(),
+                                    asset_keyring.clone(),
+                                    api_client,
+                                    username,
+                                )
+                                .await
                             };
 
                             // If keyring unlock is needed, validate the password
-                            if keyring_need_unlock {
+                            if let Some((enc_key_info, verifying_key_info)) = keyring_need_unlock {
                                 let password = perm_req.keyring_password.as_deref().unwrap_or("");
                                 if password.is_empty() {
                                     drop(perm_request_map_unlocked);
@@ -4134,18 +4049,13 @@ document.getElementById('f').onsubmit = e => {{
                                     return Ok(());
                                 }
 
-                                let rec_key_id_parts = unlocked_keyring_required
-                                    .as_ref()
-                                    .unwrap()
-                                    .recipient_key_id_parts();
-
                                 let unlock_success = asset_keyring
                                     .lock()
                                     .await
                                     .unlock_decrypt_key(
                                         asset_blob_cache.clone(),
                                         api_client,
-                                        &rec_key_id_parts,
+                                        &enc_key_info.recipient_key_id_parts(),
                                         password,
                                     )
                                     .await
@@ -4157,6 +4067,30 @@ document.getElementById('f').onsubmit = e => {{
                                     let resp = HttpResponse::json_status(
                                         401,
                                         r#"{"message":"Incorrect keyring password. Please try again."}"#,
+                                    );
+                                    resp.write_to(&mut stream).await?;
+                                    return Ok(());
+                                }
+
+                                let unlock_success = asset_keyring
+                                    .lock()
+                                    .await
+                                    .unlock_signing_key(
+                                        asset_blob_cache.clone(),
+                                        api_client,
+                                        &verifying_key_info.recipient_key_id_parts(),
+                                        password,
+                                    )
+                                    .await
+                                    .is_ok();
+
+                                // NOTE: Unexpected for decryption key & signing key to differ.
+                                if !unlock_success {
+                                    // Password incorrect
+                                    drop(perm_request_map_unlocked);
+                                    let resp = HttpResponse::json_status(
+                                        401,
+                                        r#"{"message":"Incorrect keyring password (signing key). Please try again."}"#,
                                     );
                                     resp.write_to(&mut stream).await?;
                                     return Ok(());
@@ -4434,4 +4368,72 @@ pub struct PermRequestSubmit {
     grant: Vec<Perm>,
     remember: bool,
     keyring_password: Option<String>,
+}
+
+/// If keyring needs unlocking, returns key-info for encryption and signing
+/// keys.
+///
+/// WARNING: Does not properly handle or report the unexpected case where only
+/// one of the encryption or signing keys exists as this is not a supported
+/// scenario currently.
+async fn does_keyring_need_unlock(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: &HaiClient,
+    username: Option<&str>,
+) -> Option<(EncryptKeyInfo, VerifyingKeyInfo)> {
+    let unlocked_keyring_required = if let Some(username) = username {
+        (
+            asset_crypt::get_encryption_key(
+                asset_blob_cache.clone(),
+                api_client,
+                &KeyRecipient::User(username.to_string()),
+                None,
+            )
+            .await
+            .ok()
+            .flatten(),
+            asset_crypt::get_verifying_key(
+                asset_blob_cache.clone(),
+                api_client,
+                &KeyRecipient::User(username.to_string()),
+                None,
+            )
+            .await
+            .ok()
+            .flatten(),
+        )
+    } else {
+        (None, None)
+    };
+
+    if let (Some(unlocked_enc_keyring_required), Some(unlocked_sign_keyring_required)) =
+        unlocked_keyring_required
+    {
+        let mut kr = asset_keyring.lock().await;
+        let can_unlock_enc = kr
+            .can_unlock_decrypt_key(
+                asset_blob_cache.clone(),
+                api_client,
+                &unlocked_enc_keyring_required.recipient_key_id_parts(),
+            )
+            .await;
+        let can_unlock_sign = kr
+            .can_unlock_signing_key(
+                asset_blob_cache.clone(),
+                api_client,
+                &unlocked_sign_keyring_required.recipient_key_id_parts(),
+            )
+            .await;
+        if can_unlock_enc && can_unlock_sign {
+            None
+        } else {
+            Some((
+                unlocked_enc_keyring_required,
+                unlocked_sign_keyring_required,
+            ))
+        }
+    } else {
+        None
+    }
 }
