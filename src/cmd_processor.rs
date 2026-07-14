@@ -4440,7 +4440,28 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetAppRevokePerms(cmd::AssetAppRevokePermsCmd { asset_name }) => {
+        cmd::Cmd::AssetAppPermsList(cmd::AssetAppPermsListCmd { asset_name }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                Some(account.username.clone())
+            } else {
+                None
+            };
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            if let Some(username) = username {
+                let perms =
+                    crate::db::load_gateway_perms(&*db.lock().await, &username, &asset_name);
+                println!("Permissions for asset app '{}':", asset_name);
+                if perms.is_empty() {
+                    println!("  [no permissions]");
+                } else {
+                    for perm in perms {
+                        println!("  {:?}", perm);
+                    }
+                }
+            }
+            ProcessCmdResult::Loop
+        }
+        cmd::Cmd::AssetAppPermsRevoke(cmd::AssetAppPermsRevokeCmd { asset_name }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 Some(account.username.clone())
             } else {

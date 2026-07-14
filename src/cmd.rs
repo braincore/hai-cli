@@ -170,8 +170,10 @@ pub enum Cmd {
     AssetCryptRecover(AssetCryptRecoverCmd),
     /// Launch an asset-based app in the browser
     AssetApp(AssetAppCmd),
+    /// List permissions
+    AssetAppPermsList(AssetAppPermsListCmd),
     /// Revoke permissions
-    AssetAppRevokePerms(AssetAppRevokePermsCmd),
+    AssetAppPermsRevoke(AssetAppPermsRevokeCmd),
     /// Open an asset
     AssetOpen(AssetOpenCmd),
     /// Create a new asset-pool shared between users
@@ -843,7 +845,13 @@ pub struct AssetAppCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct AssetAppRevokePermsCmd {
+pub struct AssetAppPermsListCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAppPermsRevokeCmd {
     /// Name of the asset
     pub asset_name: String,
 }
@@ -2720,12 +2728,26 @@ fn parse_command(
                 }
             }
         }
-        "asset-app-revoke-perms" => {
+        "asset-app-perms-list" => {
             if !validate_options_and_print_err(cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetAppRevokePerms(AssetAppRevokePermsCmd {
+                Some(asset_name) => {
+                    Some(Cmd::AssetAppPermsList(AssetAppPermsListCmd { asset_name }))
+                }
+                None => {
+                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    None
+                }
+            }
+        }
+        "asset-app-perms-revoke" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetAppPermsRevoke(AssetAppPermsRevokeCmd {
                     asset_name,
                 })),
                 None => {
