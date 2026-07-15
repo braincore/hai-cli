@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+use crate::asset_reader;
 use crate::config::write_to_debug_log;
 
 pub struct AssetBlobCache {
@@ -475,12 +476,25 @@ pub async fn download_and_verify_to_path(
     hash: &str,
     dest_path: &Path,
 ) -> Result<(), DownloadAssetError> {
-    let resp = reqwest::get(url)
-        .await
-        .map_err(|_| DownloadAssetError::DataFetchFailed)?;
+    let resp = match reqwest::get(url).await {
+        Ok(resp) => resp,
+        Err(_) => {
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::Unexpected,
+            ));
+        }
+    };
 
     if !resp.status().is_success() {
-        return Err(DownloadAssetError::DataFetchFailed);
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::RateLimited,
+            ));
+        } else {
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::Unexpected,
+            ));
+        }
     }
 
     let mut file = tokio::fs::File::create(dest_path)
@@ -490,11 +504,9 @@ pub async fn download_and_verify_to_path(
     let mut hasher = Sha256::new();
     let mut stream = resp.bytes_stream();
 
-    while let Some(chunk) = stream
-        .try_next()
-        .await
-        .map_err(|_| DownloadAssetError::DataFetchFailed)?
-    {
+    while let Some(chunk) = stream.try_next().await.map_err(|_| {
+        DownloadAssetError::DataFetchFailed(asset_reader::DataFetchFailure::Unexpected)
+    })? {
         hasher.update(&chunk);
         file.write_all(&chunk)
             .await
@@ -517,17 +529,19 @@ pub async fn download_and_verify_to_path(
 // --
 
 pub enum DownloadAssetError {
-    DataFetchFailed,
     FsFailed,
     HashMismatch,
+    DataFetchFailed(asset_reader::DataFetchFailure),
 }
 
 impl ::std::fmt::Display for DownloadAssetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DownloadAssetError::DataFetchFailed => write!(f, "Failed to fetch asset data"),
             DownloadAssetError::FsFailed => write!(f, "Filesystem operation failed"),
             DownloadAssetError::HashMismatch => write!(f, "Asset hash mismatch"),
+            DownloadAssetError::DataFetchFailed(failure) => {
+                write!(f, "Failed to fetch asset data: {}", failure)
+            }
         }
     }
 }
@@ -535,9 +549,11 @@ impl ::std::fmt::Display for DownloadAssetError {
 impl ::std::fmt::Debug for DownloadAssetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DownloadAssetError::DataFetchFailed => write!(f, "DownloadAssetError::DataFetchFailed"),
             DownloadAssetError::FsFailed => write!(f, "DownloadAssetError::FsFailed"),
             DownloadAssetError::HashMismatch => write!(f, "DownloadAssetError::HashMismatch"),
+            DownloadAssetError::DataFetchFailed(failure) => {
+                write!(f, "DownloadAssetError::DataFetchFailed({})", failure)
+            }
         }
     }
 }
@@ -548,18 +564,30 @@ pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
         Ok(resp) => resp,
         Err(e) => {
             eprintln!("error: {}", e);
-            return Err(DownloadAssetError::DataFetchFailed);
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::Unexpected,
+            ));
         }
     };
     if !asset_get_resp.status().is_success() {
         eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
-        return Err(DownloadAssetError::DataFetchFailed);
+        if asset_get_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::RateLimited,
+            ));
+        } else {
+            return Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::Unexpected,
+            ));
+        }
     }
     match asset_get_resp.bytes().await {
         Ok(contents) => Ok(contents.to_vec()),
         Err(e) => {
             eprintln!("error: failed to fetch asset: {}", e);
-            Err(DownloadAssetError::DataFetchFailed)
+            Err(DownloadAssetError::DataFetchFailed(
+                asset_reader::DataFetchFailure::Unexpected,
+            ))
         }
     }
 }

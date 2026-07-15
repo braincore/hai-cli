@@ -20,14 +20,30 @@ use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
 
 pub enum GetAssetError {
     BadName,
-    DataFetchFailed,
+    DataFetchFailed(DataFetchFailure),
 }
 
 impl std::fmt::Display for GetAssetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GetAssetError::BadName => write!(f, "bad-name"),
-            GetAssetError::DataFetchFailed => write!(f, "data-fetch-failed"),
+            GetAssetError::DataFetchFailed(failure) => write!(f, "data-fetch-failed: {}", failure),
+        }
+    }
+}
+
+pub enum DataFetchFailure {
+    Unexpected,
+    Retryable,
+    RateLimited,
+}
+
+impl std::fmt::Display for DataFetchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataFetchFailure::Unexpected => write!(f, "unexpected"),
+            DataFetchFailure::Retryable => write!(f, "retryable"),
+            DataFetchFailure::RateLimited => write!(f, "rate-limited"),
         }
     }
 }
@@ -45,9 +61,14 @@ pub async fn get_asset(
     {
         let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
-            Err(_) => {
-                return Err(GetAssetError::DataFetchFailed);
-            }
+            Err(err) => match err {
+                DownloadAssetError::DataFetchFailed(failure) => {
+                    return Err(GetAssetError::DataFetchFailed(failure));
+                }
+                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                }
+            },
         };
         Ok((data_contents, asset_get_res.entry))
     } else {
@@ -78,12 +99,15 @@ pub async fn get_asset_entry(
             match e {
                 RequestError::BadRequest(_)
                 | RequestError::Http(_)
-                // FIXME: Elevate RateLimit to be explicit error type
-                | RequestError::RateLimit(_)
-                | RequestError::Unexpected(_) => Err(GetAssetError::DataFetchFailed),
+                | RequestError::Unexpected(_) => {
+                    Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected))
+                }
+                RequestError::RateLimit(_) => Err(GetAssetError::DataFetchFailed(
+                    DataFetchFailure::RateLimited,
+                )),
                 RequestError::Route(e) => match e {
                     AssetGetError::BadName => Err(GetAssetError::BadName),
-                    _ => Err(GetAssetError::DataFetchFailed),
+                    _ => Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)),
                 },
             }
         }
@@ -105,9 +129,16 @@ pub async fn get_asset_and_metadata(
     {
         match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
-            Err(_) => {
+            Err(err) => {
                 eprintln!("error: failed to fetch asset data");
-                return Err(GetAssetError::DataFetchFailed);
+                match err {
+                    DownloadAssetError::DataFetchFailed(failure) => {
+                        return Err(GetAssetError::DataFetchFailed(failure));
+                    }
+                    DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                        return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                    }
+                }
             }
         }
     } else {
@@ -125,9 +156,18 @@ pub async fn get_asset_and_metadata(
                 .await
             {
                 Ok(contents) => contents,
-                Err(_) => {
+                Err(err) => {
                     eprintln!("error: failed to fetch asset metadata");
-                    return Err(GetAssetError::DataFetchFailed);
+                    match err {
+                        DownloadAssetError::DataFetchFailed(failure) => {
+                            return Err(GetAssetError::DataFetchFailed(failure));
+                        }
+                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                            return Err(GetAssetError::DataFetchFailed(
+                                DataFetchFailure::Unexpected,
+                            ));
+                        }
+                    }
                 }
             },
         )
@@ -142,9 +182,7 @@ pub enum GetRevisionError {
     BadRevId,
     NoPermission,
     Deleted,
-    DataFetchFailedUnexpected,
-    DataFetchFailedRetryable,
-    DataFetchFailedRateLimited,
+    DataFetchFailed(DataFetchFailure),
 }
 
 /// Fetches the asset data and metadata for a specific revision.
@@ -179,21 +217,28 @@ pub async fn get_asset_and_metadata_revision(
         .await
     {
         Ok(res) => Ok(res),
-        Err(e) => {
-            eprintln!("REVISION GET error: {:?}", e);
-            match e {
-                RequestError::BadRequest(_) => Err(GetRevisionError::DataFetchFailedUnexpected),
-                RequestError::Http(_) => Err(GetRevisionError::DataFetchFailedRetryable),
-                RequestError::RateLimit(_) => Err(GetRevisionError::DataFetchFailedRateLimited),
-                RequestError::Unexpected(_) => Err(GetRevisionError::DataFetchFailedRetryable),
-                RequestError::Route(e) => match e {
-                    AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
-                    AssetRevisionGetError::NoPermission => Err(GetRevisionError::NoPermission),
-                    AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
-                    _ => Err(GetRevisionError::DataFetchFailedUnexpected),
-                },
-            }
-        }
+        Err(e) => match e {
+            RequestError::BadRequest(_) => Err(GetRevisionError::DataFetchFailed(
+                DataFetchFailure::Unexpected,
+            )),
+            RequestError::Http(_) => Err(GetRevisionError::DataFetchFailed(
+                DataFetchFailure::Retryable,
+            )),
+            RequestError::RateLimit(_) => Err(GetRevisionError::DataFetchFailed(
+                DataFetchFailure::RateLimited,
+            )),
+            RequestError::Unexpected(_) => Err(GetRevisionError::DataFetchFailed(
+                DataFetchFailure::Retryable,
+            )),
+            RequestError::Route(e) => match e {
+                AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
+                AssetRevisionGetError::NoPermission => Err(GetRevisionError::NoPermission),
+                AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
+                _ => Err(GetRevisionError::DataFetchFailed(
+                    DataFetchFailure::Unexpected,
+                )),
+            },
+        },
     }?;
 
     if matches!(
@@ -209,11 +254,13 @@ pub async fn get_asset_and_metadata_revision(
         match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => Some(contents),
             Err(err) => match err {
-                DownloadAssetError::DataFetchFailed => {
-                    return Err(GetRevisionError::DataFetchFailedRetryable);
+                DownloadAssetError::DataFetchFailed(failure) => {
+                    return Err(GetRevisionError::DataFetchFailed(failure));
                 }
                 DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                    return Err(GetRevisionError::DataFetchFailedUnexpected);
+                    return Err(GetRevisionError::DataFetchFailed(
+                        DataFetchFailure::Unexpected,
+                    ));
                 }
             },
         }
@@ -235,11 +282,13 @@ pub async fn get_asset_and_metadata_revision(
                 {
                     Ok(contents) => contents,
                     Err(err) => match err {
-                        DownloadAssetError::DataFetchFailed => {
-                            return Err(GetRevisionError::DataFetchFailedRetryable);
+                        DownloadAssetError::DataFetchFailed(failure) => {
+                            return Err(GetRevisionError::DataFetchFailed(failure));
                         }
                         DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                            return Err(GetRevisionError::DataFetchFailedUnexpected);
+                            return Err(GetRevisionError::DataFetchFailed(
+                                DataFetchFailure::Unexpected,
+                            ));
                         }
                     },
                 },
@@ -278,9 +327,18 @@ pub async fn get_only_asset_metadata(
                 .await
             {
                 Ok(contents) => contents,
-                Err(_) => {
+                Err(err) => {
                     eprintln!("error: failed to fetch asset metadata");
-                    return Err(GetAssetError::DataFetchFailed);
+                    match err {
+                        DownloadAssetError::DataFetchFailed(failure) => {
+                            return Err(GetAssetError::DataFetchFailed(failure));
+                        }
+                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                            return Err(GetAssetError::DataFetchFailed(
+                                DataFetchFailure::Unexpected,
+                            ));
+                        }
+                    }
                 }
             },
         )
@@ -475,8 +533,16 @@ pub async fn prepare_assets_from_names_as_temp_files(
                 if skip_download.contains(asset_ref) {
                     asset_final_map.insert(
                         asset_ref.clone(),
-                        create_empty_temp_file(asset_ref, None, None)
-                            .map_err(|_e| GetAssetError::DataFetchFailed),
+                        create_empty_temp_file(asset_ref, None, None).map_err(
+                            |dl_err| match dl_err {
+                                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                                    GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)
+                                }
+                                DownloadAssetError::DataFetchFailed(failure) => {
+                                    GetAssetError::DataFetchFailed(failure)
+                                }
+                            },
+                        ),
                     );
                 } else {
                     match get_asset_entry(api_client, asset_ref, false).await {
@@ -509,7 +575,8 @@ pub async fn prepare_assets_from_names_as_temp_files(
         } else {
             asset_map.insert(
                 source.asset_name.clone(),
-                Err(GetAssetError::DataFetchFailed),
+                // FIXME: This isn't necessarily just an unexpected error.
+                Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)),
             );
         }
     }
@@ -738,7 +805,7 @@ pub fn create_empty_temp_file(
         .tempfile()
         .map_err(|e| {
             eprintln!("error: Failed to create temporary file: {}", e);
-            DownloadAssetError::DataFetchFailed
+            DownloadAssetError::FsFailed
         })?;
 
     Ok(temp_file)
@@ -873,7 +940,17 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                     data: r.data,
                     metadata: r.metadata,
                 })
-                .map_err(|_e| GetAssetError::DataFetchFailed),
+                .map_err(|dl_err| match dl_err {
+                    DownloadAssetError::FsFailed => {
+                        GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)
+                    }
+                    DownloadAssetError::HashMismatch => {
+                        GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)
+                    }
+                    DownloadAssetError::DataFetchFailed(failure) => {
+                        GetAssetError::DataFetchFailed(failure)
+                    }
+                }),
         );
     }
     for (asset_ref, e) in asset_fetch_failures {

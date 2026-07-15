@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
-use crate::asset_reader::GetRevisionError;
+use crate::asset_reader::{DataFetchFailure, GetRevisionError};
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
 use crate::session::{self, CmdInputReply};
 use crate::{
@@ -1631,15 +1631,15 @@ async fn handle_get(
                 Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
                 Err(GetRevisionError::NoPermission) => return HttpResponse::forbidden(),
                 Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
-                Err(GetRevisionError::DataFetchFailedUnexpected) => {
+                Err(GetRevisionError::DataFetchFailed(DataFetchFailure::Unexpected)) => {
                     return HttpResponse::internal_error("Unexpected data fetch failure.");
                 }
-                Err(GetRevisionError::DataFetchFailedRetryable) => {
+                Err(GetRevisionError::DataFetchFailed(DataFetchFailure::Retryable)) => {
                     return HttpResponse::internal_error(
                         "Temporary data fetch failure, please retry again.",
                     );
                 }
-                Err(GetRevisionError::DataFetchFailedRateLimited) => {
+                Err(GetRevisionError::DataFetchFailed(DataFetchFailure::RateLimited)) => {
                     return HttpResponse::too_many_requests();
                 }
             }

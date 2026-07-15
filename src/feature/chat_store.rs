@@ -194,8 +194,11 @@ pub async fn resume_chat_from_db_or_asset(
                     eprintln!("error: bad asset name: {}", chat_log_name);
                     return;
                 }
-                Err(asset_reader::GetAssetError::DataFetchFailed) => {
-                    eprintln!("error: failed to get asset data: {}", chat_log_name);
+                Err(asset_reader::GetAssetError::DataFetchFailed(failure)) => {
+                    eprintln!(
+                        "error: failed to get asset data: {}: {}",
+                        chat_log_name, failure
+                    );
                     return;
                 }
             };

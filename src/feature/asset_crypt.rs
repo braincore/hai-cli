@@ -7,15 +7,18 @@ use tokio::sync::Mutex;
 use x25519_dalek::PublicKey;
 use zeroize::Zeroizing;
 
-use crate::api::{
-    client::{HaiClient, RequestError},
-    types::asset::AssetEntry,
-};
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{self, GetAssetError, get_only_asset_metadata};
 use crate::crypt;
 use crate::feature::asset_keyring::AssetKeyring;
 use crate::term;
+use crate::{
+    api::{
+        client::{HaiClient, RequestError},
+        types::asset::AssetEntry,
+    },
+    asset_reader::DataFetchFailure,
+};
 
 pub enum CryptSetupError {
     Abort,
@@ -107,10 +110,11 @@ pub async fn asset_crypt_setup(
                 GetAssetError::BadName => {
                     // Continue with key generation
                 }
-                GetAssetError::DataFetchFailed => {
-                    return Err(CryptSetupError::ServerAbort(
-                        "Failed to fetch asset data".to_string(),
-                    ));
+                GetAssetError::DataFetchFailed(e) => {
+                    return Err(CryptSetupError::ServerAbort(format!(
+                        "Failed to fetch asset data: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -157,10 +161,11 @@ pub async fn asset_crypt_setup(
                 GetAssetError::BadName => {
                     // Continue with key generation
                 }
-                GetAssetError::DataFetchFailed => {
-                    return Err(CryptSetupError::ServerAbort(
-                        "Failed to fetch asset data".to_string(),
-                    ));
+                GetAssetError::DataFetchFailed(e) => {
+                    return Err(CryptSetupError::ServerAbort(format!(
+                        "Failed to fetch asset data: {}",
+                        e
+                    )));
                 }
             }
         }
@@ -654,7 +659,7 @@ pub async fn get_encryption_key(
         Err(e) => match e {
             GetKeyError::NoKey => Ok(None),
             GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
-            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+            GetKeyError::DataFetchFailed(failure) => Err(format!("key fetch failed: {}", failure)),
         },
     }
 }
@@ -701,7 +706,7 @@ pub async fn get_verifying_key(
         Err(e) => match e {
             GetKeyError::NoKey => Ok(None),
             GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
-            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+            GetKeyError::DataFetchFailed(failure) => Err(format!("key fetch failed: {}", failure)),
         },
     }
 }
@@ -936,7 +941,7 @@ pub async fn get_encrypted_decryption_key(
         Err(e) => match e {
             GetKeyError::NoKey => Ok(None),
             GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
-            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+            GetKeyError::DataFetchFailed(failure) => Err(format!("key fetch failed: {}", failure)),
         },
     }
 }
@@ -970,7 +975,7 @@ pub async fn get_encrypted_signing_key(
         Err(e) => match e {
             GetKeyError::NoKey => Ok(None),
             GetKeyError::BrokenKey => Err("key broken/invalid".to_string()),
-            GetKeyError::DataFetchFailed => Err("key fetch failed".to_string()),
+            GetKeyError::DataFetchFailed(failure) => Err(format!("key fetch failed: {}", failure)),
         },
     }
 }
@@ -978,7 +983,7 @@ pub async fn get_encrypted_signing_key(
 pub enum GetKeyError {
     NoKey,
     BrokenKey,
-    DataFetchFailed,
+    DataFetchFailed(DataFetchFailure),
 }
 
 /// Retrieve a user's key.
@@ -1016,7 +1021,7 @@ pub async fn get_key(
         Ok((_data_contents, None, _entry)) => Err(GetKeyError::BrokenKey),
         Err(e) => match e {
             GetAssetError::BadName => Err(GetKeyError::NoKey),
-            GetAssetError::DataFetchFailed => Err(GetKeyError::DataFetchFailed),
+            GetAssetError::DataFetchFailed(failure) => Err(GetKeyError::DataFetchFailed(failure)),
         },
     }
 }
@@ -1272,10 +1277,11 @@ pub async fn asset_crypt_recover(
                     recovery_file_name
                 )));
             }
-            GetAssetError::DataFetchFailed => {
-                return Err(CryptRecoverError::ServerAbort(
-                    "Failed to fetch recovery file".to_string(),
-                ));
+            GetAssetError::DataFetchFailed(failure) => {
+                return Err(CryptRecoverError::ServerAbort(format!(
+                    "Failed to fetch recovery file: {}",
+                    failure
+                )));
             }
         },
     };
@@ -1294,10 +1300,11 @@ pub async fn asset_crypt_recover(
                         enc_pub_name
                     )));
                 }
-                GetAssetError::DataFetchFailed => {
-                    return Err(CryptRecoverError::ServerAbort(
-                        "Failed to fetch encryption public key".to_string(),
-                    ));
+                GetAssetError::DataFetchFailed(failure) => {
+                    return Err(CryptRecoverError::ServerAbort(format!(
+                        "Failed to fetch encryption public key: {}",
+                        failure
+                    )));
                 }
             },
         };
@@ -1325,10 +1332,11 @@ pub async fn asset_crypt_recover(
                         sign_pub_name
                     )));
                 }
-                GetAssetError::DataFetchFailed => {
-                    return Err(CryptRecoverError::ServerAbort(
-                        "Failed to fetch signing public key".to_string(),
-                    ));
+                GetAssetError::DataFetchFailed(failure) => {
+                    return Err(CryptRecoverError::ServerAbort(format!(
+                        "Failed to fetch signing public key: {}",
+                        failure
+                    )));
                 }
             },
         };
@@ -1605,10 +1613,10 @@ pub async fn choose_akm_for_asset_by_name(
                 };
                 (None, Some(new_asset_akm_policy))
             }
-            GetAssetError::DataFetchFailed => {
+            GetAssetError::DataFetchFailed(failure) => {
                 return Err(AkmSelectionError::Abort(format!(
-                    "failed to fetch asset {}",
-                    asset_name
+                    "failed to fetch asset {}: {}",
+                    asset_name, failure
                 )));
             }
         },
@@ -1697,7 +1705,7 @@ pub async fn sign_message_using_ed25519_key(
             GetAssetError::BadName => {
                 return Err(SignMessageError::KeyNotFound);
             }
-            GetAssetError::DataFetchFailed => {
+            GetAssetError::DataFetchFailed(_failure) => {
                 return Err(SignMessageError::FetchFailed);
             }
         },
@@ -1767,7 +1775,7 @@ pub async fn verify_signature_using_ed25519_key(
             GetAssetError::BadName => {
                 return Err(VerifySignatureError::KeyNotFound);
             }
-            GetAssetError::DataFetchFailed => {
+            GetAssetError::DataFetchFailed(_) => {
                 return Err(VerifySignatureError::FetchFailed);
             }
         },
@@ -1844,7 +1852,7 @@ pub async fn get_ed25519_for_ssh_key(
             GetAssetError::BadName => {
                 return Err(SshKeyGenerationError::KeyNotFound);
             }
-            GetAssetError::DataFetchFailed => {
+            GetAssetError::DataFetchFailed(_) => {
                 return Err(SshKeyGenerationError::FetchFailed);
             }
         },

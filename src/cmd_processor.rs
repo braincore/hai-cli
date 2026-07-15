@@ -2288,8 +2288,8 @@ pub async fn process_cmd(
                                     asset_reader::GetAssetError::BadName => {
                                         eprintln!("error: {}: asset not found", asset_name);
                                     }
-                                    asset_reader::GetAssetError::DataFetchFailed => {
-                                        eprintln!("error: {}: fetch failed", asset_name);
+                                    asset_reader::GetAssetError::DataFetchFailed(e) => {
+                                        eprintln!("error: {}: fetch failed: {}", asset_name, e);
                                     }
                                 };
                                 return ProcessCmdResult::Loop;
@@ -4318,8 +4318,8 @@ pub async fn process_cmd(
                                 eprintln!("error: No keys found");
                                 return ProcessCmdResult::Loop;
                             }
-                            asset_reader::GetAssetError::DataFetchFailed => {
-                                eprintln!("fatal: failed to fetch key metadata");
+                            asset_reader::GetAssetError::DataFetchFailed(e) => {
+                                eprintln!("fatal: failed to fetch key metadata: {}", e);
                                 return ProcessCmdResult::Loop;
                             }
                         },
@@ -6384,8 +6384,8 @@ pub async fn shell_exec_with_asset_substitution(
                         asset_reader::GetAssetError::BadName => {
                             format!("bad name: {}", asset_name)
                         }
-                        asset_reader::GetAssetError::DataFetchFailed => {
-                            format!("fetch failed: {}", asset_name)
+                        asset_reader::GetAssetError::DataFetchFailed(e) => {
+                            format!("fetch failed: {}: {}", asset_name, e)
                         }
                     };
                     return Err(err_msg.into());
@@ -6427,8 +6427,8 @@ pub async fn shell_exec_with_asset_substitution(
                             asset_reader::GetAssetError::BadName => {
                                 format!("bad name: {}", output_asset)
                             }
-                            asset_reader::GetAssetError::DataFetchFailed => {
-                                format!("fetch failed: {}", output_asset)
+                            asset_reader::GetAssetError::DataFetchFailed(e) => {
+                                format!("fetch failed: {}: {}", output_asset, e)
                             }
                         };
                         return Err(err_msg.into());
