@@ -1813,7 +1813,7 @@ async fn handle_put(
 
     // Wait for the response
     match reply_rx.await {
-        Ok(Ok(new_entry)) => match serde_json::to_vec(&new_entry) {
+        Ok(Ok(new_entry)) => match serde_json::to_vec(&serde_json::json!({ "entry": new_entry })) {
             Ok(json_bytes) => HttpResponse::ok(json_bytes, "application/json"),
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
