@@ -544,7 +544,9 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
-        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+        let expanded = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        else {
             continue;
         };
         let output_asset = asset_helper::expand_asset_name(asset_name, account);
@@ -558,7 +560,9 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     }
 
     for cap in append_regex.captures_iter(cmd) {
-        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+        let expanded = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        else {
             continue;
         };
         let append_asset = asset_helper::expand_asset_name(asset_name, account);
@@ -580,7 +584,14 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
         asset_regex
             .captures_iter(&cmd_without_outputs)
             .filter_map(|cap| {
-                let asset_name = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true)?;
+                let expanded = asset_helper::expand_asset_name(&cap[1], account);
+                let asset_name = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)?;
+                println!(
+                    "input asset: {} {} {}",
+                    &cap[1],
+                    asset_name,
+                    asset_helper::expand_asset_name(asset_name, account)
+                );
                 Some(asset_helper::expand_asset_name(asset_name, account))
             })
             .collect()
@@ -592,18 +603,19 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
-        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&cap[1], true) else {
+        let expanded = asset_helper::expand_asset_name(&cap[1], account);
+        let Some(asset_path) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        else {
             continue;
         };
-        let asset_path = asset_helper::expand_asset_name(asset_name, account);
         let is_glob = is_glob_pattern(&asset_path);
 
-        if !seen_refs.contains(&asset_path) {
-            seen_refs.insert(asset_path.clone());
-            asset_refs.push(asset_path.clone());
+        if !seen_refs.contains(asset_path) {
+            seen_refs.insert(asset_path.to_string());
+            asset_refs.push(asset_path.to_string());
         }
 
-        replacements.push((full_match, asset_path, is_glob));
+        replacements.push((full_match, asset_path.to_string(), is_glob));
     }
 
     // Output-only assets that need temp files created (but not downloaded)
