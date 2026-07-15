@@ -33,6 +33,13 @@ fn encode_cookie_name(name: &str) -> String {
     URL_SAFE_NO_PAD.encode(name.as_bytes())
 }
 
+fn encode_cookie_name_suffix(asset_app_name: &str, username: Option<&str>) -> String {
+    match username {
+        Some(username) => encode_cookie_name(&format!("{}_{}", username, asset_app_name)),
+        None => encode_cookie_name(asset_app_name),
+    }
+}
+
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
 pub type Clients = Arc<Mutex<std::collections::HashMap<ClientId, Client>>>;
@@ -552,6 +559,17 @@ impl HttpResponse {
         }
     }
 
+    fn too_many_requests() -> Self {
+        Self {
+            status: 429,
+            status_text: "Too Many Requests",
+            content_type: "text/plain".into(),
+            body: b"Rate limit exceeded. Try again in 60 seconds.".to_vec(),
+            set_cookie: None,
+            additional_headers: Vec::new(),
+        }
+    }
+
     fn bad_request(msg: &str) -> Self {
         Self {
             status: 400,
@@ -596,12 +614,12 @@ impl HttpResponse {
         self
     }
 
-    fn auth_cookie(service_name: &str, token: &str) -> String {
+    fn auth_cookie(username: Option<&str>, service_name: &str, token: &str) -> String {
         // `Secure` is not set because this is used over localhost
         format!(
             "{}_{}={}; Path=/; HttpOnly; SameSite=Strict",
             HAI_TOKEN_COOKIE_NAME,
-            encode_cookie_name(service_name),
+            encode_cookie_name_suffix(service_name, username),
             token
         )
     }
@@ -1062,7 +1080,7 @@ async fn handle_websocket_connection(
         &format!(
             "{}_{}",
             HAI_TOKEN_COOKIE_NAME,
-            encode_cookie_name(service_name)
+            encode_cookie_name_suffix(service_name, username)
         ),
     );
     let cookie_auth_valid = cookie_token.as_ref().map(|t| t == &token).unwrap_or(false);
@@ -1296,7 +1314,7 @@ async fn handle_http_request(
     let cookie_token = request.cookie(&format!(
         "{}_{}",
         HAI_TOKEN_COOKIE_NAME,
-        encode_cookie_name(service_name)
+        encode_cookie_name_suffix(service_name, username)
     ));
     let bearer_token = request.bearer_token();
     let query_token = request.query_param("token");
@@ -1428,7 +1446,11 @@ async fn handle_http_request(
     }
 
     if should_set_cookie {
-        response = response.with_cookie(HttpResponse::auth_cookie(service_name, expected_token));
+        response = response.with_cookie(HttpResponse::auth_cookie(
+            username,
+            service_name,
+            expected_token,
+        ));
     }
 
     response
@@ -1609,8 +1631,16 @@ async fn handle_get(
                 Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
                 Err(GetRevisionError::NoPermission) => return HttpResponse::forbidden(),
                 Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
-                Err(GetRevisionError::DataFetchFailed) => {
-                    return HttpResponse::bad_request("Invalid URL encoding");
+                Err(GetRevisionError::DataFetchFailedUnexpected) => {
+                    return HttpResponse::internal_error("Unexpected data fetch failure.");
+                }
+                Err(GetRevisionError::DataFetchFailedRetryable) => {
+                    return HttpResponse::internal_error(
+                        "Temporary data fetch failure, please retry again.",
+                    );
+                }
+                Err(GetRevisionError::DataFetchFailedRateLimited) => {
+                    return HttpResponse::too_many_requests();
                 }
             }
         }
@@ -1800,6 +1830,11 @@ async fn handle_put(
                 | asset_async_writer::AssetSaveError::Push(RequestError::BadRequest(msg)) => {
                     return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
                 }
+                asset_async_writer::AssetSaveError::Put(RequestError::RateLimit(_msg))
+                | asset_async_writer::AssetSaveError::Replace(RequestError::RateLimit(_msg))
+                | asset_async_writer::AssetSaveError::Push(RequestError::RateLimit(_msg)) => {
+                    return HttpResponse::too_many_requests();
+                }
                 asset_async_writer::AssetSaveError::Put(RequestError::Http(http_err))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::Http(http_err))
                 | asset_async_writer::AssetSaveError::Push(RequestError::Http(http_err)) => {
@@ -1865,6 +1900,9 @@ async fn handle_put_metadata(
             match e {
                 RequestError::BadRequest(msg) => {
                     return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
+                }
+                RequestError::RateLimit(_) => {
+                    return HttpResponse::too_many_requests();
                 }
                 RequestError::Http(http_err) => {
                     return HttpResponse::internal_error(&format!("HTTP error: {}", http_err));
@@ -2101,6 +2139,10 @@ async fn send_error_response<E: Serialize>(
         RequestError::Route(route_err) => ClientMessageResponse::RouteError {
             mid: mid,
             error: route_err,
+        },
+        RequestError::RateLimit(msg) => ClientMessageResponse::GatewayError {
+            mid: mid,
+            error: msg,
         },
         RequestError::BadRequest(msg) => ClientMessageResponse::BadRequestError { error: msg },
         RequestError::Unexpected(msg) => ClientMessageResponse::UnexpectedError {

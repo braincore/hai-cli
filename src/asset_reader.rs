@@ -78,6 +78,8 @@ pub async fn get_asset_entry(
             match e {
                 RequestError::BadRequest(_)
                 | RequestError::Http(_)
+                // FIXME: Elevate RateLimit to be explicit error type
+                | RequestError::RateLimit(_)
                 | RequestError::Unexpected(_) => Err(GetAssetError::DataFetchFailed),
                 RequestError::Route(e) => match e {
                     AssetGetError::BadName => Err(GetAssetError::BadName),
@@ -140,7 +142,9 @@ pub enum GetRevisionError {
     BadRevId,
     NoPermission,
     Deleted,
-    DataFetchFailed,
+    DataFetchFailedUnexpected,
+    DataFetchFailedRetryable,
+    DataFetchFailedRateLimited,
 }
 
 /// Fetches the asset data and metadata for a specific revision.
@@ -175,17 +179,21 @@ pub async fn get_asset_and_metadata_revision(
         .await
     {
         Ok(res) => Ok(res),
-        Err(e) => match e {
-            RequestError::BadRequest(_) | RequestError::Http(_) | RequestError::Unexpected(_) => {
-                Err(GetRevisionError::DataFetchFailed)
+        Err(e) => {
+            eprintln!("REVISION GET error: {:?}", e);
+            match e {
+                RequestError::BadRequest(_) => Err(GetRevisionError::DataFetchFailedUnexpected),
+                RequestError::Http(_) => Err(GetRevisionError::DataFetchFailedRetryable),
+                RequestError::RateLimit(_) => Err(GetRevisionError::DataFetchFailedRateLimited),
+                RequestError::Unexpected(_) => Err(GetRevisionError::DataFetchFailedRetryable),
+                RequestError::Route(e) => match e {
+                    AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
+                    AssetRevisionGetError::NoPermission => Err(GetRevisionError::NoPermission),
+                    AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
+                    _ => Err(GetRevisionError::DataFetchFailedUnexpected),
+                },
             }
-            RequestError::Route(e) => match e {
-                AssetRevisionGetError::BadEntryRef => Err(GetRevisionError::BadEntryRef),
-                AssetRevisionGetError::NoPermission => Err(GetRevisionError::NoPermission),
-                AssetRevisionGetError::BadRevId => Err(GetRevisionError::BadRevId),
-                _ => Err(GetRevisionError::DataFetchFailed),
-            },
-        },
+        }
     }?;
 
     if matches!(
@@ -200,9 +208,14 @@ pub async fn get_asset_and_metadata_revision(
     {
         match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => Some(contents),
-            Err(_) => {
-                return Err(GetRevisionError::DataFetchFailed);
-            }
+            Err(err) => match err {
+                DownloadAssetError::DataFetchFailed => {
+                    return Err(GetRevisionError::DataFetchFailedRetryable);
+                }
+                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                    return Err(GetRevisionError::DataFetchFailedUnexpected);
+                }
+            },
         }
     } else {
         None
@@ -221,9 +234,14 @@ pub async fn get_asset_and_metadata_revision(
                     .await
                 {
                     Ok(contents) => contents,
-                    Err(_) => {
-                        return Err(GetRevisionError::DataFetchFailed);
-                    }
+                    Err(err) => match err {
+                        DownloadAssetError::DataFetchFailed => {
+                            return Err(GetRevisionError::DataFetchFailedRetryable);
+                        }
+                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                            return Err(GetRevisionError::DataFetchFailedUnexpected);
+                        }
+                    },
                 },
             )
         } else {

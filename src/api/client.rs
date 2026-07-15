@@ -19,6 +19,7 @@ pub struct HaiClient {
 pub enum RequestError<T> {
     Http(ReqwestError),
     Route(T),
+    RateLimit(String),
     BadRequest(String),
     Unexpected(String),
 }
@@ -28,6 +29,7 @@ impl<T: fmt::Display> fmt::Display for RequestError<T> {
         match self {
             RequestError::Http(e) => write!(f, "HTTP Error: {}", e),
             RequestError::Route(msg) => write!(f, "API Route Error: {}", msg),
+            RequestError::RateLimit(msg) => write!(f, "Rate Limit Error: {}", msg),
             RequestError::BadRequest(msg) => write!(f, "Bad Request Error: {}", msg),
             RequestError::Unexpected(msg) => write!(f, "Unexpected Error: {}", msg),
         }
@@ -106,6 +108,11 @@ impl HaiClient {
         } else if response.status().as_u16() == 422 {
             // If status is `422`, show body
             Err(RequestError::BadRequest(
+                response.text().await.unwrap_or("".to_string()),
+            ))
+        } else if response.status().as_u16() == 429 {
+            // If status is `429`, show body
+            Err(RequestError::RateLimit(
                 response.text().await.unwrap_or("".to_string()),
             ))
         } else {
