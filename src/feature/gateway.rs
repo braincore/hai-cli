@@ -154,6 +154,12 @@ impl Perm {
             (Perm::PublicAsset, AccessRequest::ReadByName { name: req_name }) => {
                 is_public_path(req_name)
             }
+            (Perm::PublicAsset, AccessRequest::WriteByName { name: req_name }) => {
+                // Allow an attempt to write to a public path knowing that the
+                // API will reject it unless the owner has given explicit
+                // permission otherwise.
+                is_public_path(req_name)
+            }
 
             // --- Shared asset name: match the suffix after /s/<participants>/ ---
             (
