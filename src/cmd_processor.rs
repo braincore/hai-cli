@@ -5021,7 +5021,7 @@ pub async fn process_cmd(
             };
             let api_client = mk_api_client(Some(session));
 
-            println!("Booting bot... you may be asked for your asset-encryption passphrase");
+            println!("Booting bot...");
             let (key_id, pub_key, _priv_key) = match asset_crypt::get_ed25519_for_ssh_key(
                 asset_blob_cache.clone(),
                 session.asset_keyring.clone(),
@@ -5057,10 +5057,10 @@ pub async fn process_cmd(
             println!("╔══════════════════════════════════════════════════════════════╗");
             println!("║                        BOT BOOTED                            ║");
             println!("╠══════════════════════════════════════════════════════════════╣");
-            println!("║ Bot ID:            {:<41} ║", boot_res.bot.bot_id);
-            println!("║ Hostname:          {:<41} ║", boot_res.bot.hostname);
+            println!("║ Bot ID:          {:<43} ║", boot_res.bot.bot_id);
+            println!("║ Hostname:        {:<43} ║", boot_res.bot.hostname);
             println!(
-                "║ Vanity Hostname:   {:<41} ║",
+                "║ Vanity Hostname: {:<43} ║",
                 boot_res.bot.vanity_hostname.unwrap_or("[none]".to_string())
             );
             println!("╠══════════════════════════════════════════════════════════════╣");
