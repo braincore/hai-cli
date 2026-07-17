@@ -481,12 +481,19 @@ impl HttpRequest {
 }
 
 /// URL is prettier if / and + are not percent-encoded. They're common in asset
-/// names.
+/// names in fragments.
 fn encode_asset_fragment(asset_name: &str) -> String {
     urlencoding::encode(asset_name)
         .to_string()
         .replace("%2F", "/")
         .replace("%2B", "+")
+}
+
+/// URL is prettier if / is not percent-encoded.
+fn encode_asset_query_param(asset_name: &str) -> String {
+    urlencoding::encode(asset_name)
+        .to_string()
+        .replace("%2F", "/")
 }
 
 struct HttpResponse {
@@ -2599,11 +2606,15 @@ async fn handle_client_message(
             let base_url = format!(
                 "http://{}/open?asset_app={}",
                 perm_addr,
-                encode_asset_fragment(&open_with_arg.asset_app),
+                encode_asset_query_param(&open_with_arg.asset_app),
             );
             let perm_req_result = if let Some(asset_name) = open_with_arg.asset {
                 ReplOpenWithResult {
-                    url: format!("{}&asset={}", base_url, encode_asset_fragment(&asset_name)),
+                    url: format!(
+                        "{}&asset={}",
+                        base_url,
+                        encode_asset_query_param(&asset_name)
+                    ),
                 }
             } else {
                 ReplOpenWithResult { url: base_url }
