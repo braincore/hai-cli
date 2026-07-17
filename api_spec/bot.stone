@@ -22,6 +22,7 @@ union BootError
 struct BotInfo
     bot_id String(min_length=1)
     hostname String
+    vanity_hostname String?
     booted_at common.UtcTimestamp
     terminated_at common.UtcTimestamp?
 

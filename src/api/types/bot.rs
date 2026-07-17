@@ -299,6 +299,7 @@ pub struct BotInfo {
     pub bot_id: String,
     pub hostname: String,
     pub booted_at: super::common::UtcTimestamp,
+    pub vanity_hostname: Option<String>,
     pub terminated_at: Option<super::common::UtcTimestamp>,
 }
 
@@ -308,8 +309,14 @@ impl BotInfo {
             bot_id,
             hostname,
             booted_at,
+            vanity_hostname: None,
             terminated_at: None,
         }
+    }
+
+    pub fn with_vanity_hostname(mut self, value: String) -> Self {
+        self.vanity_hostname = Some(value);
+        self
     }
 
     pub fn with_terminated_at(mut self, value: super::common::UtcTimestamp) -> Self {
@@ -318,7 +325,13 @@ impl BotInfo {
     }
 }
 
-const BOT_INFO_FIELDS: &[&str] = &["bot_id", "hostname", "booted_at", "terminated_at"];
+const BOT_INFO_FIELDS: &[&str] = &[
+    "bot_id",
+    "hostname",
+    "booted_at",
+    "vanity_hostname",
+    "terminated_at",
+];
 impl BotInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -333,6 +346,7 @@ impl BotInfo {
         let mut field_bot_id = None;
         let mut field_hostname = None;
         let mut field_booted_at = None;
+        let mut field_vanity_hostname = None;
         let mut field_terminated_at = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
@@ -356,6 +370,12 @@ impl BotInfo {
                     }
                     field_booted_at = Some(map.next_value()?);
                 }
+                "vanity_hostname" => {
+                    if field_vanity_hostname.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("vanity_hostname"));
+                    }
+                    field_vanity_hostname = Some(map.next_value()?);
+                }
                 "terminated_at" => {
                     if field_terminated_at.is_some() {
                         return Err(::serde::de::Error::duplicate_field("terminated_at"));
@@ -377,6 +397,7 @@ impl BotInfo {
                 .ok_or_else(|| ::serde::de::Error::missing_field("hostname"))?,
             booted_at: field_booted_at
                 .ok_or_else(|| ::serde::de::Error::missing_field("booted_at"))?,
+            vanity_hostname: field_vanity_hostname.and_then(Option::flatten),
             terminated_at: field_terminated_at.and_then(Option::flatten),
         };
         Ok(Some(result))
@@ -390,6 +411,9 @@ impl BotInfo {
         s.serialize_field("bot_id", &self.bot_id)?;
         s.serialize_field("hostname", &self.hostname)?;
         s.serialize_field("booted_at", &self.booted_at)?;
+        if let Some(val) = &self.vanity_hostname {
+            s.serialize_field("vanity_hostname", val)?;
+        }
         if let Some(val) = &self.terminated_at {
             s.serialize_field("terminated_at", val)?;
         }
@@ -419,7 +443,7 @@ impl ::serde::ser::Serialize for BotInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("BotInfo", 4)?;
+        let mut s = serializer.serialize_struct("BotInfo", 5)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

@@ -5059,6 +5059,10 @@ pub async fn process_cmd(
             println!("╠══════════════════════════════════════════════════════════════╣");
             println!("║ Bot ID:            {:<41} ║", boot_res.bot.bot_id);
             println!("║ Hostname:          {:<41} ║", boot_res.bot.hostname);
+            println!(
+                "║ Vanity Hostname:   {:<41} ║",
+                boot_res.bot.vanity_hostname.unwrap_or("[none]".to_string())
+            );
             println!("╠══════════════════════════════════════════════════════════════╣");
             println!("║                        NEXT STEP                             ║");
             println!("║  Setting up bot...                                           ║");
