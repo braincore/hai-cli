@@ -2980,27 +2980,145 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetRemove(cmd::AssetRemoveCmd { asset_name }) => {
+        cmd::Cmd::AssetRemove(cmd::AssetRemoveCmd {
+            asset_name,
+            recursive,
+        }) => {
             if session.account.is_none() {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
             }
-            let asset_name = asset_helper::expand_pub_asset_name(&asset_name, &session.account);
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            if asset_name == "*" {
+                eprintln!("error: cannot use wildcard at root");
+                return ProcessCmdResult::Loop;
+            }
+            use crate::api::types::asset::{AssetKind, AssetRemoveArg};
             let api_client = mk_api_client(Some(session));
-            use crate::api::types::asset::AssetRemoveArg;
-            match api_client
-                .asset_remove(AssetRemoveArg { name: asset_name })
-                .await
+            let folder_policy = if recursive {
+                asset_reader::FolderPolicy::IncludeAndRecurse
+            } else {
+                // Allows for removal of folder assets, but not their contents
+                asset_reader::FolderPolicy::IncludeOnly
+            };
+            let asset_entries = match asset_reader::get_asset_entries_from_globs(
+                &api_client,
+                &[asset_name.clone()],
+                folder_policy,
+            )
+            .await
             {
-                Ok(_) => {}
+                Ok(asset_entries) => asset_entries,
                 Err(e) => {
                     eprintln!("error: {}", e);
                     return ProcessCmdResult::Loop;
                 }
             };
+
+            let mut all_msgs = vec![];
+            if asset_entries.is_empty() {
+                let msg = format!("error: no match: {}", asset_name);
+                eprintln!("{}", msg);
+                all_msgs.push(msg);
+            } else if asset_entries.len() == 1
+                && !recursive
+                && !asset_reader::is_glob_pattern(&asset_name)
+            {
+                // If the user specified a single asset name without a glob
+                // pattern, we can remove it directly.
+                let asset_entry = &asset_entries[0];
+                if asset_entry.asset.kind == AssetKind::Folder {
+                    let msg = format!(
+                        "warn: {}: removing folder-asset only; use /asset-remove-recursive to remove contents",
+                        asset_entry.name
+                    );
+                    println!("{}", msg);
+                    all_msgs.push(msg);
+                }
+                match api_client
+                    .asset_remove(AssetRemoveArg {
+                        name: asset_entry.name.clone(),
+                    })
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        let msg = format!("error: {}: {}", asset_entry.name, e);
+                        eprintln!("{}", msg);
+                        all_msgs.push(msg);
+                    }
+                }
+            } else {
+                let mut preconfirm_msgs = vec![];
+                for asset_entry in &asset_entries {
+                    if !recursive && asset_entry.asset.kind == AssetKind::Folder {
+                        let msg = format!(
+                            "{} [folder-asset only, use /asset-remove-recursive to remove contents]",
+                            asset_entry.name
+                        );
+                        println!("{}", msg);
+                        preconfirm_msgs.push(msg);
+                    } else {
+                        let msg = format!("{}", asset_entry.name);
+                        println!("{}", msg);
+                        preconfirm_msgs.push(msg);
+                    }
+                }
+                // Some glob was used, so ask user for confirmation
+                let q = "Are you sure you want to remove the following assets? (y/N)";
+                let Some(answer) = term::ask_question_readline(q) else {
+                    preconfirm_msgs.push(q.to_string());
+                    preconfirm_msgs.push("error: cancelled".to_string());
+                    eprintln!("error: cancelled");
+                    all_msgs.extend(preconfirm_msgs);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &all_msgs.join("\n"),
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    return ProcessCmdResult::Loop;
+                };
+                let answer = answer.trim().to_lowercase();
+                if answer != "y" && answer != "yes" {
+                    preconfirm_msgs.push(format!("{} {}", q, answer));
+                    preconfirm_msgs.push("error: cancelled".to_string());
+                    eprintln!("error: cancelled");
+                    all_msgs.extend(preconfirm_msgs);
+                    session_history_add_user_cmd_and_reply_entries(
+                        raw_user_input,
+                        &all_msgs.join("\n"),
+                        session,
+                        bpe_tokenizer,
+                        (is_task_mode_step, LogEntryRetentionPolicy::None),
+                    );
+                    return ProcessCmdResult::Loop;
+                }
+
+                for asset_entry in asset_entries {
+                    match api_client
+                        .asset_remove(AssetRemoveArg {
+                            name: asset_entry.name.clone(),
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            let msg = format!("{}", asset_entry.name);
+                            println!("{}", msg);
+                            all_msgs.push(msg);
+                        }
+                        Err(e) => {
+                            let msg = format!("error: {}: {}", asset_entry.name, e);
+                            eprintln!("{}", msg);
+                            all_msgs.push(msg);
+                        }
+                    }
+                }
+            }
             session_history_add_user_cmd_and_reply_entries(
                 raw_user_input,
-                "Removed",
+                &all_msgs.join("\n"),
                 session,
                 bpe_tokenizer,
                 (is_task_mode_step, LogEntryRetentionPolicy::None),
@@ -6274,7 +6392,8 @@ Assets:
 /asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
 /asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
 /asset-sync-diff <path>          - Show what assets have changed locally since last sync-down.
-/asset-remove <name>             - Removes an asset
+/asset-remove <name>             - Removes an asset. Supports globs. Will remove a folder-asset but not its contents.
+/asset-remove-recursive <name>   - Recursively removes folder-asset and its contents. Supports globs.
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>
 /asset-acl-get <name>            - List ACL on an asset

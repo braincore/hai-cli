@@ -449,15 +449,109 @@ async fn expand_glob(
             .map_err(|e| format!("cannot list assets for glob {}: {}", glob_pattern, e))?;
     }
 
-    if matching_assets.is_empty() {
-        return Err(format!("no assets match glob pattern: {}", glob_pattern));
-    }
-
     // Sort for consistent ordering
     matching_assets.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
 
     Ok(matching_assets)
 }
+
+// --
+
+pub enum FolderPolicy {
+    #[allow(dead_code)]
+    Exclude,
+    #[allow(dead_code)]
+    ExcludeButRecurse,
+    IncludeOnly,
+    IncludeAndRecurse,
+}
+
+/// Fetches asset entries for a list of asset names or glob patterns.
+pub async fn get_asset_entries_from_globs(
+    api_client: &HaiClient,
+    asset_names_or_globs: &[String],
+    folder_policy: FolderPolicy,
+) -> Result<Vec<AssetEntry>, String> {
+    let mut resolved_entries: Vec<AssetEntry> = Vec::new();
+    let mut seen_globs: HashSet<String> = HashSet::new();
+    let mut seen_asset_names: HashSet<String> = HashSet::new();
+
+    let mut frontier = asset_names_or_globs.to_vec();
+
+    while let Some(asset_ref) = frontier.pop() {
+        if is_glob_pattern(&asset_ref) {
+            // Skip if we've already expanded this glob
+            if seen_globs.contains(&asset_ref) {
+                continue;
+            }
+            seen_globs.insert(asset_ref.clone());
+
+            // Expand the glob
+            let asset_entries = expand_glob(api_client, &asset_ref).await?;
+
+            // Collect unique asset entries
+            let matched_asset_entries: Vec<AssetEntry> = asset_entries
+                .into_iter()
+                .filter_map(|entry| {
+                    if seen_asset_names.contains(&entry.name) {
+                        None
+                    } else if entry.asset.kind == AssetKind::Folder {
+                        seen_asset_names.insert(entry.name.clone());
+                        match folder_policy {
+                            FolderPolicy::Exclude => None,
+                            FolderPolicy::ExcludeButRecurse => {
+                                frontier.push(format!("{}/*", entry.name));
+                                None
+                            }
+                            FolderPolicy::IncludeOnly => Some(entry),
+                            FolderPolicy::IncludeAndRecurse => {
+                                frontier.push(format!("{}/*", entry.name));
+                                Some(entry)
+                            }
+                        }
+                    } else {
+                        seen_asset_names.insert(entry.name.clone());
+                        Some(entry)
+                    }
+                })
+                .collect();
+
+            resolved_entries.extend_from_slice(matched_asset_entries.as_slice());
+        } else {
+            // Regular asset (non-glob)
+            if !seen_asset_names.contains(&asset_ref) {
+                match get_asset_entry(api_client, &asset_ref, false).await {
+                    Ok(get_res) => {
+                        seen_asset_names.insert(asset_ref.clone());
+                        if get_res.entry.asset.kind == AssetKind::Folder {
+                            match folder_policy {
+                                FolderPolicy::Exclude => {}
+                                FolderPolicy::ExcludeButRecurse => {
+                                    frontier.push(format!("{}/*", get_res.entry.name));
+                                }
+                                FolderPolicy::IncludeOnly => {
+                                    resolved_entries.push(get_res.entry);
+                                }
+                                FolderPolicy::IncludeAndRecurse => {
+                                    frontier.push(format!("{}/*", get_res.entry.name));
+                                    resolved_entries.push(get_res.entry);
+                                }
+                            }
+                        } else {
+                            resolved_entries.push(get_res.entry);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("error: failed to fetch asset {}: {}", asset_ref, e);
+                    }
+                };
+            }
+        }
+    }
+    Ok(resolved_entries)
+}
+
+// --
 
 pub type AssetTempFileMap = HashMap<String, Result<tempfile::NamedTempFile, GetAssetError>>;
 
@@ -509,6 +603,9 @@ pub async fn prepare_assets_from_names_as_temp_files(
 
             // Expand the glob
             let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
+            if matched_asset_entries.is_empty() {
+                eprintln!("no assets match glob pattern: {}", asset_ref);
+            }
 
             // Queue each matched asset for download
             for matched_asset_entry in &matched_asset_entries {
@@ -875,6 +972,9 @@ pub async fn fetch_assets_from_names_in_memory_extended(
 
             // Expand the glob
             let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
+            if matched_asset_entries.is_empty() {
+                eprintln!("no assets match glob pattern: {}", asset_ref);
+            }
 
             // Queue each matched asset for download
             for matched_asset_entry in &matched_asset_entries {
