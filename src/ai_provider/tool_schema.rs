@@ -436,7 +436,8 @@ Assets:
 /asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
 /asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
 /asset-sync-diff <path> - Show what assets have changed locally since last sync-down.
-/asset-remove <name>    - Removes an asset
+/asset-remove <name>             - Removes an asset. Supports globs. Will remove a folder-asset but not its contents.
+/asset-remove-recursive <name>   - Recursively removes folder-asset and its contents. Supports globs.
 /asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst> - Copies an asset from <src> to <dst>
 /asset-acl-get <name> - List ACL on an asset

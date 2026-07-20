@@ -487,6 +487,7 @@ async fn repl(
         "/asset-acl-get",
         "/asset-acl-set",
         "/asset-remove",
+        "/asset-remove-recursive",
         "/asset-move",
         "/asset-copy",
         "/asset-md-get",

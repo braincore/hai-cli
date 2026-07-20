@@ -644,6 +644,8 @@ pub struct AssetLinkCmd {
 pub struct AssetRemoveCmd {
     /// Name of the asset
     pub asset_name: String,
+    /// Recursive removal of all assets under matched folders
+    pub recursive: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2324,9 +2326,27 @@ fn parse_command(
                 return None;
             }
             match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd { asset_name })),
+                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd {
+                    asset_name,
+                    recursive: false,
+                })),
                 None => {
-                    eprintln!("Usage: /asset-remove <name>");
+                    eprintln!("Usage: {cmd_name} <name>");
+                    None
+                }
+            }
+        }
+        "asset-remove-recursive" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd {
+                    asset_name,
+                    recursive: true,
+                })),
+                None => {
+                    eprintln!("Usage: {cmd_name} <name>");
                     None
                 }
             }

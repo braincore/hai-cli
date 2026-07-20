@@ -493,10 +493,16 @@ a/b/d
 a/b/e/f
 ```
 
-To remove a folder, remove it like any other asset:
+To remove a folder asset, remove it like any other asset:
 
 ```
 /asset-remove a/b
+```
+
+To remove a folder asset along with its contents, use:
+
+```
+/asset-remove-recursive a/b
 ```
 
 ### Folder Metadata
