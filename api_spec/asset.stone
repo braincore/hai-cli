@@ -1,5 +1,7 @@
 namespace asset 
 
+import common
+
 # --
 
 route put(AssetPutArg, AssetPutResult, AssetPutError)
@@ -47,6 +49,8 @@ struct AssetInfo
             folder
                 "Asset was created by a folder creation."
     created_by AssetCreatedBy
+    ts common.UtcTimestamp
+        "Approximate timestamp of creation."
     size UInt64
         "Number of bytes. Deleted and access-restricted assets have a size of
         0."
@@ -69,6 +73,8 @@ union AssetCreatedBy
 struct AssetMetadataInfo
     rev_id String(min_length=1)
     created_by AssetCreatedBy
+    ts common.UtcTimestamp
+        "Approximate timestamp of creation."
     size UInt64
         "Number of bytes. Deleted and access-restricted metadata have a size of
         0."
@@ -535,6 +541,30 @@ union AssetEntryAclSetError
 
 struct AssetEntryAclSetResult
     entry AssetEntry
+
+# --
+
+route entry/acl/get_effective(AssetEntryAclGetEffectiveArg, AssetEntryAclGetEffectiveResult, AssetEntryAclGetEffectiveError)
+    "Returns the effective permissions a user has to an asset.
+
+    This takes into account all the various inputs to permissions so that the
+    client can avoid computing it themselves."
+
+    attrs
+        auth = "user_optional"
+
+struct AssetEntryAclGetEffectiveArg
+    entry_ref EntryRef
+
+struct AssetEntryAclGetEffectiveResult
+    read_data Boolean
+    read_revisions Boolean
+    write_data Boolean
+    push_data Boolean
+
+union AssetEntryAclGetEffectiveError
+    bad_entry_ref
+    no_permission
 
 # --
 

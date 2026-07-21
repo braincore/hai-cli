@@ -3972,6 +3972,42 @@ pub async fn process_cmd(
             );
             ProcessCmdResult::Loop
         }
+        cmd::Cmd::AssetAclGetEffective(cmd::AssetAclGetEffectiveCmd { asset_name }) => {
+            let asset_name = resolve_asset_name(&asset_name, session).await;
+            let api_client = mk_api_client(Some(session));
+            use api::types::asset::{AssetEntryAclGetEffectiveArg, EntryRef};
+            let output = match api_client
+                .asset_entry_acl_get_effective(AssetEntryAclGetEffectiveArg {
+                    entry_ref: EntryRef::Name(asset_name.to_owned()),
+                })
+                .await
+            {
+                Ok(res) => {
+                    let output = format!(
+                        "read-data: {}\nread-revisions: {}\nwrite-data: {}\npush-data: {}",
+                        if res.read_data { "true" } else { "false" },
+                        if res.read_revisions { "true" } else { "false" },
+                        if res.write_data { "true" } else { "false" },
+                        if res.push_data { "true" } else { "false" },
+                    );
+                    println!("{}", output);
+                    output
+                }
+                Err(err) => {
+                    let msg = format!("error: {}", err);
+                    eprintln!("{}", msg);
+                    msg
+                }
+            };
+            session_history_add_user_cmd_and_reply_entries(
+                raw_user_input,
+                &output,
+                session,
+                bpe_tokenizer,
+                (is_task_mode_step, LogEntryRetentionPolicy::None),
+            );
+            ProcessCmdResult::Loop
+        }
         cmd::Cmd::AssetAclSet(cmd::AssetAclSetCmd {
             asset_name,
             ace_principal,
@@ -6397,6 +6433,7 @@ Assets:
 /asset-move <src> <dst>          - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst>          - Copies an asset from <src> to <dst>
 /asset-acl-get <name>            - List ACL on an asset
+/asset-acl-get-effective <name>  - Show effective permissions on an asset
 /asset-acl-set <name> <principal> <ace>
                                  - Change ACL on an asset
                                    `principal` can be `everyone` or `user:<username>`

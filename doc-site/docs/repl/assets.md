@@ -418,15 +418,15 @@ set.
 A simple use case is to give write permission to another user:
 
 ```
-/asset-acl-set /ken/doc-collaborate everyone allow:write-data
-/asset-acl-set /ken/doc-collaborate leo allow:write-data
+[0] /asset-acl-set /ken/doc-collaborate everyone allow:write-data
+[1] /asset-acl-set /ken/doc-collaborate leo allow:write-data
 ```
 
 A more complex use case is to allow pushed data to create a "document drop":
 
 ```
-/asset-acl-set /ken/doc-drop everyone deny:read-data
-/asset-acl-set /ken/doc-drop everyone allow:push-data
+[2] /asset-acl-set /ken/doc-drop everyone deny:read-data
+[3] /asset-acl-set /ken/doc-drop everyone allow:push-data
 ```
 
 With these ACLs set, any user can push data (`/asset-push`) into the
@@ -434,6 +434,23 @@ With these ACLs set, any user can push data (`/asset-push`) into the
 
 The owner (user `ken` in this example) can cursor through dropped documents
 using `/asset-revisions` and create local copies with `/asset-revision-temp`.
+
+To see the ACL for an asset, use:
+
+```
+[4] /asset-acl-get /ken/doc-drop
+Principal: Everyone, read-data: Deny, read-revisions: Inherit, write-data: Inherit, push-data: Allow
+```
+
+To see the effective ACL which resolves all permissions for a given user, use:
+
+```
+[5] /asset-acl-get-effective /someone/doc-drop
+read-data: false
+read-revisions: false
+write-data: false
+push-data: true
+```
 
 ## Listening for changes
 

@@ -760,6 +760,302 @@ impl ::serde::ser::Serialize for AssetEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetEntryAclGetEffectiveArg {
+    pub entry_ref: EntryRef,
+}
+
+impl AssetEntryAclGetEffectiveArg {
+    pub fn new(entry_ref: EntryRef) -> Self {
+        AssetEntryAclGetEffectiveArg { entry_ref }
+    }
+}
+
+const ASSET_ENTRY_ACL_GET_EFFECTIVE_ARG_FIELDS: &[&str] = &["entry_ref"];
+impl AssetEntryAclGetEffectiveArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetEntryAclGetEffectiveArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetEntryAclGetEffectiveArg>, V::Error> {
+        let mut field_entry_ref = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_ref" => {
+                    if field_entry_ref.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_ref"));
+                    }
+                    field_entry_ref = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetEntryAclGetEffectiveArg {
+            entry_ref: field_entry_ref
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_ref"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_ref", &self.entry_ref)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclGetEffectiveArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetEntryAclGetEffectiveArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetEntryAclGetEffectiveArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetEntryAclGetEffectiveArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetEntryAclGetEffectiveArg",
+            ASSET_ENTRY_ACL_GET_EFFECTIVE_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetEntryAclGetEffectiveArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetEntryAclGetEffectiveError {
+    BadEntryRef,
+    NoPermission,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclGetEffectiveError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetEntryAclGetEffectiveError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetEntryAclGetEffectiveError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_entry_ref" => AssetEntryAclGetEffectiveError::BadEntryRef,
+                    "no_permission" => AssetEntryAclGetEffectiveError::NoPermission,
+                    _ => AssetEntryAclGetEffectiveError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_entry_ref", "no_permission", "other"];
+        deserializer.deserialize_struct("AssetEntryAclGetEffectiveError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetEntryAclGetEffectiveError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetEntryAclGetEffectiveError::BadEntryRef => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveError", 1)?;
+                s.serialize_field(".tag", "bad_entry_ref")?;
+                s.end()
+            }
+            AssetEntryAclGetEffectiveError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetEntryAclGetEffectiveError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetEntryAclGetEffectiveError {}
+
+impl ::std::fmt::Display for AssetEntryAclGetEffectiveError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetEntryAclGetEffectiveResult {
+    pub read_data: bool,
+    pub read_revisions: bool,
+    pub write_data: bool,
+    pub push_data: bool,
+}
+
+impl AssetEntryAclGetEffectiveResult {
+    pub fn new(read_data: bool, read_revisions: bool, write_data: bool, push_data: bool) -> Self {
+        AssetEntryAclGetEffectiveResult {
+            read_data,
+            read_revisions,
+            write_data,
+            push_data,
+        }
+    }
+}
+
+const ASSET_ENTRY_ACL_GET_EFFECTIVE_RESULT_FIELDS: &[&str] =
+    &["read_data", "read_revisions", "write_data", "push_data"];
+impl AssetEntryAclGetEffectiveResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetEntryAclGetEffectiveResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetEntryAclGetEffectiveResult>, V::Error> {
+        let mut field_read_data = None;
+        let mut field_read_revisions = None;
+        let mut field_write_data = None;
+        let mut field_push_data = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "read_data" => {
+                    if field_read_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("read_data"));
+                    }
+                    field_read_data = Some(map.next_value()?);
+                }
+                "read_revisions" => {
+                    if field_read_revisions.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("read_revisions"));
+                    }
+                    field_read_revisions = Some(map.next_value()?);
+                }
+                "write_data" => {
+                    if field_write_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("write_data"));
+                    }
+                    field_write_data = Some(map.next_value()?);
+                }
+                "push_data" => {
+                    if field_push_data.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("push_data"));
+                    }
+                    field_push_data = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetEntryAclGetEffectiveResult {
+            read_data: field_read_data
+                .ok_or_else(|| ::serde::de::Error::missing_field("read_data"))?,
+            read_revisions: field_read_revisions
+                .ok_or_else(|| ::serde::de::Error::missing_field("read_revisions"))?,
+            write_data: field_write_data
+                .ok_or_else(|| ::serde::de::Error::missing_field("write_data"))?,
+            push_data: field_push_data
+                .ok_or_else(|| ::serde::de::Error::missing_field("push_data"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("read_data", &self.read_data)?;
+        s.serialize_field("read_revisions", &self.read_revisions)?;
+        s.serialize_field("write_data", &self.write_data)?;
+        s.serialize_field("push_data", &self.push_data)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclGetEffectiveResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetEntryAclGetEffectiveResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetEntryAclGetEffectiveResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetEntryAclGetEffectiveResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetEntryAclGetEffectiveResult",
+            ASSET_ENTRY_ACL_GET_EFFECTIVE_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetEntryAclGetEffectiveResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveResult", 4)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetEntryAclSetArg {
     pub entry_ref: EntryRef,
     pub principal: AssetAcePrincipal,
@@ -3139,6 +3435,8 @@ pub struct AssetInfo {
     pub rev_id: String,
     pub kind: AssetKind,
     pub created_by: AssetCreatedBy,
+    /// Approximate timestamp of creation.
+    pub ts: super::common::UtcTimestamp,
     /// Number of bytes. Deleted and access-restricted assets have a size of 0.
     pub size: u64,
     /// Some access control entries may be omitted if access is restricted.
@@ -3155,6 +3453,7 @@ impl AssetInfo {
         rev_id: String,
         kind: AssetKind,
         created_by: AssetCreatedBy,
+        ts: super::common::UtcTimestamp,
         size: u64,
         acl: Vec<AssetAce>,
     ) -> Self {
@@ -3162,6 +3461,7 @@ impl AssetInfo {
             rev_id,
             kind,
             created_by,
+            ts,
             size,
             acl,
             hash: None,
@@ -3180,7 +3480,16 @@ impl AssetInfo {
     }
 }
 
-const ASSET_INFO_FIELDS: &[&str] = &["rev_id", "kind", "created_by", "size", "acl", "hash", "url"];
+const ASSET_INFO_FIELDS: &[&str] = &[
+    "rev_id",
+    "kind",
+    "created_by",
+    "ts",
+    "size",
+    "acl",
+    "hash",
+    "url",
+];
 impl AssetInfo {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -3195,6 +3504,7 @@ impl AssetInfo {
         let mut field_rev_id = None;
         let mut field_kind = None;
         let mut field_created_by = None;
+        let mut field_ts = None;
         let mut field_size = None;
         let mut field_acl = None;
         let mut field_hash = None;
@@ -3220,6 +3530,12 @@ impl AssetInfo {
                         return Err(::serde::de::Error::duplicate_field("created_by"));
                     }
                     field_created_by = Some(map.next_value()?);
+                }
+                "ts" => {
+                    if field_ts.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("ts"));
+                    }
+                    field_ts = Some(map.next_value()?);
                 }
                 "size" => {
                     if field_size.is_some() {
@@ -3259,6 +3575,7 @@ impl AssetInfo {
             kind: field_kind.ok_or_else(|| ::serde::de::Error::missing_field("kind"))?,
             created_by: field_created_by
                 .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
+            ts: field_ts.ok_or_else(|| ::serde::de::Error::missing_field("ts"))?,
             size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
             acl: field_acl.ok_or_else(|| ::serde::de::Error::missing_field("acl"))?,
             hash: field_hash.and_then(Option::flatten),
@@ -3275,6 +3592,7 @@ impl AssetInfo {
         s.serialize_field("rev_id", &self.rev_id)?;
         s.serialize_field("kind", &self.kind)?;
         s.serialize_field("created_by", &self.created_by)?;
+        s.serialize_field("ts", &self.ts)?;
         s.serialize_field("size", &self.size)?;
         s.serialize_field("acl", &self.acl)?;
         if let Some(val) = &self.hash {
@@ -3309,7 +3627,7 @@ impl ::serde::ser::Serialize for AssetInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetInfo", 7)?;
+        let mut s = serializer.serialize_struct("AssetInfo", 8)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -3394,6 +3712,8 @@ impl ::serde::ser::Serialize for AssetKind {
 pub struct AssetMetadataInfo {
     pub rev_id: String,
     pub created_by: AssetCreatedBy,
+    /// Approximate timestamp of creation.
+    pub ts: super::common::UtcTimestamp,
     /// Number of bytes. Deleted and access-restricted metadata have a size of 0.
     pub size: u64,
     /// SHA-256 hash of the content. Unset for deletions or when access is restricted.
@@ -3412,10 +3732,16 @@ pub struct AssetMetadataInfo {
 }
 
 impl AssetMetadataInfo {
-    pub fn new(rev_id: String, created_by: AssetCreatedBy, size: u64) -> Self {
+    pub fn new(
+        rev_id: String,
+        created_by: AssetCreatedBy,
+        ts: super::common::UtcTimestamp,
+        size: u64,
+    ) -> Self {
         AssetMetadataInfo {
             rev_id,
             created_by,
+            ts,
             size,
             hash: None,
             url: None,
@@ -3454,6 +3780,7 @@ impl AssetMetadataInfo {
 const ASSET_METADATA_INFO_FIELDS: &[&str] = &[
     "rev_id",
     "created_by",
+    "ts",
     "size",
     "hash",
     "url",
@@ -3474,6 +3801,7 @@ impl AssetMetadataInfo {
     ) -> Result<Option<AssetMetadataInfo>, V::Error> {
         let mut field_rev_id = None;
         let mut field_created_by = None;
+        let mut field_ts = None;
         let mut field_size = None;
         let mut field_hash = None;
         let mut field_url = None;
@@ -3495,6 +3823,12 @@ impl AssetMetadataInfo {
                         return Err(::serde::de::Error::duplicate_field("created_by"));
                     }
                     field_created_by = Some(map.next_value()?);
+                }
+                "ts" => {
+                    if field_ts.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("ts"));
+                    }
+                    field_ts = Some(map.next_value()?);
                 }
                 "size" => {
                     if field_size.is_some() {
@@ -3545,6 +3879,7 @@ impl AssetMetadataInfo {
             rev_id: field_rev_id.ok_or_else(|| ::serde::de::Error::missing_field("rev_id"))?,
             created_by: field_created_by
                 .ok_or_else(|| ::serde::de::Error::missing_field("created_by"))?,
+            ts: field_ts.ok_or_else(|| ::serde::de::Error::missing_field("ts"))?,
             size: field_size.ok_or_else(|| ::serde::de::Error::missing_field("size"))?,
             hash: field_hash.and_then(Option::flatten),
             url: field_url.and_then(Option::flatten),
@@ -3562,6 +3897,7 @@ impl AssetMetadataInfo {
         use serde::ser::SerializeStruct;
         s.serialize_field("rev_id", &self.rev_id)?;
         s.serialize_field("created_by", &self.created_by)?;
+        s.serialize_field("ts", &self.ts)?;
         s.serialize_field("size", &self.size)?;
         if let Some(val) = &self.hash {
             s.serialize_field("hash", val)?;
@@ -3608,7 +3944,7 @@ impl ::serde::ser::Serialize for AssetMetadataInfo {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetMetadataInfo", 8)?;
+        let mut s = serializer.serialize_struct("AssetMetadataInfo", 9)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

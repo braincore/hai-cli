@@ -304,6 +304,17 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_entry_acl_get_effective(
+        &self,
+        arg: asset::AssetEntryAclGetEffectiveArg,
+    ) -> Result<
+        asset::AssetEntryAclGetEffectiveResult,
+        RequestError<asset::AssetEntryAclGetEffectiveError>,
+    > {
+        self.mk_api_request::<_, _, _>("/asset/entry/acl/get_effective", &arg)
+            .await
+    }
+
     pub async fn asset_entry_acl_set(
         &self,
         arg: asset::AssetEntryAclSetArg,

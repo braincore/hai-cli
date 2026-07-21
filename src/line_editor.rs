@@ -633,6 +633,8 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/asset-list")
                 || is_cmd_input(line, "/ls")
                 || is_cmd_input(line, "/asset-md-get")
+                || is_cmd_input(line, "/asset-acl-get")
+                || is_cmd_input(line, "/asset-acl-get-effective")
                 || is_cmd_input(line, "/asset-listen")
                 || is_cmd_input(line, "/asset-app")
                 || is_cmd_input(line, "/asset-open")

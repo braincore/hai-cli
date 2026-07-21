@@ -142,6 +142,8 @@ pub enum Cmd {
     AssetSyncDiff(AssetSyncDiffCmd),
     /// Get ACL for an asset
     AssetAclGet(AssetAclGetCmd),
+    /// Get effective ACL for an asset
+    AssetAclGetEffective(AssetAclGetEffectiveCmd),
     /// Set ACL for an asset
     AssetAclSet(AssetAclSetCmd),
     /// Get metadata for asset
@@ -720,6 +722,12 @@ pub struct AssetRevisionTempCmd {
 
 #[derive(Clone, Debug)]
 pub struct AssetAclGetCmd {
+    /// Name of the asset
+    pub asset_name: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetAclGetEffectiveCmd {
     /// Name of the asset
     pub asset_name: String,
 }
@@ -2513,6 +2521,20 @@ fn parse_command(
                 Some(asset_name) => Some(Cmd::AssetAclGet(AssetAclGetCmd { asset_name })),
                 None => {
                     eprintln!("Usage: /asset-acl-get <name>");
+                    None
+                }
+            }
+        }
+        "asset-acl-get-effective" => {
+            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+                return None;
+            }
+            match parse_one_arg(remaining) {
+                Some(asset_name) => Some(Cmd::AssetAclGetEffective(AssetAclGetEffectiveCmd {
+                    asset_name,
+                })),
+                None => {
+                    eprintln!("Usage: /{} <name>", cmd_name);
                     None
                 }
             }

@@ -441,6 +441,7 @@ Assets:
 /asset-move <src> <dst> - Moves an asset from <src> to <dst>
 /asset-copy <src> <dst> - Copies an asset from <src> to <dst>
 /asset-acl-get <name> - List ACL on an asset
+/asset-acl-get-effective <name> - Show effective permissions on an asset
 /asset-acl-set <name> <principal> <ace>
                       - Change ACL on an asset
                         `principal` can be `everyone` or `user:<username>`
