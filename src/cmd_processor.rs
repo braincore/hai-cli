@@ -1848,17 +1848,12 @@ pub async fn process_cmd(
                     .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
                     {
                         Ok((asset_contents, md_contents, asset_entry)) => {
-                            let akm_info = match asset_crypt::choose_akm_for_asset(
+                            let akm_info = match asset_crypt::extract_akm_from_metadata(
                                 asset_blob_cache.clone(),
                                 session.asset_keyring.clone(),
                                 api_client.clone(),
                                 Some(&KeyRecipient::User(username.clone())),
-                                &asset_crypt::extract_key_recipients_from_shared_asset_name(
-                                    &asset_name,
-                                    &username,
-                                ),
                                 md_contents.as_deref(),
-                                None,
                             )
                             .await
                             {
@@ -1872,7 +1867,6 @@ pub async fn process_cmd(
                                     return ProcessCmdResult::Loop;
                                 }
                             };
-
                             if let Some(akm_info) = &akm_info {
                                 let enc_content =
                                     crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
@@ -2442,17 +2436,12 @@ pub async fn process_cmd(
                 .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
                 {
                     Ok((asset_contents, md_contents, asset_entry)) => {
-                        let akm_info = match asset_crypt::choose_akm_for_asset(
+                        let akm_info = match asset_crypt::extract_akm_from_metadata(
                             asset_blob_cache.clone(),
                             session.asset_keyring.clone(),
                             api_client.clone(),
                             Some(&KeyRecipient::User(username.clone())),
-                            &asset_crypt::extract_key_recipients_from_shared_asset_name(
-                                &asset_name,
-                                &username,
-                            ),
                             md_contents.as_deref(),
-                            None,
                         )
                         .await
                         {
@@ -2466,7 +2455,6 @@ pub async fn process_cmd(
                                 return ProcessCmdResult::Loop;
                             }
                         };
-
                         if let Some(akm_info) = &akm_info {
                             let enc_content =
                                 crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
@@ -4193,21 +4181,69 @@ pub async fn process_cmd(
             ProcessCmdResult::Loop
         }
         cmd::Cmd::AssetFolderNew(cmd::AssetFolderNewCmd { name }) => {
-            if session.account.is_none() {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
                 eprintln!("{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::Loop;
-            }
-            let name = resolve_asset_name(&name, session).await;
+            };
+
+            let asset_name = resolve_asset_name(&name, session).await;
 
             use api::types::asset::AssetFolderCreateArg;
             let api_client = mk_api_client(Some(session));
-            match api_client
-                .asset_folder_create(AssetFolderCreateArg { name })
+            // Determine AKM before creating the folder so that we don't use
+            // its existence as evidence of the AKM choice.
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                session.asset_keyring.clone(),
+                api_client.clone(),
+                Some(&KeyRecipient::User(username.to_string())),
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            let folder_create_res = match api_client
+                .asset_folder_create(AssetFolderCreateArg {
+                    name: asset_name.clone(),
+                })
                 .await
             {
-                Ok(_res) => {}
+                Ok(res) => res,
                 Err(e) => {
                     eprintln!("error: failed to create folder: {}", e);
+                    return ProcessCmdResult::Loop;
+                }
+            };
+            if folder_create_res
+                .entry
+                .metadata
+                .as_ref()
+                .map(|md| md.content_encrypted.is_none())
+                .unwrap_or(true)
+                && let Some(akm_info) = akm_info.as_ref()
+            {
+                // If this is the first time putting the asset and it's
+                // encrypted, store the encryption metadata.
+                if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                    &api_client,
+                    &folder_create_res.entry.name,
+                    &akm_info,
+                )
+                .await
+                {
+                    eprintln!("error: failed to put asset encryption metadata: {}", e);
                 }
             }
             ProcessCmdResult::Loop

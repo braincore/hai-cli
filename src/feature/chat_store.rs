@@ -206,7 +206,7 @@ pub async fn resume_chat_from_db_or_asset(
             .account
             .as_ref()
             .map(|account| account.username.clone());
-        let akm_info = match asset_crypt::choose_akm_for_asset(
+        let akm_info = match asset_crypt::extract_akm_from_metadata(
             asset_blob_cache.clone(),
             session.asset_keyring.clone(),
             api_client.clone(),
@@ -214,14 +214,7 @@ pub async fn resume_chat_from_db_or_asset(
                 .as_ref()
                 .map(|u| asset_crypt::KeyRecipient::User(u.to_string()))
                 .as_ref(),
-            username
-                .map(|u| {
-                    asset_crypt::extract_key_recipients_from_shared_asset_name(&chat_log_name, &u)
-                })
-                .as_deref()
-                .unwrap_or(&[]),
             md_contents.as_deref(),
-            None,
         )
         .await
         {
@@ -235,7 +228,6 @@ pub async fn resume_chat_from_db_or_asset(
                 return;
             }
         };
-
         if let Some(akm_info) = &akm_info {
             let enc_content = crate::crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
             crate::crypt::decrypt_content(&enc_content, &akm_info.unlocked_akm.sym_key_info.aes_key)

@@ -724,7 +724,6 @@ pub struct UnlockedAssetKeyMaterial {
 /// assumed that this is for a user whose private key is unavailable but whose
 /// an asset recipient and needs representation in the asset metadata.
 pub struct LockedAssetKeyMaterial {
-    //pub enc_key_info: EncryptKeyInfo,
     pub enc_key_id: String,
     pub enc_aes_key: String,
     pub recipient: KeyRecipient,
@@ -833,6 +832,7 @@ impl AssetKeyMaterial {
     }
 
     /// Add a new recipient to this shared key material.
+    #[allow(dead_code)]
     pub fn add_recipient(&mut self, enc_key_info: EncryptKeyInfo) -> Result<(), String> {
         let locked =
             LockedAssetKeyMaterial::new(enc_key_info, &self.unlocked_akm.sym_key_info.aes_key)?;
@@ -869,16 +869,12 @@ impl AssetKeyMaterial {
     }
 
     /// Reconstruct from metadata, unlocking only the current user's key.
-    pub fn from_metadata(
-        md_contents: &[u8],
+    pub fn from_metadata_json(
+        md_json: &serde_json::Value,
         current_recipient: &KeyRecipient,
         sym_key_info: SymmetricKeyInfo,
         current_enc_key_info: EncryptKeyInfo,
     ) -> Result<Self, String> {
-        let md_json =
-            serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(md_contents))
-                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
-
         let enc_keys = md_json
             .get("encrypted")
             .and_then(|e| e.get("keys"))
@@ -909,6 +905,24 @@ impl AssetKeyMaterial {
             },
             locked_akms: other_recipients,
         })
+    }
+
+    /// Reconstruct from metadata, unlocking only the current user's key.
+    pub fn from_metadata_contents(
+        md_contents: &[u8],
+        current_recipient: &KeyRecipient,
+        sym_key_info: SymmetricKeyInfo,
+        current_enc_key_info: EncryptKeyInfo,
+    ) -> Result<Self, String> {
+        let md_json =
+            serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(md_contents))
+                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+        Self::from_metadata_json(
+            &md_json,
+            current_recipient,
+            sym_key_info,
+            current_enc_key_info,
+        )
     }
 }
 
@@ -1437,6 +1451,7 @@ impl ::std::fmt::Display for AkmSelectionError {
     }
 }
 
+#[derive(Debug)]
 pub enum NewAssetAkmPolicy {
     /// Do not encrypt
     Unencrypted,
@@ -1456,27 +1471,16 @@ pub fn new_asset_akm_policy_by_asset_name(asset_name: &str) -> NewAssetAkmPolicy
     }
 }
 
-/// Logic differs depending on whether `new_asset_akm_policy` is set. If None,
-/// assumption is that asset already exists (even if without `md_contents`), so
-/// a lack of encryption info returns no Akm for continuity.
-///
-/// If `new_asset_akm_policy` is set, the returned Akm will follow the selected
-/// policy and it's up to the caller to decide what to do: new asset -> follow
-/// the policy; existing asset -> maintain.
-pub async fn choose_akm_for_asset(
+pub async fn extract_akm_from_metadata(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
     recipient: Option<&KeyRecipient>,
-    additional_recipients: &[KeyRecipient],
     md_contents: Option<&[u8]>,
-    new_asset_akm_policy: Option<NewAssetAkmPolicy>,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
     let Some(recipient) = recipient else {
         return Ok(None);
     };
-
-    // Case 1: Existing encrypted asset: reconstruct AssetKeyMaterial
     if let Some(md_contents) = md_contents
         && let Some(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
     {
@@ -1504,33 +1508,58 @@ pub async fn choose_akm_for_asset(
             ))
         })?;
 
-        let mut akm =
-            AssetKeyMaterial::from_metadata(md_contents, recipient, sym_key_info, enc_key_info)
-                .map_err(|e| AkmSelectionError::Abort(e))?;
+        let akm = AssetKeyMaterial::from_metadata_contents(
+            md_contents,
+            recipient,
+            sym_key_info,
+            enc_key_info,
+        )
+        .map_err(|e| AkmSelectionError::Abort(e))?;
 
-        // Add any new recipients to existing asset
-        for additional in additional_recipients {
-            let add_enc_key_info =
-                get_encryption_key(asset_blob_cache.clone(), &api_client, additional, None)
-                    .await
-                    .map_err(|e| AkmSelectionError::Abort(e))?
-                    .ok_or_else(|| {
-                        AkmSelectionError::Abort(format!(
-                            "encryption key not found for {}",
-                            additional
-                        ))
-                    })?;
+        Ok(Some(akm))
+    } else {
+        Ok(None)
+    }
+}
 
-            akm.add_recipient(add_enc_key_info)
-                .map_err(|e| AkmSelectionError::Abort(e))?;
-        }
+/// Logic differs depending on whether `new_asset_akm_policy` is set. If None,
+/// assumption is that asset already exists (even if without `md_contents`), so
+/// a lack of encryption info returns no Akm for continuity.
+///
+/// If `new_asset_akm_policy` is set, the returned Akm will follow the selected
+/// policy and it's up to the caller to decide what to do: new asset -> follow
+/// the policy; existing asset -> maintain.
+///
+/// # Arguments
+/// - `additional_recipients`: Optional additional recipients to include in the
+///   AKM for new assets. This is ignored for existing assets.
+pub async fn choose_akm_for_asset(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: HaiClient,
+    recipient: Option<&KeyRecipient>,
+    additional_recipients_if_new: &[KeyRecipient],
+    md_contents: Option<&[u8]>,
+    new_asset_akm_policy: Option<NewAssetAkmPolicy>,
+) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
+    let Some(recipient) = recipient else {
+        return Ok(None);
+    };
 
-        return Ok(Some(akm));
+    // Case 1: Existing encrypted asset: reconstruct AssetKeyMaterial
+    let akm = extract_akm_from_metadata(
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client.clone(),
+        Some(recipient),
+        md_contents,
+    )
+    .await?;
+    if akm.is_some() {
+        return Ok(akm);
     }
 
-    let new_asset_akm_policy = if let Some(new_asset_akm_policy) = new_asset_akm_policy {
-        new_asset_akm_policy
-    } else {
+    let Some(new_asset_akm_policy) = new_asset_akm_policy else {
         // Since `new_asset_akm_policy` is not set, we assume the asset already
         // exists and did not have encryption info.
         return Ok(None);
@@ -1559,7 +1588,7 @@ pub async fn choose_akm_for_asset(
 
         // Fetch additional recipients' keys
         let mut other_enc_keys = Vec::new();
-        for additional_recipient in additional_recipients {
+        for additional_recipient in additional_recipients_if_new {
             let add_enc_key_info = get_encryption_key(
                 asset_blob_cache.clone(),
                 &api_client,
@@ -1586,7 +1615,38 @@ pub async fn choose_akm_for_asset(
     }
 }
 
-/// Assumes metadata
+#[derive(Debug)]
+#[allow(dead_code)]
+enum AssetRef {
+    Path(String),
+    /// <path>:<attachment>
+    PathWithAttachment(String, String),
+    /// :<entry_id>
+    EntryId(String),
+    /// :<entry_id>:<attachment>
+    EntryIdWithAttachment(String, String),
+    /// :<entry_id>/<subpath>
+    EntryIdWithSubpath(String, String),
+}
+
+impl AssetRef {
+    fn parse(asset_name: &str) -> AssetRef {
+        if asset_name.starts_with(':') {
+            if let Some((entry_id, subpath)) = asset_name[1..].split_once('/') {
+                AssetRef::EntryIdWithSubpath(entry_id.to_string(), subpath.to_string())
+            } else if let Some((entry_id, attachment)) = asset_name[1..].split_once(':') {
+                AssetRef::EntryIdWithAttachment(entry_id.to_string(), attachment.to_string())
+            } else {
+                AssetRef::EntryId(asset_name[1..].to_string())
+            }
+        } else if let Some((path, attachment)) = asset_name.split_once(':') {
+            AssetRef::PathWithAttachment(path.to_string(), attachment.to_string())
+        } else {
+            AssetRef::Path(asset_name.to_string())
+        }
+    }
+}
+
 pub async fn choose_akm_for_asset_by_name(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
@@ -1595,45 +1655,205 @@ pub async fn choose_akm_for_asset_by_name(
     asset_name: &str,
     force_generate_akm_if_new: bool,
 ) -> Result<Option<AssetKeyMaterial>, AkmSelectionError> {
-    let (md_contents, new_asset_akm_policy) = match asset_reader::get_only_asset_metadata(
-        asset_blob_cache.clone(),
-        &api_client,
-        asset_name,
-        true,
-    )
-    .await
-    {
-        Ok(res) => (res.0, None),
-        Err(e) => match e {
-            GetAssetError::BadName => {
-                let new_asset_akm_policy = if force_generate_akm_if_new {
-                    NewAssetAkmPolicy::RequireEncrypt
-                } else {
-                    new_asset_akm_policy_by_asset_name(asset_name)
-                };
-                (None, Some(new_asset_akm_policy))
-            }
-            GetAssetError::DataFetchFailed(failure) => {
-                return Err(AkmSelectionError::Abort(format!(
-                    "failed to fetch asset {}: {}",
-                    asset_name, failure
-                )));
-            }
-        },
-    };
+    // Complexity is introduced because `asset_name` as a path is necessary to
+    // determine the encryption policy for new assets, but `asset_name` may
+    // take non-pure-path forms which require conversion.
+    //
+    // Possible `asset_name` types:
+    // 1. <path>
+    // 2. <path>:<attachment>
+    //    - akm derived from <path>
+    // 3. :<entry_id>
+    //    - while this will resolve to cases #1 & #2, since it's just an
+    //      entry_id, it's only logical that it already exists, so the akm is
+    //      re-used from the md.
+    // 4. :<entry_id>:<attachment>
+    //    - re-use akm from metadata of entry_id
+    // 5. :<entry_id>/<subpath>
+    //    - if this doesn't exist, we need to check the parent entry_id which
+    //      falls into case #1 or #2.
 
-    let additional_recipients = extract_usernames_from_shared_asset(asset_name)
-        .into_iter()
-        .map(|username| KeyRecipient::User(username.to_string()))
-        .filter(|r| Some(r) != recipient)
-        .collect::<Vec<_>>();
+    // First check the trivial case: asset already exists so use current akm
+    // specified in md.
+    let (md_contents, new_asset_akm_policy, asset_name_for_akm_policy) =
+        match asset_reader::get_only_asset_metadata(
+            asset_blob_cache.clone(),
+            &api_client,
+            asset_name,
+            true,
+        )
+        .await
+        {
+            Ok(res) => (res.0, None, Some(res.1.name)),
+            Err(e) => match e {
+                GetAssetError::BadName => {
+                    let asset_ref = AssetRef::parse(asset_name);
+                    match asset_ref {
+                        AssetRef::Path(_) => {
+                            // If it was a plain path, then we fallback to the default policy based on the path.
+                            let new_asset_akm_policy = if force_generate_akm_if_new {
+                                NewAssetAkmPolicy::RequireEncrypt
+                            } else {
+                                new_asset_akm_policy_by_asset_name(asset_name)
+                            };
+                            (
+                                None,
+                                Some(new_asset_akm_policy),
+                                Some(asset_name.to_string()),
+                            )
+                        }
+                        AssetRef::PathWithAttachment(parent_asset_name, attachment_name) => {
+                            // Fallback to the encryption policy for the attachment parent
+                            match asset_reader::get_only_asset_metadata(
+                                asset_blob_cache.clone(),
+                                &api_client,
+                                &parent_asset_name,
+                                false,
+                            )
+                            .await
+                            {
+                                Ok(res) => {
+                                    // Force usage of parent's akm info
+                                    (
+                                        res.0,
+                                        None,
+                                        Some(format!("{}:{}", res.1.name, attachment_name)),
+                                    )
+                                }
+                                Err(e) => {
+                                    return Err(AkmSelectionError::Abort(format!(
+                                        "failed to fetch asset metadata for {}: {}",
+                                        parent_asset_name, e
+                                    )));
+                                }
+                            }
+                        }
+                        AssetRef::EntryId(entry_id) => {
+                            // If the entry_id didn't exist, then none of this can
+                            // work.
+                            return Err(AkmSelectionError::Abort(format!(
+                                "failed to fetch asset metadata for entry_id {}: bad name",
+                                entry_id
+                            )));
+                        }
+                        AssetRef::EntryIdWithAttachment(entry_id, _) => {
+                            // Fallback to the encryption policy for the attachment parent
+                            match asset_reader::get_only_asset_metadata(
+                                asset_blob_cache.clone(),
+                                &api_client,
+                                &format!(":{}", entry_id),
+                                false,
+                            )
+                            .await
+                            {
+                                Ok(res) => {
+                                    // Force usage of parent's akm info
+                                    (res.0, None, None)
+                                }
+                                Err(e) => {
+                                    // If the entry_id didn't exist, then none of this can
+                                    // work.
+                                    return Err(AkmSelectionError::Abort(format!(
+                                        "failed to fetch asset metadata for entry_id {}: {}",
+                                        entry_id, e
+                                    )));
+                                }
+                            }
+                        }
+                        AssetRef::EntryIdWithSubpath(folder_entry_id, subpath) => {
+                            if subpath.contains(':') {
+                                return Err(AkmSelectionError::Abort(format!(
+                                    "invalid subpath {}: cannot reference ':' attachment",
+                                    subpath
+                                )));
+                            }
+                            // We need to look at the resolved path, but
+                            // be wary that it might be masked behind an
+                            // additional attachment indirection.
+                            match asset_reader::get_only_asset_metadata(
+                                asset_blob_cache.clone(),
+                                &api_client,
+                                &format!(":{}", folder_entry_id),
+                                true,
+                            )
+                            .await
+                            {
+                                Ok(folder_res) => {
+                                    let fixed_point_asset_ref = AssetRef::parse(&folder_res.1.name);
+                                    match fixed_point_asset_ref {
+                                        AssetRef::Path(_) | AssetRef::PathWithAttachment(_, _) => {
+                                            let new_asset_akm_policy = if force_generate_akm_if_new
+                                            {
+                                                NewAssetAkmPolicy::RequireEncrypt
+                                            } else {
+                                                new_asset_akm_policy_by_asset_name(
+                                                    &folder_res.1.name,
+                                                )
+                                            };
+                                            // If it's a resolved path
+                                            // determine akm policy with it.
+                                            // Technically, including `subpath`
+                                            // would be more accurate.
+                                            (
+                                                None,
+                                                Some(new_asset_akm_policy),
+                                                Some(folder_res.1.name),
+                                            )
+                                        }
+                                        AssetRef::EntryIdWithAttachment(_, _) => {
+                                            // Since the original asset_name
+                                            // was actually an attachment
+                                            // reference (with indirection), we
+                                            // use the parent's akm info.
+                                            //
+                                            // This working is dependent on the
+                                            // folder having `encrypted` set in
+                                            // its metadata even though it
+                                            // doesn't have contents itself.
+                                            (folder_res.0, None, None)
+                                        }
+                                        AssetRef::EntryId(_)
+                                        | AssetRef::EntryIdWithSubpath(_, _) => {
+                                            return Err(AkmSelectionError::Abort("unexpected case: parent entry_id resolved to another non-attachment entry_id".to_string()));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    return Err(AkmSelectionError::Abort(format!(
+                                        "failed to fetch asset metadata for {}: {}",
+                                        folder_entry_id, e
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                GetAssetError::DataFetchFailed(failure) => {
+                    return Err(AkmSelectionError::Abort(format!(
+                        "failed to fetch asset {}: {}",
+                        asset_name, failure
+                    )));
+                }
+            },
+        };
+
+    let additional_recipients_if_new =
+        if let Some(asset_name_for_akm_policy) = asset_name_for_akm_policy {
+            extract_usernames_from_shared_asset(&asset_name_for_akm_policy)
+                .into_iter()
+                .map(|username| KeyRecipient::User(username.to_string()))
+                .filter(|r| Some(r) != recipient)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
     choose_akm_for_asset(
         asset_blob_cache,
         asset_keyring,
         api_client,
         recipient,
-        &additional_recipients,
+        &additional_recipients_if_new,
         md_contents.as_deref(),
         new_asset_akm_policy,
     )

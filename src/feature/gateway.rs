@@ -3331,14 +3331,63 @@ async fn handle_client_message(
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
             }
+            // Determine AKM before creating the folder so that we don't use
+            // its existence as evidence of the AKM choice.
+            let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                api_client.clone(),
+                username
+                    .as_ref()
+                    .map(|s| KeyRecipient::User(s.to_string()))
+                    .as_ref(),
+                &folder_create_arg.name,
+                false,
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    send_bad_request_error(ws_sink, "Decryption key error").await;
+                    return;
+                }
+            };
             match api_client.asset_folder_create(folder_create_arg).await {
-                Ok(res) => {
+                Ok(folder_create_res) => {
+                    if folder_create_res
+                        .entry
+                        .metadata
+                        .as_ref()
+                        .map(|md| md.content_encrypted.is_none())
+                        .unwrap_or(true)
+                        && let Some(akm_info) = akm_info.as_ref()
+                    {
+                        // If this is the first time putting the asset and it's
+                        // encrypted, store the encryption metadata.
+                        if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                            &api_client,
+                            &folder_create_res.entry.name,
+                            &akm_info,
+                        )
+                        .await
+                        {
+                            send_bad_gateway_error(ws_sink, mid, &e).await;
+                            eprintln!("error: failed to put asset encryption metadata: {}", e);
+                            return;
+                        }
+                    }
+
                     let resp_ok: ClientMessageResponse<
                         asset::AssetFolderCreateResult,
                         asset::AssetFolderCreateError,
                     > = ClientMessageResponse::Ok {
                         mid: mid.clone(),
-                        result: res,
+                        result: folder_create_res,
                         more: false,
                     };
                     let json_string =

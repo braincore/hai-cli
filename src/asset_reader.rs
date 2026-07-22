@@ -312,7 +312,9 @@ pub async fn get_only_asset_metadata(
     bad_name_ok: bool,
 ) -> Result<(Option<Vec<u8>>, AssetEntry), GetAssetError> {
     let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    if asset_get_res.entry.asset.url.is_none() {
+    if asset_get_res.entry.asset.url.is_none()
+        && asset_get_res.entry.asset.kind != AssetKind::Folder
+    {
         return Err(GetAssetError::BadName);
     }
     let metadata_contents = if let Some(AssetMetadataInfo {
