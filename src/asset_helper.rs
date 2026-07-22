@@ -32,10 +32,30 @@ pub fn is_likely_valid_asset_name(name: &str, id_okay: bool) -> bool {
         name
     };
 
-    // For id-based names, a leading ':' is allowed. Strip it before running
-    // the regex so the pattern can remain unchanged.
+    // For id-based names, a leading ':' is allowed and optional second `:` to
+    // mark the end of the id. Strip it because the regex is only for the path
+    // component.
     let to_validate = if id_okay {
-        to_validate.strip_prefix(':').unwrap_or(to_validate)
+        match to_validate.strip_prefix(':') {
+            Some(after_colon) => {
+                // ":<entry_id>", ":<entry_id>:<relpath>", or ":<entry_id>:"
+                match after_colon.split_once(':') {
+                    Some((entry_id, relpath)) => {
+                        // reject "::..." (empty entry_id)
+                        // relpath can't have more colons
+                        if entry_id.is_empty() || relpath.contains(':') {
+                            return false;
+                        }
+                        relpath
+                    }
+                    None => {
+                        // ":<entry_id>" only
+                        ""
+                    }
+                }
+            }
+            None => to_validate, // no leading ':', just a normal name
+        }
     } else {
         to_validate
     };
@@ -184,7 +204,7 @@ pub async fn resolve_attachment_asset_name(asset_name: &str, api_client: &HaiCli
             }
         };
         // Build next level
-        current_name = format!(":{}/{}", entry_id, relname);
+        current_name = format!(":{}:{}", entry_id, relname);
     }
 
     // Final query to get the entry_id of the last segment
@@ -195,11 +215,7 @@ pub async fn resolve_attachment_asset_name(asset_name: &str, api_client: &HaiCli
         .await
     {
         Ok(res) => {
-            if last_relname.is_empty() {
-                format!(":{}", res.entry.entry_id)
-            } else {
-                format!(":{}/{}", res.entry.entry_id, last_relname)
-            }
+            format!(":{}:{}", res.entry.entry_id, last_relname)
         }
         Err(e) => {
             eprintln!(

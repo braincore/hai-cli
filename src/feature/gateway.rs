@@ -1385,9 +1385,10 @@ async fn handle_http_request(
                 asset_app_name.to_string()
             }
             Some(_) | None => {
-                // Support attachment look ups by ignoring any path construct before the
-                // `:`. This is so that relative paths in the browser using the `:` syntax
-                // can be used to look up attachments.
+                // Support entry_id and attachment look ups by ignoring any
+                // path construct before the `:`. This is so that relative
+                // paths in the browser using the `:` syntax can be used for
+                // look ups.
                 match decoded_path.find(':') {
                     Some(idx) => decoded_path[idx..].to_string(),
                     None => decoded_path.to_string(),
