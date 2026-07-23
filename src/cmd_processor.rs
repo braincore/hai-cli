@@ -2004,7 +2004,7 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetList(cmd::AssetListCmd { prefix }) => {
+        cmd::Cmd::AssetList(cmd::AssetListCmd { prefix, desc }) => {
             let prefix = resolve_asset_name(&prefix, session).await;
             let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
                 let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
@@ -2022,7 +2022,11 @@ pub async fn process_cmd(
                 .asset_entry_list(AssetEntryListArg {
                     prefix: Some(prefix.clone()),
                     limit: 200,
-                    order: EntryListOrder::Asc,
+                    order: if desc {
+                        EntryListOrder::Desc
+                    } else {
+                        EntryListOrder::Asc
+                    },
                 })
                 .await
             {
@@ -2088,6 +2092,9 @@ pub async fn process_cmd(
                 // If all entries are fetched in one-go, sort them.
                 entries.extend_from_slice(&asset_list_res.entries);
                 entries.sort_by(|a, b| numeric_sort::cmp(&a.name, &b.name));
+                if desc {
+                    entries.reverse();
+                }
             }
 
             let digits = count_digits(entries.len() as u32);
@@ -6415,6 +6422,7 @@ Assets:
 
 /a /asset <name> [<editor>]      - Open asset in editor (create if does not exist)
 /ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
+                                   .desc=BOOL   Sort by descending (default: false)
 /asset-search <query>            - Search for assets semantically
                                    .path=STRING   Specify the asset-pool to search (default: none)
 /asset-read <name> [<name> ...]  - Load asset(s) into the conversation

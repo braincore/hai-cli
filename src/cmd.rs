@@ -564,6 +564,8 @@ pub struct AssetListCmd {
     /// All assets with this prefix will be listed
     /// Empty string is supported
     pub prefix: String,
+    /// Whether to sort by descending
+    pub desc: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2092,13 +2094,20 @@ fn parse_command(
             }
         }
         "asset-list" | "ls" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["desc"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("desc".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let desc = options.get("desc").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
-                Some(prefix) => Some(Cmd::AssetList(AssetListCmd { prefix })),
+                Some(prefix) => Some(Cmd::AssetList(AssetListCmd { prefix, desc })),
                 None => Some(Cmd::AssetList(AssetListCmd {
                     prefix: "".to_string(),
+                    desc,
                 })),
             }
         }
