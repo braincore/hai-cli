@@ -526,7 +526,11 @@ pub async fn send_to_anthropic(
         tool_call.end();
     }
 
-    println!(); // Final newline after streaming is complete
+    // Final newline after streaming is complete
+    println!();
+    if let Some((_, handler_id, handler)) = cancel_info {
+        handler.remove_handler(handler_id);
+    }
     let mut responses = vec![];
     if !text_accumulator.printed_text.is_empty() {
         responses.push(chat::ChatCompletionResponse::Message {
