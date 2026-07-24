@@ -600,6 +600,20 @@ To create an attachment for an attachment, chain `:` as follows:
 The above is an example of attaching a thumbnail to an attachment that's an
 image.
 
+## Referencing assets by ID
+
+Up until now, assets have been referenced by name. Names are convenient but
+aren't stable when assets are moved. For a stable ID, use `/ls.full` to find an
+asset's `ID`.
+
+You can reference the ID in any command that takes an asset by prefixing it
+with `:`. For example:
+
+```
+/asset-read :<ID>
+/asset-md-get :<ID>
+```
+
 ## Quota
 
 Each account gets 1GB of asset storage.
