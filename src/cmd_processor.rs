@@ -6700,6 +6700,14 @@ Attachments:
   attached to `day1.md`, which is itself attached to `trip.md`.
 - Use a trailing `:` to refer to an asset's list of attachments, e.g. `/asset-list doc.md:`.
 
+Referencing assets by ID:
+
+Use `/asset-list.full` to find an asset's `ID`. The ID is a stable reference to
+the asset, even if it is moved or renamed.
+
+You can reference the ID in any command that takes an asset name by prefixing
+it with `:`. For example, `/asset-read :<ID>` or `/asset-md-get :<ID>`
+
 --
 
 MCPs (Experimental):
