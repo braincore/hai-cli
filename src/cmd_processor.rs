@@ -1,4 +1,5 @@
 use bstr::ByteSlice;
+use chrono::{DateTime, Utc};
 use colored::*;
 use glob::glob;
 use num_format::{Locale, ToFormattedString};
@@ -11,6 +12,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use crate::api::client::RequestError;
@@ -2004,7 +2006,7 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::AssetList(cmd::AssetListCmd { prefix, desc }) => {
+        cmd::Cmd::AssetList(cmd::AssetListCmd { prefix, desc, full }) => {
             let prefix = resolve_asset_name(&prefix, session).await;
             let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
                 let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
@@ -2053,12 +2055,14 @@ pub async fn process_cmd(
                 && matches!(asset_list_res.entries[0].asset.kind, AssetKind::Folder)
                 && asset_list_res.entries[0].name == prefix
             {
+                let desc_option = if desc { ".desc" } else { "" };
+                let full_option = if full { ".full" } else { "" };
                 session
                     .cmd_queue
                     .lock()
                     .await
                     .push_front(session::CmdInput {
-                        input: format!("/asset-list {}/", prefix),
+                        input: format!("/asset-list{}{} {}/", desc_option, full_option, prefix),
                         source: session::CmdSource::Internal,
                         reply_channel: None,
                     });
@@ -2101,19 +2105,197 @@ pub async fn process_cmd(
             let mut asset_list_output = vec![];
             let mut new_quick_index_vars = vec![];
             let mut quick_index = 0;
-            for entry in &entries {
-                let matches = pattern.as_ref().map_or(true, |p| p.matches(&entry.name));
-                if !matches {
-                    continue;
+
+            // First pass: collect the entries that match the pattern so we can
+            // compute column widths for the full table.
+            let matched: Vec<&AssetEntry> = entries
+                .iter()
+                .filter(|entry| pattern.as_ref().map_or(true, |p| p.matches(&entry.name)))
+                .collect();
+
+            if full {
+                struct Row {
+                    idx: String,
+                    name: String,
+                    id: String,
+                    size: String,
+                    ctype: String,
+                    ts: String,
+                    enc: String,
+                    md: String,
+                    acl: String,
                 }
-                let line = if matches!(entry.asset.kind, AssetKind::Folder) {
-                    print_folder(&entry.name, Some((quick_index, digits)))
-                } else {
-                    print_asset_entry(entry, Some((quick_index, digits)))
+
+                // Column widths (measured in display width).
+                let mut idx_w = "#".width();
+                let mut name_w = "NAME".width();
+                let mut id_w = "ID".width();
+                let mut size_w = "SIZE".width();
+                let mut type_w = "CON TYPE".width();
+                let mut ts_w = "AGE".width();
+                let mut enc_w = "ENC".width();
+                let mut md_w = "MD".width();
+                let mut acl_w = "ACL".width();
+
+                let mut rows = vec![];
+
+                for entry in &matched {
+                    let is_folder = matches!(entry.asset.kind, AssetKind::Folder);
+
+                    let idx = format!("{}", quick_index);
+
+                    // Append glyphs to the name, like folders/push.
+                    let push_symbol = if matches!(entry.asset.kind, AssetKind::Log) {
+                        "📥"
+                    } else {
+                        ""
+                    };
+                    let name = if is_folder {
+                        format!("{}📁", entry.name)
+                    } else {
+                        format!("{}{}", entry.name, push_symbol)
+                    };
+
+                    let id = entry.entry_id.to_string();
+
+                    let size = if is_folder {
+                        "-".to_string()
+                    } else {
+                        format_size(entry.total_size)
+                    };
+
+                    let ctype = entry
+                        .metadata
+                        .as_ref()
+                        .and_then(|md| md.content_type.clone())
+                        .unwrap_or_else(|| "-".to_string());
+
+                    let ts = format_time_delta(&entry.asset.ts);
+
+                    let enc = if entry
+                        .metadata
+                        .as_ref()
+                        .map_or(false, |md| md.content_encrypted.is_some())
+                    {
+                        "🔒".to_string()
+                    } else {
+                        "".to_string()
+                    };
+
+                    let md = if entry.metadata.is_some() {
+                        "✓".to_string()
+                    } else {
+                        "".to_string()
+                    };
+
+                    let acl = if !entry.asset.acl.is_empty() {
+                        "✓".to_string()
+                    } else {
+                        "".to_string()
+                    };
+
+                    idx_w = idx_w.max(idx.width());
+                    name_w = name_w.max(name.width());
+                    id_w = id_w.max(id.width());
+                    size_w = size_w.max(size.width());
+                    type_w = type_w.max(ctype.width());
+                    ts_w = ts_w.max(ts.width());
+                    enc_w = enc_w.max(enc.width());
+                    md_w = md_w.max(md.width());
+                    acl_w = acl_w.max(acl.width());
+
+                    rows.push(Row {
+                        idx,
+                        name,
+                        id,
+                        size,
+                        ctype,
+                        ts,
+                        enc,
+                        md,
+                        acl,
+                    });
+
+                    new_quick_index_vars.push(entry.name.clone());
+                    quick_index += 1;
+                }
+
+                // Helper closures for display-width-aware padding.
+                let pad_right = |s: &str, w: usize| -> String {
+                    let pad = w.saturating_sub(s.width());
+                    format!("{}{}", s, " ".repeat(pad))
                 };
-                asset_list_output.push(line);
-                new_quick_index_vars.push(entry.name.clone());
-                quick_index += 1;
+                let pad_left = |s: &str, w: usize| -> String {
+                    let pad = w.saturating_sub(s.width());
+                    format!("{}{}", " ".repeat(pad), s)
+                };
+
+                let make_line = |idx: &str,
+                                 name: &str,
+                                 id: &str,
+                                 size: &str,
+                                 ctype: &str,
+                                 ts: &str,
+                                 enc: &str,
+                                 md: &str,
+                                 acl: &str|
+                 -> String {
+                    format!(
+                        "{}  {}  {}  {}  {}  {}  {}  {}  {}",
+                        pad_left(idx, idx_w),
+                        pad_right(name, name_w),
+                        pad_right(id, id_w),
+                        pad_left(size, size_w),
+                        pad_right(ctype, type_w),
+                        pad_left(ts, ts_w),
+                        pad_right(enc, enc_w),
+                        pad_right(md, md_w),
+                        pad_right(acl, acl_w),
+                    )
+                };
+
+                // Header
+                let header = make_line(
+                    "#", "NAME", "ID", "SIZE", "CON TYPE", "AGE", "ENC", "MD", "ACL",
+                );
+                println!("{}", header);
+                asset_list_output.push(header);
+
+                // Separator.
+                let sep = make_line(
+                    &"-".repeat(idx_w),
+                    &"-".repeat(name_w),
+                    &"-".repeat(id_w),
+                    &"-".repeat(size_w),
+                    &"-".repeat(type_w),
+                    &"-".repeat(ts_w),
+                    &"-".repeat(enc_w),
+                    &"-".repeat(md_w),
+                    &"-".repeat(acl_w),
+                );
+                println!("{}", sep);
+                asset_list_output.push(sep);
+
+                for row in &rows {
+                    let line = make_line(
+                        &row.idx, &row.name, &row.id, &row.size, &row.ctype, &row.ts, &row.enc,
+                        &row.md, &row.acl,
+                    );
+                    println!("{}", line);
+                    asset_list_output.push(line);
+                }
+            } else {
+                // Existing behavior.
+                for entry in &matched {
+                    let line = if matches!(entry.asset.kind, AssetKind::Folder) {
+                        print_folder(&entry.name, Some((quick_index, digits)))
+                    } else {
+                        print_asset_entry(entry, Some((quick_index, digits)))
+                    };
+                    asset_list_output.push(line);
+                    new_quick_index_vars.push(entry.name.clone());
+                    quick_index += 1;
+                }
             }
 
             let asset_list_output = asset_list_output.join("\n");
@@ -6834,6 +7016,57 @@ fn count_digits(n: u32) -> u32 {
         return 1;
     }
     ((n as f64).log10().floor() as u32) + 1
+}
+
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", bytes, UNITS[unit])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit])
+    }
+}
+
+/// Parse an RFC3339 / ISO8601 timestamp string and render a compact
+/// "time ago" delta like "5m", "3d", "2mo", "1y".
+fn format_time_delta(ts: &str) -> String {
+    let parsed = DateTime::parse_from_rfc3339(ts).map(|dt| dt.with_timezone(&Utc));
+
+    let dt = match parsed {
+        Ok(dt) => dt,
+        Err(_) => return "-".to_string(),
+    };
+
+    let now = Utc::now();
+    let secs = (now - dt).num_seconds();
+
+    // Handle future timestamps gracefully.
+    let (secs, suffix) = if secs < 0 {
+        (-secs, "") // could add "+" for future if you want
+    } else {
+        (secs, "")
+    };
+    let _ = suffix;
+
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else if secs < 86_400 * 30 {
+        format!("{}d", secs / 86_400)
+    } else if secs < 86_400 * 365 {
+        format!("{}mo", secs / (86_400 * 30))
+    } else {
+        format!("{}y", secs / (86_400 * 365))
+    }
 }
 
 // --

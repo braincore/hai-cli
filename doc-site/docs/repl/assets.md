@@ -87,6 +87,21 @@ Patterns can include forward slashes to span folder-like segments. Examples:
 /ls logs/**/*.log     # all .log files anywhere under logs/
 ```
 
+To order by descending, use the `desc` option:
+
+```
+/ls.desc
+```
+
+To output a detailed table of information, use the `full` option:
+
+```
+[0] /ls.full
+#  NAME  ID                SIZE  CON TYPE       AGE  ENC  MD  ACL
+-  ----  ------------  --------  -------------  ---  ---  --  ---
+1  todo  jqJ8zZOFa...    7.2 MB  text/markdown   1m       ✓
+```
+
 ## Temporary local copy of asset
 
 It's undesirable to load an asset into a conversation when the data is better
@@ -558,7 +573,7 @@ name.
 To list all attachments for a given asset, use a trailing `:`:
 
 ```
-[1] /asset-list trip.md:
+[1] /ls trip.md:
 0. :xGwFHee-eJ9cWQlJw2QEDacTX5FA/map.jpg
 ```
 
@@ -570,8 +585,8 @@ To list all attachments for a given asset, use a trailing `:`:
     ```
 
     Note `:` is at the beginning and the parent's *entry ID* is used instead
-    its name. This format is often returned (see `/asset-list` above) and can
-    be used for all asset commands.
+    its name. This format is often returned (see `/ls` above) and can be used
+    for all asset commands.
 
 
 ### Attachments for attachments

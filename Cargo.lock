@@ -2021,6 +2021,7 @@ dependencies = [
  "toml",
  "toml_edit",
  "two-face",
+ "unicode-width 0.2.2",
  "urlencoding",
  "uuid",
  "viuer",
