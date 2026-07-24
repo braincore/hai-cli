@@ -42,7 +42,7 @@ supports all the capabilities (images, tools) utilized in the conversation.
 |------------|-----------------------------------------|
 | OpenAI     | gpt-5.5 (`g55`), gpt-5.2-chat (`g52c`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`) |
 |            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
-| Anthropic  | opus-4.8 (`opus`), opus-4-thinking (`opus-thinking`), sonnet-4.6 (`sonnet`), haiku-3.5 (`haiku`) |
+| Anthropic  | opus-5 (`opus`), opus-4.8 (`opus-4.8`), sonnet-4.6 (`sonnet`), haiku-3.5 (`haiku`) |
 | Google     | gemini-3.1-pro (`geminipro`), gemini-3.5-flash (`flash`) |
 | DeepSeek   | v4-pro (`ds4p`), v4-flash (`ds4f`) |
 | xAI        | grok-4                                         |
@@ -78,7 +78,11 @@ delimited keys or key-values following the model name:
 | Gemini-3   | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | Sonnet-3.7 | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Sonnet-4.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Sonnet-4.x | `summarize` (`s`) | none, setting key alone is sufficient                       |
 | Opus-4.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Opus-4.x   | `summarize` (`s`) | none, setting key alone is sufficient                       |
+| Opus-5.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Opus-5.x   | `summarize` (`s`) | none, setting key alone is sufficient                       |
 
 Examples:
 
@@ -89,4 +93,5 @@ Examples:
 /ai flash3,r=h
 /ai sonnet,thinking
 /ai sonnet,t
+/ai opus,t,s
 ```
