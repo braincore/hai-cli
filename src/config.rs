@@ -197,7 +197,10 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "opus47" => Some(AiModel::Anthropic(AnthropicModel::Opus47(
             parse_anthropic46_opts(opts),
         ))),
-        "opus" | "opus48" => Some(AiModel::Anthropic(AnthropicModel::Opus48(
+        "opus48" => Some(AiModel::Anthropic(AnthropicModel::Opus48(
+            parse_anthropic46_opts(opts),
+        ))),
+        "opus" | "opus5" => Some(AiModel::Anthropic(AnthropicModel::Opus5(
             parse_anthropic46_opts(opts),
         ))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
@@ -449,6 +452,7 @@ pub fn parse_anthropic_opts(opts: Vec<&str>) -> bool {
 pub fn parse_anthropic46_opts(opts: Vec<&str>) -> Anthropic46Options {
     let mut effort = None;
     let mut thinking = None;
+    let mut thinking_display = None;
     for opt in opts {
         let mut kv = opt.split('=');
         let key = match kv.next() {
@@ -479,12 +483,26 @@ pub fn parse_anthropic46_opts(opts: Vec<&str>) -> Anthropic46Options {
                     }
                 };
             }
+            "s" | "summarize" => {
+                match value {
+                    "true" => thinking_display = Some(true),
+                    "false" => thinking_display = Some(false),
+                    _ => {
+                        println!("ignoring unknown thinking_display value: {}", value);
+                        continue;
+                    }
+                };
+            }
             _ => {
                 println!("ignoring unknown option: {}", key);
             }
         }
     }
-    Anthropic46Options { effort, thinking }
+    Anthropic46Options {
+        effort,
+        thinking,
+        thinking_display,
+    }
 }
 
 // --
@@ -527,6 +545,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Opus48(opts) => {
                 let base = "opus-4.8".to_string();
+                append_anthropic46_opts(base, opts)
+            }
+            AnthropicModel::Opus5(opts) => {
+                let base = "opus-5".to_string();
                 append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
@@ -697,6 +719,10 @@ fn append_anthropic46_opts(base: String, opts: &Anthropic46Options) -> String {
     if let Some(ref thinking) = opts.thinking {
         result.push_str(",thinking=");
         result.push_str(&thinking.to_string());
+    }
+    if let Some(ref thinking_display) = opts.thinking_display {
+        result.push_str(",thinking_display=");
+        result.push_str(&thinking_display.to_string());
     }
     if let Some(ref effort) = opts.effort {
         result.push_str(",effort=");
@@ -935,6 +961,7 @@ pub enum AnthropicModel {
     Opus46(Anthropic46Options), // If true, enables thinking
     Opus47(Anthropic46Options), // If true, enables thinking
     Opus48(Anthropic46Options), // If true, enables thinking
+    Opus5(Anthropic46Options),  // If true, enables thinking
     Sonnet35,
     Sonnet37(bool),               // If true, enables thinking
     Sonnet4(bool),                // If true, enables thinking
@@ -947,6 +974,7 @@ pub enum AnthropicModel {
 pub struct Anthropic46Options {
     pub effort: Option<AnthropicEffort>,
     pub thinking: Option<bool>,
+    pub thinking_display: Option<bool>, // If true, summarize
 }
 
 #[derive(Debug)]
@@ -1083,6 +1111,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Opus46(_) => "claude-opus-4-6",
             AnthropicModel::Opus47(_) => "claude-opus-4-7",
             AnthropicModel::Opus48(_) => "claude-opus-4-8",
+            AnthropicModel::Opus5(_) => "claude-opus-5",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
@@ -1180,6 +1209,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Opus48(opts) => {
                 format!("opus-4.8{}", get_anthropic46_opts_display(opts))
+            }
+            AnthropicModel::Opus5(opts) => {
+                format!("opus-5{}", get_anthropic46_opts_display(opts))
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
@@ -1316,6 +1348,9 @@ pub fn get_anthropic46_opts_display(opts: &Anthropic46Options) -> String {
     let mut parts = Vec::new();
     if let Some(true) = opts.thinking {
         parts.push("t".to_string());
+    }
+    if let Some(true) = opts.thinking_display {
+        parts.push("s".to_string());
     }
     if let Some(ref e) = opts.effort {
         let e_str = match e {
@@ -1464,6 +1499,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Opus46(_)
                     | AnthropicModel::Opus47(_)
                     | AnthropicModel::Opus48(_)
+                    | AnthropicModel::Opus5(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
@@ -1543,7 +1579,8 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             AnthropicModel::Opus45(_)
             | AnthropicModel::Opus46(_)
             | AnthropicModel::Opus47(_)
-            | AnthropicModel::Opus48(_) => Some((5000, 25000)),
+            | AnthropicModel::Opus48(_)
+            | AnthropicModel::Opus5(_) => Some((5000, 25000)),
             AnthropicModel::Sonnet35
             | AnthropicModel::Sonnet37(_)
             | AnthropicModel::Sonnet4(_)
@@ -1907,6 +1944,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
         AiModel::Anthropic(AnthropicModel::Sonnet46(Anthropic46Options {
             effort: None,
             thinking: None,
+            thinking_display: None,
         }))
     } else if get_deepseek_api_key(cfg).is_some() {
         AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Flash(DeepSeekV4Options {

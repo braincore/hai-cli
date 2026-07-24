@@ -602,6 +602,7 @@ async fn repl(
         "opus46",
         "opus47",
         "opus48",
+        "opus5",
         "sonnet",
         "sonnet35",
         "sonnet37",
@@ -1962,18 +1963,30 @@ pub async fn prompt_ai(
                 config::AnthropicModel::Opus46(opts)
                 | config::AnthropicModel::Sonnet46(opts)
                 | config::AnthropicModel::Opus47(opts)
-                | config::AnthropicModel::Opus48(opts) => opts.thinking,
+                | config::AnthropicModel::Opus48(opts)
+                | config::AnthropicModel::Opus5(opts) => opts.thinking,
+                _ => None,
+            };
+            let thinking_display_summarized = match anthropic_model {
+                config::AnthropicModel::Opus46(opts)
+                | config::AnthropicModel::Opus47(opts)
+                | config::AnthropicModel::Opus48(opts)
+                | config::AnthropicModel::Opus5(opts)
+                | config::AnthropicModel::Sonnet46(opts) => opts.thinking_display,
                 _ => None,
             };
             // Opus 4.7+ deprecated temperature
             let temperature_deprecated = matches!(
                 anthropic_model,
-                config::AnthropicModel::Opus47(_) | config::AnthropicModel::Opus48(_)
+                config::AnthropicModel::Opus47(_)
+                    | config::AnthropicModel::Opus48(_)
+                    | config::AnthropicModel::Opus5(_)
             );
             let use_effort = match anthropic_model {
                 config::AnthropicModel::Opus46(opts)
                 | config::AnthropicModel::Opus47(opts)
                 | config::AnthropicModel::Opus48(opts)
+                | config::AnthropicModel::Opus5(opts)
                 | config::AnthropicModel::Sonnet46(opts) => opts.effort.as_ref(),
                 _ => None,
             };
@@ -1985,6 +1998,7 @@ pub async fn prompt_ai(
                 config::get_ai_model_provider_name(&session.ai),
                 use_thinking,
                 use_thinking46,
+                thinking_display_summarized,
                 use_effort,
                 session.prompt_cache,
                 session.ai_temperature,

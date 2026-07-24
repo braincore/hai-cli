@@ -97,6 +97,7 @@ pub async fn send_to_anthropic(
     model: &str,
     use_thinking: bool,
     use_thinking46: Option<bool>,
+    thinking_display_summarized: Option<bool>,
     use_effort: Option<&config::AnthropicEffort>,
     use_automatic_caching: bool,
     temperature: Option<f32>,
@@ -195,18 +196,31 @@ pub async fn send_to_anthropic(
                     "budget_tokens": 4096,
                 }),
             );
-            // API requires thinking to be set to 1 if thinking is enabled.
+            // API requires temperature to be set to 1 if thinking is enabled.
             request_obj.insert("temperature".to_string(), json!(1));
         }
         if let Some(use_thinking46) = use_thinking46 {
             if use_thinking46 {
-                request_obj.insert(
-                    "thinking".to_string(),
-                    json!({
-                        "type": "adaptive",
-                    }),
-                );
-                // API requires thinking to be set to 1 if thinking is enabled.
+                let thinking_value =
+                    if let Some(thinking_display_summarized) = thinking_display_summarized {
+                        if thinking_display_summarized {
+                            json!({
+                                "type": "adaptive",
+                                "display": "summarized",
+                            })
+                        } else {
+                            json!({
+                                "type": "adaptive",
+                                "display": "omitted",
+                            })
+                        }
+                    } else {
+                        json!({
+                            "type": "adaptive",
+                        })
+                    };
+                request_obj.insert("thinking".to_string(), thinking_value);
+                // API requires temperature to be set to 1 if thinking is enabled.
                 request_obj.insert("temperature".to_string(), json!(1));
             }
         }
@@ -443,6 +457,10 @@ pub async fn send_to_anthropic(
                                     ContentDelta::ThinkingDelta {
                                         thinking: delta_thinking,
                                     } => {
+                                        if thinking_accumulator.printed_text.is_empty() {
+                                            outln!(out, "{}", "🧠 begin");
+                                            outln!(out);
+                                        }
                                         thinking_accumulator.acc(&delta_thinking, out);
                                     }
                                     ContentDelta::InputJsonDelta { partial_json } => {
@@ -466,8 +484,18 @@ pub async fn send_to_anthropic(
                                 }
                                 content_blocks.insert(index, content_block.clone());
                                 if index > 0 {
-                                    // Space out from previous content block
-                                    outln!(out);
+                                    let prev_empty_thinking =
+                                        if let Some(ContentBlockType::Thinking { .. }) =
+                                            content_blocks.get(&(index - 1))
+                                        {
+                                            thinking_accumulator.printed_text.is_empty()
+                                        } else {
+                                            false
+                                        };
+                                    if !prev_empty_thinking {
+                                        // Space out from previous content block
+                                        outln!(out);
+                                    }
                                 }
                                 match content_block {
                                     ContentBlockType::Text {
@@ -475,13 +503,11 @@ pub async fn send_to_anthropic(
                                     } => {
                                         text_accumulator.acc(&content_block_text, out);
                                     }
-                                    ContentBlockType::Thinking {
-                                        thinking: thinking_text,
-                                        ..
-                                    } => {
-                                        outln!(out, "{}", "🧠 begin");
-                                        outln!(out);
-                                        thinking_accumulator.acc(&thinking_text, out);
+                                    ContentBlockType::Thinking { .. } => {
+                                        // If `display` is set to `omitted`,
+                                        // the block is empty. So, it's better
+                                        // to wait until thinking delta to
+                                        // print the "begin" message.
                                     }
                                     ContentBlockType::ToolUse { id, name } => {
                                         // Bit of a HACK, but an extra space tends to be necessary
@@ -511,10 +537,12 @@ pub async fn send_to_anthropic(
                                 } else if let Some(ContentBlockType::Thinking { .. }) =
                                     content_blocks.get(&index)
                                 {
-                                    thinking_accumulator.end(out);
-                                    outln!(out);
-                                    outln!(out);
-                                    outln!(out, "🧠 end");
+                                    if !thinking_accumulator.printed_text.is_empty() {
+                                        thinking_accumulator.end(out);
+                                        outln!(out);
+                                        outln!(out);
+                                        outln!(out, "🧠 end");
+                                    }
                                 } else if let Some(ContentBlockType::ToolUse { .. }) =
                                     content_blocks.get(&index)
                                 {
