@@ -64,7 +64,14 @@ To load an asset and have visible line numbers added (handy when asking the LLM
 to produce patches or refer to specific lines), use:
 
 ```
-/asset-read.n <path>
+/asset-read.n <name>
+```
+
+Images are loaded as 512px thumbnails to bound token usage. For the full
+resolution, use:
+
+```
+/asset-read.hq <name>
 ```
 
 ## Listing assets

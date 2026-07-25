@@ -436,9 +436,10 @@ pub fn session_history_add_user_image_entry(
     img_png_b64: &str,
     session: &mut SessionState,
     retention_policy: (bool, LogEntryRetentionPolicy),
+    hq: bool,
+    dim: (u32, u32),
 ) -> u32 {
-    // OpenAI-specific for low-detail images
-    let token_count = 85u32;
+    let token_count = calc_image_tokens(&session.ai, hq, dim);
     if matches!(
         retention_policy.1,
         LogEntryRetentionPolicy::ConversationLoad
@@ -454,7 +455,7 @@ pub fn session_history_add_user_image_entry(
             role: chat::MessageRole::User,
             content: vec![chat::MessageContent::ImageUrl {
                 image_url: chat::ImageData {
-                    detail: "low".to_string(),
+                    detail: if hq { "high" } else { "low" }.to_string(),
                     url: format!("data:image/png;base64,{}", &img_png_b64),
                 },
             }],
@@ -466,6 +467,62 @@ pub fn session_history_add_user_image_entry(
         model: None,
     });
     token_count
+}
+
+/// Based on the AI provider, calculates the image token cost.
+///
+/// Note, all providers besides Anthropic and Google are calculated using
+/// OpenAI's method.
+pub fn calc_image_tokens(ai_model: &config::AiModel, hq: bool, dim: (u32, u32)) -> u32 {
+    let (mut w, mut h) = dim;
+    match ai_model {
+        config::AiModel::Anthropic(_) => {
+            // Anthropic downscales long edge to ~1568 and caps at ~1.15M px.
+            const MAX_EDGE: u32 = 1568;
+            if w.max(h) > MAX_EDGE {
+                let scale = MAX_EDGE as f64 / w.max(h) as f64;
+                w = (w as f64 * scale).round() as u32;
+                h = (h as f64 * scale).round() as u32;
+            }
+            ((w * h) as f64 / 750.0).round() as u32
+        }
+        config::AiModel::Google(_) => {
+            // Gemini: <=384 in both dims => 1 tile (258).
+            if w <= 384 && h <= 384 {
+                return 258;
+            }
+            // Otherwise tile into ~768x768 tiles, 258 tokens each.
+            let tiles = w.div_ceil(768) * h.div_ceil(768);
+            tiles * 258
+        }
+        config::AiModel::OpenAi(_)
+        | config::AiModel::DeepSeek(_)
+        | config::AiModel::LlamaCpp(_)
+        | config::AiModel::Ollama(_)
+        | config::AiModel::Void(_)
+        | config::AiModel::Xai(_) => {
+            if !hq {
+                85
+            } else {
+                // 1. Fit within 2048x2048.
+                if w > 2048 || h > 2048 {
+                    let scale = 2048.0 / w.max(h) as f64;
+                    w = (w as f64 * scale).round() as u32;
+                    h = (h as f64 * scale).round() as u32;
+                }
+                // 2. Scale shortest side to 768.
+                let short = w.min(h) as f64;
+                if short != 768.0 {
+                    let scale = 768.0 / short;
+                    w = (w as f64 * scale).round() as u32;
+                    h = (h as f64 * scale).round() as u32;
+                }
+                // 3. Count 512x512 tiles.
+                let tiles = w.div_ceil(512) * h.div_ceil(512);
+                tiles * 170 + 85
+            }
+        }
+    }
 }
 
 /// Convenience function to add mocked assistant text into conversation history

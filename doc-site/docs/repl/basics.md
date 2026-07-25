@@ -73,6 +73,13 @@ to produce patches or refer to specific lines), use:
 /file-read.n <path>
 ```
 
+Images are loaded as 512px thumbnails to bound token usage. For the full
+resolution, use:
+
+```
+/file-read.hq <path>
+```
+
 ## Load a URL
 
 To load a URL into the chat conversation, use:
@@ -95,6 +102,13 @@ To have visible line numbers added to assist LLMs with patching, use:
 
 ```
 /http-get.n <url>
+```
+
+Images are loaded as 512px thumbnails to bound token usage. For the full
+resolution, use:
+
+```
+/http-get.hq <url>
 ```
 
 ## Execute program and load stdout/stderr

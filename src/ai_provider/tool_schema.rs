@@ -289,6 +289,7 @@ Available Commands:
 /file-read <glob>     - Load files into the conversation (e.g., `/load src/**/*.py`)
                         Supports text files or PNG/JPG images
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /file-write <path> <multi-line body>
                       - Create/replace a file at `path`. This is a MULTI-line command.
                         Use a newline after `path` to write arbitrary multi-line content to the file.
@@ -314,9 +315,11 @@ Available Commands:
           - Use /file-read or /file-cat to grab exact text for building the search block.
 /file-cat <glob>      - Load file(s) into the conversation and print it
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /http-get <url>       - Load the URL into the conversation
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                         .raw=BOOL Return raw content rather than extracting markdown (default: false)
+                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /exec <cmd>           - Executes a shell command and adds the output to this conversation.
                         The <cmd> can be treated as a bash shell command. One deviation
                         is the use of `@@name` where a file would typically be specified.
@@ -392,11 +395,13 @@ Assets:
                           .path=STRING   Specify the asset-pool to search (default: none)
 /asset-read <name> [<name> ...]   - Load asset(s) into the conversation
                                     .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                                    .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /asset-write <name> <multi-line body>
                         - Create/replace an asset with `name`. This is a MULTI-line command.
                           Use a newline after `name` to write arbitrary multi-line content.
 /asset-cat <name> [<name> ...]   - Load asset(s) into the conversation and print it
                                     .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                                    .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /asset-patch <name> <multi-line body>
     - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
     The body contains a search block and a replace block separated by a delimiter line.

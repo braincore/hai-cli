@@ -337,6 +337,8 @@ pub struct FileReadCmd {
     pub path: String,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -345,6 +347,8 @@ pub struct FileCatCmd {
     pub path: String,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -375,6 +379,8 @@ pub struct HttpGetCmd {
     pub raw: bool,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -584,6 +590,8 @@ pub struct AssetReadCmd {
     pub asset_names: Vec<String>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -604,6 +612,8 @@ pub struct AssetCatCmd {
     pub asset_names: Vec<String>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1576,47 +1586,59 @@ fn parse_command(
             }
         }
         "file-read" | "load" | "l" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("n".to_string(), OptionType::Bool),
+                ("hq".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
                 Some(path) => Some(Cmd::FileRead(FileReadCmd {
                     path,
                     show_line_numbers: n,
+                    image_hq: hq,
                 })),
                 None => {
                     eprintln!("Usage: /file-read <glob path>");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
                     None
                 }
             }
         }
         "file-cat" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("n".to_string(), OptionType::Bool),
+                ("hq".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
                 Some(path) => Some(Cmd::FileCat(FileCatCmd {
                     path,
                     show_line_numbers: n,
+                    image_hq: hq,
                 })),
                 None => {
                     eprintln!("Usage: /file-cat <glob path>");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
                     None
                 }
             }
@@ -1698,12 +1720,13 @@ fn parse_command(
             }
         }
         "http-get" | "load-url" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["raw", "n"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["raw", "n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
                 ("raw".to_string(), OptionType::Bool),
                 ("n".to_string(), OptionType::Bool),
+                ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
@@ -1711,11 +1734,13 @@ fn parse_command(
             }
             let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
                 Some(url) => Some(Cmd::HttpGet(HttpGetCmd {
                     url,
                     raw,
                     show_line_numbers: n,
+                    image_hq: hq,
                 })),
                 None => {
                     eprintln!("Usage: /http-get <url>");
@@ -1724,6 +1749,7 @@ fn parse_command(
                         "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
                     );
                     eprintln!("  .n=BOOL         Show line numbers (default: false)");
+                    eprintln!("  .hq=BOOL        Use high-resolution images (default: false)");
                     None
                 }
             }
@@ -2145,24 +2171,30 @@ fn parse_command(
             }
         }
         "read" | "asset-read" | "asset-load" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("n".to_string(), OptionType::Bool),
+                ("hq".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
                 Some(args) => Some(Cmd::AssetRead(AssetReadCmd {
                     asset_names: args,
                     show_line_numbers: n,
+                    image_hq: hq,
                 })),
                 _ => {
                     eprintln!("Usage: /asset-read <name> [<name> ...]");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
                     None
                 }
             }
@@ -2204,24 +2236,30 @@ fn parse_command(
             }
         }
         "cat" | "asset-cat" | "asset-view" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
-            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
+            let expected_types = HashMap::from([
+                ("n".to_string(), OptionType::Bool),
+                ("hq".to_string(), OptionType::Bool),
+            ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
                 eprintln!("Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
+            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
             match parse_n_args(remaining) {
                 Some(args) => Some(Cmd::AssetCat(AssetCatCmd {
                     asset_names: args,
                     show_line_numbers: n,
+                    image_hq: hq,
                 })),
                 _ => {
                     eprintln!("Usage: /asset-cat <name> [<name> ...]");
                     eprintln!("Options:");
                     eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
                     None
                 }
             }

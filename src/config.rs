@@ -1375,72 +1375,77 @@ pub fn get_deepseek_v4_opts_display(opts: &DeepSeekV4Options) -> String {
 
 #[derive(Debug)]
 pub struct AiModelCapability {
-    pub image: bool,
+    pub image: Option<AiModelImageCapability>,
     pub tool: bool,
+}
+
+#[derive(Debug)]
+pub struct AiModelImageCapability {
+    pub auto_resize: bool,
 }
 
 pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
     match ai_model {
         AiModel::Anthropic(_) => AiModelCapability {
-            image: true,
+            image: Some(AiModelImageCapability { auto_resize: false }),
             tool: true,
         },
         AiModel::DeepSeek(_) => AiModelCapability {
-            image: false,
+            image: None,
             tool: true,
         },
         AiModel::Google(_) => AiModelCapability {
-            image: true,
+            image: Some(AiModelImageCapability { auto_resize: false }),
             tool: true,
         },
         AiModel::LlamaCpp(model) => match model {
             LlamaCppModel::Other(_) => AiModelCapability {
-                image: true,
+                image: Some(AiModelImageCapability { auto_resize: false }),
                 tool: true,
             },
         },
         AiModel::Ollama(model) => match model {
             OllamaModel::Gemma3 => AiModelCapability {
-                image: true,
+                image: Some(AiModelImageCapability { auto_resize: false }),
                 tool: false,
             },
             OllamaModel::GptOss20b => AiModelCapability {
-                image: false,
+                image: Some(AiModelImageCapability { auto_resize: false }),
                 tool: true,
             },
             OllamaModel::Llama32 => AiModelCapability {
-                image: false,
+                image: None,
                 tool: true,
             },
             OllamaModel::Llama32Vision => AiModelCapability {
-                image: true,
+                image: Some(AiModelImageCapability { auto_resize: true }),
                 tool: false,
             },
             OllamaModel::Other(_) => AiModelCapability {
-                image: true,
+                image: Some(AiModelImageCapability { auto_resize: false }),
                 tool: true,
             },
         },
         AiModel::OpenAi(model) => match model {
             OpenAiModel::O1Mini => AiModelCapability {
-                image: false,
+                image: Some(AiModelImageCapability { auto_resize: true }),
                 tool: false,
             },
             OpenAiModel::O3Mini => AiModelCapability {
-                image: false,
+                image: None,
                 tool: true,
             },
             _ => AiModelCapability {
-                image: true,
+                image: Some(AiModelImageCapability { auto_resize: true }),
                 tool: true,
             },
         },
         AiModel::Void(_) => AiModelCapability {
-            image: true,
+            image: Some(AiModelImageCapability { auto_resize: true }),
             tool: true,
         },
         AiModel::Xai(_) => AiModelCapability {
-            image: true,
+            image: Some(AiModelImageCapability { auto_resize: false }),
             tool: true,
         },
     }

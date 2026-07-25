@@ -328,8 +328,8 @@ pub async fn resume_chat_from_db_or_asset(
                 &log_entry.message.content[0]
             {
                 println!("{}[{}]:", role_name, i);
-                match crate::loader::resolve_image_b64(&image_url.url).await {
-                    Ok(img_png_b64) => {
+                match crate::loader::resolve_image_b64(&image_url.url, false).await {
+                    Ok((img_png_b64, _dim)) => {
                         crate::term::print_image_to_term(&img_png_b64).unwrap();
                         println!();
                     }

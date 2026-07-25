@@ -95,7 +95,7 @@ pub async fn prompt_to_chat_message_content(
                 markdown::mdast::Node::Paragraph(p_node) => {
                     match &p_node.children[0] {
                         markdown::mdast::Node::Image(img_node) => {
-                            if !config::get_ai_model_capability(ai).image {
+                            if config::get_ai_model_capability(ai).image.is_none() {
                                 eprintln!("error: model does not support images");
                                 continue;
                             }
@@ -112,9 +112,10 @@ pub async fn prompt_to_chat_message_content(
                                 }
                                 cur_md_group = vec![];
                             }
-                            let image_b64_res = loader::resolve_image_b64(&img_node.url).await;
+                            let image_b64_res =
+                                loader::resolve_image_b64(&img_node.url, true).await;
                             match image_b64_res {
-                                Ok(encoded_image) => {
+                                Ok((encoded_image, _dim)) => {
                                     msg_content.push(MessageContent::ImageUrl {
                                         image_url: ImageData {
                                             detail: "low".to_string(),

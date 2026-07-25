@@ -134,7 +134,7 @@ pub async fn process_cmd(
                             break;
                         }
                         for content_part in &msg.message.content {
-                            if !ai_model_capability.image
+                            if ai_model_capability.image.is_none()
                                 && matches!(content_part, chat::MessageContent::ImageUrl { .. })
                             {
                                 eprintln!(
@@ -857,10 +857,12 @@ pub async fn process_cmd(
         cmd::Cmd::FileRead(cmd::FileReadCmd {
             path,
             show_line_numbers,
+            image_hq,
         })
         | cmd::Cmd::FileCat(cmd::FileCatCmd {
             path,
             show_line_numbers,
+            image_hq,
         }) => {
             //
             // The purpose of loading is for the user to be able to easily
@@ -937,14 +939,22 @@ pub async fn process_cmd(
                             }
                             newly_loaded_tokens += token_count;
                         } else {
+                            let image_capability =
+                                config::get_ai_model_capability(&session.ai).image;
+                            let use_thumbnail = image_capability
+                                .as_ref()
+                                .map(|cap| !image_hq && !cap.auto_resize)
+                                .unwrap_or(false);
+
                             // Not a text file, try opening as image
                             match loader::resolve_image_b64(
                                 &file_path.to_string_lossy().into_owned(),
+                                use_thumbnail,
                             )
                             .await
                             {
-                                Ok(img_png_b64) => {
-                                    if !config::get_ai_model_capability(&session.ai).image {
+                                Ok((img_png_b64, img_dim)) => {
+                                    if image_capability.is_none() {
                                         eprintln!("error: model does not support images");
                                         return ProcessCmdResult::Loop;
                                     }
@@ -955,6 +965,8 @@ pub async fn process_cmd(
                                             is_task_mode_step,
                                             LogEntryRetentionPolicy::ConversationLoad,
                                         ),
+                                        image_hq,
+                                        img_dim,
                                     );
                                     newly_loaded_tokens += token_count;
                                     term::print_image_to_term(&img_png_b64).unwrap();
@@ -1119,6 +1131,7 @@ pub async fn process_cmd(
             url,
             raw,
             show_line_numbers,
+            image_hq,
         }) => {
             let http_response = match reqwest::Client::new()
                 .get(&url)
@@ -1147,30 +1160,39 @@ pub async fn process_cmd(
                 .unwrap_or(false);
             match content_type.as_deref() {
                 Some("image/jpeg") | Some("image/png") => {
-                    if !config::get_ai_model_capability(&session.ai).image {
+                    let Some(image_capability) = config::get_ai_model_capability(&session.ai).image
+                    else {
                         eprintln!("error: model does not support images");
                         return ProcessCmdResult::Loop;
-                    }
+                    };
                     let img_bytes = if let Ok(img_bytes) = http_response.bytes().await {
                         img_bytes
                     } else {
                         eprintln!("error: failed to get image from url");
                         return ProcessCmdResult::Loop;
                     };
-                    let img_png_b64 = if let Ok(img_png_b64) =
-                        loader::encode_image_bytes_to_png_base64(img_bytes)
+                    let use_thumbnail = !image_hq && !image_capability.auto_resize;
+                    let (img_png_b64, img_dim) = if let Ok(encode_res) =
+                        loader::encode_image_bytes_to_png_base64(img_bytes, use_thumbnail)
                     {
-                        img_png_b64
+                        encode_res
                     } else {
                         eprintln!("error: failed to encode image as png-base64");
                         return ProcessCmdResult::Loop;
                     };
-                    session_history_add_user_image_entry(
+                    let token_count = session_history_add_user_image_entry(
                         &img_png_b64,
                         session,
                         (is_task_mode_step, LogEntryRetentionPolicy::ConversationLoad),
+                        image_hq,
+                        img_dim,
                     );
                     term::print_image_to_term(&img_png_b64).unwrap();
+                    println!(
+                        "Loaded: {} ({} tokens)",
+                        url,
+                        token_count.to_formatted_string(&Locale::en)
+                    );
                 }
                 _ => {
                     let url_body = match http_response.text().await {
@@ -2364,10 +2386,12 @@ pub async fn process_cmd(
         cmd::Cmd::AssetRead(cmd::AssetReadCmd {
             asset_names,
             show_line_numbers,
+            image_hq,
         })
         | cmd::Cmd::AssetCat(cmd::AssetCatCmd {
             asset_names,
             show_line_numbers,
+            image_hq,
         }) => {
             let asset_names = futures::future::join_all(
                 asset_names
@@ -2479,7 +2503,7 @@ pub async fn process_cmd(
                             }
                         };
 
-                        match String::from_utf8(decrypted_asset_contents) {
+                        match String::from_utf8(decrypted_asset_contents.clone()) {
                             Ok(asset_contents_string) => {
                                 let asset_contents_with_delimeters = add_content_delimiters(
                                     "ASSET",
@@ -2510,8 +2534,44 @@ pub async fn process_cmd(
                                     );
                                 }
                             }
-                            Err(e) => {
-                                eprintln!("error: {}: {}", asset_name, e);
+                            Err(_e) => {
+                                // Not text, try opening as image
+                                let image_capability =
+                                    config::get_ai_model_capability(&session.ai).image;
+                                let use_thumbnail = image_capability
+                                    .as_ref()
+                                    .map(|cap| !image_hq && !cap.auto_resize)
+                                    .unwrap_or(false);
+
+                                match loader::encode_image_bytes_to_png_base64(
+                                    decrypted_asset_contents.into(),
+                                    use_thumbnail,
+                                ) {
+                                    Ok((img_png_b64, img_dim)) => {
+                                        if image_capability.is_none() {
+                                            eprintln!("error: model does not support images");
+                                            return ProcessCmdResult::Loop;
+                                        }
+                                        let token_count = session_history_add_user_image_entry(
+                                            &img_png_b64,
+                                            session,
+                                            (
+                                                is_task_mode_step,
+                                                LogEntryRetentionPolicy::ConversationLoad,
+                                            ),
+                                            image_hq,
+                                            img_dim,
+                                        );
+                                        term::print_image_to_term(&img_png_b64).unwrap();
+                                        println!("Loaded: {} ({} tokens)", asset_name, token_count);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "error: failed to load as text or image: {:?}: {:?}",
+                                            asset_name, e
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
@@ -6523,6 +6583,7 @@ const HELP_MSG: &str = r##"Available Commands:
 /file-read <glob path>       - Load files into the conversation (e.g., `/load src/**/*.py`)
                                Supports text files or PNG/JPG images
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /file-write <path> <multi-line body>
                              - Create/replace a file at `path`. This is a MULTI-line command.
                                Use a newline after `path` to write arbitrary multi-line content to the file.
@@ -6548,9 +6609,11 @@ const HELP_MSG: &str = r##"Available Commands:
                                  - Use /file-read or /file-cat to grab exact text for building the search block.
 /file-cat <glob path>        - Load file(s) into the conversation and print it
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /http-get <url>              - Load url into the conversation
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                                .raw=BOOL  Return raw content rather than extracting markdown (default: false)
+                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /e /exec <cmd>               - Executes a shell command and adds the output to this conversation
                                @@asset can be used in place of file paths. These assets will be
                                transparently downloaded. If specified as a shell output redirect
@@ -6623,12 +6686,14 @@ Assets:
                                    .path=STRING   Specify the asset-pool to search (default: none)
 /asset-read <name> [<name> ...]  - Load asset(s) into the conversation
                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                                   .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /asset-write <name> <multi-line body>
                                  - Create/replace an asset with `name`. This is a MULTI-line command.
                                    Use a newline after `name` to write arbitrary multi-line content.
 /cat /asset-cat <name> [<name> ...]
                                  - Load asset(s) into the conversation and print it
                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
+                                   .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
 /asset-patch <name> <multi-line body>
                                  - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
                                    The body contains a search block and a replace block separated by a delimiter line.
