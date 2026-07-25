@@ -5078,7 +5078,10 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::ChatResume(cmd::ChatResumeCmd { chat_log_name }) => {
+        cmd::Cmd::ChatResume(cmd::ChatResumeCmd {
+            chat_log_name,
+            fork,
+        }) => {
             let api_client = mk_api_client(Some(session));
             chat_store::resume_chat_from_db_or_asset(
                 session,
@@ -5086,11 +5089,15 @@ pub async fn process_cmd(
                 asset_blob_cache,
                 &api_client,
                 chat_log_name.as_deref(),
+                fork,
             )
             .await;
             ProcessCmdResult::Loop
         }
-        cmd::Cmd::ChatSave(cmd::ChatSaveCmd { chat_log_name }) => {
+        cmd::Cmd::ChatSave(cmd::ChatSaveCmd {
+            chat_log_name,
+            fork,
+        }) => {
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -5098,6 +5105,13 @@ pub async fn process_cmd(
                 return ProcessCmdResult::Loop;
             };
             let api_client = mk_api_client(Some(session));
+            let resolved_chat_log_name = if let Some(chat_log_name) = chat_log_name {
+                Some(chat_log_name)
+            } else if !fork && let Some(chat_log_name) = session.chat_log_asset_name.as_ref() {
+                Some(chat_log_name.clone())
+            } else {
+                None
+            };
             chat_store::save_chat_as_asset(
                 session,
                 cfg,
@@ -5107,7 +5121,7 @@ pub async fn process_cmd(
                 bpe_tokenizer,
                 &api_client,
                 &username,
-                chat_log_name.as_deref(),
+                resolved_chat_log_name.as_deref(),
                 debug,
             )
             .await;
@@ -6686,8 +6700,10 @@ Assets:
 /chats                           - Interactive prompt to resume a recent conversation.
 /chat-save [<asset_name>]        - Save the conversation as an asset
                                    If asset name omitted, name automatically generated
+                                   .fork=BOOL    If from a resumed chat, creates a new asset when re-saving (default: false)
 /chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`
                                    If asset name omitted, resumes last auto-saved chat
+                                   .fork=BOOL    Re-saves will create a new asset (default: false)
 
 Attachments:
 

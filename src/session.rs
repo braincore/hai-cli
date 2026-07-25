@@ -141,8 +141,11 @@ pub struct SessionState {
     pub quick_index_vars: Vec<String>,
     /// Gateway servers
     pub gateways: Vec<GatewayInfo>,
-    // (MCP service, is task step?)
+    /// (MCP service, is task step?)
     pub mcps: HashMap<String, (crate::feature::mcp::McpService, bool)>,
+    /// Asset name that originates the chat (/chat-resume) and the asset name
+    /// to save to (/chat-save).
+    pub chat_log_asset_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -221,6 +224,7 @@ impl SessionState {
             quick_index_vars: vec![],
             gateways: vec![],
             mcps: HashMap::new(),
+            chat_log_asset_name: None,
         }
     }
 
@@ -301,6 +305,7 @@ impl SessionState {
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        self.chat_log_asset_name = None;
     }
 
     /// Resets the session state.
@@ -334,6 +339,7 @@ impl SessionState {
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        self.chat_log_asset_name = None;
     }
 
     /// Ends task mode.

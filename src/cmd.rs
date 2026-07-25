@@ -892,12 +892,16 @@ pub struct ChatResumeCmd {
     /// Name of the chat log asset
     /// If omitted, queries the local db for last chat
     pub chat_log_name: Option<String>,
+    /// Whether to create a new asset when re-saving
+    pub fork: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct ChatSaveCmd {
     /// Name of the asset to save the chat log to
     pub chat_log_name: Option<String>,
+    /// If from a resumed chat, creates a new asset when re-saving
+    pub fork: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2863,19 +2867,33 @@ fn parse_command(
             Some(Cmd::Chats)
         }
         "chat-resume" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["fork"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
             Some(Cmd::ChatResume(ChatResumeCmd {
                 chat_log_name: parse_one_arg_catchall(remaining),
+                fork,
             }))
         }
         "chat-save" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(cmd_name, &options, &["fork"]) {
                 return None;
             }
+            let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                eprintln!("Error: {}", type_error);
+                return None;
+            }
+            let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
             Some(Cmd::ChatSave(ChatSaveCmd {
                 chat_log_name: parse_one_arg(remaining),
+                fork,
             }))
         }
         "email" => {

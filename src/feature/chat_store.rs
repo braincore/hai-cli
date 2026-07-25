@@ -96,6 +96,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         eprintln!("error: failed to serialize chat log");
         return;
     };
+    session.chat_log_asset_name = Some(chat_log_asset_name.clone());
 
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
         asset_blob_cache.clone(),
@@ -171,12 +172,17 @@ struct ChatLog {
 ///
 /// If chat name isn't specified, the most recent chat stored in the local db
 /// is used.
+///
+/// # Arguments
+/// - `fork`: If set, does not save chat_log_asset_name so that a new asset is
+///   created when re-saving.
 pub async fn resume_chat_from_db_or_asset(
     session: &mut session::SessionState,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &api::client::HaiClient,
     chat_log_name: Option<&str>,
+    fork: bool,
 ) {
     let chat_log_contents = if let Some(chat_log_name) = chat_log_name {
         let (asset_contents, md_contents, _asset_entry) =
@@ -253,6 +259,24 @@ pub async fn resume_chat_from_db_or_asset(
 
     session.cmd_task_end().await;
     session.cmd_new().await;
+    if !fork && let Some(chat_log_name) = chat_log_name {
+        use crate::api::types::asset::{AssetEntryAclGetEffectiveArg, EntryRef};
+        match api_client
+            .asset_entry_acl_get_effective(AssetEntryAclGetEffectiveArg {
+                entry_ref: EntryRef::Name(chat_log_name.to_string()),
+            })
+            .await
+        {
+            Ok(res) => {
+                if res.write_data {
+                    session.chat_log_asset_name = Some(chat_log_name.to_string());
+                } else {
+                    eprintln!("notice: chat log is read-only. /chat-save will save to new asset.")
+                }
+            }
+            _ => {}
+        };
+    }
 
     match serde_json::from_slice::<ChatLog>(&chat_log_contents) {
         Ok(res) => {
