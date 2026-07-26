@@ -454,6 +454,8 @@ pub fn session_history_add_user_image_entry(
         message: chat::Message {
             role: chat::MessageRole::User,
             content: vec![chat::MessageContent::ImageUrl {
+                // id assignment happens when attachment is created
+                id: None,
                 image_url: chat::ImageData {
                     detail: if hq { "high" } else { "low" }.to_string(),
                     url: format!("data:image/png;base64,{}", &img_png_b64),

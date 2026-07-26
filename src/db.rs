@@ -26,7 +26,9 @@ impl LogEntry {
         if self.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
             if let chat::MessageContent::Text { text } = &self.message.content[0] {
                 preview.push_str(text.split_once("\n").unwrap().0);
-            } else if let chat::MessageContent::ImageUrl { image_url } = &self.message.content[0] {
+            } else if let chat::MessageContent::ImageUrl { image_url, .. } =
+                &self.message.content[0]
+            {
                 preview.push_str(&image_url.url[..10]);
             }
         } else {

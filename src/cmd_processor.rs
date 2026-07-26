@@ -399,7 +399,7 @@ pub async fn process_cmd(
                             "message: /load: {}",
                             text.split_once("\n").unwrap_or((text, "")).0
                         );
-                    } else if let chat::MessageContent::ImageUrl { image_url } =
+                    } else if let chat::MessageContent::ImageUrl { image_url, .. } =
                         &message.message.content[0]
                     {
                         println!("message: /load image: {}", &image_url.url[..10]);

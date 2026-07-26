@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::{config, loader, term};
 
@@ -58,7 +59,12 @@ pub enum MessageContent {
     Text { text: String },
 
     #[serde(rename = "image_url")]
-    ImageUrl { image_url: ImageData },
+    ImageUrl {
+        /// Only assigned when attachment is created
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<Uuid>,
+        image_url: ImageData,
+    },
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -117,6 +123,7 @@ pub async fn prompt_to_chat_message_content(
                             match image_b64_res {
                                 Ok((encoded_image, _dim)) => {
                                     msg_content.push(MessageContent::ImageUrl {
+                                        id: Some(Uuid::now_v7()),
                                         image_url: ImageData {
                                             detail: "low".to_string(),
                                             url: format!(

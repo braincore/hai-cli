@@ -13,8 +13,12 @@ use crate::api::types::asset::{
     AssetRevision, AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
-use crate::asset_helper;
-use crate::feature::{asset_crypt::KeyRecipient, asset_keyring::AssetKeyring};
+use crate::feature::asset_crypt::AkmSelectionError;
+use crate::feature::{
+    asset_crypt::{self, KeyRecipient},
+    asset_keyring::AssetKeyring,
+};
+use crate::{asset_helper, crypt};
 
 // --
 
@@ -175,6 +179,66 @@ pub async fn get_asset_and_metadata(
         None
     };
     Ok((data_contents, metadata_contents, asset_get_res.entry))
+}
+
+pub enum GetDecryptedAssetError {
+    GetAsset(GetAssetError),
+    Akm(AkmSelectionError),
+}
+
+impl std::fmt::Display for GetDecryptedAssetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GetDecryptedAssetError::GetAsset(e) => write!(f, "get-asset-error: {}", e),
+            GetDecryptedAssetError::Akm(e) => write!(f, "akm-selection-error: {}", e),
+        }
+    }
+}
+
+pub async fn get_decrypted_asset_and_metadata(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: Option<&str>,
+    asset_name: &str,
+) -> Result<(Vec<u8>, AssetEntry), GetDecryptedAssetError> {
+    match get_asset_and_metadata(asset_blob_cache.clone(), &api_client, &asset_name, false).await {
+        Ok((asset_contents, md_contents, asset_entry)) => {
+            let akm_info = match asset_crypt::extract_akm_from_metadata(
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                api_client.clone(),
+                username.map(|u| KeyRecipient::User(u.to_string())).as_ref(),
+                md_contents.as_deref(),
+            )
+            .await
+            {
+                Ok(akm_info) => akm_info,
+                Err(e) => {
+                    match &e {
+                        asset_crypt::AkmSelectionError::Abort(msg) => {
+                            eprintln!("error: {}", msg);
+                        }
+                    }
+                    return Err(GetDecryptedAssetError::Akm(e));
+                }
+            };
+            if let Some(akm_info) = &akm_info {
+                let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                Ok((
+                    crypt::decrypt_content(
+                        &enc_content,
+                        &akm_info.unlocked_akm.sym_key_info.aes_key,
+                    )
+                    .unwrap(),
+                    asset_entry,
+                ))
+            } else {
+                Ok((asset_contents.to_vec(), asset_entry))
+            }
+        }
+        Err(e) => Err(GetDecryptedAssetError::GetAsset(e)),
+    }
 }
 
 pub enum GetRevisionError {

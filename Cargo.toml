@@ -91,7 +91,7 @@ toml_edit = "0.22.22"
 two-face = { version = "0.4.3", default-features = false, features = ["syntect-default-fancy"] }
 unicode-width = "0.2.2"
 urlencoding = "2.1.3"
-uuid = { version = "1.11.0", features = ["std", "v7"] }
+uuid = { version = "1.11.0", features = ["serde", "std", "v7"] }
 viuer = { version = "0.10.0", features = ["icy_sixel"] }
 walkdir = "2.5.0"
 which = "8.0.0"
