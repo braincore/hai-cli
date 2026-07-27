@@ -154,10 +154,11 @@ pub async fn send_to_openai(
     }
     remove_nulls(&mut request_body);
 
-    // Non-OpenAI APIs can return longer than 40char tool IDs which cause
-    // OpenAI to error out. This filter simply truncates the tool ID.
-    let truncate_tool_id_transform = r#"
-        .messages |= map(
+    let mut jq_transforms = vec![
+        // Truncate tool ID: Non-OpenAI APIs can return longer than 40char tool
+        // IDs which cause OpenAI to error out. This filter simply truncates
+        // the tool ID.
+        r#".messages |= map(
             (
                 if has("tool_calls") and .tool_calls != null then
                     .tool_calls |= map(.id |= (.[:40]))
@@ -174,26 +175,40 @@ pub async fn send_to_openai(
                 .
             end)
             )
-        "#;
-    request_body = run_jaq(truncate_tool_id_transform, &request_body).unwrap();
-
-    if deepseek_flatten_nonuser_content {
-        // Deepseek requires assistant & tool messages to have `content`
-        // as a string. The OpenAI list format is not accepted.
-        let flatten_nonuser_content_transform = r#"
-        .messages |= map(
-            if (.role == "assistant" or .role == "tool") then
-                .content |= (
-                map(
-                    if .type == "text" then .text else . end
-                ) | map(select(type == "string")) | join("")
-                )
+        "#,
+        // Remove `id` from image_url content blocks, since that's for internal
+        // use (attachment reference) only.
+        r#".messages[].content[] |= (
+            if .type == "image_url" then
+                del(.id)
             else
                 .
             end
-            )
-        "#;
-        request_body = run_jaq(flatten_nonuser_content_transform, &request_body).unwrap();
+        )
+        "#,
+    ];
+
+    if deepseek_flatten_nonuser_content {
+        jq_transforms.push(
+            // Deepseek requires assistant & tool messages to have `content`
+            // as a string. The OpenAI list format is not accepted.
+            r#".messages |= map(
+                if (.role == "assistant" or .role == "tool") then
+                    .content |= (
+                    map(
+                        if .type == "text" then .text else . end
+                    ) | map(select(type == "string")) | join("")
+                    )
+                else
+                    .
+                end
+                )
+            "#,
+        );
+    }
+
+    for jq_transform in jq_transforms {
+        request_body = run_jaq(jq_transform, &request_body).unwrap();
     }
 
     //

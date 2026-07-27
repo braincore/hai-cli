@@ -245,6 +245,17 @@ pub async fn send_to_anthropic(
             .
         end
         "#,
+        // Remove `id` from image_url content blocks, since that's for internal
+        // use (attachment reference) only.
+        r#"
+        .messages[].content[] |= (
+            if .type == "image_url" then
+                del(.id)
+            else
+                .
+            end
+        )
+        "#,
         // Image transform
         r#"
         .messages[] |=

@@ -80,6 +80,17 @@ pub async fn send_to_ollama(
     remove_nulls(&mut request_body);
 
     let jq_transforms = [
+        // Remove `id` from image_url content blocks, since that's for internal
+        // use (attachment reference) only.
+        r#"
+        .messages[].content[] |= (
+            if .type == "image_url" then
+                del(.id)
+            else
+                .
+            end
+        )
+        "#,
         // Image transform
         // NOTE: This leaves the image_url objects in content. It's up to the
         // message_transform to filter these out.
