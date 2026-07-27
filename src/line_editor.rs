@@ -1160,7 +1160,11 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    eprintln!("error: failed to list asset pools");
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: failed to list asset pools"
+                        ));
+                    }
                     return vec![];
                 }
             }
@@ -1234,7 +1238,12 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                eprintln!("error: could not fetch list of matching assets: {}", e);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "error: could not fetch list of matching assets: {}",
+                        e
+                    ));
+                }
                 vec![]
             }
         }
@@ -1284,7 +1293,11 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    eprintln!("error: failed to list asset pools");
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: failed to list asset pools"
+                        ));
+                    }
                     return vec![];
                 }
             }
@@ -1374,7 +1387,12 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                eprintln!("error: could not fetch list of matching assets: {}", e);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "error: could not fetch list of matching assets: {}",
+                        e
+                    ));
+                }
                 vec![]
             }
         }
@@ -1435,7 +1453,12 @@ impl CmdAndFileCompleter {
                     completions
                 }
                 Err(e) => {
-                    eprintln!("error: could not fetch list of matching assets: {}", e);
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: could not fetch list of matching assets: {}",
+                            e
+                        ));
+                    }
                     vec![]
                 }
             }

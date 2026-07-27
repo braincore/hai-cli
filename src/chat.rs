@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{config, loader, term};
+use crate::errorln;
+use crate::io::Out;
+use crate::{config, loader};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Message {
@@ -86,6 +88,7 @@ pub enum ChatCompletionResponse {
 }
 
 pub async fn prompt_to_chat_message_content(
+    out: &Out,
     ai: &config::AiModel,
     prompt: &str,
 ) -> Vec<MessageContent> {
@@ -102,7 +105,7 @@ pub async fn prompt_to_chat_message_content(
                     match &p_node.children[0] {
                         markdown::mdast::Node::Image(img_node) => {
                             if config::get_ai_model_capability(ai).image.is_none() {
-                                eprintln!("error: model does not support images");
+                                errorln!(out, "model does not support images");
                                 continue;
                             }
                             if !cur_md_group.is_empty() {
@@ -121,21 +124,18 @@ pub async fn prompt_to_chat_message_content(
                             let image_b64_res =
                                 loader::resolve_image_b64(&img_node.url, true).await;
                             match image_b64_res {
-                                Ok((encoded_image, _dim)) => {
+                                Ok((img_png_b64, _dim)) => {
                                     msg_content.push(MessageContent::ImageUrl {
                                         id: Some(Uuid::now_v7()),
                                         image_url: ImageData {
                                             detail: "low".to_string(),
-                                            url: format!(
-                                                "data:image/png;base64,{}",
-                                                &encoded_image
-                                            ),
+                                            url: format!("data:image/png;base64,{}", &img_png_b64),
                                         },
                                     });
-                                    term::print_image_to_term(&encoded_image).unwrap();
+                                    out.display("image/png", &img_png_b64);
                                 }
                                 Err(e) => {
-                                    println!("Failed to encode image: {}", e);
+                                    errorln!(out, "Failed to encode image: {}", e);
                                     continue; // Skip sending if image encoding fails
                                 }
                             }

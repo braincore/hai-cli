@@ -2,7 +2,9 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use crate::io::Out;
 use crate::tool;
+use crate::{errln, warnln};
 
 #[derive(Clone, Debug)]
 /// Represents all possible commands in the program's REPL
@@ -357,8 +359,6 @@ pub struct FileWriteCmd {
     pub path: String,
     /// Contents to write to the file
     pub contents: Option<String>,
-    /// Whether to omit contents from the conversation history
-    pub suppress_body: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -602,8 +602,6 @@ pub struct AssetWriteCmd {
     pub contents: Option<String>,
     /// Whether to encrypt the asset
     pub encrypt: bool,
-    /// Whether to omit contents from the conversation history
-    pub suppress_body: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1044,6 +1042,7 @@ pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
 /// command list. For example, we don't want a "//comment" input to trigger an
 /// error even though if you squint it looks like a cmd.
 pub fn parse_user_input(
+    out: &Out,
     input: &str,
     last_tool_cmd: Option<ToolCmd>,
     tool_mode: Option<ToolModeCmd>,
@@ -1080,7 +1079,7 @@ pub fn parse_user_input(
                     remaining = &input[m.end() + 1..];
                     (remaining, m.as_str())
                 } else {
-                    eprintln!("Warning: Did you intend to invoke a /command?");
+                    warnln!(out, "Did you intend to invoke a /command?");
                     return Some(Cmd::Prompt(PromptCmd {
                         prompt: input.into(),
                         cache: false,
@@ -1088,7 +1087,7 @@ pub fn parse_user_input(
                 }
             }
             None => {
-                eprintln!("Warning: Did you intend to invoke a /command?");
+                warnln!(out, "Did you intend to invoke a /command?");
                 return Some(Cmd::Prompt(PromptCmd {
                     prompt: input.into(),
                     cache: false,
@@ -1115,7 +1114,7 @@ pub fn parse_user_input(
         } else {
             (HashMap::new(), remaining)
         };
-        parse_command(cmd_name, options.clone(), remaining, input)
+        parse_command(out, cmd_name, options.clone(), remaining, input)
     } else if let Some(mut remaining) = input.strip_prefix('!') {
         // Try parsing as a tool-command
         let input = input.trim_end();
@@ -1137,7 +1136,7 @@ pub fn parse_user_input(
                         remaining = &remaining[m.end()..];
                         (remaining, m.as_str().replace("\\'", "'"))
                     } else {
-                        eprintln!("Warning: Did you intend to invoke a tool?");
+                        warnln!(out, "Did you intend to invoke a tool?");
                         return Some(Cmd::Prompt(PromptCmd {
                             prompt: input.into(),
                             cache: false,
@@ -1145,7 +1144,7 @@ pub fn parse_user_input(
                     }
                 }
                 None => {
-                    eprintln!("Warning: Did you intend to invoke a tool?");
+                    warnln!(out, "Did you intend to invoke a tool?");
                     return Some(Cmd::Prompt(PromptCmd {
                         prompt: input.into(),
                         cache: false,
@@ -1180,6 +1179,7 @@ pub fn parse_user_input(
             (HashMap::new(), remaining)
         };
         parse_tool_command(
+            out,
             tool_name.as_str(),
             user_confirmation,
             force_tool,
@@ -1318,6 +1318,7 @@ fn parse_three_arg_catchall(s: &str) -> Option<(String, String, String)> {
 
 /// If None is returned, it prints an error usage string.
 fn parse_command(
+    out: &Out,
     cmd_name: &str,
     options: HashMap<String, String>,
     remaining: &str,
@@ -1363,104 +1364,104 @@ fn parse_command(
     }
     match cmd_name {
         "quit" | "q" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Quit)
         }
         "help" | "h" | "?" => {
             // `history` is DEPRECATED. Output always added to history.
-            if !validate_options_and_print_err(cmd_name, &options, &["history"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["history"]) {
                 return None;
             }
             let expected_types = HashMap::from([("history".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let history = options.get("history").map(|v| v == "true").unwrap_or(false);
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Help(HelpCmd { history }))
         }
         "new" | "n" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::New)
         }
         "reset" | "r" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Reset)
         }
         "clip" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Clip)
         }
         "printvars" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::PrintVars)
         }
         "dump" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Dump)
         }
         "dump-session" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::DumpSession)
         }
         "about" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::About)
         }
         "cd" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::Cd(CdCmd {
@@ -1468,7 +1469,7 @@ fn parse_command(
             }))
         }
         "ai" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::Ai(AiCmd {
@@ -1476,7 +1477,7 @@ fn parse_command(
             }))
         }
         "ai-default" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AiDefault(AiDefaultCmd {
@@ -1484,26 +1485,26 @@ fn parse_command(
             }))
         }
         "set-key" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg(remaining) {
                 Some((provider, key)) => Some(Cmd::SetKey(SetKeyCmd { provider, key })),
                 None => {
-                    eprintln!("Usage: /set-key <provider> <key>");
-                    eprintln!("providers: openai, anthropic, deepseek, google, xai");
+                    errln!(out, "Usage: /set-key <provider> <key>");
+                    errln!(out, "providers: openai, anthropic, deepseek, google, xai");
                     None
                 }
             }
         }
         "set-mask-secrets" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(arg) => {
                     if arg != "on" && arg != "off" {
-                        eprintln!("Usage: /set-mask-secrets <on/off>");
+                        errln!(out, "Usage: /set-mask-secrets <on/off>");
                         None
                     } else {
                         Some(Cmd::SetMaskSecrets(SetMaskSecretsCmd {
@@ -1515,13 +1516,13 @@ fn parse_command(
             }
         }
         "hai-router" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(arg) => {
                     if arg != "on" && arg != "off" {
-                        eprintln!("Usage: /hai-router <on|off>");
+                        errln!(out, "Usage: /hai-router <on|off>");
                         None
                     } else {
                         Some(Cmd::HaiRouter(HaiRouterCmd {
@@ -1533,13 +1534,13 @@ fn parse_command(
             }
         }
         "agentic" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(arg) => {
                     if arg != "on" && arg != "on-without-cache" && arg != "off" {
-                        eprintln!("Usage: /{cmd_name} <on|on-without-cache|off>");
+                        errln!(out, "Usage: /{cmd_name} <on|on-without-cache|off>");
                         None
                     } else {
                         Some(Cmd::Agentic(AgenticCmd {
@@ -1551,7 +1552,7 @@ fn parse_command(
             }
         }
         "temperature" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -1564,7 +1565,7 @@ fn parse_command(
                                 temperature: Some(value),
                             })),
                             Err(_) => {
-                                eprintln!("Error: Temperature must be a number or `none`.");
+                                errln!(out, "Error: Temperature must be a number or `none`.");
                                 None
                             }
                         }
@@ -1574,19 +1575,19 @@ fn parse_command(
             }
         }
         "setvar" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
                 Some((key, value)) => Some(Cmd::SetVar(SetVarCmd { key, value })),
                 None => {
-                    eprintln!("Usage: /setvar <key> <value...>");
+                    errln!(out, "Usage: /setvar <key> <value...>");
                     None
                 }
             }
         }
         "file-read" | "load" | "l" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1594,7 +1595,7 @@ fn parse_command(
                 ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
@@ -1606,16 +1607,19 @@ fn parse_command(
                     image_hq: hq,
                 })),
                 None => {
-                    eprintln!("Usage: /file-read <glob path>");
-                    eprintln!("Options:");
-                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
-                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
+                    errln!(out, "Usage: /file-read <glob path>");
+                    errln!(out, "Options:");
+                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
+                    errln!(
+                        out,
+                        "  .hq=BOOL  Use high-resolution images (default: false)"
+                    );
                     None
                 }
             }
         }
         "file-cat" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1623,7 +1627,7 @@ fn parse_command(
                 ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
@@ -1635,65 +1639,65 @@ fn parse_command(
                     image_hq: hq,
                 })),
                 None => {
-                    eprintln!("Usage: /file-cat <glob path>");
-                    eprintln!("Options:");
-                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
-                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
-                    None
-                }
-            }
-        }
-        "file-write" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["suppress_body"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("suppress_body".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
-                return None;
-            }
-            let suppress_body = options
-                .get("suppress_body")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            match parse_one_arg(&cmd_arg) {
-                Some(path) => Some(Cmd::FileWrite(FileWriteCmd {
-                    path,
-                    contents,
-                    suppress_body,
-                })),
-                None => {
-                    eprintln!("Usage: /file-write <path> [<NEWLINE><body>]");
-                    eprintln!("Options:");
-                    eprintln!(
-                        "  .suppress_body=BOOL   Omit contents from conversation history (default: false)"
+                    errln!(out, "Usage: /file-cat <glob path>");
+                    errln!(out, "Options:");
+                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
+                    errln!(
+                        out,
+                        "  .hq=BOOL  Use high-resolution images (default: false)"
                     );
                     None
                 }
             }
         }
+        "file-write" => {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
+                return None;
+            }
+            let expected_types = HashMap::from([]);
+            if let Err(type_error) = validate_option_types(&options, &expected_types) {
+                errln!(out, "Error: {}", type_error);
+                return None;
+            }
+            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
+            match parse_one_arg(&cmd_arg) {
+                Some(path) => Some(Cmd::FileWrite(FileWriteCmd { path, contents })),
+                None => {
+                    errln!(out, "Usage: /file-write <path> [<NEWLINE><body>]");
+                    None
+                }
+            }
+        }
         "file-patch" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
 
-            fn print_file_patch_usage() {
-                eprintln!("Usage: /file-patch <name>");
-                eprintln!("  <search string>");
-                eprintln!("  =======");
-                eprintln!("  <replace string>");
-                eprintln!();
-                eprintln!("The divider is the line with the LONGEST run of '=' characters.");
-                eprintln!("Use a single '=' for simple edits, or more (e.g. 100) if your");
-                eprintln!("search/replace text contains lines of '=' that would collide.");
+            fn print_file_patch_usage(out: &Out) {
+                errln!(out, "Usage: /file-patch <name>");
+                errln!(out, "  <search string>");
+                errln!(out, "  =======");
+                errln!(out, "  <replace string>");
+                errln!(out);
+                errln!(
+                    out,
+                    "The divider is the line with the LONGEST run of '=' characters."
+                );
+                errln!(
+                    out,
+                    "Use a single '=' for simple edits, or more (e.g. 100) if your"
+                );
+                errln!(
+                    out,
+                    "search/replace text contains lines of '=' that would collide."
+                );
             }
 
             let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
             let contents = match contents {
                 Some(c) => c,
                 None => {
-                    print_file_patch_usage();
+                    print_file_patch_usage(out);
                     return None;
                 }
             };
@@ -1701,7 +1705,7 @@ fn parse_command(
             let path = match parse_one_arg(&cmd_arg) {
                 Some(name) => name,
                 None => {
-                    print_file_patch_usage();
+                    print_file_patch_usage(out);
                     return None;
                 }
             };
@@ -1713,14 +1717,14 @@ fn parse_command(
                     replace,
                 })),
                 Err(e) => {
-                    eprintln!("Error: {}", e);
-                    print_file_patch_usage();
+                    errln!(out, "Error: {}", e);
+                    print_file_patch_usage(out);
                     None
                 }
             }
         }
         "http-get" | "load-url" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["raw", "n", "hq"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["raw", "n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1729,7 +1733,7 @@ fn parse_command(
                 ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
@@ -1743,65 +1747,71 @@ fn parse_command(
                     image_hq: hq,
                 })),
                 None => {
-                    eprintln!("Usage: /http-get <url>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: /http-get <url>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
                     );
-                    eprintln!("  .n=BOOL         Show line numbers (default: false)");
-                    eprintln!("  .hq=BOOL        Use high-resolution images (default: false)");
+                    errln!(out, "  .n=BOOL         Show line numbers (default: false)");
+                    errln!(
+                        out,
+                        "  .hq=BOOL        Use high-resolution images (default: false)"
+                    );
                     None
                 }
             }
         }
         "prep" => {
             if !validate_options_and_print_err(
+                out,
                 cmd_name,
                 &options,
                 &["danger", "warn", "info", "success"],
             ) {
                 return None;
             }
-            let accent = parse_accent(&options);
+            let accent = parse_accent(out, &options);
             match parse_one_arg_catchall(remaining) {
                 Some(message) => Some(Cmd::Prep(PrepCmd { message, accent })),
                 None => {
-                    eprintln!("Usage: /prep <message>");
+                    errln!(out, "Usage: /prep <message>");
                     None
                 }
             }
         }
         "pin" => {
             if !validate_options_and_print_err(
+                out,
                 cmd_name,
                 &options,
                 &["danger", "warn", "info", "success"],
             ) {
                 return None;
             }
-            let accent = parse_accent(&options);
+            let accent = parse_accent(out, &options);
             match parse_one_arg_catchall(remaining) {
                 Some(message) => Some(Cmd::Pin(PinCmd { message, accent })),
                 None => {
-                    eprintln!("Usage: /pin <message>");
+                    errln!(out, "Usage: /pin <message>");
                     None
                 }
             }
         }
         "assistant" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg_catchall(remaining) {
                 Some(message) => Some(Cmd::Assistant(AssistantCmd { message })),
                 None => {
-                    eprintln!("Usage: /assistant <message>");
+                    errln!(out, "Usage: /assistant <message>");
                     None
                 }
             }
         }
         "system-prompt" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::SystemPrompt(SystemPromptCmd {
@@ -1809,7 +1819,7 @@ fn parse_command(
             }))
         }
         "forget" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             let arg = parse_one_arg_catchall(remaining);
@@ -1817,7 +1827,7 @@ fn parse_command(
                 match n_str.parse::<u32>() {
                     Ok(n) => n,
                     Err(_) => {
-                        eprintln!("Usage: /forget <number>");
+                        errln!(out, "Usage: /forget <number>");
                         return None;
                     }
                 }
@@ -1827,7 +1837,7 @@ fn parse_command(
             Some(Cmd::Forget(ForgetCmd { n }))
         }
         "keep" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             let (top, bottom) = match parse_two_arg_one_optional_catchall(remaining) {
@@ -1835,7 +1845,7 @@ fn parse_command(
                     let bottom = match bottom_str.parse::<u32>() {
                         Ok(n) => n,
                         Err(_) => {
-                            eprintln!("Usage: /keep <bottom> [<top>]");
+                            errln!(out, "Usage: /keep <bottom> [<top>]");
                             return None;
                         }
                     };
@@ -1843,7 +1853,7 @@ fn parse_command(
                         match top_str.parse::<u32>() {
                             Ok(n) => Some(n),
                             Err(_) => {
-                                eprintln!("Usage: /keep <bottom> [<top>]");
+                                errln!(out, "Usage: /keep <bottom> [<top>]");
                                 return None;
                             }
                         }
@@ -1853,14 +1863,14 @@ fn parse_command(
                     (top, bottom)
                 }
                 None => {
-                    eprintln!("Usage: /keep <bottom> [<top>]");
+                    errln!(out, "Usage: /keep <bottom> [<top>]");
                     return None;
                 }
             };
             Some(Cmd::Keep(KeepCmd { bottom, top }))
         }
         "exec" | "e" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["cache", "i"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["cache", "i"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1868,7 +1878,7 @@ fn parse_command(
                 ("i".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
@@ -1880,12 +1890,14 @@ fn parse_command(
                     interactive,
                 })),
                 None => {
-                    eprintln!("Usage: /exec <command>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: /exec <command>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
-                    eprintln!(
+                    errln!(
+                        out,
                         "  .i=BOOL        Run the command in interactive mode (default: false)"
                     );
                     None
@@ -1893,7 +1905,7 @@ fn parse_command(
             }
         }
         "ask-human" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["secret", "cache"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["secret", "cache"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1901,7 +1913,7 @@ fn parse_command(
                 ("cache".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let secret = options.get("secret").map(|v| v == "true").unwrap_or(false);
@@ -1914,10 +1926,14 @@ fn parse_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: /ask-human <question>");
-                    eprintln!("Options:");
-                    eprintln!("  .secret=BOOL   Hide input from terminal (default: false)");
-                    eprintln!(
+                    errln!(out, "Usage: /ask-human <question>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
+                        "  .secret=BOOL   Hide input from terminal (default: false)"
+                    );
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
                     None
@@ -1925,7 +1941,7 @@ fn parse_command(
             }
         }
         "task" | "t" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["key", "trust"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["key", "trust"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -1933,7 +1949,7 @@ fn parse_command(
                 ("trust".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let key = options.get("key").map(|v| trim_string_value(v).to_string());
@@ -1945,10 +1961,11 @@ fn parse_command(
                     trust,
                 })),
                 None => {
-                    eprintln!("Usage: /task <task_ref>");
-                    eprintln!("Options:");
-                    eprintln!("  .key=STRING    Namespace the cache (default: none)");
-                    eprintln!(
+                    errln!(out, "Usage: /task <task_ref>");
+                    errln!(out, "Options:");
+                    errln!(out, "  .key=STRING    Namespace the cache (default: none)");
+                    errln!(
+                        out,
                         "  .trust=BOOL    Do not prompt for user confirmations (default: false)"
                     );
                     None
@@ -1956,138 +1973,138 @@ fn parse_command(
             }
         }
         "task-end" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::TaskEnd)
         }
         "task-forget" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["key"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["key"]) {
                 return None;
             }
             let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let key = options.get("key").map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref, key })),
                 None => {
-                    eprintln!("Usage: /task-forget <task_ref>");
+                    errln!(out, "Usage: /task-forget <task_ref>");
                     None
                 }
             }
         }
         "task-purge" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(task_fqn) => Some(Cmd::TaskPurge(TaskPurgeCmd { task_fqn })),
                 None => {
-                    eprintln!("Usage: /task-purge <task_fqn>");
+                    errln!(out, "Usage: /task-purge <task_fqn>");
                     None
                 }
             }
         }
         "task-publish" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg_catchall(remaining) {
                 Some(task_path) => Some(Cmd::TaskPublish(TaskPublishCmd { task_path })),
                 None => {
-                    eprintln!("Usage: /task-publish <task_path>");
+                    errln!(out, "Usage: /task-publish <task_path>");
                     None
                 }
             }
         }
         "task-edit" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(task_fqn) => Some(Cmd::TaskEdit(TaskEditCmd { task_fqn })),
                 None => {
-                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
                     None
                 }
             }
         }
         "task-fetch" | "task-update" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(task_fqn) => Some(Cmd::TaskFetch(TaskFetchCmd { task_fqn })),
                 None => {
-                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
                     None
                 }
             }
         }
         "task-include" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["key"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["key"]) {
                 return None;
             }
             let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let key = options.get("key").map(|v| trim_string_value(v).to_string());
             match parse_one_arg_catchall(remaining) {
                 Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref, key })),
                 None => {
-                    eprintln!("Usage: /task-include <task_ref>");
+                    errln!(out, "Usage: /task-include <task_ref>");
                     None
                 }
             }
         }
         "task-search" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg_catchall(remaining) {
                 Some(q) => Some(Cmd::TaskSearch(TaskSearchCmd { q })),
                 None => {
-                    eprintln!("Usage: /task-search <query>");
+                    errln!(out, "Usage: /task-search <query>");
                     None
                 }
             }
         }
         "task-cat" | "task-view" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(task_ref) => Some(Cmd::TaskCat(TaskCatCmd { task_ref })),
                 None => {
-                    eprintln!("Usage: /{} <task_ref>", cmd_name);
+                    errln!(out, "Usage: /{} <task_ref>", cmd_name);
                     None
                 }
             }
         }
         "task-versions" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(task_fqn) => Some(Cmd::TaskVersions(TaskVersionsCmd { task_fqn })),
                 None => {
-                    eprintln!("Usage: /{} <task_fqn>", cmd_name);
+                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
                     None
                 }
             }
         }
         "asset" | "a" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["no_create"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["no_create"]) {
                 return None;
             }
             let expected_types = HashMap::from([("no_create".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let no_create = options
@@ -2101,8 +2118,9 @@ fn parse_command(
                     no_create,
                 })),
                 None => {
-                    eprintln!("Usage: /asset <name>");
-                    eprintln!(
+                    errln!(out, "Usage: /asset <name>");
+                    errln!(
+                        out,
                         "  .no_create=BOOL   Do not create if does not exist (default: false)"
                     );
                     None
@@ -2110,7 +2128,7 @@ fn parse_command(
             }
         }
         "asset-push" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
@@ -2120,13 +2138,13 @@ fn parse_command(
                     contents,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-push <name> [<NEWLINE><body>]");
+                    errln!(out, "Usage: /asset-push <name> [<NEWLINE><body>]");
                     None
                 }
             }
         }
         "asset-list" | "ls" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["desc", "full"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["desc", "full"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -2134,7 +2152,7 @@ fn parse_command(
                 ("full".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let desc = options.get("desc").map(|v| v == "true").unwrap_or(false);
@@ -2149,12 +2167,12 @@ fn parse_command(
             }
         }
         "asset-search" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["path"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["path"]) {
                 return None;
             }
             let expected_types = HashMap::from([("path".to_string(), OptionType::String)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let path = options
@@ -2163,15 +2181,18 @@ fn parse_command(
             match parse_one_arg_catchall(remaining) {
                 Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q, path })),
                 None => {
-                    eprintln!("Usage: /asset-search <query>");
-                    eprintln!("Options:");
-                    eprintln!("  .path=STRING   Specify the asset-pool to search (default: none)");
+                    errln!(out, "Usage: /asset-search <query>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
+                        "  .path=STRING   Specify the asset-pool to search (default: none)"
+                    );
                     None
                 }
             }
         }
         "read" | "asset-read" | "asset-load" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -2179,7 +2200,7 @@ fn parse_command(
                 ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
@@ -2191,52 +2212,47 @@ fn parse_command(
                     image_hq: hq,
                 })),
                 _ => {
-                    eprintln!("Usage: /asset-read <name> [<name> ...]");
-                    eprintln!("Options:");
-                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
-                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
+                    errln!(out, "Usage: /asset-read <name> [<name> ...]");
+                    errln!(out, "Options:");
+                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
+                    errln!(
+                        out,
+                        "  .hq=BOOL  Use high-resolution images (default: false)"
+                    );
                     None
                 }
             }
         }
         "write" | "asset-write" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["encrypt", "suppress_body"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["encrypt"]) {
                 return None;
             }
-            let expected_types = HashMap::from([
-                ("encrypt".to_string(), OptionType::Bool),
-                ("suppress_body".to_string(), OptionType::Bool),
-            ]);
+            let expected_types = HashMap::from([("encrypt".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let encrypt = options.get("encrypt").map(|v| v == "true").unwrap_or(false);
-            let suppress_body = options
-                .get("suppress_body")
-                .map(|v| v == "true")
-                .unwrap_or(false);
             let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
             match parse_one_arg(&cmd_arg) {
                 Some(asset_name) => Some(Cmd::AssetWrite(AssetWriteCmd {
                     asset_name,
                     contents,
                     encrypt,
-                    suppress_body,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-write <name> <multi-line body>]");
-                    eprintln!("Options:");
-                    eprintln!("  .encrypt=BOOL   Force encryption of the asset (default: false)");
-                    eprintln!(
-                        "  .suppress_body=BOOL   Omit contents from conversation history (default: false)"
+                    errln!(out, "Usage: /asset-write <name> <multi-line body>]");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
+                        "  .encrypt=BOOL   Force encryption of the asset (default: false)"
                     );
                     None
                 }
             }
         }
         "cat" | "asset-cat" | "asset-view" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n", "hq"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -2244,7 +2260,7 @@ fn parse_command(
                 ("hq".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
@@ -2256,35 +2272,47 @@ fn parse_command(
                     image_hq: hq,
                 })),
                 _ => {
-                    eprintln!("Usage: /asset-cat <name> [<name> ...]");
-                    eprintln!("Options:");
-                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
-                    eprintln!("  .hq=BOOL  Use high-resolution images (default: false)");
+                    errln!(out, "Usage: /asset-cat <name> [<name> ...]");
+                    errln!(out, "Options:");
+                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
+                    errln!(
+                        out,
+                        "  .hq=BOOL  Use high-resolution images (default: false)"
+                    );
                     None
                 }
             }
         }
         "asset-patch" | "patch" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
 
-            fn print_asset_patch_usage() {
-                eprintln!("Usage: /asset-patch <name>");
-                eprintln!("  <search string>");
-                eprintln!("  =======");
-                eprintln!("  <replace string>");
-                eprintln!();
-                eprintln!("The divider is the line with the LONGEST run of '=' characters.");
-                eprintln!("Use a single '=' for simple edits, or more (e.g. 100) if your");
-                eprintln!("search/replace text contains lines of '=' that would collide.");
+            fn print_asset_patch_usage(out: &Out) {
+                errln!(out, "Usage: /asset-patch <name>");
+                errln!(out, "  <search string>");
+                errln!(out, "  =======");
+                errln!(out, "  <replace string>");
+                errln!(out);
+                errln!(
+                    out,
+                    "The divider is the line with the LONGEST run of '=' characters."
+                );
+                errln!(
+                    out,
+                    "Use a single '=' for simple edits, or more (e.g. 100) if your"
+                );
+                errln!(
+                    out,
+                    "search/replace text contains lines of '=' that would collide."
+                );
             }
 
             let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
             let contents = match contents {
                 Some(c) => c,
                 None => {
-                    print_asset_patch_usage();
+                    print_asset_patch_usage(out);
                     return None;
                 }
             };
@@ -2292,7 +2320,7 @@ fn parse_command(
             let asset_name = match parse_one_arg(&cmd_arg) {
                 Some(name) => name,
                 None => {
-                    print_asset_patch_usage();
+                    print_asset_patch_usage(out);
                     return None;
                 }
             };
@@ -2304,19 +2332,19 @@ fn parse_command(
                     replace,
                 })),
                 Err(e) => {
-                    eprintln!("Error: {}", e);
-                    print_asset_patch_usage();
+                    errln!(out, "Error: {}", e);
+                    print_asset_patch_usage(out);
                     None
                 }
             }
         }
         "asset-revisions" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["n"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["n"]) {
                 return None;
             }
             let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options.get("n").map(|v| v == "true").unwrap_or(false);
@@ -2326,9 +2354,9 @@ fn parse_command(
                         match count_str.parse::<u32>() {
                             Ok(count) => Some(count),
                             Err(_) => {
-                                eprintln!("Usage: /asset-revisions <name> [<count>]");
-                                eprintln!("Options:");
-                                eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                                errln!(out, "Usage: /asset-revisions <name> [<count>]");
+                                errln!(out, "Options:");
+                                errln!(out, "  .n=BOOL   Show line numbers (default: false)");
                                 return None;
                             }
                         }
@@ -2342,27 +2370,27 @@ fn parse_command(
                     }))
                 }
                 None => {
-                    eprintln!("Usage: /asset-revisions <name> [<count>]");
-                    eprintln!("Options:");
-                    eprintln!("  .n=BOOL   Show line numbers (default: false)");
+                    errln!(out, "Usage: /asset-revisions <name> [<count>]");
+                    errln!(out, "Options:");
+                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
                     None
                 }
             }
         }
         "asset-follow" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetFollow(AssetFollowCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /asset-follow <name>");
+                    errln!(out, "Usage: /asset-follow <name>");
                     None
                 }
             }
         }
         "asset-listen" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_one_optional_catchall(remaining) {
@@ -2370,25 +2398,25 @@ fn parse_command(
                     Some(Cmd::AssetListen(AssetListenCmd { asset_name, cursor }))
                 }
                 None => {
-                    eprintln!("Usage: /asset-listen <name> [<cursor>]");
+                    errln!(out, "Usage: /asset-listen <name> [<cursor>]");
                     None
                 }
             }
         }
         "asset-link" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetLink(AssetLinkCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /asset-link <name>");
+                    errln!(out, "Usage: /asset-link <name>");
                     None
                 }
             }
         }
         "asset-remove" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -2397,13 +2425,13 @@ fn parse_command(
                     recursive: false,
                 })),
                 None => {
-                    eprintln!("Usage: {cmd_name} <name>");
+                    errln!(out, "Usage: {cmd_name} <name>");
                     None
                 }
             }
         }
         "asset-remove-recursive" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -2412,13 +2440,13 @@ fn parse_command(
                     recursive: true,
                 })),
                 None => {
-                    eprintln!("Usage: {cmd_name} <name>");
+                    errln!(out, "Usage: {cmd_name} <name>");
                     None
                 }
             }
         }
         "asset-move" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg(remaining) {
@@ -2427,13 +2455,13 @@ fn parse_command(
                     dest_asset_name,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-move <source_name> <dest_name>");
+                    errln!(out, "Usage: /asset-move <source_name> <dest_name>");
                     None
                 }
             }
         }
         "asset-copy" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg(remaining) {
@@ -2442,13 +2470,13 @@ fn parse_command(
                     dest_asset_name,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-copy <source_name> <dest_name>");
+                    errln!(out, "Usage: /asset-copy <source_name> <dest_name>");
                     None
                 }
             }
         }
         "asset-import" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2457,13 +2485,16 @@ fn parse_command(
                     source_file_path: file_path,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-import <target_asset_name> <source_file_path>");
+                    errln!(
+                        out,
+                        "Usage: /asset-import <target_asset_name> <source_file_path>"
+                    );
                     None
                 }
             }
         }
         "asset-export" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2472,13 +2503,16 @@ fn parse_command(
                     target_file_path: file_path,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-export <source_asset_name> <target_file_path>");
+                    errln!(
+                        out,
+                        "Usage: /asset-export <source_asset_name> <target_file_path>"
+                    );
                     None
                 }
             }
         }
         "asset-temp" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_one_optional_catchall(remaining) {
@@ -2487,7 +2521,7 @@ fn parse_command(
                         match count_str.parse::<u32>() {
                             Ok(count) => Some(count),
                             Err(_) => {
-                                eprintln!("Usage: /asset-temp <name> [<count>]");
+                                errln!(out, "Usage: /asset-temp <name> [<count>]");
                                 return None;
                             }
                         }
@@ -2497,13 +2531,13 @@ fn parse_command(
                     Some(Cmd::AssetTemp(AssetTempCmd { asset_name, count }))
                 }
                 None => {
-                    eprintln!("Usage: /asset-temp <asset_name> [<count>]");
+                    errln!(out, "Usage: /asset-temp <asset_name> [<count>]");
                     None
                 }
             }
         }
         "asset-revision-temp" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg(remaining) {
@@ -2512,13 +2546,13 @@ fn parse_command(
                     rev_id,
                 })),
                 None => {
-                    eprintln!("Usage: /{} <asset_name> <rev_id>", cmd_name);
+                    errln!(out, "Usage: /{} <asset_name> <rev_id>", cmd_name);
                     None
                 }
             }
         }
         "asset-sync-down" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2527,13 +2561,13 @@ fn parse_command(
                     target_path,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-sync-down <prefix> <target_path>");
+                    errln!(out, "Usage: /asset-sync-down <prefix> <target_path>");
                     None
                 }
             }
         }
         "asset-sync-up" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["new", "dry"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["new", "dry"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -2541,7 +2575,7 @@ fn parse_command(
                 ("dry".to_string(), OptionType::Bool),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let new = options.get("new").map(|v| v == "true").unwrap_or(false);
@@ -2554,37 +2588,37 @@ fn parse_command(
                     dry_run: dry,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-sync-up <source_path> <target_prefix>");
+                    errln!(out, "Usage: /asset-sync-up <source_path> <target_prefix>");
                     None
                 }
             }
         }
         "asset-sync-diff" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["", ""]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["", ""]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(path) => Some(Cmd::AssetSyncDiff(AssetSyncDiffCmd { path })),
                 None => {
-                    eprintln!("Usage: /asset-sync-diff <path>");
+                    errln!(out, "Usage: /asset-sync-diff <path>");
                     None
                 }
             }
         }
         "asset-acl-get" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetAclGet(AssetAclGetCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /asset-acl-get <name>");
+                    errln!(out, "Usage: /asset-acl-get <name>");
                     None
                 }
             }
         }
         "asset-acl-get-effective" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -2592,13 +2626,13 @@ fn parse_command(
                     asset_name,
                 })),
                 None => {
-                    eprintln!("Usage: /{} <name>", cmd_name);
+                    errln!(out, "Usage: /{} <name>", cmd_name);
                     None
                 }
             }
         }
         "asset-acl-set" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_three_arg_catchall(remaining) {
@@ -2610,7 +2644,8 @@ fn parse_command(
                             "user" => {
                                 let username = username.trim();
                                 if username.is_empty() {
-                                    eprintln!(
+                                    errln!(
+                                        out,
                                         "error: user principal requires a username: try `user:<username>`"
                                     );
                                     return None;
@@ -2618,14 +2653,18 @@ fn parse_command(
                                 AssetAcePrincipal::User(username.to_string())
                             }
                             _ => {
-                                eprintln!(
+                                errln!(
+                                    out,
                                     "error: unknown principal: try `everyone` or `user:<username>`"
                                 );
                                 return None;
                             }
                         }
                     } else {
-                        eprintln!("error: unknown principal: try `everyone` or `user:<username>`");
+                        errln!(
+                            out,
+                            "error: unknown principal: try `everyone` or `user:<username>`"
+                        );
                         return None;
                     };
                     if let Some((ace_effect_raw, ace_perm_raw)) = acl_cmd.split_once(":") {
@@ -2634,7 +2673,7 @@ fn parse_command(
                             "deny" => AssetAceEffect::Deny,
                             "inherit" => AssetAceEffect::Inherit,
                             _ => {
-                                eprintln!("error: unknown type: try allow, deny, inherit");
+                                errln!(out, "error: unknown type: try allow, deny, inherit");
                                 return None;
                             }
                         };
@@ -2644,7 +2683,7 @@ fn parse_command(
                             "write-data" => AssetAcePermission::WriteData,
                             "push-data" => AssetAcePermission::PushData,
                             _ => {
-                                eprintln!("error: unknown permission");
+                                errln!(out, "error: unknown permission");
                                 return None;
                             }
                         };
@@ -2655,12 +2694,13 @@ fn parse_command(
                             ace_effect: asset_ace_effect,
                         }))
                     } else {
-                        eprintln!("error: bad format: try `allow:read-data`");
+                        errln!(out, "error: bad format: try `allow:read-data`");
                         None
                     }
                 }
                 None => {
-                    eprintln!(
+                    errln!(
+                        out,
                         "Usage: /asset-acl-set <asset_name> <principal> <allow|deny|inherit>:<acl>"
                     );
                     None
@@ -2668,19 +2708,19 @@ fn parse_command(
             }
         }
         "asset-md-get" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetMdGet(AssetMdGetCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /asset-md-get <name>");
+                    errln!(out, "Usage: /asset-md-get <name>");
                     None
                 }
             }
         }
         "asset-md-set" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2689,13 +2729,13 @@ fn parse_command(
                     metadata,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-md-set <asset_name> <metadata>");
+                    errln!(out, "Usage: /asset-md-set <asset_name> <metadata>");
                     None
                 }
             }
         }
         "asset-md-set-key" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_three_arg_catchall(remaining) {
@@ -2705,13 +2745,13 @@ fn parse_command(
                     value,
                 })),
                 None => {
-                    eprintln!("Usage: /asset-md-set-key <asset_name> <key> <value>");
+                    errln!(out, "Usage: /asset-md-set-key <asset_name> <key> <value>");
                     None
                 }
             }
         }
         "asset-md-del-key" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
@@ -2719,49 +2759,49 @@ fn parse_command(
                     Some(Cmd::AssetMdDelKey(AssetMdDelKeyCmd { asset_name, key }))
                 }
                 None => {
-                    eprintln!("Usage: /asset-md-del-key <asset_name> <key>");
+                    errln!(out, "Usage: /asset-md-del-key <asset_name> <key>");
                     None
                 }
             }
         }
         "asset-folder-new" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(name) => Some(Cmd::AssetFolderNew(AssetFolderNewCmd { name })),
                 None => {
-                    eprintln!("Usage: /asset-folder-new <name>");
+                    errln!(out, "Usage: /asset-folder-new <name>");
                     None
                 }
             }
         }
         "asset-folder-collapse" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(prefix) => Some(Cmd::AssetFolderCollapse(AssetFolderCollapseCmd { prefix })),
                 None => {
-                    eprintln!("Usage: /asset-folder-collapse <prefix>");
+                    errln!(out, "Usage: /asset-folder-collapse <prefix>");
                     None
                 }
             }
         }
         "asset-folder-expand" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(prefix) => Some(Cmd::AssetFolderExpand(AssetFolderExpandCmd { prefix })),
                 None => {
-                    eprintln!("Usage: /asset-folder-expand <prefix>");
+                    errln!(out, "Usage: /asset-folder-expand <prefix>");
                     None
                 }
             }
         }
         "asset-folder-list" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AssetFolderList(AssetFolderListCmd {
@@ -2769,17 +2809,17 @@ fn parse_command(
             }))
         }
         "asset-crypt-setup" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::AssetCryptSetup)
         }
         "asset-crypt-unlock" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AssetCryptUnlock(AssetCryptUnlockCmd {
@@ -2787,7 +2827,7 @@ fn parse_command(
             }))
         }
         "asset-crypt-lock" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AssetCryptLock(AssetCryptLockCmd {
@@ -2795,7 +2835,7 @@ fn parse_command(
             }))
         }
         "asset-crypt-recover" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AssetCryptRecover(AssetCryptRecoverCmd {
@@ -2803,7 +2843,7 @@ fn parse_command(
             }))
         }
         "asset-app" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["no_open", "dev"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["no_open", "dev"]) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -2811,7 +2851,7 @@ fn parse_command(
                 ("dev".to_string(), OptionType::String),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let no_open = options.get("no_open").map(|v| v == "true").unwrap_or(false);
@@ -2823,13 +2863,13 @@ fn parse_command(
                     dev_mode,
                 })),
                 None => {
-                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    errln!(out, "Usage: /{cmd_name} <asset_name>");
                     None
                 }
             }
         }
         "asset-app-perms-list" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -2837,13 +2877,13 @@ fn parse_command(
                     Some(Cmd::AssetAppPermsList(AssetAppPermsListCmd { asset_name }))
                 }
                 None => {
-                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    errln!(out, "Usage: /{cmd_name} <asset_name>");
                     None
                 }
             }
         }
         "asset-app-perms-revoke" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
@@ -2851,43 +2891,43 @@ fn parse_command(
                     asset_name,
                 })),
                 None => {
-                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    errln!(out, "Usage: /{cmd_name} <asset_name>");
                     None
                 }
             }
         }
         "open" | "asset-open" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(asset_name) => Some(Cmd::AssetOpen(AssetOpenCmd { asset_name })),
                 None => {
-                    eprintln!("Usage: /{cmd_name} <asset_name>");
+                    errln!(out, "Usage: /{cmd_name} <asset_name>");
                     None
                 }
             }
         }
         "asset-pool-new" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_n_args(remaining) {
                 Some(usernames) => Some(Cmd::AssetPoolNew(AssetPoolNewCmd { usernames })),
                 None => {
-                    eprintln!("Usage: /{cmd_name} <username> [<username> ...]");
+                    errln!(out, "Usage: /{cmd_name} <username> [<username> ...]");
                     None
                 }
             }
         }
         "asset-pools" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AssetPools)
         }
         "gateway" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::Gateway(GatewayCmd {
@@ -2895,22 +2935,22 @@ fn parse_command(
             }))
         }
         "chats" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Chats)
         }
         "chat-resume" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["fork"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["fork"]) {
                 return None;
             }
             let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
@@ -2920,12 +2960,12 @@ fn parse_command(
             }))
         }
         "chat-save" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["fork"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["fork"]) {
                 return None;
             }
             let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
@@ -2935,43 +2975,43 @@ fn parse_command(
             }))
         }
         "email" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             let (cmd_arg, body) = split_arg_and_optional_body(remaining);
             match parse_one_arg_catchall(&cmd_arg) {
                 Some(subject) => Some(Cmd::Email(EmailCmd { subject, body })),
                 None => {
-                    eprintln!("Usage: /email <subject> [<NEWLINE><body>]");
+                    errln!(out, "Usage: /email <subject> [<NEWLINE><body>]");
                     None
                 }
             }
         }
         "notif" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             let (cmd_arg, body) = split_arg_and_optional_body(remaining);
             match parse_one_arg_catchall(&cmd_arg) {
                 Some(title) => Some(Cmd::Notif(NotifCmd { title, body })),
                 None => {
-                    eprintln!("Usage: /notif <title> [<NEWLINE><body>]");
+                    errln!(out, "Usage: /notif <title> [<NEWLINE><body>]");
                     None
                 }
             }
         }
         "fns" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Fns)
         }
         "std" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_one_optional_catchall(remaining) {
@@ -2980,48 +3020,48 @@ fn parse_command(
                         if fn_arg.is_none() {
                             Some(Cmd::Std(StdCmd::Now))
                         } else {
-                            eprintln!("Usage: {fn_name} takes no arguments");
+                            errln!(out, "Usage: {fn_name} takes no arguments");
                             None
                         }
                     } else if fn_name == "new-day-alert" {
                         if fn_arg.is_none() {
                             Some(Cmd::Std(StdCmd::NewDayAlert))
                         } else {
-                            eprintln!("Usage: {fn_name} takes no arguments");
+                            errln!(out, "Usage: {fn_name} takes no arguments");
                             None
                         }
                     } else if fn_name == "which" {
                         if let Some(prog) = fn_arg {
                             Some(Cmd::Std(StdCmd::Which(prog)))
                         } else {
-                            eprintln!("Usage: {fn_name} <prog>");
+                            errln!(out, "Usage: {fn_name} <prog>");
                             None
                         }
                     } else {
-                        eprintln!("Unknown stdlib function: {fn_name}");
+                        errln!(out, "Unknown stdlib function: {fn_name}");
                         None
                     }
                 }
                 None => {
-                    eprintln!("Usage: /{cmd_name} <fn_name> [<fn_arg>]");
+                    errln!(out, "Usage: /{cmd_name} <fn_name> [<fn_arg>]");
                     None
                 }
             }
         }
         "mcp-add" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_two_arg_catchall(remaining) {
                 Some((name, cmd)) => Some(Cmd::McpAdd(McpAddCmd { name, cmd })),
                 None => {
-                    eprintln!("Usage: /mcp-add <name> <cmd>");
+                    errln!(out, "Usage: /mcp-add <name> <cmd>");
                     None
                 }
             }
         }
         "bot-boot" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotBoot(BotBootCmd {
@@ -3029,37 +3069,37 @@ fn parse_command(
             }))
         }
         "bot-get-active" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotGetActive)
         }
         "bot-probe" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotProbe)
         }
         "bot-setup" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotSetup)
         }
         "bot-ssh" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotSsh)
         }
         "bot-shutdown" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::BotShutdown)
         }
         "account" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::Account(AccountCmd {
@@ -3067,17 +3107,17 @@ fn parse_command(
             }))
         }
         "account-new" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::AccountNew)
         }
         "account-login" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             // The ability to specify the username/password is for internal use
@@ -3094,7 +3134,7 @@ fn parse_command(
             }
         }
         "account-logout" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::AccountLogout(AccountLogoutCmd {
@@ -3102,49 +3142,50 @@ fn parse_command(
             }))
         }
         "account-balance" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::AccountBalance)
         }
         "account-subscribe" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::AccountSubscribe)
         }
         "inbox-setup" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::InboxSetup)
         }
         "whois" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             match parse_one_arg(remaining) {
                 Some(username) => Some(Cmd::Whois(WhoisCmd { username })),
                 None => {
-                    eprintln!("Usage: /whois username");
+                    errln!(out, "Usage: /whois username");
                     None
                 }
             }
         }
         "web-search" => {
             if !validate_options_and_print_err(
+                out,
                 cmd_name,
                 &options,
                 &["n", "pd", "pw", "pm", "py", "range"],
@@ -3160,7 +3201,7 @@ fn parse_command(
                 ("range".to_string(), OptionType::String),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let n = options
@@ -3185,23 +3226,23 @@ fn parse_command(
                     range,
                 })),
                 None => {
-                    eprintln!("Usage: /web-search <query>");
+                    errln!(out, "Usage: /web-search <query>");
                     None
                 }
             }
         }
         "cost" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             if parse_one_arg_catchall(remaining).is_some() {
-                eprintln!("Usage: /{cmd_name} takes no arguments");
+                errln!(out, "Usage: /{cmd_name} takes no arguments");
                 return None;
             }
             Some(Cmd::Cost)
         }
         "queue-pop" | "qpop" => {
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::QueuePop(QueuePopCmd {
@@ -3209,21 +3250,22 @@ fn parse_command(
             }))
         }
         "prompt" => {
-            if !validate_options_and_print_err(cmd_name, &options, &["cache"]) {
+            if !validate_options_and_print_err(out, cmd_name, &options, &["cache"]) {
                 return None;
             }
             let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
             match parse_one_arg_catchall(remaining) {
                 Some(prompt) => Some(Cmd::Prompt(PromptCmd { prompt, cache })),
                 None => {
-                    eprintln!("Usage: /prompt <message>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: /prompt <message>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
                     None
@@ -3231,8 +3273,8 @@ fn parse_command(
             }
         }
         _ => {
-            eprintln!("Warning: Did you intend to invoke a /command?");
-            if !validate_options_and_print_err(cmd_name, &options, &[]) {
+            errln!(out, "Warning: Did you intend to invoke a /command?");
+            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
                 return None;
             }
             Some(Cmd::Prompt(PromptCmd {
@@ -3243,7 +3285,7 @@ fn parse_command(
     }
 }
 
-pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
+pub fn parse_tool_command_standalone(out: &Out, input: &str) -> Option<ToolModeCmd> {
     if let Some(mut remaining) = input.strip_prefix('!') {
         // Try parsing as a tool-command
         let input = input.trim_end();
@@ -3256,7 +3298,7 @@ pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
         // If the next char is blank, then we assume the user intends to use a
         // previous tool so we leave the tool_name empty.
         let (mut remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
-            eprintln!("error: No tool name specified");
+            errln!(out, "error: No tool name specified");
             return None;
         } else {
             let tool_re = get_tool_re();
@@ -3266,12 +3308,12 @@ pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
                         remaining = &remaining[m.end()..];
                         (remaining, m.as_str().replace("\\'", "'"))
                     } else {
-                        eprintln!("error: Bad tool specification");
+                        errln!(out, "error: Bad tool specification");
                         return None;
                     }
                 }
                 None => {
-                    eprintln!("error: Bad tool specification");
+                    errln!(out, "error: Bad tool specification");
                     return None;
                 }
             }
@@ -3288,13 +3330,15 @@ pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
             (HashMap::new(), remaining)
         };
         if remaining.len() > 0 {
-            eprintln!(
+            errln!(
+                out,
                 "error: Tool specification had unexpected trailing characters: {}",
                 remaining
             );
             return None;
         }
         parse_tool_command(
+            out,
             tool_name.as_str(),
             user_confirmation,
             force_tool,
@@ -3306,18 +3350,22 @@ pub fn parse_tool_command_standalone(input: &str) -> Option<ToolModeCmd> {
         .and_then(|cmd| match cmd {
             Cmd::ToolMode(tool_mode_cmd) => Some(tool_mode_cmd),
             _ => {
-                eprintln!("error: Expected a tool mode command, but got a different command");
+                errln!(
+                    out,
+                    "error: Expected a tool mode command, but got a different command"
+                );
                 None
             }
         })
     } else {
-        eprintln!("error: invalid tool {}: must start with '!'", input);
+        errln!(out, "error: invalid tool {}: must start with '!'", input);
         None
     }
 }
 
 /// If None is returned, it prints an error usage string.
 pub fn parse_tool_command(
+    out: &Out,
     tool_name: &str,
     user_confirmation: bool,
     force_tool: bool,
@@ -3344,7 +3392,7 @@ pub fn parse_tool_command(
                     }))
                 }
                 None => {
-                    eprintln!("Usage: !clip <prompt: what to clip>");
+                    errln!(out, "Usage: !clip <prompt: what to clip>");
                     None
                 }
             }
@@ -3447,7 +3495,12 @@ pub fn parse_tool_command(
             })),
         },
         "fn-py" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
+            if !validate_options_and_print_err_for_tool(
+                out,
+                tool_name,
+                &options,
+                &["cache", "name"],
+            ) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -3455,7 +3508,7 @@ pub fn parse_tool_command(
                 ("name".to_string(), OptionType::String),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
@@ -3474,9 +3527,10 @@ pub fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-py <prompt: function to implement>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: !fn-py <prompt: function to implement>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
                     None
@@ -3484,7 +3538,12 @@ pub fn parse_tool_command(
             }
         }
         "fn-pyuv" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
+            if !validate_options_and_print_err_for_tool(
+                out,
+                tool_name,
+                &options,
+                &["cache", "name"],
+            ) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -3492,7 +3551,7 @@ pub fn parse_tool_command(
                 ("name".to_string(), OptionType::String),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
@@ -3511,9 +3570,10 @@ pub fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-pyuv <prompt: function to implement>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: !fn-pyuv <prompt: function to implement>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
                     None
@@ -3521,7 +3581,12 @@ pub fn parse_tool_command(
             }
         }
         "fn-sh" => {
-            if !validate_options_and_print_err_for_tool(tool_name, &options, &["cache", "name"]) {
+            if !validate_options_and_print_err_for_tool(
+                out,
+                tool_name,
+                &options,
+                &["cache", "name"],
+            ) {
                 return None;
             }
             let expected_types = HashMap::from([
@@ -3529,7 +3594,7 @@ pub fn parse_tool_command(
                 ("name".to_string(), OptionType::String),
             ]);
             if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                eprintln!("Error: {}", type_error);
+                errln!(out, "Error: {}", type_error);
                 return None;
             }
             let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
@@ -3548,9 +3613,10 @@ pub fn parse_tool_command(
                     cache,
                 })),
                 None => {
-                    eprintln!("Usage: !fn-sh <prompt: function to implement>");
-                    eprintln!("Options:");
-                    eprintln!(
+                    errln!(out, "Usage: !fn-sh <prompt: function to implement>");
+                    errln!(out, "Options:");
+                    errln!(
+                        out,
                         "  .cache=BOOL    Cache the result for the next execution (default: false)"
                     );
                     None
@@ -3584,7 +3650,7 @@ pub fn parse_tool_command(
                     })),
                 }
             } else {
-                eprintln!("Error: No tool was previously used");
+                errln!(out, "Error: No tool was previously used");
                 None
             }
         }
@@ -3617,7 +3683,7 @@ pub fn parse_tool_command(
                 // Since the tool didn't match a known one, treat it as if the
                 // user never intended to make a !tool call and send it to the
                 // AI as a prompt.
-                eprintln!("Warning: Did you intend to invoke a tool?");
+                errln!(out, "Warning: Did you intend to invoke a tool?");
                 Some(Cmd::Prompt(PromptCmd {
                     prompt: full_input.to_owned(),
                     cache: false,
@@ -3627,7 +3693,7 @@ pub fn parse_tool_command(
     }
 }
 
-fn parse_accent(options: &HashMap<String, String>) -> Option<Accent> {
+fn parse_accent(out: &Out, options: &HashMap<String, String>) -> Option<Accent> {
     let expected_types = HashMap::from([
         ("danger".to_string(), OptionType::Bool),
         ("warn".to_string(), OptionType::Bool),
@@ -3635,7 +3701,7 @@ fn parse_accent(options: &HashMap<String, String>) -> Option<Accent> {
         ("success".to_string(), OptionType::Bool),
     ]);
     if let Err(type_error) = validate_option_types(options, &expected_types) {
-        eprintln!("Error: {}", type_error);
+        errln!(out, "Error: {}", type_error);
         return None;
     }
     if options.get("danger").map(|v| v == "true").unwrap_or(false) {
@@ -3825,15 +3891,18 @@ fn validate_options(
 }
 
 fn validate_options_and_print_err(
+    out: &Out,
     cmd: &str,
     options: &HashMap<String, String>,
     valid_keys: &[&str],
 ) -> bool {
     if let Err(invalid_keys) = validate_options(options, valid_keys) {
         let invalid_keys_pretty = invalid_keys.join(", ");
-        eprintln!(
+        errln!(
+            out,
             "Error: Invalid option(s) for /{}: {}",
-            cmd, invalid_keys_pretty
+            cmd,
+            invalid_keys_pretty
         );
         false
     } else {
@@ -3842,15 +3911,18 @@ fn validate_options_and_print_err(
 }
 
 fn validate_options_and_print_err_for_tool(
+    out: &Out,
     tool_name: &str,
     options: &HashMap<String, String>,
     valid_keys: &[&str],
 ) -> bool {
     if let Err(invalid_keys) = validate_options(options, valid_keys) {
         let invalid_keys_pretty = invalid_keys.join(", ");
-        eprintln!(
+        errln!(
+            out,
             "Error: Invalid option(s) for !{}: {}",
-            tool_name, invalid_keys_pretty
+            tool_name,
+            invalid_keys_pretty
         );
         false
     } else {
@@ -3982,7 +4054,7 @@ mod tests {
         // treated as an AI prompt and never as a command. This eases issues
         // with pasting code that looks like a command.
         let input = " /load xyz";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
                 assert_eq!(prompt, input);
@@ -3995,7 +4067,7 @@ mod tests {
     fn test_arguments() {
         // Test no arguments
         let input = "/ask-human agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4011,7 +4083,7 @@ mod tests {
 
         // Test one argument
         let input = "/ask-human(secret=true) agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4027,7 +4099,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human(secret=true,cache=true) agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4043,7 +4115,7 @@ mod tests {
 
         // Test two arguments separated by space
         let input = "/ask-human(secret=true, cache=true) agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4062,7 +4134,7 @@ mod tests {
     fn test_arguments_new() {
         // Test one argument
         let input = "/ask-human.secret=true agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4078,7 +4150,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human.secret=true.cache=true agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4094,7 +4166,7 @@ mod tests {
 
         // Test two arguments shorthand
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -4110,7 +4182,7 @@ mod tests {
 
         // Test string argument
         let input = "/task.key=\"test\".trust user/task";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Task(TaskCmd {
                 task_ref,
@@ -4128,7 +4200,7 @@ mod tests {
     #[test]
     fn test_clip_tool_command() {
         let input = "!clip Copy this to clipboard";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::CopyToClipboard,
@@ -4146,7 +4218,7 @@ mod tests {
     #[test]
     fn test_py_tool_command() {
         let input = "!py print('Hello, World!')";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4164,7 +4236,7 @@ mod tests {
     #[test]
     fn test_sh_tool_command() {
         let input = "!sh ls -lah";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
@@ -4183,7 +4255,7 @@ mod tests {
     #[test]
     fn test_shscript_tool_command() {
         let input = "!shscript echo 'Hello'";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
@@ -4201,7 +4273,7 @@ mod tests {
     #[test]
     fn test_invalid_tool_command() {
         let input = "!invalid_tool Something";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
                 assert_eq!(prompt, input);
@@ -4213,7 +4285,7 @@ mod tests {
     #[test]
     fn test_optional_tool_command() {
         let input = "!?py print('Hello, World!')";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4231,7 +4303,7 @@ mod tests {
     #[test]
     fn test_custom_tool_command() {
         let input = "!?'psql' describe the user table";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4248,7 +4320,7 @@ mod tests {
 
         // custom tool with space
         let input = "!?'psql -hlocalhost' describe the user table";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4265,7 +4337,7 @@ mod tests {
 
         // custom tool with double-quotes
         let input = "!?'psql -h \"localhost\"' describe the user table";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4282,7 +4354,7 @@ mod tests {
 
         // custom tool with escaped single-quote
         let input = "!?'psql -h loc\\'alhost' describe the user table";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4299,7 +4371,7 @@ mod tests {
 
         // custom tool with file+ext placeholder
         let input = "!?'uv run {file.py}' distance sf to nyc";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -4317,7 +4389,7 @@ mod tests {
 
         // custom tool with file sans ext placeholder
         let input = "!?'uv run {file}' distance sf to nyc";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -4346,7 +4418,7 @@ mod tests {
 
         // Test tool re-use
         let input = "! 3 + 4";
-        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4362,7 +4434,7 @@ mod tests {
 
         // Test tool re-use with !?
         let input = "!? 3 + 4";
-        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4378,7 +4450,7 @@ mod tests {
 
         // Test tool & prompt re-use
         let input = "!";
-        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4394,7 +4466,7 @@ mod tests {
 
         // Test tool & prompt re-use with extraneous space and !?
         let input = "!? ";
-        let cmd = parse_user_input(input, Some(last_tool_cmd), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4424,7 +4496,7 @@ mod tests {
 
         // Test tool re-use
         let input = "! dump task table";
-        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4441,7 +4513,7 @@ mod tests {
 
         // Test tool & prompt re-use
         let input = "!";
-        let cmd = parse_user_input(input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -4471,7 +4543,7 @@ mod tests {
         // Test entering tool mode
         //
 
-        let cmd = parse_user_input("!py", None, None);
+        let cmd = parse_user_input(&Out::stdio(), "!py", None, None);
         match cmd {
             Some(Cmd::ToolMode(ToolModeCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4493,7 +4565,7 @@ mod tests {
             force_tool: true,
         };
         let input = "3 + 4";
-        let cmd = parse_user_input(input, None, Some(tool_mode.clone()));
+        let cmd = parse_user_input(&Out::stdio(), input, None, Some(tool_mode.clone()));
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4512,6 +4584,7 @@ mod tests {
         //
 
         let cmd = parse_user_input(
+            &Out::stdio(),
             "! get system time",
             Some(last_tool_cmd),
             Some(tool_mode.clone()),
@@ -4533,7 +4606,7 @@ mod tests {
     #[test]
     fn test_tool_command_with_option() {
         let input = "!fn-py(cache=true) double a number";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool:
@@ -4555,7 +4628,7 @@ mod tests {
         }
 
         let input = "!fn-py.cache=true double a number";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool:
@@ -4577,7 +4650,7 @@ mod tests {
         }
 
         let input = "!fn-py.cache double a number";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool:
@@ -4602,7 +4675,7 @@ mod tests {
     #[test]
     fn test_tool_require() {
         let input = "!py area of circle w/ radius 3";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4619,7 +4692,7 @@ mod tests {
         }
 
         let input = "!py? area of circle w/ radius 3";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -4649,7 +4722,7 @@ mod tests {
     fn test_string_option() {
         // Test simple
         let input = "/task(key=\"A\", trust) hai/test";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Task(TaskCmd {
                 task_ref,
@@ -4666,7 +4739,7 @@ mod tests {
 
         // Test comma in string
         let input = "/task(key=\"A,B\", trust) hai/test";
-        let cmd = parse_user_input(input, None, None);
+        let cmd = parse_user_input(&Out::stdio(), input, None, None);
         match cmd {
             Some(Cmd::Task(TaskCmd {
                 task_ref,

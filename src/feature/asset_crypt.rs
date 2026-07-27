@@ -11,7 +11,7 @@ use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{self, GetAssetError, get_only_asset_metadata};
 use crate::crypt;
 use crate::feature::asset_keyring::AssetKeyring;
-use crate::term;
+use crate::io::Io;
 use crate::{
     api::{
         client::{HaiClient, RequestError},
@@ -19,6 +19,7 @@ use crate::{
     },
     asset_reader::DataFetchFailure,
 };
+use crate::{errorln, outln};
 
 pub enum CryptSetupError {
     Abort,
@@ -39,6 +40,7 @@ pub enum CryptSetupError {
 /// or a CryptSetupError on failure.
 ///
 pub async fn asset_crypt_setup(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: HaiClient,
     username: &str,
@@ -55,26 +57,80 @@ pub async fn asset_crypt_setup(
     match get_only_asset_metadata(asset_blob_cache.clone(), &api_client, &pub_key_path, true).await
     {
         Ok((enc_key_md_contents, _enc_key_entry)) => {
-            println!();
-            println!("╔══════════════════════════════════════════════════════════════╗");
-            println!("║                    ⚠  WARNING: KEY EXISTS                    ║");
-            println!("╠══════════════════════════════════════════════════════════════╣");
-            println!("║                                                              ║");
-            println!("║  Asset encryption key already exists at:                     ║");
-            println!("║  {:<60}║", pub_key_path);
-            println!("║                                                              ║");
-            println!("║  You will be prompted to confirm key rotation.               ║");
-            println!("║                                                              ║");
-            println!("║  Key rotation will:                                          ║");
-            println!("║   • Generate new encryption and signing keys                 ║");
-            println!("║   • Set the new keys as your default                         ║");
-            println!("║   • Keep old keys available to decrypt/verify previously     ║");
-            println!("║     encrypted assets                                         ║");
-            println!("║                                                              ║");
-            println!("╚══════════════════════════════════════════════════════════════╝");
-            println!();
-            let answer = term::ask_question_readline("Type 'yes' to rotate keys");
-            if answer.as_deref() != Some("yes") {
+            outln!(
+                io,
+                "╔══════════════════════════════════════════════════════════════╗"
+            );
+            outln!(
+                io,
+                "║                    ⚠  WARNING: KEY EXISTS                    ║"
+            );
+            outln!(
+                io,
+                "╠══════════════════════════════════════════════════════════════╣"
+            );
+            outln!(
+                io,
+                "║                                                              ║"
+            );
+            outln!(
+                io,
+                "║  Asset encryption key already exists at:                     ║"
+            );
+            outln!(io, "║  {:<60}║", pub_key_path);
+            outln!(
+                io,
+                "║                                                              ║"
+            );
+            outln!(
+                io,
+                "║  You will be prompted to confirm key rotation.               ║"
+            );
+            outln!(
+                io,
+                "║                                                              ║"
+            );
+            outln!(
+                io,
+                "║  Key rotation will:                                          ║"
+            );
+            outln!(
+                io,
+                "║   • Generate new encryption and signing keys                 ║"
+            );
+            outln!(
+                io,
+                "║   • Set the new keys as your default                         ║"
+            );
+            outln!(
+                io,
+                "║   • Keep old keys available to decrypt/verify previously     ║"
+            );
+            outln!(
+                io,
+                "║     encrypted assets                                         ║"
+            );
+            outln!(
+                io,
+                "║                                                              ║"
+            );
+            outln!(
+                io,
+                "╚══════════════════════════════════════════════════════════════╝"
+            );
+            outln!(io);
+
+            let answer = match io
+                .prompt(&crate::io::Prompt::confirm("Type 'yes' to rotate keys"))
+                .into_option()
+            {
+                Some(answer) => answer,
+                None => {
+                    return Err(CryptSetupError::Abort);
+                }
+            };
+
+            if answer != "yes" {
                 return Err(CryptSetupError::Abort);
             }
             rotation_accepted = true;
@@ -87,7 +143,7 @@ pub async fn asset_crypt_setup(
                     serde_json::from_str::<serde_json::Value>(&enc_key_md_contents)
                     && let Some(old_key_id) = enc_key_md_json.get("key_id").and_then(|v| v.as_str())
                 {
-                    println!("Existing encryption key ID: {}", old_key_id);
+                    outln!(io, "Existing encryption key ID: {}", old_key_id);
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
                         &format!("keys/enc_{old_key_id}.key"),
@@ -121,9 +177,11 @@ pub async fn asset_crypt_setup(
     };
     match get_only_asset_metadata(asset_blob_cache, &api_client, "keys/sign.key", true).await {
         Ok((sign_key_md_contents, _sign_key_entry)) => {
-            println!("Asset sign key `keys/sign.key` already exists.");
+            outln!(io, "Asset sign key `keys/sign.key` already exists.");
             if !rotation_accepted {
-                let answer = term::ask_question_readline("Type 'yes' to rotate keys");
+                let answer = io
+                    .prompt(&crate::io::Prompt::confirm("Type 'yes' to rotate keys"))
+                    .into_option();
                 if answer.as_deref() != Some("yes") {
                     return Err(CryptSetupError::Abort);
                 }
@@ -138,7 +196,7 @@ pub async fn asset_crypt_setup(
                     && let Some(old_key_id) =
                         sign_key_md_json.get("key_id").and_then(|v| v.as_str())
                 {
-                    println!("Existing sign key ID: {}", old_key_id);
+                    outln!(io, "Existing sign key ID: {}", old_key_id);
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
                         &format!("keys/sign_{old_key_id}.key"),
@@ -198,7 +256,7 @@ pub async fn asset_crypt_setup(
                         // no conflict
                     }
                     _ => {
-                        eprintln!("error: {}", e);
+                        errorln!(io, "{}", e);
                         return Err(CryptSetupError::Other(format!("{}", e)));
                     }
                 }
@@ -219,7 +277,7 @@ pub async fn asset_crypt_setup(
                     break (keys, enc_key_id, sign_key_id);
                 }
                 _ => {
-                    eprintln!("error: {}", e);
+                    errorln!(io, "{}", e);
                     return Err(CryptSetupError::Other(format!("{}", e)));
                 }
             },
@@ -229,37 +287,82 @@ pub async fn asset_crypt_setup(
     //
     // Query user for password to protect keys
     //
-    println!();
-    println!("╔══════════════════════════════════════════════════════════════╗");
-    println!("║           CHOOSE A KEY ENCRYPTION PASSWORD                   ║");
-    println!("╠══════════════════════════════════════════════════════════════╣");
-    println!("║                                                              ║");
-    println!("║  💡 Tips for a strong password:                              ║");
-    println!("║                                                              ║");
-    println!("║   • Use 4-6 random words (easier to remember!)               ║");
-    println!("║   • DON'T reuse your account password                        ║");
-    println!("║   • Make it unique to this key                               ║");
-    println!("║                                                              ║");
-    println!("║  Example: \"person woman man camera TV\"                       ║");
-    println!("║                                                              ║");
-    println!("╚══════════════════════════════════════════════════════════════╝");
-    println!();
-    let password =
-        if let Some(password) = term::ask_question("Enter password to protect keys:", true) {
-            if password.is_empty() {
-                eprintln!("error: password cannot be empty");
-                return Err(CryptSetupError::InvalidPassword);
-            }
-            let password_verify = term::ask_question("Verify password:", true);
-            if password_verify.as_deref() != Some(&password) {
-                eprintln!("error: passwords do not match");
-                return Err(CryptSetupError::PasswordMismatch);
-            }
-            password.into_bytes()
-        } else {
-            eprintln!("error: password input cancelled");
-            return Err(CryptSetupError::Abort);
-        };
+    outln!(io);
+    outln!(
+        io,
+        "╔══════════════════════════════════════════════════════════════╗"
+    );
+    outln!(
+        io,
+        "║           CHOOSE A KEY ENCRYPTION PASSWORD                   ║"
+    );
+    outln!(
+        io,
+        "╠══════════════════════════════════════════════════════════════╣"
+    );
+    outln!(
+        io,
+        "║                                                              ║"
+    );
+    outln!(
+        io,
+        "║  💡 Tips for a strong password:                              ║"
+    );
+    outln!(
+        io,
+        "║                                                              ║"
+    );
+    outln!(
+        io,
+        "║   • Use 4-6 random words (easier to remember!)               ║"
+    );
+    outln!(
+        io,
+        "║   • DON'T reuse your account password                        ║"
+    );
+    outln!(
+        io,
+        "║   • Make it unique to this key                               ║"
+    );
+    outln!(
+        io,
+        "║                                                              ║"
+    );
+    outln!(
+        io,
+        "║  Example: \"person woman man camera TV\"                       ║"
+    );
+    outln!(
+        io,
+        "║                                                              ║"
+    );
+    outln!(
+        io,
+        "╚══════════════════════════════════════════════════════════════╝"
+    );
+    outln!(io);
+    let password = if let Some(password) = io
+        .prompt(&crate::io::Prompt::secret_line(
+            "Enter password to protection keys:",
+        ))
+        .into_option()
+    {
+        if password.is_empty() {
+            errorln!(io, "password cannot be empty");
+            return Err(CryptSetupError::InvalidPassword);
+        }
+        let password_verify = io
+            .prompt(&crate::io::Prompt::secret_line("Verify password:"))
+            .into_option();
+        if password_verify.as_deref() != Some(&password) {
+            errorln!(io, "passwords do not match");
+            return Err(CryptSetupError::PasswordMismatch);
+        }
+        password.into_bytes()
+    } else {
+        errorln!(io, "password input cancelled");
+        return Err(CryptSetupError::Abort);
+    };
 
     //
     // Generate recovery code and create recovery-encrypted keys
@@ -281,6 +384,7 @@ pub async fn asset_crypt_setup(
 
     use crate::api::types::asset::{AssetPutArg, PutConflictPolicy};
     async fn put_crypt_asset(
+        io: &Io,
         api_client: &HaiClient,
         name: String,
         data: &[u8],
@@ -295,19 +399,21 @@ pub async fn asset_crypt_setup(
         {
             Ok(_) => Ok(()),
             Err(e) => {
-                eprintln!("error: failed to put: {}", e);
+                errorln!(io, "failed to put: {}", e);
                 Err(CryptSetupError::ServerAbort(format!("{}", e)))
             }
         }
     }
 
     put_crypt_asset(
+        io,
         &api_client,
         format!("/{username}/keys/enc_{enc_key_id}.pub"),
         &public_bundle.encryption_public,
     )
     .await?;
     put_crypt_asset(
+        io,
         &api_client,
         format!("/{username}/keys/sign_{sign_key_id}.pub"),
         &public_bundle.verifying_key,
@@ -316,12 +422,14 @@ pub async fn asset_crypt_setup(
 
     // FUTURE: Convert this to an asset-copy
     put_crypt_asset(
+        io,
         &api_client,
         format!("/{username}/keys/enc.pub"),
         &public_bundle.encryption_public,
     )
     .await?;
     put_crypt_asset(
+        io,
         &api_client,
         format!("/{username}/keys/sign.pub"),
         &public_bundle.verifying_key,
@@ -329,12 +437,14 @@ pub async fn asset_crypt_setup(
     .await?;
 
     put_crypt_asset(
+        io,
         &api_client,
         format!("keys/enc_{enc_key_id}.key"),
         &encrypted_encryption_bundle.to_bytes(),
     )
     .await?;
     put_crypt_asset(
+        io,
         &api_client,
         format!("keys/sign_{sign_key_id}.key"),
         &encrypted_signing_bundle.to_bytes(),
@@ -356,6 +466,7 @@ pub async fn asset_crypt_setup(
     );
 
     put_crypt_asset(
+        io,
         &api_client,
         format!("keys/enc_{enc_key_id}.recovery"),
         recovery_file_contents.as_bytes(),
@@ -364,6 +475,7 @@ pub async fn asset_crypt_setup(
 
     use crate::api::types::asset::AssetMetadataPutArg;
     async fn put_crypt_asset_metadata(
+        io: &Io,
         api_client: &HaiClient,
         name: String,
         md_contents: String,
@@ -378,7 +490,7 @@ pub async fn asset_crypt_setup(
         {
             Ok(_) => Ok(()),
             Err(e) => {
-                eprintln!("error: failed to metadata/put: {}", e);
+                errorln!(io, "failed to metadata/put: {}", e);
                 Err(CryptSetupError::ServerAbort(format!("{}", e)))
             }
         }
@@ -395,12 +507,14 @@ pub async fn asset_crypt_setup(
     .to_string();
 
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("/{username}/keys/enc.pub"),
         enc_pub_md.clone(),
     )
     .await?;
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("/{username}/keys/enc_{enc_key_id}.pub"),
         enc_pub_md,
@@ -414,12 +528,14 @@ pub async fn asset_crypt_setup(
     })
     .to_string();
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("/{username}/keys/sign.pub"),
         sign_pub_md.clone(),
     )
     .await?;
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("/{username}/keys/sign_{sign_key_id}.pub"),
         sign_pub_md,
@@ -434,6 +550,7 @@ pub async fn asset_crypt_setup(
     })
     .to_string();
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("keys/enc_{enc_key_id}.key"),
         enc_key_md,
@@ -448,6 +565,7 @@ pub async fn asset_crypt_setup(
     })
     .to_string();
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("keys/sign_{sign_key_id}.key"),
         sign_key_md,
@@ -466,6 +584,7 @@ pub async fn asset_crypt_setup(
     })
     .to_string();
     put_crypt_asset_metadata(
+        io,
         &api_client,
         format!("keys/enc_{enc_key_id}.recovery"),
         recovery_md,
@@ -1155,6 +1274,7 @@ pub struct SymmetricKeyInfo {
 }
 
 pub async fn get_symmetric_key_ez(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -1163,6 +1283,7 @@ pub async fn get_symmetric_key_ez(
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let secret = match asset_keyring_locked
         .get_or_unlock_decrypt_key_with_prompt(
+            io,
             asset_blob_cache,
             api_client,
             &rec_key_info.recipient_key_id_parts(),
@@ -1171,7 +1292,6 @@ pub async fn get_symmetric_key_ez(
     {
         Ok(secret) => secret,
         Err(e) => {
-            eprintln!("error: failed to unlock keyring: {}", e);
             return Err(AssetKeyMaterialDecryptionError::DecryptionKeyError(
                 e.to_string(),
             ));
@@ -1188,6 +1308,7 @@ pub async fn get_symmetric_key_ez(
 // --
 
 pub async fn maybe_decrypt_asset_contents(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -1198,12 +1319,18 @@ pub async fn maybe_decrypt_asset_contents(
     if let Some(md_contents) = md_contents
         && let Some(rec_key_info) = parse_metadata_for_encryption_info(&md_contents, recipient)
     {
-        get_symmetric_key_ez(asset_blob_cache, asset_keyring, &api_client, &rec_key_info)
-            .await
-            .map(|sym_info| {
-                let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
-                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
-            })
+        get_symmetric_key_ez(
+            io,
+            asset_blob_cache,
+            asset_keyring,
+            &api_client,
+            &rec_key_info,
+        )
+        .await
+        .map(|sym_info| {
+            let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+            crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
+        })
     } else {
         Ok(asset_contents.to_vec())
     }
@@ -1472,6 +1599,7 @@ pub fn new_asset_akm_policy_by_asset_name(asset_name: &str) -> NewAssetAkmPolicy
 }
 
 pub async fn extract_akm_from_metadata(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
@@ -1485,6 +1613,7 @@ pub async fn extract_akm_from_metadata(
         && let Some(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
     {
         let sym_key_info = get_symmetric_key_ez(
+            io,
             asset_blob_cache.clone(),
             asset_keyring.clone(),
             &api_client,
@@ -1534,6 +1663,7 @@ pub async fn extract_akm_from_metadata(
 /// - `additional_recipients`: Optional additional recipients to include in the
 ///   AKM for new assets. This is ignored for existing assets.
 pub async fn choose_akm_for_asset(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
@@ -1548,6 +1678,7 @@ pub async fn choose_akm_for_asset(
 
     // Case 1: Existing encrypted asset: reconstruct AssetKeyMaterial
     let akm = extract_akm_from_metadata(
+        io,
         asset_blob_cache.clone(),
         asset_keyring.clone(),
         api_client.clone(),
@@ -1648,6 +1779,7 @@ impl AssetRef {
 }
 
 pub async fn choose_akm_for_asset_by_name(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: HaiClient,
@@ -1849,6 +1981,7 @@ pub async fn choose_akm_for_asset_by_name(
         };
 
     choose_akm_for_asset(
+        io,
         asset_blob_cache,
         asset_keyring,
         api_client,
@@ -1904,6 +2037,7 @@ pub enum SignMessageError {
 /// (signer_key_id, signature)
 /// where `signer_key_id` is `u:<username>:<key_id>``
 pub async fn sign_message_using_ed25519_key(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -1943,6 +2077,7 @@ pub async fn sign_message_using_ed25519_key(
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let signing_key = match asset_keyring_locked
         .get_or_unlock_signing_key_with_prompt(
+            io,
             asset_blob_cache,
             api_client,
             &RecipientKeyIdParts {
@@ -1954,8 +2089,7 @@ pub async fn sign_message_using_ed25519_key(
         .await
     {
         Ok(secret) => secret,
-        Err(e) => {
-            eprintln!("error: failed to unlock keyring: {}", e);
+        Err(_e) => {
             return Err(SignMessageError::BadPassword);
         }
     };
@@ -2051,6 +2185,7 @@ impl Debug for SshKeyGenerationError {
 /// # Returns
 /// A tuple containing the key ID, base64 public key, and base64 private key.
 pub async fn get_ed25519_for_ssh_key(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -2091,6 +2226,7 @@ pub async fn get_ed25519_for_ssh_key(
     let mut asset_keyring_locked = asset_keyring.lock().await;
     let signing_key = match asset_keyring_locked
         .get_or_unlock_signing_key_with_prompt(
+            io,
             asset_blob_cache,
             api_client,
             &RecipientKeyIdParts {
@@ -2102,8 +2238,7 @@ pub async fn get_ed25519_for_ssh_key(
         .await
     {
         Ok(secret) => secret,
-        Err(e) => {
-            eprintln!("error: failed to unlock keyring: {}", e);
+        Err(_e) => {
             return Err(SshKeyGenerationError::BadPassword);
         }
     };

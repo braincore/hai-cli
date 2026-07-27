@@ -8,6 +8,8 @@ use two_face::re_exports::syntect::highlighting::{self, FontStyle};
 use two_face::re_exports::syntect::parsing::SyntaxSet;
 use two_face::theme::EmbeddedLazyThemeSet;
 
+use crate::io::Out;
+
 /// Function taken unmodified from `bat` crate (sharkdp/bat)
 pub fn to_ansi_color(color: highlighting::Color, true_color: bool) -> Option<nu_ansi_term::Color> {
     if color.a == 0 {
@@ -165,9 +167,14 @@ pub fn get_markdown_code_block_re() -> &'static Regex {
 
 // --
 
+use crate::io::Io;
+use crate::record_out;
 use two_face::re_exports::syntect::easy::HighlightLines;
 
-pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
+/// Prints using regular print!/println! to stdout.
+///
+/// However, adds out-of-band records for the transcript and other backends.
+pub fn print_with_syntax_highlighting(io: &Io, text: &str, lang_token: &str) {
     let color_capability = if let Some(color_capability) = terminal_color_capability() {
         color_capability
     } else {
@@ -211,11 +218,16 @@ pub fn print_with_syntax_highlighting(text: &str, lang_token: &str) {
         }
         std::io::stdout().flush().unwrap();
     }
+
+    // Record for the transcript and other backends. This is the raw text
+    // without escape codes.
+    record_out!(io, "{}", text);
 }
 
 /// Assumes `text` is markdown text. Supports highlighting markdown and
 /// embedded code blocks.
 pub fn print_multi_lang_syntax_highlighting(
+    out: &Out,
     markdown: &str,
     background_color: &Option<(u8, u8, u8)>,
 ) {
@@ -223,6 +235,6 @@ pub fn print_multi_lang_syntax_highlighting(
     if let Some((r, g, b)) = background_color {
         sh_printer.set_background_color(*r, *g, *b, 255);
     };
-    sh_printer.acc(markdown);
-    sh_printer.end();
+    sh_printer.acc(markdown, out);
+    sh_printer.end(out);
 }

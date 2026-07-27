@@ -69,20 +69,40 @@ pub fn is_likely_valid_asset_name(name: &str, id_okay: bool) -> bool {
 /// Given a raw captured asset name (from the naive regex that stops at
 /// whitespace), progressively trim trailing characters until the name is
 /// likely valid.
-pub fn trim_to_likely_valid_asset_name(raw: &str, id_okay: bool) -> Option<&str> {
+///
+/// # Arguments
+/// - glob_ok: If true, allow glob characters (e.g., `*`, `?`, `[abc]`) in the
+///   name as those will be necessary for expansion.
+pub fn trim_to_likely_valid_asset_name(raw: &str, id_okay: bool, glob_ok: bool) -> Option<&str> {
     // The naive regex already stops at whitespace, so `raw` has none.
     // We just need to peel off trailing shell punctuation like `;`, `,`, etc.
     let mut candidate = raw;
     while !candidate.is_empty() {
-        if is_likely_valid_asset_name(candidate, id_okay) {
+        // When globbing is allowed, glob characters would normally fail the
+        // validity check, so strip them out just for validation while keeping
+        // them in the returned slice. Otherwise validate `candidate` as-is.
+        let is_valid = if glob_ok {
+            let deglobbed: String = candidate.chars().filter(|c| !is_glob_char(*c)).collect();
+            !deglobbed.is_empty() && is_likely_valid_asset_name(&deglobbed, id_okay)
+        } else {
+            is_likely_valid_asset_name(candidate, id_okay)
+        };
+
+        if is_valid {
             return Some(candidate);
         }
+
         // Drop the last char and retry.
         let mut chars = candidate.char_indices();
         let last = chars.next_back().map(|(i, _)| i)?;
         candidate = &candidate[..last];
     }
     None
+}
+
+/// Glob characters that can appear in an asset reference.
+fn is_glob_char(c: char) -> bool {
+    matches!(c, '*' | '?' | '[' | ']' | '{' | '}')
 }
 
 /// Constructs the publicly accessible URL for an asset.

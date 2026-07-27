@@ -15,7 +15,7 @@ use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
 use crate::crypt;
 use crate::feature::asset_crypt;
-use crate::term;
+use crate::io::Io;
 
 const KEYRING_SERVICE: &str = "hai-asset-keys";
 
@@ -215,6 +215,7 @@ impl AssetKeyring {
     /// Unlock a specific decryption key by ID
     pub async fn unlock_decrypt_key_with_prompt(
         &mut self,
+        io: &Io,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
@@ -259,9 +260,13 @@ impl AssetKeyring {
         }
 
         // Prompt for password if we don't have a valid stored one
-        let password =
-            term::ask_question(&format!("Unlock key {}:", rec_key_id_parts.key_id), true)
-                .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        let password = io
+            .prompt(&crate::io::Prompt::secret_line(&format!(
+                "Unlock key {}:",
+                rec_key_id_parts.key_id
+            )))
+            .into_option()
+            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
         let password = Zeroizing::new(password);
 
         // Decrypt and store the private key
@@ -405,6 +410,7 @@ impl AssetKeyring {
     /// Unlock a specific signing key by ID
     pub async fn unlock_signing_key_with_prompt(
         &mut self,
+        io: &Io,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
@@ -446,9 +452,13 @@ impl AssetKeyring {
         }
 
         // Prompt for password if we don't have a valid stored one
-        let password =
-            term::ask_question(&format!("Unlock key {}:", rec_key_id_parts.key_id), true)
-                .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        let password = io
+            .prompt(&crate::io::Prompt::secret_line(&format!(
+                "Unlock key {}:",
+                rec_key_id_parts.key_id
+            )))
+            .into_option()
+            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
         let password = Zeroizing::new(password);
 
         // Decrypt and store the private key
@@ -469,13 +479,14 @@ impl AssetKeyring {
     /// Get an unlocked key, prompting to unlock if needed
     pub async fn get_or_unlock_decrypt_key_with_prompt(
         &mut self,
+        io: &Io,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<&StaticSecret, asset_crypt::AssetKeyMaterialDecryptionError> {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
         if !self.unlocked_decrypt_keys.contains_key(&rec_key_id) {
-            self.unlock_decrypt_key_with_prompt(asset_blob_cache, api_client, rec_key_id_parts)
+            self.unlock_decrypt_key_with_prompt(io, asset_blob_cache, api_client, rec_key_id_parts)
                 .await?;
         }
 
@@ -486,13 +497,14 @@ impl AssetKeyring {
     /// Get an unlocked key, prompting to unlock if needed
     pub async fn get_or_unlock_signing_key_with_prompt(
         &mut self,
+        io: &Io,
         asset_blob_cache: Arc<AssetBlobCache>,
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<&SigningKey, asset_crypt::AssetKeyMaterialDecryptionError> {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
         if !self.unlocked_signing_keys.contains_key(&rec_key_id) {
-            self.unlock_signing_key_with_prompt(asset_blob_cache, api_client, rec_key_id_parts)
+            self.unlock_signing_key_with_prompt(io, asset_blob_cache, api_client, rec_key_id_parts)
                 .await?;
         }
 

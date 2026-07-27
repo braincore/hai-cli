@@ -226,7 +226,7 @@ macro_rules! force_eprintln {
 
 /// Flush stdout if printing is enabled
 #[macro_export]
-macro_rules! flush {
+macro_rules! flush_if_enabled {
     () => {{
         $crate::printer::_flush_stdout();
     }};
@@ -234,7 +234,7 @@ macro_rules! flush {
 
 /// Flush stderr if printing is enabled
 #[macro_export]
-macro_rules! eflush {
+macro_rules! eflush_if_enabled {
     () => {{
         $crate::printer::_flush_stderr();
     }};

@@ -18,6 +18,7 @@ use crate::feature::{
     asset_crypt::{self, KeyRecipient},
     asset_keyring::AssetKeyring,
 };
+use crate::io::Io;
 use crate::{asset_helper, crypt};
 
 // --
@@ -97,8 +98,6 @@ pub async fn get_asset_entry(
                 if bad_name_ok {
                     return Err(GetAssetError::BadName);
                 }
-            } else {
-                eprintln!("error: {}", e);
             }
             match e {
                 RequestError::BadRequest(_)
@@ -133,17 +132,14 @@ pub async fn get_asset_and_metadata(
     {
         match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
-            Err(err) => {
-                eprintln!("error: failed to fetch asset data");
-                match err {
-                    DownloadAssetError::DataFetchFailed(failure) => {
-                        return Err(GetAssetError::DataFetchFailed(failure));
-                    }
-                    DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                        return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
-                    }
+            Err(err) => match err {
+                DownloadAssetError::DataFetchFailed(failure) => {
+                    return Err(GetAssetError::DataFetchFailed(failure));
                 }
-            }
+                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                }
+            },
         }
     } else {
         return Err(GetAssetError::BadName);
@@ -160,19 +156,14 @@ pub async fn get_asset_and_metadata(
                 .await
             {
                 Ok(contents) => contents,
-                Err(err) => {
-                    eprintln!("error: failed to fetch asset metadata");
-                    match err {
-                        DownloadAssetError::DataFetchFailed(failure) => {
-                            return Err(GetAssetError::DataFetchFailed(failure));
-                        }
-                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                            return Err(GetAssetError::DataFetchFailed(
-                                DataFetchFailure::Unexpected,
-                            ));
-                        }
+                Err(err) => match err {
+                    DownloadAssetError::DataFetchFailed(failure) => {
+                        return Err(GetAssetError::DataFetchFailed(failure));
                     }
-                }
+                    DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                        return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                    }
+                },
             },
         )
     } else {
@@ -196,6 +187,7 @@ impl std::fmt::Display for GetDecryptedAssetError {
 }
 
 pub async fn get_decrypted_asset_and_metadata(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -205,6 +197,7 @@ pub async fn get_decrypted_asset_and_metadata(
     match get_asset_and_metadata(asset_blob_cache.clone(), &api_client, &asset_name, false).await {
         Ok((asset_contents, md_contents, asset_entry)) => {
             let akm_info = match asset_crypt::extract_akm_from_metadata(
+                io,
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 api_client.clone(),
@@ -215,11 +208,6 @@ pub async fn get_decrypted_asset_and_metadata(
             {
                 Ok(akm_info) => akm_info,
                 Err(e) => {
-                    match &e {
-                        asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
-                        }
-                    }
                     return Err(GetDecryptedAssetError::Akm(e));
                 }
             };
@@ -393,19 +381,14 @@ pub async fn get_only_asset_metadata(
                 .await
             {
                 Ok(contents) => contents,
-                Err(err) => {
-                    eprintln!("error: failed to fetch asset metadata");
-                    match err {
-                        DownloadAssetError::DataFetchFailed(failure) => {
-                            return Err(GetAssetError::DataFetchFailed(failure));
-                        }
-                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                            return Err(GetAssetError::DataFetchFailed(
-                                DataFetchFailure::Unexpected,
-                            ));
-                        }
+                Err(err) => match err {
+                    DownloadAssetError::DataFetchFailed(failure) => {
+                        return Err(GetAssetError::DataFetchFailed(failure));
                     }
-                }
+                    DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                        return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                    }
+                },
             },
         )
     } else {
@@ -416,22 +399,58 @@ pub async fn get_only_asset_metadata(
 
 // --
 
-pub async fn get_asset_raw(data_url: &str) -> Option<Vec<u8>> {
-    let asset_get_resp = match reqwest::get(data_url).await {
-        Ok(resp) => resp,
-        Err(e) => {
-            eprintln!("error: {}", e);
-            return None;
+#[derive(Debug)]
+pub enum DownloadError {
+    Request(reqwest::Error),
+    BadStatus(reqwest::StatusCode),
+    Body(reqwest::Error),
+}
+
+impl std::fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DownloadError::Request(e) => write!(f, "request failed: {}", e),
+            DownloadError::BadStatus(s) => write!(f, "bad status: {}", s),
+            DownloadError::Body(e) => write!(f, "failed to read body: {}", e),
         }
-    };
-    if !asset_get_resp.status().is_success() {
-        eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
-        return None;
     }
-    match asset_get_resp.bytes().await {
-        Ok(contents) => Some(contents.to_vec()),
-        Err(_) => None,
+}
+
+impl std::error::Error for DownloadError {}
+
+/// Downloads content from a URL using a new reqwest client.
+///
+/// Emphasizing the lack of client re-use so that the caller knows it's not
+/// ideal (connection pool, dns cache, tls, ...).
+pub async fn download_with_new_client(url: &str) -> Result<Vec<u8>, DownloadError> {
+    let resp = reqwest::get(url).await.map_err(DownloadError::Request)?;
+
+    if !resp.status().is_success() {
+        return Err(DownloadError::BadStatus(resp.status()));
     }
+
+    let bytes = resp.bytes().await.map_err(DownloadError::Body)?;
+    Ok(bytes.to_vec())
+}
+
+/// Preferred method for downloading content.
+#[allow(dead_code)]
+pub async fn download_with_existing_client(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<u8>, DownloadError> {
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(DownloadError::Request)?;
+
+    if !resp.status().is_success() {
+        return Err(DownloadError::BadStatus(resp.status()));
+    }
+
+    let bytes = resp.bytes().await.map_err(DownloadError::Body)?;
+    Ok(bytes.to_vec())
 }
 
 // --
@@ -608,7 +627,7 @@ pub async fn get_asset_entries_from_globs(
                         }
                     }
                     Err(e) => {
-                        eprintln!("error: failed to fetch asset {}: {}", asset_ref, e);
+                        return Err(e.to_string());
                     }
                 };
             }
@@ -639,6 +658,7 @@ pub type AssetTempFileMap = HashMap<String, Result<tempfile::NamedTempFile, GetA
 /// - A map of asset names to their (NamedTempFile, PathBuf) tuples
 /// - A map of glob patterns to their expanded asset names (for callers that need this info)
 pub async fn prepare_assets_from_names_as_temp_files(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -670,25 +690,27 @@ pub async fn prepare_assets_from_names_as_temp_files(
             // Expand the glob
             let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
             if matched_asset_entries.is_empty() {
-                eprintln!("no assets match glob pattern: {}", asset_ref);
-            }
-
-            // Queue each matched asset for download
-            for matched_asset_entry in &matched_asset_entries {
-                if !seen_assets.contains(&matched_asset_entry.name) {
-                    seen_assets.insert(matched_asset_entry.name.clone());
-                    // Glob-matched assets are always inputs, so they need download
-                    assets_to_download.push(matched_asset_entry.clone());
+                // If glob doesn't match anything, use the shell approach and
+                // treat the blob as the literal asset name.
+                asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
+            } else {
+                // Queue each matched asset for download
+                for matched_asset_entry in &matched_asset_entries {
+                    if !seen_assets.contains(&matched_asset_entry.name) {
+                        seen_assets.insert(matched_asset_entry.name.clone());
+                        // Glob-matched assets are always inputs, so they need download
+                        assets_to_download.push(matched_asset_entry.clone());
+                    }
                 }
-            }
 
-            expanded_globs.insert(
-                asset_ref.clone(),
-                matched_asset_entries
-                    .iter()
-                    .map(|entry| entry.name.clone())
-                    .collect::<Vec<_>>(),
-            );
+                expanded_globs.insert(
+                    asset_ref.clone(),
+                    matched_asset_entries
+                        .iter()
+                        .map(|entry| entry.name.clone())
+                        .collect::<Vec<_>>(),
+                );
+            }
         } else {
             // Regular asset (non-glob)
             if !seen_assets.contains(asset_ref) {
@@ -721,6 +743,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
 
     // Download/create files in parallel
     let sync_res = crate::asset_sync::sync_down_entries(
+        io,
         asset_blob_cache,
         asset_keyring,
         api_client,
@@ -771,6 +794,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
 ///   - A map of asset names to their temporary files and paths
 ///   - A set of asset names that are used as outputs (via > or >>)
 pub async fn prepare_assets_from_cmd_as_temp_files(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     account: &Option<crate::db::Account>,
@@ -793,7 +817,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     // First identify output assets and append assets
     for cap in output_regex.captures_iter(cmd) {
         let expanded = asset_helper::expand_asset_name(&cap[1], account);
-        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true, true)
         else {
             continue;
         };
@@ -809,7 +833,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     for cap in append_regex.captures_iter(cmd) {
         let expanded = asset_helper::expand_asset_name(&cap[1], account);
-        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        let Some(asset_name) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true, true)
         else {
             continue;
         };
@@ -833,13 +857,8 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
             .captures_iter(&cmd_without_outputs)
             .filter_map(|cap| {
                 let expanded = asset_helper::expand_asset_name(&cap[1], account);
-                let asset_name = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)?;
-                println!(
-                    "input asset: {} {} {}",
-                    &cap[1],
-                    asset_name,
-                    asset_helper::expand_asset_name(asset_name, account)
-                );
+                let asset_name =
+                    asset_helper::trim_to_likely_valid_asset_name(&expanded, true, true)?;
                 Some(asset_helper::expand_asset_name(asset_name, account))
             })
             .collect()
@@ -852,7 +871,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     for cap in asset_regex.captures_iter(cmd) {
         let full_match = cap[0].to_string();
         let expanded = asset_helper::expand_asset_name(&cap[1], account);
-        let Some(asset_path) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true)
+        let Some(asset_path) = asset_helper::trim_to_likely_valid_asset_name(&expanded, true, true)
         else {
             continue;
         };
@@ -875,6 +894,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
 
     // Use the new function to prepare all assets
     let (asset_map, expanded_globs) = prepare_assets_from_names_as_temp_files(
+        io,
         asset_blob_cache,
         asset_keyring,
         api_client,
@@ -966,10 +986,7 @@ pub fn create_empty_temp_file(
         .prefix(&prefix)
         .suffix(&full_suffix)
         .tempfile()
-        .map_err(|e| {
-            eprintln!("error: Failed to create temporary file: {}", e);
-            DownloadAssetError::FsFailed
-        })?;
+        .map_err(|_e| DownloadAssetError::FsFailed)?;
 
     Ok(temp_file)
 }
@@ -1028,7 +1045,6 @@ pub async fn fetch_assets_from_names_in_memory_extended(
     let mut assets_skipped_folders = Vec::new();
 
     let mut asset_fetch_failures = Vec::new();
-
     for asset_ref in asset_names_or_globs {
         if is_glob_pattern(asset_ref) {
             // Skip if we've already expanded this glob
@@ -1039,33 +1055,35 @@ pub async fn fetch_assets_from_names_in_memory_extended(
             // Expand the glob
             let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
             if matched_asset_entries.is_empty() {
-                eprintln!("no assets match glob pattern: {}", asset_ref);
-            }
+                // If glob doesn't match anything, use the shell approach and
+                // treat the blob as the literal asset name.
+                asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
+            } else {
+                // Queue each matched asset for download
+                for matched_asset_entry in &matched_asset_entries {
+                    if seen_assets.contains(&matched_asset_entry.name) {
+                        continue;
+                    }
+                    if matched_asset_entry.redactions.is_some() {
+                        assets_skipped_content_restrictions.push(matched_asset_entry.name.clone());
+                        continue;
+                    }
+                    if matches!(matched_asset_entry.asset.kind, AssetKind::Folder) {
+                        assets_skipped_folders.push(matched_asset_entry.name.clone());
+                        continue;
+                    }
+                    seen_assets.insert(matched_asset_entry.name.clone());
+                    assets_to_fetch.push(matched_asset_entry.clone());
+                }
 
-            // Queue each matched asset for download
-            for matched_asset_entry in &matched_asset_entries {
-                if seen_assets.contains(&matched_asset_entry.name) {
-                    continue;
-                }
-                if matched_asset_entry.redactions.is_some() {
-                    assets_skipped_content_restrictions.push(matched_asset_entry.name.clone());
-                    continue;
-                }
-                if matches!(matched_asset_entry.asset.kind, AssetKind::Folder) {
-                    assets_skipped_folders.push(matched_asset_entry.name.clone());
-                    continue;
-                }
-                seen_assets.insert(matched_asset_entry.name.clone());
-                assets_to_fetch.push(matched_asset_entry.clone());
+                expanded_globs.insert(
+                    asset_ref.clone(),
+                    matched_asset_entries
+                        .iter()
+                        .map(|entry| entry.name.clone())
+                        .collect::<Vec<_>>(),
+                );
             }
-
-            expanded_globs.insert(
-                asset_ref.clone(),
-                matched_asset_entries
-                    .iter()
-                    .map(|entry| entry.name.clone())
-                    .collect::<Vec<_>>(),
-            );
         } else {
             // Regular asset (non-glob)
             if !seen_assets.contains(asset_ref) {
