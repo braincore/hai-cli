@@ -1,4 +1,3 @@
-use colored::*;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,8 +10,8 @@ use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nu
 use crate::chat;
 use crate::config::{self, OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::println;
 use crate::tool;
+use crate::{errorln, io::Out, outln};
 
 //
 // Start OpenAI Response Types
@@ -51,6 +50,7 @@ struct FunctionResponse {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn send_to_openai(
+    out: &Out,
     base_url: Option<&str>,
     api_key: &str,
     provider_header: Option<String>,
@@ -70,13 +70,12 @@ pub async fn send_to_openai(
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
 
     // Register ctrl+c interrupt handler
-    // NOTE: This handler prints "AI Interrupted" but the tokio code actually
-    // adds "AI Interrupted" into the output text.
     let cancel_info = if let Some(handler) = ctrlc_handler {
         let parent_cancel_token = CancellationToken::new();
         let cancel_token_child = parent_cancel_token.clone();
         let handler_id = handler.add_handler(move || {
-            println!("AI Interrupted");
+            // Signal handler kept light to avoid deadlocking by printing to
+            // `out`.
             cancel_token_child.cancel();
         });
         Some((parent_cancel_token, handler_id, handler))
@@ -256,6 +255,7 @@ pub async fn send_to_openai(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
         }
     };
@@ -291,6 +291,7 @@ pub async fn send_to_openai(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
                 return Ok(vec![chat::ChatCompletionResponse::Message {
@@ -328,16 +329,16 @@ pub async fn send_to_openai(
                                 && let Some(tool_name) = tool_response.function.name
                             {
                                 if !tool_calls.is_empty() {
-                                    println!();
-                                    println!();
-                                    println!("∥");
-                                    println!();
+                                    outln!(out);
+                                    outln!(out);
+                                    outln!(out, "∥");
+                                    outln!(out);
                                 } else if !text_accumulator.printed_text.is_empty() {
                                     // For cases where a tool-response follows a text-response, add
                                     // a newline to make the output clearer.
                                     // AFAICT, both responses will have index=0 set so delineating
                                     // between the two that way isn't doable.
-                                    println!();
+                                    outln!(out);
                                 }
                                 // Gemini returns an empty string as the
                                 // tool ID which the Anthropic API is not
@@ -367,12 +368,9 @@ pub async fn send_to_openai(
                             }
                             if let Some(json_accumulator) = tool_calls.get_mut(&tool_response.index)
                             {
-                                json_accumulator.acc(&tool_response.function.arguments)
+                                json_accumulator.acc(&tool_response.function.arguments, out);
                             } else {
-                                eprintln!(
-                                    "error: unexpected tool call ID: {}",
-                                    tool_response.index
-                                );
+                                errorln!(out, "unexpected tool call ID: {}", tool_response.index);
                             }
                         } else if let Some(content) =
                             json_data["choices"][0]["delta"]["content"].as_str()
@@ -380,26 +378,26 @@ pub async fn send_to_openai(
                             if text_accumulator.printed_text.is_empty()
                                 && !reasoning_accumulator.printed_text.is_empty()
                             {
-                                println!();
-                                println!();
-                                println!("{}", "🧠 end".white().on_black());
-                                println!();
+                                outln!(out);
+                                outln!(out);
+                                outln!(out, "🧠 end");
+                                outln!(out);
                             }
-                            text_accumulator.acc(content);
+                            text_accumulator.acc(content, out);
                         } else if let Some(content) =
                             json_data["choices"][0]["delta"]["reasoning_content"].as_str()
                         {
                             if reasoning_accumulator.printed_text.is_empty() && !content.is_empty()
                             {
-                                println!("{}", "🧠 begin".white().on_black());
-                                println!();
+                                outln!(out, "🧠 begin");
+                                outln!(out);
                             }
-                            reasoning_accumulator.acc(content);
+                            reasoning_accumulator.acc(content, out);
                         } else if let Some(content) =
                             json_data["choices"][0]["message"]["content"].as_str()
                         {
                             // This is for non-streaming cases
-                            text_accumulator.acc(content);
+                            text_accumulator.acc(content, out);
                         } else if let Ok(tool_response) =
                             serde_json::from_value::<ToolCallNonStreamingResponse>(
                                 json_data["choices"][0]["message"]["tool_calls"][0].clone(),
@@ -415,11 +413,11 @@ pub async fn send_to_openai(
                                     }),
                                     masked_strings.clone(),
                                 );
-                                json_accumulator.acc(&tool_response.function.arguments);
+                                json_accumulator.acc(&tool_response.function.arguments, out);
                                 tool_calls.insert(0, json_accumulator);
                             }
                         } else if let Some(message) = json_data["error"]["message"].as_str() {
-                            eprintln!("unexpected error: {}", message);
+                            errorln!(out, "unexpected error: {}", message);
                         }
                         break;
                     }
@@ -437,13 +435,13 @@ pub async fn send_to_openai(
         }
     }
     // Mark accumulators as done to clear buffers
-    text_accumulator.end();
+    text_accumulator.end(out);
     for tool_call in tool_calls.values_mut() {
-        tool_call.end();
+        tool_call.end(out);
     }
 
     // Final newline post-response-stream
-    println!();
+    outln!(out);
     if let Some((_, handler_id, handler)) = cancel_info {
         handler.remove_handler(handler_id);
     }

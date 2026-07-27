@@ -23,6 +23,8 @@ use crate::feature::{
     asset_crypt::{self, KeyRecipient},
     asset_keyring::AssetKeyring,
 };
+use crate::io::{Io, Out};
+use crate::{errorln, outln, warnln};
 
 const HAISYNC_FILENAME: &str = ".haisync";
 const METADATA_EXTENSION: &str = ".metadata";
@@ -151,6 +153,7 @@ pub fn resolve_haisync(target_dir: &Path) -> Result<Option<HaiSyncResolution>, S
 }
 
 pub async fn sync_down(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -369,12 +372,12 @@ pub async fn sync_down(
                     cursor: None,
                 };
                 if let Err(write_err) = fresh_state.write_to_dir(&sync_root) {
-                    eprintln!("warning: failed to write .haisync: {}", write_err);
+                    warnln!(io, "failed to write .haisync: {}", write_err);
                 }
 
                 return match e {
                     api::client::RequestError::Route(AssetEntryIterError::Empty) => {
-                        println!("[empty]");
+                        outln!(io, "[empty]");
                         Ok(())
                     }
                     _ => Err(format!("error: {}", e)),
@@ -399,11 +402,11 @@ pub async fn sync_down(
     }
 
     if entries.is_empty() && latest_cursor.is_some() {
-        println!("Already up to date.");
+        outln!(io, "Already up to date.");
         if let Some(cursor) = latest_cursor {
             haisync_state.cursor = Some(cursor);
             if let Err(e) = haisync_state.write_to_dir(&sync_root) {
-                eprintln!("warning: failed to write .haisync: {}", e);
+                warnln!(io, "failed to write .haisync: {}", e);
             }
         }
         return Ok(());
@@ -422,9 +425,10 @@ pub async fn sync_down(
             && entry.redactions.is_none()
     });
 
-    println!("Syncing {} entries...", entries.len());
+    outln!(io, "Syncing {} entries...", entries.len());
 
     let _ = sync_down_entries(
+        io,
         asset_blob_cache,
         asset_keyring,
         api_client,
@@ -443,7 +447,7 @@ pub async fn sync_down(
         haisync_state.cursor = Some(cursor);
     }
     if let Err(e) = haisync_state.write_to_dir(&sync_root) {
-        eprintln!("warning: failed to write .haisync: {}", e);
+        warnln!(io, "failed to write .haisync: {}", e);
     } else if debug {
         let _ = config::write_to_debug_log(format!(
             "sync: wrote .haisync to '{}'\n",
@@ -520,11 +524,10 @@ async fn decide_local_asset_file_sync_down_policy(
     let change_status = match is_local_asset_file_changed_using_xattr(file_path).await {
         Ok(status) => status,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to check local file status for '{}': {}",
+            return Err(format!(
+                "Failed to check local file status for '{}': {}",
                 file_path, e
-            );
-            return Err(e);
+            ));
         }
     };
     if let Some(source_hash) = source.asset.hash.as_ref() {
@@ -630,7 +633,7 @@ fn get_folder_prefix(prefix: &str) -> String {
 ///
 /// Defaults to xattrs if present and the mtime matches since it doesn't
 /// require expensive hashing. However, this makes it potentially unreliable.
-async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
+async fn get_file_hash(out: &Out, file_path: &str) -> Result<Vec<u8>, std::io::Error> {
     let fs_metadata = std::fs::metadata(file_path)?;
     if let Ok(fs_modified_time) = fs_metadata.modified() {
         let mtime_ts = fs_modified_time
@@ -657,14 +660,15 @@ async fn get_file_hash(file_path: &str) -> Result<Vec<u8>, std::io::Error> {
                         if binary_data.len() == 32 {
                             return Ok(binary_data);
                         } else {
-                            println!(
-                                "Warning: Hash has unexpected length: {} bytes",
+                            warnln!(
+                                out,
+                                "Hash has unexpected length: {} bytes",
                                 binary_data.len()
                             );
                         }
                     }
                     Err(e) => {
-                        println!("Error decoding hex string: {}", e);
+                        warnln!(out, "Failed to decode hex string: {}", e);
                     }
                 }
             }
@@ -832,6 +836,7 @@ pub struct AssetSourceMinimal {
 /// Only returns temp files if `persist` is None. When temp files go out of
 /// scope, they will be automatically removed.
 pub async fn sync_down_entries(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -911,6 +916,7 @@ pub async fn sync_down_entries(
     let mut handles = Vec::new();
 
     for dl_task in entries_with_dl_tasks {
+        let io_clone = io.clone();
         let asset_blob_cache_clone = asset_blob_cache.clone();
         let asset_keyring_clone = asset_keyring.clone();
         let api_client_clone = api_client.clone();
@@ -922,6 +928,7 @@ pub async fn sync_down_entries(
         let handle = tokio::spawn(async move {
             let _permit = sem_clone.acquire().await.unwrap();
 
+            let io = io_clone.clone();
             let asset_blob_cache = asset_blob_cache_clone.clone();
             let asset_keyring = asset_keyring_clone;
             let api_client = api_client_clone;
@@ -943,9 +950,11 @@ pub async fn sync_down_entries(
                 {
                     Ok(policy) => policy,
                     Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to decide sync down policy for '{}': {}. Skipping deletion.",
-                            asset_final_path, e
+                        warnln!(
+                            io,
+                            "Failed to decide sync down policy for '{}': {}. Skipping deletion.",
+                            asset_final_path,
+                            e
                         );
                         return Err(e);
                     }
@@ -977,8 +986,9 @@ pub async fn sync_down_entries(
                         return Ok((source, None, None));
                     }
                     LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges => {
-                        eprintln!(
-                            "Warning: Detected local changes to '{}'. Skipping deletion from remote.",
+                        warnln!(
+                            io,
+                            "Detected local changes to '{}'. Skipping deletion from remote.",
                             asset_final_path
                         );
                         return Ok((source, None, None));
@@ -990,7 +1000,7 @@ pub async fn sync_down_entries(
                 && let Some(metadata) = source.metadata.as_ref()
                 && let Some(metadata_hash) = metadata.hash.as_deref()
             {
-                match get_file_hash(metadata_final_path).await {
+                match get_file_hash(&io.out, metadata_final_path).await {
                     Ok(existing_hash) => {
                         if let Ok(expected_hash) = hex_to_bytes(metadata_hash)
                             && existing_hash == expected_hash
@@ -1047,9 +1057,11 @@ pub async fn sync_down_entries(
                     {
                         Ok(temp_file) => temp_file,
                         Err(e) => {
-                            eprintln!(
-                                "error: failed to download metadata for '{}': {}",
-                                source.asset_name, e
+                            errorln!(
+                                io,
+                                "Failed to download metadata for '{}': {}",
+                                source.asset_name,
+                                e
                             );
                             return Err(e.to_string());
                         }
@@ -1061,9 +1073,11 @@ pub async fn sync_down_entries(
                             (Some(metadata_contents_temp_file), Some(metadata_contents))
                         }
                         Err(e) => {
-                            eprintln!(
-                                "error: failed to read metadata temp file for '{}': {}",
-                                source.asset_name, e
+                            errorln!(
+                                io,
+                                "Failed to read metadata temp file for '{}': {}",
+                                source.asset_name,
+                                e
                             );
                             (None, None)
                         }
@@ -1076,9 +1090,11 @@ pub async fn sync_down_entries(
                 match decide_local_asset_file_sync_down_policy(final_path, &source).await {
                     Ok(policy) => policy,
                     Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to decide sync down policy for '{}': {}. Skipping deletion.",
-                            final_path, e
+                        warnln!(
+                            io,
+                            "Failed to decide sync down policy for '{}': {}. Skipping deletion.",
+                            final_path,
+                            e
                         );
                         return Err(e.to_string());
                     }
@@ -1091,8 +1107,9 @@ pub async fn sync_down_entries(
                 asset_sync_down_policy,
                 LocalAssetFileSyncDownPolicy::NoSyncDueToLocalChanges
             ) {
-                eprintln!(
-                    "Warning: Detected local changes to '{}'. Skipping sync from remote.",
+                warnln!(
+                    io,
+                    "Detected local changes to '{}'. Skipping sync from remote.",
                     final_path.as_deref().unwrap_or("<unknown>")
                 );
                 return Ok((source, None, None));
@@ -1121,7 +1138,7 @@ pub async fn sync_down_entries(
                     {
                         Ok(temp_file) => temp_file,
                         Err(e) => {
-                            eprintln!("error: failed to download '{}': {}", source.asset_name, e);
+                            errorln!(io, "Failed to download '{}': {}", source.asset_name, e);
                             return Err(e.to_string());
                         }
                     };
@@ -1146,6 +1163,7 @@ pub async fn sync_down_entries(
                         decrypted_asset_contents_temp_file.path();
 
                     match asset_crypt::get_symmetric_key_ez(
+                        &io,
                         asset_blob_cache,
                         asset_keyring,
                         &api_client,
@@ -1193,8 +1211,16 @@ pub async fn sync_down_entries(
                     .path()
                     .to_str()
                     .unwrap();
-                asset_file_set_xattrs(&data_contents_path, &source);
-                asset_data_file_set_xattrs(&data_contents_path, &source, decrypted_hash.as_deref());
+                if let Err(e) = asset_file_set_xattrs(&data_contents_path, &source) {
+                    errorln!(io, "{}: {}", data_contents_path, e);
+                }
+                if let Err(e) = asset_data_file_set_xattrs(
+                    &data_contents_path,
+                    &source,
+                    decrypted_hash.as_deref(),
+                ) {
+                    errorln!(io, "{}: {}", data_contents_path, e);
+                }
             }
 
             if metadata_contents_temp_file.is_some() {
@@ -1204,8 +1230,12 @@ pub async fn sync_down_entries(
                     .path()
                     .to_str()
                     .unwrap();
-                asset_file_set_xattrs(&metadata_contents_path, &source);
-                asset_metadata_file_set_xattrs(&metadata_contents_path, &source);
+                if let Err(e) = asset_file_set_xattrs(&metadata_contents_path, &source) {
+                    errorln!(io, "{}: {}", metadata_contents_path, e);
+                }
+                if let Err(e) = asset_metadata_file_set_xattrs(&metadata_contents_path, &source) {
+                    errorln!(io, "{}: {}", metadata_contents_path, e);
+                }
             }
 
             let data_contents_temp_file = if let Some(asset_final_path) = final_path.clone()
@@ -1267,12 +1297,12 @@ pub async fn sync_down_entries(
                     result.push((source, data_temp_file_opt, metadata_temp_file_opt));
                 }
                 Err(e) => {
-                    eprintln!("A download task failed: {}", e);
+                    errorln!(io, "Download task failed: {}", e);
                 }
             },
             Err(e) => {
                 // Handle the case where the task panicked
-                eprintln!("A download task panicked: {}", e);
+                errorln!(io, "Download task panicked: {}", e);
             }
         }
     }
@@ -1286,18 +1316,19 @@ pub async fn sync_down_entries(
 /// - user.hai.entry_id
 /// - user.hai.seq_id
 /// - user.hai.asset_name
-fn asset_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
+fn asset_file_set_xattrs(path: &str, source: &AssetSourceMinimal) -> Result<(), String> {
     if let Some((entry_id, seq_id)) = source.iter_info.as_ref() {
         if xattr_set(&path, "user.hai.entry_id", &entry_id).is_err() {
-            eprintln!("failed to set entry_id xattr");
+            return Err("failed to set entry_id xattr".to_string());
         }
         if xattr_set(&path, "user.hai.seq_id", &seq_id.to_string()).is_err() {
-            eprintln!("failed to set seq_id xattr");
+            return Err("failed to set seq_id xattr".to_string());
         }
         if xattr_set(&path, "user.hai.asset_name", &source.asset_name).is_err() {
-            eprintln!("failed to set asset_name xattr");
+            return Err("failed to set asset_name xattr".to_string());
         }
     }
+    Ok(())
 }
 
 /// Sets xattrs for asset data files (not metadata).
@@ -1313,9 +1344,9 @@ fn asset_data_file_set_xattrs(
     path: &str,
     source: &AssetSourceMinimal,
     decrypted_hash: Option<&[u8]>,
-) {
+) -> Result<(), String> {
     if xattr_set(&path, "user.hai.rev_id", &source.asset.rev_id).is_err() {
-        eprintln!("failed to set rev_id xattr");
+        return Err("failed to set rev_id xattr".to_string());
     }
     if let Some(hash) = source.asset.hash.as_ref() {
         //
@@ -1329,18 +1360,18 @@ fn asset_data_file_set_xattrs(
                 .expect("Time went backwards")
                 .as_secs();
             if xattr_set(&path, "user.hai.hash_mtime", &mtime_ts.to_string()).is_err() {
-                eprintln!("failed to set hash_mtime xattr");
+                return Err("failed to set hash_mtime xattr".to_string());
             }
         }
 
         if xattr_set(&path, "user.hai.hash", hash).is_err() {
-            eprintln!("failed to set hash xattr");
+            return Err("failed to set hash xattr".to_string());
         }
 
         if let Some(decrypted_hash) = decrypted_hash {
             let decrypted_hash_hex = hex::encode(decrypted_hash);
             if xattr_set(&path, "user.hai.decrypted_hash", &decrypted_hash_hex).is_err() {
-                eprintln!("failed to set decrypted_hash xattr");
+                return Err("failed to set decrypted_hash xattr".to_string());
             }
         }
     }
@@ -1352,15 +1383,16 @@ fn asset_data_file_set_xattrs(
     {
         if let Some(_content_encrypted) = content_encrypted {
             if xattr_set(&path, "user.hai.decrypted", "true").is_err() {
-                eprintln!("failed to set decrypted xattr");
+                return Err("failed to set decrypted xattr".to_string());
             }
         }
         if let Some(content_type) = content_type {
             if xattr_set(&path, "user.hai.content_type", content_type).is_err() {
-                eprintln!("failed to set content_type xattr");
+                return Err("failed to set content_type xattr".to_string());
             }
         }
     }
+    Ok(())
 }
 
 /// Sets xattrs for asset metadata files.
@@ -1370,7 +1402,7 @@ fn asset_data_file_set_xattrs(
 /// - user.hai.rev_id
 /// - user.hai.hash_mtime (local file mtime when hash attached)
 /// - user.hai.hash
-fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
+fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) -> Result<(), String> {
     if let Some(AssetMetadataInfo {
         rev_id,
         hash: Some(hash),
@@ -1378,10 +1410,10 @@ fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
     }) = source.metadata.as_ref()
     {
         if xattr_set(&path, "user.hai.is_metadata", "true").is_err() {
-            eprintln!("failed to set is_metadata xattr");
+            return Err("failed to set is_metadata xattr".to_string());
         }
         if xattr_set(&path, "user.hai.rev_id", &rev_id).is_err() {
-            eprintln!("failed to set rev_id xattr");
+            return Err("failed to set rev_id xattr".to_string());
         }
         //
         // Write the file hash and the mtime of the file into
@@ -1394,14 +1426,15 @@ fn asset_metadata_file_set_xattrs(path: &str, source: &AssetSourceMinimal) {
                 .expect("Time went backwards")
                 .as_secs();
             if xattr_set(&path, "user.hai.hash_mtime", &mtime_ts.to_string()).is_err() {
-                eprintln!("failed to set hash_mtime xattr");
+                return Err("failed to set hash_mtime xattr".to_string());
             }
         }
 
         if xattr_set(&path, "user.hai.hash", &hash).is_err() {
-            eprintln!("failed to set hash xattr");
+            return Err("failed to set hash xattr".to_string());
         }
     }
+    Ok(())
 }
 
 // --
@@ -1481,6 +1514,7 @@ impl Default for SyncUpOptions {
 /// # Returns
 /// Vector of results for each file processed
 pub async fn sync_up(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -1695,6 +1729,7 @@ pub async fn sync_up(
     let mut handles = Vec::new();
 
     for (file_path, asset_name, is_metadata) in file_pairs {
+        let io_clone = io.clone();
         let asset_blob_cache_clone = asset_blob_cache.clone();
         let asset_keyring_clone = asset_keyring.clone();
         let api_client_clone = api_client.clone();
@@ -1727,6 +1762,7 @@ pub async fn sync_up(
                 let _permit = sem_clone.acquire().await.unwrap();
 
                 sync_up_move(
+                    &io_clone,
                     asset_blob_cache_clone,
                     asset_keyring_clone,
                     &api_client_clone,
@@ -1765,6 +1801,7 @@ pub async fn sync_up(
                 let _permit = sem_clone.acquire().await.unwrap();
                 vec![
                     sync_up_data_file(
+                        &io_clone,
                         asset_blob_cache_clone,
                         asset_keyring_clone,
                         &api_client_clone,
@@ -1790,7 +1827,7 @@ pub async fn sync_up(
         match handle {
             Ok(result) => results.extend(result),
             Err(e) => {
-                eprintln!("A sync task panicked: {}", e);
+                errorln!(io, "Sync task panicked: {}", e);
             }
         }
     }
@@ -1804,6 +1841,7 @@ pub async fn sync_up(
 /// - Clear xattrs if anything unexpected (or missing)
 /// - Atomic xattr updates (modifying bit?)
 async fn sync_up_data_file(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -1835,9 +1873,6 @@ async fn sync_up_data_file(
                 "sync_up: skipping new file '{}' (sync_new_files=false)\n",
                 file_path
             ));
-        }
-        if dry_run {
-            println!("new:  {}", file_path)
         }
         return SyncUpResult {
             file_path: file_path.to_string(),
@@ -1903,6 +1938,7 @@ async fn sync_up_data_file(
     };
 
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        io,
         asset_blob_cache.clone(),
         asset_keyring.clone(),
         api_client.clone(),
@@ -1914,17 +1950,12 @@ async fn sync_up_data_file(
     {
         Ok(akm_info) => akm_info,
         Err(e) => {
-            match e {
-                asset_crypt::AkmSelectionError::Abort(msg) => {
-                    eprintln!("error: {}", msg);
-                }
-            }
             return SyncUpResult {
                 file_path: file_path.to_string(),
                 asset_name: asset_name.to_string(),
                 action: SyncUpAction::Skipped,
                 success: false,
-                error: Some(format!("Decryption key error")),
+                error: Some(format!("Decryption key error: {}", e)),
                 dry_run,
             };
         }
@@ -2246,6 +2277,7 @@ fn update_hash_xattrs(file_path: &str, hash: &str) {
 /// Detects that a file was moved locally (via xattr asset_name mismatch),
 /// performs the remote move, and then optionally syncs content if it also changed.
 async fn sync_up_move(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -2335,6 +2367,7 @@ async fn sync_up_move(
                 }
 
                 let data_result = sync_up_data_file(
+                    io,
                     asset_blob_cache,
                     asset_keyring,
                     api_client,
@@ -2354,11 +2387,6 @@ async fn sync_up_move(
             results
         }
         Err(e) => {
-            eprintln!(
-                "Failed to move asset '{}' -> '{}': {}",
-                old_asset_name, new_asset_name, e
-            );
-
             vec![SyncUpResult {
                 file_path: file_path.to_string(),
                 asset_name: new_asset_name.to_string(),
@@ -2375,6 +2403,7 @@ async fn sync_up_move(
 /// Inner function to sync specific file/asset pairs.
 /// Useful when you already know which files need to be synced.
 pub async fn sync_up_pairs(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -2387,6 +2416,7 @@ pub async fn sync_up_pairs(
     let mut handles = Vec::new();
 
     for (file_path, asset_name) in pairs {
+        let io_clone = io.clone();
         let asset_blob_cache_clone = asset_blob_cache.clone();
         let asset_keyring_clone = asset_keyring.clone();
         let api_client_clone = api_client.clone();
@@ -2415,6 +2445,7 @@ pub async fn sync_up_pairs(
                 .await
             } else {
                 sync_up_data_file(
+                    &io_clone,
                     asset_blob_cache_clone,
                     asset_keyring_clone,
                     &api_client_clone,
@@ -2438,7 +2469,7 @@ pub async fn sync_up_pairs(
         match handle {
             Ok(result) => results.push(result),
             Err(e) => {
-                eprintln!("A sync task panicked: {}", e);
+                errorln!(io, "Sync task panicked: {}", e);
             }
         }
     }

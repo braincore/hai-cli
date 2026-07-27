@@ -18,7 +18,9 @@ use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
+use crate::errorln;
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
+use crate::io::Io;
 use crate::session::{self, CmdInputReply};
 use crate::{
     asset_async_writer, asset_reader,
@@ -699,6 +701,7 @@ pub struct ViteProxy {
 ///   `asset_prefix` are proxied to instead of being served from the asset API.
 ///   Vite websocket requests are also proxied.
 pub async fn launch_gateway(
+    io: &Io,
     repl_remote: crate::repl_remote::ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -804,6 +807,7 @@ pub async fn launch_gateway(
     let perm_request_map: PermRequestMap = Arc::new(Mutex::new(HashMap::new()));
     let perm_request_map_clone = perm_request_map.clone();
 
+    let io_clone = io.clone();
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
@@ -838,6 +842,7 @@ pub async fn launch_gateway(
 
                     let _ = stream.set_nodelay(true);
 
+                    let io_clone_inner = io_clone.clone();
                     let token_clone_inner = token_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -854,6 +859,7 @@ pub async fn launch_gateway(
 
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
+                            &io_clone_inner,
                             stream,
                             peer_addr,
                             perm_addr,
@@ -944,6 +950,7 @@ pub async fn launch_gateway(
 // Handles both HTTP and WebSocket connections, dispatching to the appropriate
 // handler based on the initial request.
 async fn handle_connection(
+    io: &Io,
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     perm_addr: SocketAddr,
@@ -988,6 +995,7 @@ async fn handle_connection(
         }
         // Handle as WebSocket - tokio-tungstenite will read the upgrade request
         handle_websocket_connection(
+            io,
             stream,
             &perm_addr,
             token,
@@ -1008,6 +1016,7 @@ async fn handle_connection(
     } else {
         // Handle as HTTP - we need to actually read and parse the request
         handle_http_connection(
+            io,
             stream,
             &peer_addr,
             token,
@@ -1071,6 +1080,7 @@ async fn handle_vite_websocket_proxy(
 }
 
 async fn handle_websocket_connection(
+    io: &Io,
     stream: tokio::net::TcpStream,
     perm_addr: &SocketAddr,
     token: &str,
@@ -1194,6 +1204,7 @@ async fn handle_websocket_connection(
                 match msg_option {
                     Some(Ok(Message::Text(msg))) => {
                         handle_client_message(
+                            io,
                             perm_addr,
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
@@ -1249,6 +1260,7 @@ async fn handle_websocket_connection(
 }
 
 async fn handle_http_connection(
+    io: &Io,
     mut stream: tokio::net::TcpStream,
     peer_addr: &std::net::SocketAddr,
     token: &str,
@@ -1272,6 +1284,7 @@ async fn handle_http_connection(
 
     // Handle the HTTP request
     let response = handle_http_request(
+        io,
         &request,
         &peer_addr,
         &token,
@@ -1295,6 +1308,7 @@ async fn handle_http_connection(
 // -- HTTP request handler --
 
 async fn handle_http_request(
+    io: &Io,
     request: &HttpRequest,
     #[allow(unused_variables)] peer_addr: &std::net::SocketAddr,
     expected_token: &str,
@@ -1404,6 +1418,7 @@ async fn handle_http_request(
                 return HttpResponse::bad_request("push parameter is not valid for GET requests");
             }
             handle_get(
+                io,
                 &request,
                 &asset_name,
                 rev_id.as_deref(),
@@ -1436,6 +1451,7 @@ async fn handle_http_request(
                 .await
             } else {
                 handle_put(
+                    io,
                     &asset_name,
                     &request.body,
                     is_push,
@@ -1504,6 +1520,7 @@ fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
 }
 
 async fn handle_get(
+    io: &Io,
     request: &HttpRequest,
     asset_name: &str,
     rev_id: Option<&str>,
@@ -1668,6 +1685,7 @@ async fn handle_get(
         }
     } else if let Some(data_contents) = data_contents {
         match asset_crypt::maybe_decrypt_asset_contents(
+            io,
             asset_blob_cache.clone(),
             asset_keyring.clone(),
             api_client,
@@ -1757,6 +1775,7 @@ async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) ->
 }
 
 async fn handle_put(
+    io: &Io,
     asset_name: &str,
     body: &[u8],
     is_push: bool,
@@ -1774,6 +1793,7 @@ async fn handle_put(
     }
     // Choose encryption key material for this asset
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        io,
         asset_blob_cache.clone(),
         asset_keyring.clone(),
         api_client.clone(),
@@ -2255,6 +2275,7 @@ async fn send_bad_gateway_error(
 // --
 
 async fn handle_client_message(
+    io: &Io,
     perm_addr: &SocketAddr,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -2663,6 +2684,7 @@ async fn handle_client_message(
                 }
             };
             let sign_result = match asset_crypt::sign_message_using_ed25519_key(
+                io,
                 asset_blob_cache,
                 asset_keyring,
                 api_client,
@@ -3334,6 +3356,7 @@ async fn handle_client_message(
             // Determine AKM before creating the folder so that we don't use
             // its existence as evidence of the AKM choice.
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                io,
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 api_client.clone(),
@@ -3350,7 +3373,7 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
+                            errorln!(io, "{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
@@ -3377,7 +3400,7 @@ async fn handle_client_message(
                         .await
                         {
                             send_bad_gateway_error(ws_sink, mid, &e).await;
-                            eprintln!("error: failed to put asset encryption metadata: {}", e);
+                            errorln!(io, "failed to put asset encryption metadata: {}", e);
                             return;
                         }
                     }
@@ -3560,6 +3583,7 @@ async fn handle_client_message(
                 return;
             }
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                io,
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 api_client.clone(),
@@ -3636,6 +3660,7 @@ async fn handle_client_message(
                 return;
             }
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+                io,
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 api_client.clone(),

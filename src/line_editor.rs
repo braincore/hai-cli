@@ -1121,10 +1121,12 @@ impl CmdAndFileCompleter {
     fn asset_completer(&self, asset_prefix: &str) -> Vec<Suggestion> {
         let expanded_asset_prefix = asset_helper::expand_asset_name(asset_prefix, &self.account);
         let resolved_asset_prefix = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(asset_helper::resolve_attachment_asset_name(
-                &expanded_asset_prefix,
-                &self.api_client,
-            ))
+            tokio::runtime::Handle::current()
+                .block_on(asset_helper::resolve_attachment_asset_name(
+                    &expanded_asset_prefix,
+                    &self.api_client,
+                ))
+                .unwrap_or(expanded_asset_prefix.clone())
         });
         if asset_prefix.starts_with("/s/") && asset_prefix.matches('/').count() == 2 {
             // If prefix is querying /s/, auto-complete asset pools.
@@ -1160,7 +1162,11 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    eprintln!("error: failed to list asset pools");
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: failed to list asset pools"
+                        ));
+                    }
                     return vec![];
                 }
             }
@@ -1234,7 +1240,12 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                eprintln!("error: could not fetch list of matching assets: {}", e);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "error: could not fetch list of matching assets: {}",
+                        e
+                    ));
+                }
                 vec![]
             }
         }
@@ -1284,7 +1295,11 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    eprintln!("error: failed to list asset pools");
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: failed to list asset pools"
+                        ));
+                    }
                     return vec![];
                 }
             }
@@ -1374,7 +1389,12 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                eprintln!("error: could not fetch list of matching assets: {}", e);
+                if self.debug {
+                    let _ = config::write_to_debug_log(format!(
+                        "error: could not fetch list of matching assets: {}",
+                        e
+                    ));
+                }
                 vec![]
             }
         }
@@ -1435,7 +1455,12 @@ impl CmdAndFileCompleter {
                     completions
                 }
                 Err(e) => {
-                    eprintln!("error: could not fetch list of matching assets: {}", e);
+                    if self.debug {
+                        let _ = config::write_to_debug_log(format!(
+                            "error: could not fetch list of matching assets: {}",
+                            e
+                        ));
+                    }
                     vec![]
                 }
             }

@@ -7,10 +7,13 @@ use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_helper;
 use crate::feature::gateway;
+use crate::io::{Io, Out};
 use crate::repl_remote::ReplRemote;
 use crate::session::SessionState;
+use crate::{errorln, outln};
 
 pub async fn start_app_and_launch_browser(
+    io: &Io,
     session: &mut SessionState,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -45,11 +48,11 @@ pub async fn start_app_and_launch_browser(
                 &gateway_info.auth_token,
                 debug,
             );
-            println!("Reusing existing gateway. Asset app URL: {}", final_url);
+            outln!(io, "Reusing existing gateway. Asset app URL: {}", final_url);
             if !skip_browser_launch {
-                println!("Opening asset app in browser");
+                outln!(io, "Opening asset app in browser");
                 if let Err(e) = open::that_detached(&final_url) {
-                    eprintln!("error: failed to open asset app in browser: {}", e);
+                    errorln!(io, "failed to open asset app in browser: {}", e);
                 }
             }
             return Some((final_url, gateway_info.addr, gateway_info.perm_addr));
@@ -57,6 +60,7 @@ pub async fn start_app_and_launch_browser(
     }
 
     if let Some((final_url, addr, perm_addr, clients, cancel_token, auth_token)) = start_app(
+        io,
         ReplRemote::from_session(session),
         db,
         asset_blob_cache,
@@ -72,11 +76,11 @@ pub async fn start_app_and_launch_browser(
     .await
     {
         if skip_browser_launch {
-            println!("Asset app URL: {}", final_url);
+            outln!(io, "Asset app URL: {}", final_url);
         } else {
-            println!("Opening asset app in browser: {}", final_url);
+            outln!(io, "Opening asset app in browser: {}", final_url);
             if let Err(e) = open::that_detached(&final_url) {
-                eprintln!("error: failed to open asset app in browser: {}", e);
+                errorln!(io, "failed to open asset app in browser: {}", e);
             }
         }
         session.gateways.push(crate::session::GatewayInfo {
@@ -101,6 +105,7 @@ pub async fn start_app_and_launch_browser(
 ///   `npm run dev` is launched there and GET requests under `prog_asset_name`
 ///   are proxied to the vite dev server.
 pub async fn start_app(
+    io: &Io,
     repl_remote: ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -123,10 +128,10 @@ pub async fn start_app(
     // If local_dev_path set, launches a vite dev server (`npm run dev`) in the
     // provided project directory on a free port.
     let vite_proxy = if let Some(vite_project_path) = local_dev_path {
-        match launch_vite_dev_server(vite_project_path, prog_asset_name).await {
+        match launch_vite_dev_server(&io.out, vite_project_path, prog_asset_name).await {
             Some(vite_proxy) => Some(vite_proxy),
             None => {
-                eprintln!("error: failed to launch vite dev server");
+                errorln!(io, "failed to launch vite dev server");
                 return None;
             }
         }
@@ -136,6 +141,7 @@ pub async fn start_app(
 
     if let Ok((addr, perm_addr, clients, cancel_token, auth_token)) =
         crate::feature::gateway::launch_gateway(
+            io,
             repl_remote,
             db.clone(),
             asset_blob_cache.clone(),
@@ -178,6 +184,7 @@ pub async fn start_app(
 /// The spawned process is detached: it inherits stdio and is not tracked for
 /// shutdown.
 async fn launch_vite_dev_server(
+    out: &Out,
     vite_project_path: &str,
     asset_app_prefix: &str,
 ) -> Option<gateway::ViteProxy> {
@@ -193,9 +200,11 @@ async fn launch_vite_dev_server(
 
     let vite_host = format!("127.0.0.1:{}", port);
 
-    println!(
+    outln!(
+        out,
         "Launching vite dev server (`npm run dev`) in {} on http://{}",
-        vite_project_path, vite_host
+        vite_project_path,
+        vite_host
     );
 
     // Assumption: generally, canonicalization of the asset prefix is done via
@@ -227,7 +236,7 @@ async fn launch_vite_dev_server(
     let _child = match spawn_result {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("error: failed to spawn `npm run dev`: {}", e);
+            errorln!(out, "failed to spawn `npm run dev`: {}", e);
             return None;
         }
     };
@@ -248,7 +257,7 @@ async fn launch_vite_dev_server(
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
-    eprintln!("error: timed out waiting for vite dev server to start");
+    errorln!(out, "timed out waiting for vite dev server to start");
     None
 }
 

@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{config, loader, term};
+use crate::errorln;
+use crate::io::Out;
+use crate::{config, loader, session};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Message {
@@ -85,12 +87,22 @@ pub enum ChatCompletionResponse {
     },
 }
 
+/// # Returns
+///
+/// (message_content, token_count)
+///
+/// The `token_count` is ballpark. It's the token count of the entire `prompt`
+/// with additional tokens for each input image (low res).
 pub async fn prompt_to_chat_message_content(
+    out: &Out,
+    bpe_tokenizer: &tiktoken_rs::CoreBPE,
     ai: &config::AiModel,
     prompt: &str,
-) -> Vec<MessageContent> {
+) -> (Vec<MessageContent>, u32) {
     let mut msg_content: Vec<MessageContent> = vec![];
     let mut cur_md_group = vec![];
+
+    let mut tokens = bpe_tokenizer.encode_with_special_tokens(&prompt).len() as u32;
 
     let md = markdown::to_mdast(prompt, &markdown::ParseOptions::default())
         .expect("Markdown parse failed");
@@ -102,7 +114,7 @@ pub async fn prompt_to_chat_message_content(
                     match &p_node.children[0] {
                         markdown::mdast::Node::Image(img_node) => {
                             if config::get_ai_model_capability(ai).image.is_none() {
-                                eprintln!("error: model does not support images");
+                                errorln!(out, "model does not support images");
                                 continue;
                             }
                             if !cur_md_group.is_empty() {
@@ -121,21 +133,19 @@ pub async fn prompt_to_chat_message_content(
                             let image_b64_res =
                                 loader::resolve_image_b64(&img_node.url, true).await;
                             match image_b64_res {
-                                Ok((encoded_image, _dim)) => {
+                                Ok((img_png_b64, img_dim)) => {
+                                    tokens += session::calc_image_tokens(ai, false, img_dim);
                                     msg_content.push(MessageContent::ImageUrl {
                                         id: Some(Uuid::now_v7()),
                                         image_url: ImageData {
                                             detail: "low".to_string(),
-                                            url: format!(
-                                                "data:image/png;base64,{}",
-                                                &encoded_image
-                                            ),
+                                            url: format!("data:image/png;base64,{}", &img_png_b64),
                                         },
                                     });
-                                    term::print_image_to_term(&encoded_image).unwrap();
+                                    out.display("image/png", &img_png_b64);
                                 }
                                 Err(e) => {
-                                    println!("Failed to encode image: {}", e);
+                                    errorln!(out, "Failed to encode image: {}", e);
                                     continue; // Skip sending if image encoding fails
                                 }
                             }
@@ -151,6 +161,7 @@ pub async fn prompt_to_chat_message_content(
             }
         }
     }
+
     if !cur_md_group.is_empty()
         && let Ok(cur_md_group_text) = mdast_util_to_markdown::to_markdown(
             &markdown::mdast::Node::Root(markdown::mdast::Root {
@@ -159,9 +170,21 @@ pub async fn prompt_to_chat_message_content(
             }),
         )
     {
+        let cur_md_group_text_trimmed = if prompt.ends_with('\n') {
+            &cur_md_group_text
+        } else {
+            // Markdown parsing adds a single trailing newline, which we trim
+            // here if the original prompt did not have one.
+            cur_md_group_text
+                .strip_suffix('\n')
+                .unwrap_or(&cur_md_group_text)
+        };
+        tokens += bpe_tokenizer
+            .encode_with_special_tokens(&cur_md_group_text_trimmed)
+            .len() as u32;
         msg_content.push(MessageContent::Text {
-            text: cur_md_group_text,
+            text: cur_md_group_text_trimmed.to_string(),
         });
     }
-    msg_content
+    (msg_content, tokens)
 }

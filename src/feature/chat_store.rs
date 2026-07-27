@@ -6,10 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::io::Io;
 use crate::{
     api, asset_async_writer, asset_cache::AssetBlobCache, asset_reader, chat, config,
-    ctrlc_handler, db, feature::asset_crypt, session,
+    ctrlc_handler, db, feature::asset_crypt, io::Out, session,
 };
+use crate::{errorln, flush, infoln, out, outln};
 
 /// Saves chat to the local db for the session user.
 ///
@@ -41,6 +43,7 @@ pub async fn save_chat_to_db(
 
 /// Saves chat to assets
 pub async fn save_chat_as_asset(
+    io: &Io,
     session: &mut session::SessionState,
     cfg: &config::Config,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -78,15 +81,18 @@ pub async fn save_chat_as_asset(
             Ok(get_res) => Some(get_res.entry.entry_id.clone()),
             Err(asset_reader::GetAssetError::BadName) => None,
             Err(asset_reader::GetAssetError::DataFetchFailed(failure)) => {
-                eprintln!(
-                    "error: failed to get asset data: {}: {}",
-                    chat_log_asset_name, failure
+                errorln!(
+                    io,
+                    "failed to get asset data: {}: {}",
+                    chat_log_asset_name,
+                    failure
                 );
                 return;
             }
         };
 
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        io,
         asset_blob_cache.clone(),
         session.asset_keyring.clone(),
         api_client.clone(),
@@ -100,7 +106,7 @@ pub async fn save_chat_as_asset(
         Err(e) => {
             match e {
                 asset_crypt::AkmSelectionError::Abort(msg) => {
-                    eprintln!("error: {}", msg);
+                    errorln!(io, "{}", msg);
                 }
             }
             return;
@@ -132,15 +138,17 @@ pub async fn save_chat_as_asset(
     let abridged_history = session::get_abridged_history(&session.history);
     let abridged_history_tokens = bpe_tokenizer.encode_with_special_tokens(&abridged_history);
     let chat_title = if abridged_history.len() > 100 {
-        println!(
+        outln!(
+            io,
             "Generating title ({} tokens)...",
             abridged_history_tokens
                 .len()
                 .to_formatted_string(&Locale::en)
         );
-        use std::io::Write;
-        std::io::stdout().flush().unwrap();
+        flush!(io);
+        // FIXME: prompt_ai_simple needs to use out?
         prompt_ai_simple(
+            &io.out,
             &format!(
                 r#"Generate a short title for the included chat log.
 Do not quote it.
@@ -159,7 +167,7 @@ lesson (e.g. "understanding").\n\n{}"#,
     } else {
         None
     };
-    println!("Saving to asset: {}", chat_log_asset_name);
+    outln!(io, "Saving to asset: {}", chat_log_asset_name);
 
     let mut new_ids = std::collections::HashSet::new();
 
@@ -220,7 +228,7 @@ lesson (e.g. "understanding").\n\n{}"#,
                     }
 
                     if !image_url.url.starts_with("data:image/") {
-                        eprintln!("error: image url is not in b64 format: {}", image_url.url);
+                        errorln!(io, "image url is not in b64 format: {}", image_url.url);
                         continue;
                     }
                     let Some((content_type, b64_data)) =
@@ -230,13 +238,13 @@ lesson (e.g. "understanding").\n\n{}"#,
                             Some((mime, b64))
                         })
                     else {
-                        eprintln!("error: failed to parse image b64 data");
+                        errorln!(io, "failed to parse image b64 data");
                         continue;
                     };
 
                     // Decode the image from b64 first and store it as raw bytes
                     let Ok(raw) = general_purpose::STANDARD.decode(b64_data) else {
-                        eprintln!("error: failed to decode image b64 data");
+                        errorln!(io, "failed to decode image b64 data");
                         continue;
                     };
                     let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -277,7 +285,7 @@ lesson (e.g. "understanding").\n\n{}"#,
     }) {
         res.into_bytes()
     } else {
-        eprintln!("error: failed to serialize chat log");
+        errorln!(io, "failed to serialize chat log");
         return;
     };
     session.chat_log_asset_name = Some(chat_log_asset_name.clone());
@@ -340,6 +348,7 @@ struct ChatLog {
 /// - `fork`: If set, does not save chat_log_asset_name so that a new asset is
 ///   created when re-saving.
 pub async fn resume_chat_from_db_or_asset(
+    io: &Io,
     session: &mut session::SessionState,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -353,6 +362,7 @@ pub async fn resume_chat_from_db_or_asset(
             .as_ref()
             .map(|account| account.username.clone());
         match asset_reader::get_decrypted_asset_and_metadata(
+            io,
             asset_blob_cache.clone(),
             session.asset_keyring.clone(),
             api_client,
@@ -363,7 +373,7 @@ pub async fn resume_chat_from_db_or_asset(
         {
             Ok((decrypted_contents, _asset_entry)) => decrypted_contents,
             Err(e) => {
-                eprintln!("error: failed to get chat {}: {}", chat_log_name, e);
+                errorln!(io, "failed to get chat {}: {}", chat_log_name, e);
                 return;
             }
         }
@@ -378,7 +388,7 @@ pub async fn resume_chat_from_db_or_asset(
         {
             res.0.into_bytes()
         } else {
-            eprintln!("error: no chat saved");
+            errorln!(io, "no chat saved");
             return;
         }
     };
@@ -397,7 +407,10 @@ pub async fn resume_chat_from_db_or_asset(
                 if res.write_data {
                     session.chat_log_asset_name = Some(chat_log_name.to_string());
                 } else {
-                    eprintln!("notice: chat log is read-only. /chat-save will save to new asset.")
+                    infoln!(
+                        io,
+                        "chat log is read-only. /chat-save will save to new asset."
+                    );
                 }
             }
             _ => {}
@@ -413,7 +426,7 @@ pub async fn resume_chat_from_db_or_asset(
             let history = match serde_json::from_slice::<Vec<db::LogEntry>>(&chat_log_contents) {
                 Ok(res) => res,
                 Err(e) => {
-                    eprintln!("error: chat log bad format: {}", e);
+                    errorln!(io, "chat log bad format: {}", e);
                     return;
                 }
             };
@@ -443,17 +456,19 @@ pub async fn resume_chat_from_db_or_asset(
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             session.input_loaded_tokens += log_entry.tokens;
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                println!(
+                // FIXME
+                outln!(
+                    io,
                     "{}[{}]: {}",
                     role_name,
                     i,
                     text.split_once("\n").unwrap_or((text, "")).0
                 );
-                println!();
+                outln!(io);
             } else if let chat::MessageContent::ImageUrl { id, image_url } =
                 &mut log_entry.message.content[0]
             {
-                println!("{}[{}]:", role_name, i);
+                outln!(io, "{}[{}]:", role_name, i);
 
                 // Three types of image urls need to be handled:
                 // 1. A legit URL (http:// or https://)
@@ -467,6 +482,7 @@ pub async fn resume_chat_from_db_or_asset(
                         .as_ref()
                         .map(|account| account.username.clone());
                     match asset_reader::get_decrypted_asset_and_metadata(
+                        io,
                         asset_blob_cache.clone(),
                         session.asset_keyring.clone(),
                         api_client,
@@ -481,7 +497,7 @@ pub async fn resume_chat_from_db_or_asset(
                             img_url
                         }
                         Err(e) => {
-                            eprintln!("error: failed to get image attachment: {}", e);
+                            errorln!(io, "failed to get image attachment: {}", e);
                             continue;
                         }
                     }
@@ -490,12 +506,12 @@ pub async fn resume_chat_from_db_or_asset(
                 };
                 match crate::loader::resolve_image_b64(&url, false).await {
                     Ok((img_png_b64, _dim)) => {
-                        crate::term::print_image_to_term(&img_png_b64).unwrap();
-                        println!();
+                        io.display("image/png", &img_png_b64);
+                        outln!(io);
                         image_url.url = format!("data:image/png;base64,{}", img_png_b64);
                     }
                     Err(e) => {
-                        eprintln!("error: failed to load image: {}", e);
+                        errorln!(io, "failed to load image: {}", e);
                     }
                 }
             }
@@ -515,7 +531,12 @@ pub async fn resume_chat_from_db_or_asset(
             let left_prompt = format!("{}[{}]:", role_name, i);
             if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
                 if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
-                    println!("{}", left_prompt.bright_green());
+                    if io.is_terminal() {
+                        println!("{}", left_prompt.bright_green());
+                        io.record_out(&left_prompt);
+                    } else {
+                        outln!(io, "{}", left_prompt);
+                    }
                     for tool_call in tool_calls {
                         let tool_name = tool_call.function.name.clone();
                         let mut json_obj_acc = crate::ai_provider::util::JsonObjectAccumulator::new(
@@ -524,18 +545,32 @@ pub async fn resume_chat_from_db_or_asset(
                             crate::ai_provider::tool_schema::get_syntax_highlighter_token_from_tool_name(&tool_name),
                             vec![],
                         );
-                        json_obj_acc.acc(&tool_call.function.arguments);
-                        json_obj_acc.end();
-                        println!();
-                        println!();
+                        json_obj_acc.acc(&tool_call.function.arguments, &io.out);
+                        json_obj_acc.end(&io.out);
+                        outln!(io);
+                        outln!(io);
                     }
                 } else {
-                    print!("{} ", left_prompt.bright_green());
-                    crate::term_color::print_multi_lang_syntax_highlighting(&entry_body, &None);
-                    println!();
+                    if io.is_terminal() {
+                        print!("{} ", left_prompt.bright_green());
+                        io.record_out(&format!("{} ", left_prompt));
+                    } else {
+                        out!(io, "{}", left_prompt);
+                    }
+                    crate::term_color::print_multi_lang_syntax_highlighting(
+                        &io.out,
+                        &entry_body,
+                        &None,
+                    );
+                    outln!(io);
                 }
             } else {
-                print!("{} {}", left_prompt.bright_green(), entry_body);
+                if io.is_terminal() {
+                    print!("{}", left_prompt.bright_green());
+                    io.record_out(&left_prompt);
+                } else {
+                    out!(io, "{}", left_prompt);
+                }
             }
         }
     }
@@ -544,6 +579,7 @@ pub async fn resume_chat_from_db_or_asset(
 // --
 
 async fn prompt_ai_simple(
+    out: &Out,
     prompt: &str,
     session: &mut session::SessionState,
     cfg: &config::Config,
@@ -559,6 +595,7 @@ async fn prompt_ai_simple(
         tool_calls: None,
     }];
     let res = crate::prompt_ai(
+        &out,
         &msg_history,
         &None,
         &Vec::new(),

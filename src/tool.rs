@@ -486,3 +486,77 @@ pub async fn collect_and_print_command_output(
         Err(e) => Err(e.into()),
     }
 }
+
+// --
+
+use crate::io::Out;
+use crate::{errln, outln};
+
+/// Given a child process, collects stdout and stderr, prints them to the
+/// terminal, and returns the combined output as a string.
+///
+/// This function waits for the child process to exit before returning.
+pub async fn collect_and_output_command(
+    out: &Out,
+    child: &mut tokio::process::Child,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let stdout = child.stdout.take().ok_or("Failed to open stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to open stderr")?;
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    let mut output_text = String::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+
+    loop {
+        tokio::select! {
+            stdout_line = stdout_reader.next_line(), if !stdout_done => {
+                match stdout_line {
+                    Ok(Some(line)) => {
+                        outln!(out, "{}", line);
+                        output_text.push_str(&(line + "\n"));
+                    }
+                    Ok(None) => stdout_done = true,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            stderr_line = stderr_reader.next_line(), if !stderr_done => {
+                match stderr_line {
+                    Ok(Some(line)) => {
+                        errln!(out, "{}", line);
+                        output_text.push_str(&(line + "\n"));
+                    }
+                    Ok(None) => stderr_done = true,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            else => break,
+        }
+        if stdout_done && stderr_done {
+            break;
+        }
+    }
+
+    match child.wait().await {
+        Ok(status) => {
+            if status.success() {
+                Ok(output_text)
+            } else {
+                Ok(format!(
+                    "{}Process exited with status: {}",
+                    if !output_text.is_empty() {
+                        format!("{}\n", output_text)
+                    } else {
+                        "".to_string()
+                    },
+                    status.code().unwrap_or(-256)
+                ))
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}

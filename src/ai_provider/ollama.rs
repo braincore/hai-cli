@@ -9,8 +9,8 @@ use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nu
 use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::println;
 use crate::tool;
+use crate::{errorln, io::Out, outln};
 
 //
 // End Ollama Response Types
@@ -18,6 +18,7 @@ use crate::tool;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn send_to_ollama(
+    out: &Out,
     base_url: Option<&str>,
     model: &str,
     temperature: Option<f32>,
@@ -32,13 +33,12 @@ pub async fn send_to_ollama(
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
 
     // Register ctrl+c interrupt handler
-    // NOTE: This handler prints "AI Interrupted" but the tokio code actually
-    // adds "AI Interrupted" into the output text.
     let cancel_info = if let Some(handler) = ctrlc_handler {
         let parent_cancel_token = CancellationToken::new();
         let cancel_token_child = parent_cancel_token.clone();
         let handler_id = handler.add_handler(move || {
-            println!("AI Interrupted");
+            // Signal handler kept light to avoid deadlocking by printing to
+            // `out`.
             cancel_token_child.cancel();
         });
         Some((parent_cancel_token, handler_id, handler))
@@ -170,6 +170,7 @@ pub async fn send_to_ollama(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
         }
     };
@@ -202,6 +203,7 @@ pub async fn send_to_ollama(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
                 return Ok(vec![chat::ChatCompletionResponse::Message {
@@ -252,16 +254,16 @@ pub async fn send_to_ollama(
                                 ),
                             );
                             if let Some(json_accumulator) = tool_calls.get_mut(&0) {
-                                json_accumulator.acc(&arguments);
+                                json_accumulator.acc(&arguments, out);
                             } else {
-                                eprintln!("error: unexpected tool call ID: {}", 0);
+                                errorln!(out, "unexpected tool call ID: {}", 0);
                             }
                             break;
                         }
                         if let Some(content) = json_data["message"]["content"].as_str() {
-                            text_accumulator.acc(content);
+                            text_accumulator.acc(content, out);
                         } else if let Some(message) = json_data["error"].as_str() {
-                            eprintln!("unexpected error: {}", message);
+                            errorln!(out, "unexpected: {}", message);
                         }
                         break;
                     }
@@ -279,13 +281,13 @@ pub async fn send_to_ollama(
         }
     }
     // Mark accumulators as done to clear buffers
-    text_accumulator.end();
+    text_accumulator.end(out);
     for tool_call in tool_calls.values_mut() {
-        tool_call.end();
+        tool_call.end(out);
     }
 
     // Final newline post-response-stream
-    println!();
+    outln!(out);
     if let Some((_, handler_id, handler)) = cancel_info {
         handler.remove_handler(handler_id);
     }

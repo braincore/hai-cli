@@ -8,9 +8,11 @@ use rmcp::{
     transport::{ConfigureCommandExt, TokioChildProcess},
 };
 
+use crate::{errorln, io::Out, outln};
+
 pub type McpService = RunningService<RoleClient, ()>;
 
-pub async fn init_mcp(cmd: &str) -> Option<(McpService, ListToolsResult)> {
+pub async fn init_mcp(out: &Out, cmd: &str) -> Option<(McpService, ListToolsResult)> {
     let cmd_parts = cmd.split_whitespace();
 
     let mut env = HashMap::new();
@@ -31,7 +33,7 @@ pub async fn init_mcp(cmd: &str) -> Option<(McpService, ListToolsResult)> {
     let command = if let Some(command) = command {
         command
     } else {
-        eprintln!("error: no command provided");
+        errorln!(out, "no command provided");
         return None;
     };
 
@@ -48,7 +50,7 @@ pub async fn init_mcp(cmd: &str) -> Option<(McpService, ListToolsResult)> {
     let transport = match TokioChildProcess::new(cmd) {
         Ok(transport) => transport,
         Err(e) => {
-            eprintln!("error: failed to start process: {}", e);
+            errorln!(out, "failed to start process: {}", e);
             return None;
         }
     };
@@ -56,21 +58,22 @@ pub async fn init_mcp(cmd: &str) -> Option<(McpService, ListToolsResult)> {
     let service = match ().serve(transport).await {
         Ok(service) => service,
         Err(e) => {
-            eprintln!("error: failed to initialize MCP service: {}", e);
+            errorln!(out, "failed to initialize MCP service: {}", e);
             return None;
         }
     };
     let server_info = service.peer_info();
-    println!("Connected to server: {server_info:#?}");
+    outln!(out, "Connected to server: {server_info:#?}");
 
     let tools = match service.list_tools(None).await {
         Ok(tools) => tools,
         Err(e) => {
-            eprintln!("error: failed to list tools from MCP service: {}", e);
+            errorln!(out, "failed to list tools from MCP service: {}", e);
             return None;
         }
     };
-    println!(
+    outln!(
+        out,
         "Tools: {}",
         serde_json::to_string_pretty(&tools).expect("Failed to serialize tools")
     );

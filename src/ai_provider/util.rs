@@ -1,12 +1,9 @@
 use jaq_interpret::{Ctx, FilterT, ParseCtx, RcIter, Val};
 use serde_json::Value;
-use std::io::{self, Write};
-use two_face::re_exports::syntect::easy::HighlightLines;
-use two_face::re_exports::syntect::highlighting::Style;
+use std::io;
 
-use crate::printer::is_stdout_enabled;
 use crate::term_color;
-use crate::{print, println, write_if_enabled, writeln_if_enabled};
+use crate::{errorln, io::Out, out, out_flush, outln};
 
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
@@ -38,15 +35,15 @@ pub fn run_jaq(query: &str, input: &Value) -> Result<Value, String> {
     }
 }
 
-pub struct TextAccumulator<'a> {
-    printer: MaskedPrinter<'a>,
+pub struct TextAccumulator {
+    printer: MaskedPrinter,
     // The printed text is masked
     pub printed_text: String,
     // An unmasked version of the printed text
     pub unmasked_printed_text: String,
 }
 
-impl TextAccumulator<'_> {
+impl TextAccumulator {
     pub fn new(masked_strings: Vec<String>) -> Self {
         TextAccumulator {
             printer: MaskedPrinter::new(masked_strings),
@@ -55,15 +52,15 @@ impl TextAccumulator<'_> {
         }
     }
 
-    pub fn acc(&mut self, next: &str) {
-        let acc_result = self.printer.acc(next);
+    pub fn acc(&mut self, next: &str, out: &Out) {
+        let acc_result = self.printer.acc(next, out);
         self.printed_text.push_str(&acc_result.printed_text_chunk);
         self.unmasked_printed_text
             .push_str(&acc_result.unmasked_printed_text_chunk);
     }
 
-    pub fn end(&mut self) {
-        let acc_result = self.printer.end();
+    pub fn end(&mut self, out: &Out) {
+        let acc_result = self.printer.end(out);
         self.printed_text.push_str(&acc_result.printed_text_chunk);
         self.unmasked_printed_text
             .push_str(&acc_result.unmasked_printed_text_chunk);
@@ -72,14 +69,14 @@ impl TextAccumulator<'_> {
 
 /// Responsible for printing output while masking specified strings which may
 /// necessitate it buffer while checking for incoming string matches.
-pub struct MaskedPrinter<'a> {
-    sh_printer: SyntaxHighlighterPrinter<'a>,
+pub struct MaskedPrinter {
+    sh_printer: SyntaxHighlighterPrinter,
     buffer: String,
     masked_buffer: String,
     masked_strings: Vec<String>,
 }
 
-impl MaskedPrinter<'_> {
+impl MaskedPrinter {
     pub fn new(masked_strings: Vec<String>) -> Self {
         MaskedPrinter {
             sh_printer: SyntaxHighlighterPrinter::new(false),
@@ -89,7 +86,7 @@ impl MaskedPrinter<'_> {
         }
     }
 
-    pub fn acc(&mut self, next: &str) -> PrinterAccResult {
+    pub fn acc(&mut self, next: &str, out: &Out) -> PrinterAccResult {
         self.buffer.push_str(next);
         self.masked_buffer.push_str(next);
         let mut printable_length = self.buffer.len();
@@ -108,7 +105,7 @@ impl MaskedPrinter<'_> {
         }
         let printable_unmasked_text = self.buffer[..printable_length].to_string();
         let printable_masked_text = self.masked_buffer[..printable_length].to_string();
-        self.sh_printer.acc(&printable_masked_text);
+        self.sh_printer.acc(&printable_masked_text, out);
         remove_first_n_chars(&mut self.buffer, printable_length);
         remove_first_n_chars(&mut self.masked_buffer, printable_length);
 
@@ -119,9 +116,9 @@ impl MaskedPrinter<'_> {
         }
     }
 
-    pub fn end(&mut self) -> PrinterAccResult {
-        self.sh_printer.acc(&self.masked_buffer);
-        self.sh_printer.end();
+    pub fn end(&mut self, out: &Out) -> PrinterAccResult {
+        self.sh_printer.acc(&self.masked_buffer, out);
+        self.sh_printer.end(out);
         PrinterAccResult {
             printed_text_chunk: self.masked_buffer.clone(),
             unmasked_printed_text_chunk: self.buffer.clone(),
@@ -134,35 +131,22 @@ impl MaskedPrinter<'_> {
 
 use two_face::re_exports::syntect::highlighting::Color;
 
-pub struct SyntaxHighlighterPrinter<'a> {
+pub struct SyntaxHighlighterPrinter {
     buffer: String,
-    highlighter: Option<HighlightLines<'a>>,
-    // There's a persistent markdown highlighter that's unused during code
-    // fences but resumes afterwards to maximize syntax context.
-    default_highlighter: Option<HighlightLines<'a>>,
-    terminal_color_capability: Option<term_color::ColorCapability>,
+    lang_token: Option<String>,
+    default_lang_token: Option<String>,
     background_color: Option<Color>,
     cur_line_partial: bool,
     one_shot: bool,
 }
 
-impl SyntaxHighlighterPrinter<'_> {
+impl SyntaxHighlighterPrinter {
     pub fn new(one_shot: bool) -> Self {
         SyntaxHighlighterPrinter {
             buffer: String::new(),
-            highlighter: Some(HighlightLines::new(
-                term_color::get_syntax_set()
-                    .find_syntax_by_token("markdown")
-                    .unwrap(),
-                // The markdown theme was chosen for these properties:
-                // - Headers are bolded and highlighted (light blue)
-                // - Bolded text is bolded but still white
-                // - Ordered and unordered lists are highlighted (pink)
-                term_color::get_theme_set().get(two_face::theme::EmbeddedThemeName::ColdarkDark),
-            )),
-            // The default_highlighter starts out as the "active" highlighter.
-            default_highlighter: None,
-            terminal_color_capability: term_color::terminal_color_capability(),
+            lang_token: Some("markdown".to_string()),
+            // The default_lang_token starts out as the "active" lang token.
+            default_lang_token: None,
             background_color: None,
             cur_line_partial: false,
             one_shot,
@@ -173,49 +157,46 @@ impl SyntaxHighlighterPrinter<'_> {
         self.background_color = Some(Color { r, g, b, a });
     }
 
-    pub fn set_highlighter(&mut self, token: &str) {
+    /// The configured background color as an RGB triple, for passing to
+    /// `Out::code_bg`.
+    fn bg_rgb(&self) -> Option<(u8, u8, u8)> {
+        self.background_color.map(|c| (c.r, c.g, c.b))
+    }
+
+    pub fn set_lang_token(&mut self, token: &str) {
         // jsx isn't supported by two_face, but tsx is.
         let token = if token == "jsx" { "tsx" } else { token };
-        if self.default_highlighter.is_none() {
-            self.default_highlighter = Some(
-                self.highlighter
+        if self.default_lang_token.is_none() {
+            self.default_lang_token = Some(
+                self.lang_token
                     .take()
-                    .expect("Default highlighter is missing"),
+                    .expect("Default lang token is missing"),
             );
         }
-        let ps = term_color::get_syntax_set();
-        let ts = term_color::get_theme_set();
-        if let Some(syntax) = ps.find_syntax_by_token(token) {
-            let _ = crate::config::write_to_debug_log(format!("HIGHLIGHT -> {}\n", token));
-            self.highlighter = Some(HighlightLines::new(
-                syntax,
-                ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
-            ));
+        self.lang_token = Some(token.to_string());
+    }
+
+    pub fn set_lang_token_default(&mut self) {
+        if let Some(lang_token) = self.default_lang_token.take() {
+            self.lang_token = Some(lang_token);
         }
     }
 
-    pub fn set_highlighter_default(&mut self) {
-        if let Some(highlighter) = self.default_highlighter.take() {
-            let _ = crate::config::write_to_debug_log("HIGHLIGHT -> DEFAULT\n".to_string());
-            self.highlighter = Some(highlighter);
-        }
-    }
-
-    pub fn highlighter_check_start(&mut self, line: &str) {
+    pub fn lang_token_check_start(&mut self, line: &str) {
         let markdown_code_block_re = term_color::get_markdown_code_block_re();
         if let Some(captures) = markdown_code_block_re.captures(line)
             && let Some(lang) = captures.get(1).map(|m| m.as_str().to_string())
         {
-            self.set_highlighter(&lang);
+            self.set_lang_token(&lang);
         }
     }
 
-    pub fn highlighter_check_end(&mut self, line: &str) {
-        if self.default_highlighter.is_some()
-            && self.highlighter.is_some()
+    pub fn lang_token_check_end(&mut self, line: &str) {
+        if self.default_lang_token.is_some()
+            && self.lang_token.is_some()
             && line.trim_ascii() == "```"
         {
-            self.set_highlighter_default();
+            self.set_lang_token_default();
         }
     }
 
@@ -240,19 +221,8 @@ impl SyntaxHighlighterPrinter<'_> {
     /// the entire first line as `next` or you set `one_shot` to `true` in
     /// `new()` so that it syntax highlights regardless of an explicit newline
     /// end.
-    pub fn acc(&mut self, next: &str) {
-        let color_capability =
-            if let Some(color_capability) = self.terminal_color_capability.clone() {
-                color_capability
-            } else {
-                self.buffer.push_str(next);
-                print!("{}", next);
-                if is_stdout_enabled() {
-                    io::stdout().flush().unwrap(); // Flush to skip line-buffer
-                }
-                return;
-            };
-
+    pub fn acc(&mut self, next: &str, out: &Out) {
+        let bg = self.bg_rgb();
         let mut stdout = io::stdout().lock();
 
         let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
@@ -264,34 +234,35 @@ impl SyntaxHighlighterPrinter<'_> {
             self.buffer.clear();
 
             let need_reprint = if !self.cur_line_partial
-                && let Some(highlighter) = self.highlighter.as_mut()
+                && let Some(lang) = self.lang_token.as_mut()
             {
                 let line_with_ending = format!("{}\n", full_first_line);
-                print_line_syntax_highlighted(
-                    &mut stdout,
-                    &color_capability,
-                    highlighter,
-                    &self.background_color,
-                    &line_with_ending,
-                );
+                out.code_bg(&line_with_ending, Some(lang), bg);
                 false
             } else {
                 // Either finishing the current line or there was no highlighter set
-                let _ = writeln_if_enabled!(stdout, "{}", &lines[0]);
-                if is_stdout_enabled() {
-                    stdout.flush().unwrap();
+                if self.lang_token.is_some() {
+                    // If the line is going to be reprinted with syntax
+                    // highlighting, then don't record it in the transcript
+                    // now.
+                    let was_recording = out.record_off();
+                    outln!(out, "{}", &lines[0]);
+                    out.record_set(was_recording);
+                    true
+                } else {
+                    outln!(out, "{}", &lines[0]);
+                    false
                 }
-                self.highlighter.is_some()
             };
 
             // If this line is the end of a code block, end it before
             // triggering the highlight logic.
-            self.highlighter_check_end(&full_first_line);
+            self.lang_token_check_end(&full_first_line);
 
             // If highlighter is set, clear the previous line and reprint with
             // colors.
             if need_reprint
-                && let Some(highlighter) = self.highlighter.as_mut()
+                && let Some(lang) = self.lang_token.as_mut()
                 && let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
             {
                 let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
@@ -320,45 +291,28 @@ impl SyntaxHighlighterPrinter<'_> {
                     height
                 ));
 
-                if is_stdout_enabled() {
+                if out.is_terminal() {
+                    // For rewriting the line with syntax highlighting.
+                    // This only applies if it's a terminal backend.
                     crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
                 }
 
                 let line_with_ending = format!("{}\n", full_first_line);
-                print_line_syntax_highlighted(
-                    &mut stdout,
-                    &color_capability,
-                    highlighter,
-                    &self.background_color,
-                    &line_with_ending,
-                );
+                out.code_bg(&line_with_ending, Some(lang), bg);
             }
 
             // It's important to activate highlighting after the start so that
             // the ``` isn't treated as part of the code. Otherwise, in some
             // languages it will be interpreted as a multi-line comment.
-            self.highlighter_check_start(&full_first_line);
+            self.lang_token_check_start(&full_first_line);
 
             // All lines in the middle are printed fully
             for middle_line in &lines[1..lines.len() - 1] {
                 let _ = crate::config::write_to_debug_log(format!("MID line: {:?}\n", middle_line));
-                self.highlighter_check_end(middle_line);
+                self.lang_token_check_end(middle_line);
                 let middle_line_with_ending = format!("{}\n", middle_line);
-                if let Some(highlighter) = self.highlighter.as_mut() {
-                    print_line_syntax_highlighted(
-                        &mut stdout,
-                        &color_capability,
-                        highlighter,
-                        &self.background_color,
-                        &middle_line_with_ending,
-                    );
-                } else {
-                    let _ = write_if_enabled!(stdout, "{}", middle_line_with_ending);
-                    if is_stdout_enabled() {
-                        stdout.flush().unwrap();
-                    }
-                }
-                self.highlighter_check_start(middle_line);
+                out.code_bg(&middle_line_with_ending, self.lang_token.as_deref(), bg);
+                self.lang_token_check_start(middle_line);
             }
 
             // The last line is only partial (unless this is the last acc() call)
@@ -367,45 +321,32 @@ impl SyntaxHighlighterPrinter<'_> {
                 "LAST line partial: {:?}\n",
                 last_line_partial
             ));
-            if self.one_shot
-                && let Some(highlighter) = self.highlighter.as_mut()
-            {
-                print_line_syntax_highlighted(
-                    &mut stdout,
-                    &color_capability,
-                    highlighter,
-                    &self.background_color,
-                    last_line_partial,
-                );
+            if self.one_shot {
+                out.code_bg(last_line_partial, self.lang_token.as_deref(), bg);
             } else {
-                let _ = write_if_enabled!(stdout, "{}", last_line_partial);
-                if is_stdout_enabled() {
-                    stdout.flush().unwrap();
-                }
+                // NOTE: This case may not be fully thought through
+                let was_recording = out.record_off();
+                out_flush!(out, "{}", last_line_partial);
+                out.record_set(was_recording);
             }
             self.cur_line_partial = !last_line_partial.is_empty();
             self.buffer.push_str(last_line_partial);
-        } else if self.one_shot
-            && let Some(highlighter) = self.highlighter.as_mut()
-        {
-            print_line_syntax_highlighted(
-                &mut stdout,
-                &color_capability,
-                highlighter,
-                &self.background_color,
-                next,
-            );
+        } else if self.one_shot {
+            out.code_bg(next, self.lang_token.as_deref(), bg);
         } else {
             self.cur_line_partial = true;
             self.buffer.push_str(next);
-            let _ = write_if_enabled!(stdout, "{}", next);
-            if is_stdout_enabled() {
-                stdout.flush().unwrap(); // Flush to skip line-buffer
-            }
+
+            // Turn off recording because it's a partial line that will be
+            // rewritten or fully written later.
+            let was_recording = out.record_off();
+            out_flush!(out, "{}", next); // Flush to skip line-buffer
+            out.record_set(was_recording);
         }
     }
 
-    pub fn end(&mut self) {
+    pub fn end(&mut self, out: &Out) {
+        let bg = self.bg_rgb();
         if self.one_shot {
             return;
         }
@@ -417,9 +358,7 @@ impl SyntaxHighlighterPrinter<'_> {
         // activated, the current line should be cleared and reprinted with
         // highlighting. This is only an issue when the output ends with ```
         // w/o a trailing newline.
-        if let Some(color_capability) = self.terminal_color_capability.clone()
-            && let Some(highlighter) = self.highlighter.as_mut()
-        {
+        if let Some(lang) = self.lang_token.as_mut() {
             let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
             let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
             let height = if line_width == 0 {
@@ -436,7 +375,7 @@ impl SyntaxHighlighterPrinter<'_> {
             // WARN: In some terminals, MoveToPreviousLine(0) will
             // default to 1 which is undesirable so it's handled
             // separately.
-            if is_stdout_enabled() {
+            if out.is_terminal() {
                 if height > 0 {
                     crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height))
                         .unwrap();
@@ -445,37 +384,9 @@ impl SyntaxHighlighterPrinter<'_> {
                 }
             }
 
-            print_line_syntax_highlighted(
-                &mut stdout,
-                &color_capability,
-                highlighter,
-                &self.background_color,
-                &self.buffer,
-            );
+            out.code_bg(&self.buffer, Some(lang), bg);
+            self.buffer.clear();
         }
-    }
-}
-
-pub fn print_line_syntax_highlighted(
-    stdout: &mut io::StdoutLock,
-    color_capability: &term_color::ColorCapability,
-    highlighter: &mut HighlightLines,
-    background_color: &Option<Color>,
-    line_with_ending: &str,
-) {
-    let ps = term_color::get_syntax_set();
-    let highlighted_parts: Vec<(Style, &str)> =
-        highlighter.highlight_line(line_with_ending, ps).unwrap();
-
-    for (style, text) in highlighted_parts {
-        let escaped =
-            term_color::as_terminal_escaped(style, text, color_capability, background_color);
-        if is_stdout_enabled() {
-            crossterm::queue!(stdout, crossterm::style::Print(escaped),).unwrap();
-        }
-    }
-    if is_stdout_enabled() {
-        stdout.flush().unwrap();
     }
 }
 
@@ -491,11 +402,13 @@ pub struct PrinterAccResult {
 
 /// Responsible for printing output while masking specified strings which may
 /// necessitate it buffer while checking for incoming string matches.
-pub struct MaskedJsonStringPrinter<'a> {
+pub struct MaskedJsonStringPrinter {
     /// If set, nothing is printed. The buffer will continue to be populated
     /// and the print cursor advanced as if output was being printed.
     mute: bool,
     buffer: String,
+    // Must be sorted by length descending in case a mask is a left-aligned
+    // subset of another.
     masked_strings: Vec<String>,
     /// The offset into buffer that has been printed to screen
     buffer_print_cursor: usize,
@@ -505,14 +418,11 @@ pub struct MaskedJsonStringPrinter<'a> {
     // An unmasked version of the printed text
     pub unmasked_printed_text: String,
 
-    sh_printer: SyntaxHighlighterPrinter<'a>,
+    sh_printer: SyntaxHighlighterPrinter,
 }
 
-impl<'a> MaskedJsonStringPrinter<'a> {
-    pub fn new(mute: bool, masked_strings: Vec<String>) -> MaskedJsonStringPrinter<'a> {
-        // Sort by length descending in case a mask is a left-aligned subset of another.
-        //let mut masked_strings_ordered: Vec<String> = masked_strings.clone().into_iter().collect();
-        //masked_strings_ordered.sort_by_key(|b| std::cmp::Reverse(b.len()));
+impl MaskedJsonStringPrinter {
+    pub fn new(mute: bool, masked_strings: Vec<String>) -> MaskedJsonStringPrinter {
         MaskedJsonStringPrinter {
             mute,
             buffer: String::new(),
@@ -524,14 +434,14 @@ impl<'a> MaskedJsonStringPrinter<'a> {
         }
     }
 
-    pub fn set_highlighter(&mut self, token: &str) {
-        self.sh_printer.set_highlighter(token);
+    pub fn set_lang_token(&mut self, token: &str) {
+        self.sh_printer.set_lang_token(token);
     }
 
     /// Accumulates next chunk of text into its buffer and prints as much of
     /// the buffer that it can while respecting masked-strings and JSON
     /// escaping.
-    pub fn acc(&mut self, next: &str) -> PrinterAccResult {
+    pub fn acc(&mut self, next: &str, out: &Out) -> PrinterAccResult {
         self.buffer.push_str(next);
         if !self.buffer.is_empty() && self.buffer_print_cursor == 0 {
             // Skip to 1 since the input is guaranteed to be a double-quote
@@ -639,7 +549,7 @@ impl<'a> MaskedJsonStringPrinter<'a> {
                 remaining,
             }
         } else {
-            self.sh_printer.acc(&masked_decoded_next_chunk);
+            self.sh_printer.acc(&masked_decoded_next_chunk, out);
             self.printed_text.push_str(&masked_decoded_next_chunk);
             self.unmasked_printed_text.push_str(&decoded_next_chunk);
             PrinterAccResult {
@@ -650,8 +560,8 @@ impl<'a> MaskedJsonStringPrinter<'a> {
         }
     }
 
-    pub fn end(&mut self) {
-        self.sh_printer.end();
+    pub fn end(&mut self, out: &Out) {
+        self.sh_printer.end(out);
     }
 }
 
@@ -682,16 +592,16 @@ fn remove_first_n_chars(buffer: &mut String, n: usize) {
 
 // --
 
-enum Printer<'a> {
-    String(MaskedJsonStringPrinter<'a>),
-    Array(JsonArrayAccumulator<'a>),
+enum Printer {
+    String(MaskedJsonStringPrinter),
+    Array(JsonArrayAccumulator),
 }
 
 const LANG_TAG: &str = "_lang_tag";
 const CONTINUE_TAG: &str = "_continue";
 
 // FIXME: Remove tool_id
-pub struct JsonObjectAccumulator<'a> {
+pub struct JsonObjectAccumulator {
     pub tool_id: String,
     pub tool_name: String,
     /// When set, enables syntax highlighting.
@@ -705,19 +615,19 @@ pub struct JsonObjectAccumulator<'a> {
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
     masked_strings: Vec<String>,
-    cur_printer: Option<Printer<'a>>,
+    cur_printer: Option<Printer>,
     key_search_start_index: usize,
     first_unmuted_key_found: bool,
     cur_key_name: Option<String>,
 }
 
-impl<'a> JsonObjectAccumulator<'a> {
+impl JsonObjectAccumulator {
     pub fn new(
         id: String,
         name: String,
         sh_lang_token: Option<String>,
         masked_strings: Vec<String>,
-    ) -> JsonObjectAccumulator<'a> {
+    ) -> JsonObjectAccumulator {
         JsonObjectAccumulator {
             tool_id: id,
             tool_name: name,
@@ -734,7 +644,7 @@ impl<'a> JsonObjectAccumulator<'a> {
         }
     }
 
-    pub fn acc(&mut self, next: &str) {
+    pub fn acc(&mut self, next: &str, out: &Out) {
         self.buffer.push_str(next);
         loop {
             if self.buffer_print_cursor <= self.key_search_start_index {
@@ -788,7 +698,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                                     self.masked_strings.clone(),
                                 );
                                 if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
-                                    printer.set_highlighter(sh_lang_token);
+                                    printer.set_lang_token(sh_lang_token);
                                 }
                                 (Printer::String(printer), third_quote_index)
                             } else {
@@ -804,7 +714,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                             let mut printer =
                                 MaskedJsonStringPrinter::new(mute_kv, self.masked_strings.clone());
                             if let Some(sh_lang_token) = self.sh_lang_token.as_ref() {
-                                printer.set_highlighter(sh_lang_token);
+                                printer.set_lang_token(sh_lang_token);
                             }
                             (Printer::String(printer), third_quote_index)
                         }
@@ -824,7 +734,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                         let blank_lines = "\n\n";
                         self.printed_text.push_str(blank_lines);
                         self.unmasked_printed_text.push_str(blank_lines);
-                        print!("{}", blank_lines);
+                        out!(out, "{}", blank_lines);
                     }
                     // FUTURE: Generalize this based on tool-type.
                     match self.cur_key_name.as_deref() {
@@ -837,7 +747,7 @@ impl<'a> JsonObjectAccumulator<'a> {
                             let key_label = format!("{}:\n", key_name);
                             self.printed_text.push_str(&key_label);
                             self.unmasked_printed_text.push_str(&key_label);
-                            print!("{}", key_label);
+                            out!(out, "{}", key_label);
                         }
                     }
                 } else {
@@ -852,7 +762,7 @@ impl<'a> JsonObjectAccumulator<'a> {
 
             let next_chunk_to_print = &self.buffer[self.buffer_print_cursor..];
             if let Some(Printer::String(printer)) = &mut self.cur_printer {
-                let acc_result = printer.acc(next_chunk_to_print);
+                let acc_result = printer.acc(next_chunk_to_print, out);
                 self.printed_text.push_str(&acc_result.printed_text_chunk);
                 self.unmasked_printed_text
                     .push_str(&acc_result.unmasked_printed_text_chunk);
@@ -863,12 +773,12 @@ impl<'a> JsonObjectAccumulator<'a> {
                             Some(printer.buffer[1..printer.buffer.len() - 1].to_string());
                     }
                     self.buffer_print_cursor -= remaining.len();
-                    printer.end();
+                    printer.end(out);
                     self.cur_printer = None;
                     self.key_search_start_index = self.buffer_print_cursor;
                 }
             } else if let Some(Printer::Array(printer)) = &mut self.cur_printer {
-                let acc_result = printer.acc(next_chunk_to_print);
+                let acc_result = printer.acc(next_chunk_to_print, out);
                 self.printed_text.push_str(&acc_result.printed_text_chunk);
                 self.unmasked_printed_text
                     .push_str(&acc_result.unmasked_printed_text_chunk);
@@ -885,17 +795,17 @@ impl<'a> JsonObjectAccumulator<'a> {
         }
     }
 
-    pub fn end(&mut self) {
+    pub fn end(&mut self, out: &Out) {
         if let Some(Printer::String(printer)) = &mut self.cur_printer {
-            printer.end();
-            eprintln!("error: bad json deserialization of object");
+            printer.end(out);
+            errorln!(out, "bad json deserialization of object");
         }
     }
 }
 
 // --
 
-pub struct JsonArrayAccumulator<'a> {
+pub struct JsonArrayAccumulator {
     /// Unprocessed parts of the array (prefix, suffix, and in-between strings)
     pub buffer: String,
     /// The printed text is the buffer without JSON markup and masked.
@@ -903,11 +813,11 @@ pub struct JsonArrayAccumulator<'a> {
     /// What would have been the printed text without masking.
     pub unmasked_printed_text: String,
     masked_strings: Vec<String>,
-    cur_printer: Option<MaskedJsonStringPrinter<'a>>,
+    cur_printer: Option<MaskedJsonStringPrinter>,
 }
 
-impl<'a> JsonArrayAccumulator<'a> {
-    pub fn new(masked_strings: Vec<String>) -> JsonArrayAccumulator<'a> {
+impl JsonArrayAccumulator {
+    pub fn new(masked_strings: Vec<String>) -> JsonArrayAccumulator {
         JsonArrayAccumulator {
             buffer: String::new(),
             printed_text: String::new(),
@@ -917,14 +827,14 @@ impl<'a> JsonArrayAccumulator<'a> {
         }
     }
 
-    pub fn acc(&mut self, next: &str) -> PrinterAccResult {
+    pub fn acc(&mut self, next: &str, out: &Out) -> PrinterAccResult {
         self.buffer.push_str(next);
         let mut printed_text_chunk = String::new();
         let mut unmasked_printed_text_chunk = String::new();
 
         loop {
             if let Some(printer) = &mut self.cur_printer {
-                let acc_res = printer.acc(&self.buffer);
+                let acc_res = printer.acc(&self.buffer, out);
                 printed_text_chunk.push_str(&acc_res.printed_text_chunk);
                 unmasked_printed_text_chunk.push_str(&acc_res.unmasked_printed_text_chunk);
                 if let Some(remaining) = acc_res.remaining {
@@ -932,7 +842,7 @@ impl<'a> JsonArrayAccumulator<'a> {
                     self.buffer = remaining;
                     printed_text_chunk.push('\n');
                     unmasked_printed_text_chunk.push('\n');
-                    println!();
+                    outln!(out);
                 } else {
                     // JSON-String Printer absorbed entire buffer and we need
                     // keep accumulating
@@ -979,7 +889,7 @@ impl<'a> JsonArrayAccumulator<'a> {
                     remove_first_n_chars(&mut self.buffer, quote_index);
                     printed_text_chunk.push_str("- ");
                     unmasked_printed_text_chunk.push_str("- ");
-                    print!("- ");
+                    out!(out, "- ");
                 } else {
                     // Keep accumulating
                     break;
@@ -1005,10 +915,11 @@ mod tests {
 
     #[test]
     fn test_json_array_acc_basic() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["mango", "pear"]"#;
-        let acc_res = accumulator.acc(input1);
+        let acc_res = accumulator.acc(input1, &out);
         assert_eq!(acc_res.printed_text_chunk, "- mango\n- pear\n");
         assert_eq!(acc_res.unmasked_printed_text_chunk, "- mango\n- pear\n");
         assert_eq!(acc_res.remaining, Some("".to_string()));
@@ -1019,7 +930,7 @@ mod tests {
         let masked_strings = vec!["ear".to_string()];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["mango", "pear"]"#;
-        let acc_res = accumulator.acc(input1);
+        let acc_res = accumulator.acc(input1, &out);
         assert_eq!(accumulator.printed_text, "- mango\n- p***\n");
         assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
         assert_eq!(acc_res.remaining, Some("".to_string()));
@@ -1027,16 +938,18 @@ mod tests {
 
     #[test]
     fn test_json_array_acc_odd_spacing() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = "[    \n   \"mango\"     , \n     \"pear\"      ]    ";
-        accumulator.acc(input1);
+        accumulator.acc(input1, &out);
         assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
         assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
     }
 
     #[test]
     fn test_json_array_acc_many_pieces() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings);
         let input1 = r#"["#;
@@ -1045,12 +958,12 @@ mod tests {
         let input4 = r#" "pea"#;
         let input5 = r#"r"#;
         let input6 = r#""]  , "#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
-        accumulator.acc(input3);
-        accumulator.acc(input4);
-        accumulator.acc(input5);
-        let acc_res = accumulator.acc(input6);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
+        accumulator.acc(input3, &out);
+        accumulator.acc(input4, &out);
+        accumulator.acc(input5, &out);
+        let acc_res = accumulator.acc(input6, &out);
         assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
         assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
         assert_eq!(acc_res.remaining, Some("  , ".to_string()));
@@ -1058,14 +971,15 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_basic() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"{"input": "Hello "#;
         let input2 = r#"World!"}"#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
 
         assert_eq!(accumulator.printed_text, "Hello World!");
         assert_eq!(accumulator.buffer, r#"{"input": "Hello World!"}"#);
@@ -1074,21 +988,22 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_many_pieces() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
-        accumulator.acc(r#"{""#);
-        accumulator.acc(r#"in"#);
-        accumulator.acc(r#"p"#);
-        accumulator.acc(r#"ut"#);
-        accumulator.acc(r#"""#);
-        accumulator.acc(r#": "#);
-        accumulator.acc(r#""H"#);
-        accumulator.acc(r#"e"#);
-        accumulator.acc(r#"ll"#);
-        accumulator.acc(r#"o"#);
-        accumulator.acc(r#""}"#);
+        accumulator.acc(r#"{""#, &out);
+        accumulator.acc(r#"in"#, &out);
+        accumulator.acc(r#"p"#, &out);
+        accumulator.acc(r#"ut"#, &out);
+        accumulator.acc(r#"""#, &out);
+        accumulator.acc(r#": "#, &out);
+        accumulator.acc(r#""H"#, &out);
+        accumulator.acc(r#"e"#, &out);
+        accumulator.acc(r#"ll"#, &out);
+        accumulator.acc(r#"o"#, &out);
+        accumulator.acc(r#""}"#, &out);
 
         assert_eq!(accumulator.printed_text, "Hello");
         assert_eq!(accumulator.buffer, r#"{"input": "Hello"}"#);
@@ -1097,14 +1012,15 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_odd_spacing() {
+        let out = Out::stdio();
         let masked_strings = vec!["secret".to_string()];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"        {       "input"     :        "Hello "#;
         let input2 = r#"World!"     }      "#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
 
         assert_eq!(accumulator.printed_text, "Hello World!");
         assert_eq!(accumulator.buffer, format!("{}{}", input1, input2));
@@ -1113,28 +1029,30 @@ mod tests {
 
     #[test]
     fn test_json_obj_acc_with_array() {
+        let out = Out::stdio();
         let masked_strings = vec!["secret".to_string()];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"        {  "cmds"     :        ["Hello "#;
         let input2 = r#"World!"  ]   }      "#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
 
         assert_eq!(accumulator.printed_text, "- Hello World!\n");
     }
 
     #[test]
     fn test_json_obj_acc_multikey() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut accumulator =
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"{"input": "Hello "#;
         let input2 = r#"World!",   "lang": "en"}"#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
 
         assert_eq!(accumulator.printed_text, "Hello World!\n\nlang:\nen");
         assert_eq!(
@@ -1152,10 +1070,10 @@ mod tests {
         let input2 = r#"World!",   "#;
         let input3 = r#"""#;
         let input4 = r#"lang": "en"}"#;
-        accumulator.acc(input1);
-        accumulator.acc(input2);
-        accumulator.acc(input3);
-        accumulator.acc(input4);
+        accumulator.acc(input1, &out);
+        accumulator.acc(input2, &out);
+        accumulator.acc(input3, &out);
+        accumulator.acc(input4, &out);
 
         assert_eq!(accumulator.printed_text, "Hello World!\n\nlang:\nen");
         assert_eq!(
@@ -1170,17 +1088,18 @@ mod tests {
             JsonObjectAccumulator::new("id".to_string(), "name".to_string(), None, masked_strings);
 
         let input1 = r#"{"_lang_tag": "en", "input": "Hello, World!"}"#;
-        accumulator.acc(input1);
+        accumulator.acc(input1, &out);
         assert_eq!(accumulator.printed_text, "Hello, World!");
         assert!(serde_json::from_str::<Value>(&accumulator.buffer).is_ok());
     }
 
     #[test]
     fn test_basic_masking() {
+        let out = Out::stdio();
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"hello world\"");
+        let result = printer.acc("\"hello world\"", &out);
         assert_eq!(result.printed_text_chunk, "***** world");
         assert_eq!(result.unmasked_printed_text_chunk, "hello world");
         assert_eq!(printer.printed_text, "***** world");
@@ -1189,10 +1108,11 @@ mod tests {
 
     #[test]
     fn test_multiple_masked_strings() {
+        let out = Out::stdio();
         let masked_strings = vec!["hello".to_string(), "world".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"hello world\"");
+        let result = printer.acc("\"hello world\"", &out);
         assert_eq!(result.printed_text_chunk, "***** *****");
         assert_eq!(result.unmasked_printed_text_chunk, "hello world");
         assert_eq!(printer.printed_text, "***** *****");
@@ -1201,10 +1121,10 @@ mod tests {
 
     #[test]
     fn test_json_string_encoding() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
-
-        let result = printer.acc("\"hello \\\"world\"");
+        let result = printer.acc("\"hello \\\"world\"", &out);
         assert_eq!(result.printed_text_chunk, "hello \"world");
         assert_eq!(result.unmasked_printed_text_chunk, "hello \"world");
         assert_eq!(printer.printed_text, "hello \"world");
@@ -1213,12 +1133,13 @@ mod tests {
 
     #[test]
     fn test_partial_string_accumulation() {
+        let out = Out::stdio();
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result1 = printer.acc("\"hel");
-        let result2 = printer.acc("lo");
-        let result3 = printer.acc(" world\"");
+        let result1 = printer.acc("\"hel", &out);
+        let result2 = printer.acc("lo", &out);
+        let result3 = printer.acc(" world\"", &out);
 
         assert_eq!(result1.printed_text_chunk, ""); // Nothing printed yet due to potential masking
         assert_eq!(result1.remaining, None);
@@ -1235,9 +1156,9 @@ mod tests {
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result1 = printer.acc("\"hel");
-        let result2 = printer.acc("lo");
-        let result3 = printer.acc(" world\",    \"");
+        let result1 = printer.acc("\"hel", &out);
+        let result2 = printer.acc("lo", &out);
+        let result3 = printer.acc(" world\",    \"", &out);
 
         assert_eq!(result1.printed_text_chunk, "");
         assert_eq!(result1.remaining, None);
@@ -1253,7 +1174,7 @@ mod tests {
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result1 = printer.acc("\"hel\", ");
+        let result1 = printer.acc("\"hel\", ", &out);
 
         assert_eq!(result1.printed_text_chunk, "hel");
         assert_eq!(result1.unmasked_printed_text_chunk, "hel");
@@ -1264,24 +1185,25 @@ mod tests {
         //
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
-        let result1 = printer.acc("\"\", ");
+        let result1 = printer.acc("\"\", ", &out);
         assert_eq!(result1.printed_text_chunk, "");
         assert_eq!(result1.remaining, Some(", ".to_string()));
 
         let masked_strings = vec!["hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
-        let result1 = printer.acc("\"\"");
+        let result1 = printer.acc("\"\"", &out);
         assert_eq!(result1.printed_text_chunk, "");
         assert_eq!(result1.remaining, Some("".to_string()));
     }
 
     #[test]
     fn test_partial_string_accumulation_escaping() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result1 = printer.acc("\"hello\\");
-        let result2 = printer.acc("n\"");
+        let result1 = printer.acc("\"hello\\", &out);
+        let result2 = printer.acc("n\"", &out);
 
         assert_eq!(result1.printed_text_chunk, "hello");
         assert_eq!(result1.remaining, None);
@@ -1291,11 +1213,12 @@ mod tests {
 
     #[test]
     fn test_overlapping_masked_strings() {
+        let out = Out::stdio();
         // Manually maintain the longest-first order
         let masked_strings = vec!["hello".to_string(), "hell".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"hello there\"");
+        let result = printer.acc("\"hello there\"", &out);
         assert_eq!(result.printed_text_chunk, "***** there");
         assert_eq!(result.unmasked_printed_text_chunk, "hello there");
         assert_eq!(printer.printed_text, "***** there");
@@ -1304,20 +1227,22 @@ mod tests {
 
     #[test]
     fn test_no_masked_strings() {
+        let out = Out::stdio();
         let masked_strings = vec![];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"hello world\"");
+        let result = printer.acc("\"hello world\"", &out);
         assert_eq!(result.printed_text_chunk, "hello world");
         assert_eq!(result.unmasked_printed_text_chunk, "hello world");
     }
 
     #[test]
     fn test_multiple_occurrences() {
+        let out = Out::stdio();
         let masked_strings = vec!["test".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"test test test\"");
+        let result = printer.acc("\"test test test\"", &out);
         assert_eq!(result.printed_text_chunk, "**** **** ****");
         assert_eq!(result.unmasked_printed_text_chunk, "test test test");
         assert_eq!(result.remaining, Some("".to_string()));
@@ -1325,10 +1250,11 @@ mod tests {
 
     #[test]
     fn test_case_sensitivity() {
+        let out = Out::stdio();
         let masked_strings = vec!["Hello".to_string()];
         let mut printer = MaskedJsonStringPrinter::new(false, masked_strings);
 
-        let result = printer.acc("\"hello HELLO Hello\"");
+        let result = printer.acc("\"hello HELLO Hello\"", &out);
         assert_eq!(result.printed_text_chunk, "hello HELLO *****");
         assert_eq!(result.unmasked_printed_text_chunk, "hello HELLO Hello");
     }

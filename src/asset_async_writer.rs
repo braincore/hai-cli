@@ -381,7 +381,8 @@ pub async fn asset_metadata_set_keys(
                 ..
             }) = res.entry.metadata.as_ref()
             {
-                if let Some(contents_bin) = asset_reader::get_asset_raw(metadata_url).await {
+                if let Ok(contents_bin) = asset_reader::download_with_new_client(metadata_url).await
+                {
                     let contents = String::from_utf8_lossy(&contents_bin);
                     serde_json::from_str::<serde_json::Value>(&contents)
                         .expect("failed to parse metadata")

@@ -6,11 +6,13 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::errorln;
 use crate::{
     api::client::HaiClient,
     chat, cmd, config,
     db::{self, LogEntryRetentionPolicy},
     feature::asset_keyring::AssetKeyring,
+    io::Out,
     tool,
 };
 
@@ -162,6 +164,7 @@ pub struct GatewayInfo {
 
 impl SessionState {
     pub fn new_from_cfg(
+        out: &Out,
         repl_mode: ReplMode,
         cfg: &config::Config,
         account: Option<db::Account>,
@@ -173,7 +176,7 @@ impl SessionState {
             if let Some(ai_model) = config::ai_model_from_string(ai_model_unmatched_str) {
                 default_ai_model = ai_model;
             } else {
-                eprintln!("error: unknown incognito model {}", ai_model_unmatched_str);
+                errorln!(out, "unknown incognito model {}", ai_model_unmatched_str);
             }
         }
         if let Some(force_ai_model) = force_ai_model {
@@ -186,7 +189,7 @@ impl SessionState {
             cfg.default_shell.clone().unwrap_or("bash".into())
         };
         let default_tool = if let Some(default_tool) = cfg.default_tool.clone() {
-            cmd::parse_tool_command_standalone(&default_tool)
+            cmd::parse_tool_command_standalone(out, &default_tool)
         } else {
             None
         };
@@ -595,6 +598,7 @@ pub fn hai_router_set(session: &mut SessionState, on: bool) {
 // --
 
 pub async fn account_login_setup_session(
+    out: &Out,
     session: &mut SessionState,
     db: Arc<Mutex<rusqlite::Connection>>,
     user_id: &str,
@@ -614,7 +618,7 @@ pub async fn account_login_setup_session(
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("failed to read db: {}", e);
+            errorln!(out, "failed to read db: {}", e);
         }
     }
 }

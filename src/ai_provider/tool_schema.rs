@@ -390,6 +390,7 @@ Assets:
 
 /asset <name> - Opens an asset in their configured editor for interactive editing by the user.
 /asset-list <prefix>    - List assets with the given (optional) prefix. Supports globs.
+                          Legend: 📁 (folder), 📥 (log), 🔒 (encrypted)
                           .desc=BOOL   Sort by descending (default: false)
 /asset-search <query>   - Search for assets semantically
                           .path=STRING   Specify the asset-pool to search (default: none)

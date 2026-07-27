@@ -10,7 +10,10 @@ use std::error::Error;
 use std::io::Read;
 use std::ops::Deref;
 use std::process;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -31,15 +34,17 @@ mod crypt;
 mod ctrlc_handler;
 mod db;
 mod feature;
+mod io;
 mod line_editor;
 mod loader;
-mod printer;
 mod repl_remote;
 mod session;
 mod term;
 mod term_color;
 mod tool;
 
+pub use io::Level;
+use io::{Io, Out};
 use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
@@ -277,18 +282,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 None
             };
+            let out = Out::stdio();
             match command {
                 BotSubcommand::Start { daemon } => {
-                    let _ = crate::feature::haibot::start_bot(cfg, account, force_ai_model, daemon)
-                        .await;
+                    let _ = crate::feature::haibot::start_bot(
+                        &out,
+                        cfg,
+                        account,
+                        force_ai_model,
+                        daemon,
+                    )
+                    .await;
                     return Ok(());
                 }
                 BotSubcommand::Stop => {
-                    let _ = crate::feature::haibot::stop_bot();
+                    let _ = crate::feature::haibot::stop_bot(&out).await;
                     return Ok(());
                 }
                 BotSubcommand::Status => {
-                    let _ = crate::feature::haibot::bot_status();
+                    let _ = crate::feature::haibot::bot_status(&out).await;
                     return Ok(());
                 }
             }
@@ -363,7 +375,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let force_model = args
             .model
             .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
+        let io = Io::stdio();
         repl(
+            &io,
             &config_path_override,
             args.debug,
             args.incognito,
@@ -383,6 +397,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[allow(clippy::too_many_arguments)]
 async fn repl(
+    io: &Io,
     config_path_override: &Option<String>,
     debug: bool,
     incognito: bool,
@@ -398,7 +413,7 @@ async fn repl(
     let mut cfg = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("error: failed to read config: {}", e);
+            errln!(io, "error: failed to read config: {}", e);
             process::exit(1);
         }
     };
@@ -656,7 +671,7 @@ async fn repl(
         if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
             Some(ai_model)
         } else {
-            eprintln!("error: unknown model {}", force_ai_model);
+            errln!(io, "error: unknown model {}", force_ai_model);
             process::exit(1);
         }
     } else {
@@ -670,7 +685,8 @@ async fn repl(
             match db::get_account_by_username(&*db.lock().await, &force_account)? {
                 Some(account) => Some(account),
                 None => {
-                    eprintln!(
+                    errln!(
+                        io,
                         "error: `{}` is unavailable (try /account-login)",
                         force_account
                     );
@@ -684,11 +700,18 @@ async fn repl(
 
     let multiple_accounts = db::list_accounts(&*db.lock().await)?.len() > 1;
 
-    let mut session =
-        SessionState::new_from_cfg(repl_mode, &cfg, account.clone(), incognito, force_ai_model);
+    let mut session = SessionState::new_from_cfg(
+        &io.out,
+        repl_mode,
+        &cfg,
+        account.clone(),
+        incognito,
+        force_ai_model,
+    );
 
     if let Some(account) = &account {
         session::account_login_setup_session(
+            &io.out,
             &mut session,
             db.clone(),
             &account.user_id,
@@ -705,7 +728,7 @@ async fn repl(
     drop(cmd_queue);
 
     if mute_all_but_final_ai_response {
-        crate::printer::disable_stdout();
+        io.mute();
     }
 
     //
@@ -713,7 +736,7 @@ async fn repl(
     //
     if !exit_when_done {
         let newer_client_version = if cfg.check_for_updates {
-            is_client_update_available(db.clone()).await
+            is_client_update_available(io, db.clone()).await
         } else {
             None
         };
@@ -723,38 +746,54 @@ async fn repl(
             .map(|version| format!(" -- Update available ({})", version))
             .unwrap_or_default();
 
-        println!(
+        outln!(
+            io,
             "hai! ({}){}",
             env!("CARGO_PKG_VERSION"),
             update_available_str
         );
         if let Some(version) = newer_client_version {
-            println!("  - changelog: `/cat /hai/changelog` or `!!cat @/hai/changelog`");
+            outln!(
+                io,
+                "  - changelog: `/cat /hai/changelog` or `!!cat @/hai/changelog`"
+            );
             let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {
-                println!(
+                outln!(
+                    io,
                     "  - installer (from shell): `curl -LsSf https://hai.dog/hai-installer.sh | sh`"
                 );
             } else {
                 let asset_name =
                     format!("hai-cli-{}-{}.zip", version, config::get_machine_os_arch());
-                println!("  - download: `/asset-export /hai/client/{} .`", asset_name);
+                outln!(
+                    io,
+                    "  - download: `/asset-export /hai/client/{} .`",
+                    asset_name
+                );
                 if let Ok(exe_path) = env::current_exe() {
-                    println!("  - install: unpack and copy to {:?}", exe_path);
+                    outln!(io, "  - install: unpack and copy to {:?}", exe_path);
                 }
             }
         }
-        println!(
+        outln!(
+            io,
             "Type a prompt and press Enter. Use Alt+Enter or Option+Enter for multi-line prompts."
         );
         match env::var("TERM_PROGRAM") {
             Ok(value) if value == "Apple_Terminal" => {
                 // This is required, otherwise Option+Enter does not register.
-                println!("For Apple's Terminal, turn on Edit->Use Option as Meta Key.");
+                outln!(
+                    io,
+                    "For Apple's Terminal, turn on Edit->Use Option as Meta Key."
+                );
             }
             _ => {}
         }
-        println!("/help for more commands | `/task hai/feedback` for ideas & suggestions");
+        outln!(
+            io,
+            "/help for more commands | `/task hai/feedback` for ideas & suggestions"
+        );
     };
 
     //
@@ -774,18 +813,18 @@ async fn repl(
         let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.pop_front() {
             if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
                 if *step_id > 0 {
-                    println!();
+                    outln!(io);
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
 
-                print_step(&step_badge, &cmd_info.input, &masked_strings);
+                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::ListenQueue(queue_name, index) = &cmd_info.source {
                 let step_badge = if let Some(queue_name) = queue_name {
                     format!("queue/{}[{}]:", queue_name, index)
                 } else {
                     format!("queue[{}]:", index)
                 };
-                print_step(&step_badge, &cmd_info.input, &masked_strings);
+                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
                 // being written by `/asset-write`.
@@ -799,10 +838,10 @@ async fn repl(
                     } else {
                         cmd_info.input.clone()
                     };
-                print_step(&step_badge, &display_input, &masked_strings);
+                print_step(io, &step_badge, &display_input, &masked_strings);
             } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
                 let step_badge = format!("bye[{}]:", index);
-                print_step(&step_badge, &cmd_info.input, &masked_strings);
+                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
             }
             cmd_info
         } else {
@@ -899,18 +938,20 @@ async fn repl(
                             reply_channel: None,
                         }
                     } else {
-                        println!("バイバイ！");
+                        outln!(io, "バイバイ！");
                         break;
                     }
                 }
                 unk => {
-                    println!("Event: {:?}", unk);
+                    outln!(io, "Event: {:?}", unk);
                     continue;
                 }
             }
         };
 
         let task_step_signature = cmd_input.source.get_task_step_signature();
+        // Task steps only have a non-standard retention policy when they are
+        // actioned as part of a process-wide task-mode.
         let is_task_mode_step =
             task_step_signature.is_some() && matches!(session.repl_mode, ReplMode::Task(..));
         let trusted = if let ReplMode::Task(_, _, trusted) = session.repl_mode {
@@ -925,7 +966,7 @@ async fn repl(
         // Expectation is that if `parse_user_input` returns None, it will have
         // also printed an error msg to the user so it's okay to ignore the
         // input here.
-        let maybe_cmd = cmd::parse_user_input(&cmd_input.input, last_tool_cmd, tool_mode);
+        let maybe_cmd = cmd::parse_user_input(&io.out, &cmd_input.input, last_tool_cmd, tool_mode);
         let mut cmd = if let Some(cmd) = maybe_cmd {
             cmd
         } else {
@@ -954,6 +995,7 @@ async fn repl(
         }
         let tokenizer_locked = tokenizer.lock().await;
         let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
+        let api_client = mk_api_client(Some(&session));
 
         if session.add_msg_on_new_day {
             // Check if it's a new day in local time. If so, add a message to
@@ -971,10 +1013,10 @@ async fn repl(
                         now.format("%Y-%m-%d %H:%M:%S"),
                         utc_now.format("%Y-%m-%d %H:%M:%S"),
                     );
-                    println!();
-                    println!("🕛🕛🕛");
-                    println!();
-                    print!("{}", contents);
+                    outln!(io);
+                    outln!(io, "🕛🕛🕛");
+                    outln!(io);
+                    out!(io, "{}", contents);
                     session::session_history_add_user_text_entry(
                         &contents,
                         &mut session,
@@ -988,8 +1030,11 @@ async fn repl(
         //
         // REPL Eval/Print Commands
         //
-        cmd = preprocess_cmd(cmd, &cfg.haivars);
-        let (prompt, cache) = match cmd_processor::process_cmd(
+        cmd = preprocess_cmd(&io.out, cmd, &cfg.haivars);
+        // Record to capture any stdout output from commands into a message.
+        io.record_on();
+        let cmd_result = cmd_processor::process_cmd(
+            io,
             config_path_override,
             &mut session,
             &mut cfg,
@@ -998,22 +1043,110 @@ async fn repl(
             update_asset_tx.clone(),
             ctrlc_handler,
             bpe_tokenizer,
+            &api_client,
             &cmd,
             &mut cmd_input,
             force_yes,
             debug,
         )
-        .await
-        {
-            cmd_processor::ProcessCmdResult::Break => break,
-            cmd_processor::ProcessCmdResult::Loop => {
+        .await;
+        let transcript = io.transcript_with(false);
+        io.clear();
+        io.record_off();
+
+        if cmd_result.new_cmds.len() > 0 {
+            let mut cmd_queue = session.cmd_queue.lock().await;
+            for new_cmd in cmd_result.new_cmds.into_iter().rev() {
+                cmd_queue.push_front(new_cmd);
+            }
+        }
+        if cmd_result.new_temp_files.len() > 0 {
+            for new_temp_file in cmd_result.new_temp_files.into_iter() {
+                session.temp_files.push((new_temp_file, is_task_mode_step));
+            }
+        }
+        if cmd_result.new_masked_strings.len() > 0 {
+            for new_masked_string in cmd_result.new_masked_strings.into_iter() {
+                session.masked_strings.push(new_masked_string);
+            }
+        }
+        if cmd_result.purge_cmd_queue {
+            let mut cmd_queue = session.cmd_queue.lock().await;
+            cmd_queue.clear();
+        }
+        if let Some(tool_mode_cmd) = cmd_result.tool_mode_cmd {
+            if tool_mode_cmd.is_none() && session.tool_mode.is_none() {
+                warnln!(io, "tool mode was not active");
+            }
+            session.tool_mode = tool_mode_cmd;
+        }
+
+        match cmd_result.next {
+            cmd_processor::ProcessCmdNext::Break | cmd_processor::ProcessCmdNext::Loop => {
+                if !cmd_input.input.is_empty() && !cmd_result.discard_cmd_and_output {
+                    if transcript.is_empty() {
+                        session::session_history_add_user_text_entry(
+                            &cmd_input.input,
+                            &mut session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, cmd_result.retention_policy),
+                        );
+                    } else {
+                        session::session_history_add_user_cmd_and_reply_entries(
+                            &cmd_input.input,
+                            &transcript,
+                            &mut session,
+                            bpe_tokenizer,
+                            (is_task_mode_step, cmd_result.retention_policy),
+                        );
+                    }
+                }
+                for history_entry in cmd_result.history_entries {
+                    match history_entry {
+                        cmd_processor::HistoryEntry::UserText(text) => {
+                            session::session_history_add_user_text_entry(
+                                &text,
+                                &mut session,
+                                bpe_tokenizer,
+                                (is_task_mode_step, cmd_result.retention_policy),
+                            );
+                        }
+                        cmd_processor::HistoryEntry::UserImage(b64, hq, dim) => {
+                            session::session_history_add_user_image_entry(
+                                &b64,
+                                &mut session,
+                                (is_task_mode_step, cmd_result.retention_policy),
+                                hq,
+                                dim,
+                            );
+                        }
+                        cmd_processor::HistoryEntry::AssistantText(text, ai_model) => {
+                            session::session_history_add_assistant_text_entry(
+                                &text,
+                                &mut session,
+                                bpe_tokenizer,
+                                (is_task_mode_step, cmd_result.retention_policy),
+                                ai_model.as_ref(),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let (prompt, cache) = match cmd_result.next {
+            cmd_processor::ProcessCmdNext::Break => {
+                break;
+            }
+            cmd_processor::ProcessCmdNext::Loop => {
                 if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                     wrapup_and_cleanup(&session, update_asset_tx).await;
                     process::exit(0);
                 };
                 continue;
             }
-            cmd_processor::ProcessCmdResult::PromptAi(prompt, cache) => (prompt, cache),
+            cmd_processor::ProcessCmdNext::PromptAi(prompt, cache) => (prompt, cache),
         };
 
         //
@@ -1024,7 +1157,7 @@ async fn repl(
         if let cmd::Cmd::Tool(_) = cmd
             && !config::get_ai_model_capability(&session.ai).tool
         {
-            eprintln!("error: model does not support tools");
+            errln!(io, "error: model does not support tools");
             continue;
         }
 
@@ -1056,22 +1189,13 @@ async fn repl(
         // - Prints errors to stderr
         //
 
-        let msg_content = chat::prompt_to_chat_message_content(&session.ai, &prompt).await;
+        let (msg_content, tokens) =
+            chat::prompt_to_chat_message_content(&io.out, bpe_tokenizer, &session.ai, &prompt)
+                .await;
 
         //
         // Append user-input to message history
         //
-        let mut tokens = 0;
-        for msg in &msg_content {
-            tokens += match msg {
-                chat::MessageContent::ImageUrl { .. } => {
-                    85 // OpenAI-specific for low-detail images
-                }
-                chat::MessageContent::Text { text } => {
-                    bpe_tokenizer.encode_with_special_tokens(text).len() as u32
-                }
-            }
-        }
         session.input_tokens += tokens;
         session.history.push(db::LogEntry {
             uuid: Uuid::now_v7().to_string(),
@@ -1088,14 +1212,14 @@ async fn repl(
         });
 
         loop {
-            println!();
-            println!("{}", "↓↓↓".truecolor(128, 128, 128));
-            println!();
+            outln!(io);
+            outln!(io, "{}", "↓↓↓".truecolor(128, 128, 128));
+            outln!(io);
 
             if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_ai_response {
                 // Re-enable printing for the AI response if we're in hai-bye mode and
                 // we've printed all but the last command.
-                crate::printer::enable_stdout();
+                io.unmute();
             }
 
             //
@@ -1110,53 +1234,71 @@ async fn repl(
                 .map(|log_entry| log_entry.message)
                 .collect();
 
-            let (ai_responses, from_cache) = if let Some((ref task_fqn, ref task_key, step_index)) =
-                task_step_signature
-            {
-                let ai_responses_from_cache = if cache {
-                    // An error deserializing is likely due to a change
-                    // in format due to a version update. Assume that
-                    // the cache value will be updated to a compatible
-                    // schema once the user enters a new value.
-                    db::get_task_step_cache(
-                        &*db.lock().await,
-                        session
-                            .account
-                            .as_ref()
-                            .map(|a| a.username.as_str())
-                            .unwrap_or(""),
-                        task_fqn,
-                        task_key.as_deref(),
-                        step_index,
-                        &prompt,
-                    )
-                    .and_then(|cached_serialized_output| {
-                        serde_json::from_str::<Vec<chat::ChatCompletionResponse>>(
-                            &cached_serialized_output,
+            let (ai_responses, from_cache) =
+                if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
+                    let ai_responses_from_cache = if cache {
+                        // An error deserializing is likely due to a change
+                        // in format due to a version update. Assume that
+                        // the cache value will be updated to a compatible
+                        // schema once the user enters a new value.
+                        db::get_task_step_cache(
+                            &*db.lock().await,
+                            session
+                                .account
+                                .as_ref()
+                                .map(|a| a.username.as_str())
+                                .unwrap_or(""),
+                            task_fqn,
+                            task_key.as_deref(),
+                            step_index,
+                            &prompt,
                         )
-                        .ok()
-                    })
-                } else {
-                    None
-                };
-                if let Some(ai_responses_from_cache) = ai_responses_from_cache {
-                    (ai_responses_from_cache, true)
-                } else {
-                    if task_step_requires_user_confirmation && !force_yes {
-                        // If we're initializing a task, it's critical that we ask the
-                        // user for confirmation. Otherwise, a destructive command could
-                        // be hidden in a task.
-                        let answer =
-                            term::ask_question_default_empty("Prompt AI the above? y/[n]:", false);
-                        let answered_yes = answer.starts_with('y');
-                        if !answered_yes {
-                            println!("USER CANCELLED PROMPT. TASK MAY MALFUNCTION.");
-                            continue;
+                        .and_then(|cached_serialized_output| {
+                            serde_json::from_str::<Vec<chat::ChatCompletionResponse>>(
+                                &cached_serialized_output,
+                            )
+                            .ok()
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(ai_responses_from_cache) = ai_responses_from_cache {
+                        (ai_responses_from_cache, true)
+                    } else {
+                        if task_step_requires_user_confirmation && !force_yes {
+                            // If we're initializing a task, it's critical that we ask the
+                            // user for confirmation. Otherwise, a destructive command could
+                            // be hidden in a task.
+                            let answer = io
+                                .query(&crate::io::Query::confirm("Prompt AI the above? y/[n]:"))
+                                .into_option()
+                                .unwrap_or_default();
+                            let answered_yes = answer.starts_with('y');
+                            if !answered_yes {
+                                outln!(io, "USER CANCELLED PROMPT. TASK MAY MALFUNCTION.");
+                                break;
+                            }
+                            outln!(io);
                         }
-                        println!();
+                        (
+                            prompt_ai(
+                                &io.out,
+                                &msg_history,
+                                &tool_policy,
+                                &masked_strings,
+                                &mut session,
+                                &cfg,
+                                ctrlc_handler,
+                                debug,
+                            )
+                            .await,
+                            false,
+                        )
                     }
+                } else {
                     (
                         prompt_ai(
+                            &io.out,
                             &msg_history,
                             &tool_policy,
                             &masked_strings,
@@ -1168,32 +1310,22 @@ async fn repl(
                         .await,
                         false,
                     )
-                }
-            } else {
-                (
-                    prompt_ai(
-                        &msg_history,
-                        &tool_policy,
-                        &masked_strings,
-                        &mut session,
-                        &cfg,
-                        ctrlc_handler,
-                        debug,
-                    )
-                    .await,
-                    false,
-                )
-            };
+                };
 
             if from_cache {
                 if let Some((ref task_fqn, _, _)) = task_step_signature {
-                    println!("[Retrieved from cache; `/task-forget {task_fqn}` to prompt again]");
+                    let was_recording = io.record_off();
+                    outln!(
+                        io,
+                        "[Retrieved from cache; `/task-forget {task_fqn}` to prompt again]"
+                    );
+                    io.record_set(was_recording);
                 }
                 // Because it's from the cache, the response is not yet on the screen.
                 for ai_response in &ai_responses {
                     match ai_response {
                         chat::ChatCompletionResponse::Message { text } => {
-                            println!("{}", text);
+                            outln!(io, "{}", text);
                         }
                         chat::ChatCompletionResponse::Tool {
                             tool_id,
@@ -1211,8 +1343,8 @@ async fn repl(
                                 tool_schema::get_syntax_highlighter_token_from_tool_name(tool_name),
                                 masked_strings.clone(),
                             );
-                            json_obj_acc.acc(arg);
-                            json_obj_acc.end();
+                            json_obj_acc.acc(arg, &io.out);
+                            json_obj_acc.end(&io.out);
                         }
                     };
                 }
@@ -1311,9 +1443,14 @@ async fn repl(
                     arg,
                 } = &ai_response
                 {
-                    println!();
-                    println!("{}", "⚙ ⚙ ⚙".white().on_black());
-                    println!();
+                    outln!(io);
+                    if io.is_terminal() {
+                        println!("{}", "⚙ ⚙ ⚙".white().on_black());
+                        io.record_out("⚙ ⚙ ⚙");
+                    } else {
+                        outln!(io, "⚙ ⚙ ⚙");
+                    }
+                    outln!(io);
 
                     let tool_policy = tool_policy.clone();
 
@@ -1360,7 +1497,10 @@ async fn repl(
                             || tool_policy_needs_user_confirmation
                             || task_step_requires_user_confirmation)
                     {
-                        let answer = term::ask_question_default_empty("Execute? y/[n]:", false);
+                        let answer = io
+                            .query(&crate::io::Query::confirm("Execute? y/[n]:"))
+                            .into_option()
+                            .unwrap_or_default();
                         let answered_yes = answer.starts_with('y');
                         if !answered_yes {
                             let error_text = format!("USER CANCELLED TOOL: Execute? {}", answer);
@@ -1390,16 +1530,25 @@ async fn repl(
                     };
 
                     if user_confirmed_tool_execute && let Some(ref tp) = tool_policy {
-                        let tool_exec_handler_id = ctrlc_handler.add_handler(|| {
-                            println!("Tool Interrupted");
+                        // Use an AtomicBool since it's lock-free and cannot
+                        // deadlock in the signal handler.
+                        let interrupted = Arc::new(AtomicBool::new(false));
+                        let tool_exec_handler_id = ctrlc_handler.add_handler({
+                            let interrupted_clone = interrupted.clone();
+                            move || {
+                                // Don't use `out` because of the risk of
+                                // deadlock.
+                                interrupted_clone.store(true, Ordering::SeqCst);
+                            }
                         });
-                        let (output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl) {
+                        let (mut output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl)
+                        {
                             let mut cmd_queue = session.cmd_queue.lock().await;
                             match tool::execute_hai_repl_tool(&tp.tool, arg, &mut cmd_queue) {
                                 Ok(output_text) => (output_text, None),
                                 Err(e) => {
                                     let err_text = format!("error executing hai-repl tool: {}", e);
-                                    println!("{}", err_text);
+                                    outln!(io, "{}", err_text);
                                     (err_text, None)
                                 }
                             }
@@ -1431,12 +1580,12 @@ async fn repl(
                                     );
                                     let output_text =
                                         format!("Stored as command: /{}", ai_defined_tool_name);
-                                    println!("{}", output_text);
+                                    outln!(io, "{}", output_text);
                                     (output_text, None)
                                 }
                                 Err(e) => {
                                     let err_text = format!("error extracting function: {}", e);
-                                    println!("{}", err_text);
+                                    outln!(io, "{}", err_text);
                                     (err_text, None)
                                 }
                             }
@@ -1450,12 +1599,12 @@ async fn repl(
                             {
                                 Ok(temp_file_path) => {
                                     let output_text = format!("Updated {}", temp_file_path);
-                                    println!("{}", output_text);
+                                    outln!(io, "{}", output_text);
                                     (output_text, None)
                                 }
                                 Err(e) => {
                                     let err_text = format!("error executing HTML tool: {}", e);
-                                    println!("{}", err_text);
+                                    outln!(io, "{}", err_text);
                                     (err_text, None)
                                 }
                             }
@@ -1471,7 +1620,7 @@ async fn repl(
                                 Ok((output_text, follow_up)) => (output_text, follow_up),
                                 Err(e) => {
                                     let err_text = format!("error executing tool: {}", e);
-                                    println!("{}", err_text);
+                                    outln!(io, "{}", err_text);
                                     (err_text, None)
                                 }
                             }
@@ -1480,6 +1629,10 @@ async fn repl(
                             ai_follow_up_requested = follow_up;
                         }
                         ctrlc_handler.remove_handler(tool_exec_handler_id);
+                        if interrupted.load(Ordering::SeqCst) {
+                            outln!(io, "Tool Interrupted");
+                            output_text.push_str("^CTool Interrupted");
+                        }
                         // Increment tokens because the tool output will be part of
                         // the next message's input.
                         let tokens =
@@ -1510,11 +1663,11 @@ async fn repl(
                 process::exit(0);
             };
 
-            println!();
-            println!("{}", "---".truecolor(128, 128, 128));
-            println!();
+            outln!(io);
+            outln!(io, "{}", "---".truecolor(128, 128, 128));
+            outln!(io);
             if let Some(follow_up) = ai_follow_up_requested {
-                println!("{}", follow_up);
+                outln!(io, "{}", follow_up);
                 let user_backwards_compat_follow_up_msg = "Go on";
                 let tokens = bpe_tokenizer
                     .encode_with_special_tokens(&user_backwards_compat_follow_up_msg)
@@ -1569,7 +1722,7 @@ async fn wrapup_and_cleanup(
 
 /// Prints step (a REPL command from a source such as a task-step, bye-step, or
 /// hai-tool-step) with appropriate syntax highlighting and accent color.
-fn print_step(step_badge: &str, input: &str, masked_strings: &Vec<String>) {
+fn print_step(io: &Io, step_badge: &str, input: &str, masked_strings: &Vec<String>) {
     let mut masked_input = input.to_string();
     for masked_string in masked_strings {
         let mask = "*".repeat(masked_string.len());
@@ -1577,10 +1730,18 @@ fn print_step(step_badge: &str, input: &str, masked_strings: &Vec<String>) {
     }
 
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
-        print!("{} ", step_badge.black().on_white());
+        if io.is_terminal() {
+            // Using print! instead of out! here so that colored output isn't
+            // sent to the backend.
+            print!("{} ", step_badge.black().on_white());
+            io.record_out(&format!("{} ", step_badge));
+        } else {
+            out!(io, "{} ", step_badge);
+        }
+
         let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
         | Some(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
-            cmd::parse_user_input(input, None, None)
+            cmd::parse_user_input(&io.out, input, None, None)
         {
             match accent {
                 Some(cmd::Accent::Danger) => Some((128, 0, 0)),
@@ -1592,10 +1753,15 @@ fn print_step(step_badge: &str, input: &str, masked_strings: &Vec<String>) {
         } else {
             None
         };
-        term_color::print_multi_lang_syntax_highlighting(&masked_input, &color);
-        println!();
+        term_color::print_multi_lang_syntax_highlighting(&io.out, &masked_input, &color);
+        outln!(io);
     } else {
-        println!("{} {}", step_badge.black().on_white(), &masked_input);
+        if io.is_terminal() {
+            println!("{} {}", step_badge.black().on_white(), &masked_input);
+            io.record_out(&format!("{} {}", step_badge, &masked_input));
+        } else {
+            outln!(io, "{} {}", step_badge, &masked_input);
+        }
     }
 }
 
@@ -1605,20 +1771,22 @@ fn print_step(step_badge: &str, input: &str, masked_strings: &Vec<String>) {
 ///
 /// For now, this only replaces haivars in shell-exec-with-{file,stdin} tool in
 /// both the shell-cmd and prompt, which includes the shell-cmd redundantly.
-fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd {
+fn preprocess_cmd(out: &Out, cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd {
     // Replace variables in the custom command itself for tool execution.
     let tool = match cmd.clone() {
         cmd::Cmd::Tool(cmd::ToolCmd {
             tool: tool::Tool::ShellExecWithFile(shell_cmd, ext),
             ..
         }) => tool::Tool::ShellExecWithFile(
-            feature::haivar::replace_haivars(&shell_cmd, haivars),
+            feature::haivar::replace_haivars(out, &shell_cmd, haivars),
             ext,
         ),
         cmd::Cmd::Tool(cmd::ToolCmd {
             tool: tool::Tool::ShellExecWithStdin(shell_cmd),
             ..
-        }) => tool::Tool::ShellExecWithStdin(feature::haivar::replace_haivars(&shell_cmd, haivars)),
+        }) => tool::Tool::ShellExecWithStdin(feature::haivar::replace_haivars(
+            out, &shell_cmd, haivars,
+        )),
         _ => return cmd,
     };
     if let cmd::Cmd::Tool(cmd::ToolCmd {
@@ -1633,7 +1801,7 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
             tool,
             // Replace vars in the recorded input because the unexpanded
             // vars are sometimes too opaque for the AI to understand.
-            prompt: feature::haivar::replace_haivars(&prompt, haivars),
+            prompt: feature::haivar::replace_haivars(out, &prompt, haivars),
             user_confirmation,
             force_tool,
             cache,
@@ -1646,6 +1814,7 @@ fn preprocess_cmd(cmd: cmd::Cmd, haivars: &HashMap<String, String>) -> cmd::Cmd 
 // --
 
 pub async fn prompt_ai(
+    out: &Out,
     msg_history: &[chat::Message],
     tool_policy: &Option<tool::ToolPolicy>,
     masked_strings: &Vec<String>,
@@ -1694,7 +1863,7 @@ pub async fn prompt_ai(
                     let api_key = if let Some(ref account) = session.account {
                         account.token.clone()
                     } else {
-                        eprintln!("error: you must be logged-in to use the hai-router");
+                        errln!(out, "error: you must be logged-in to use the hai-router");
                         return vec![];
                     };
                     let provider_header = match session.ai {
@@ -1703,7 +1872,7 @@ pub async fn prompt_ai(
                         config::AiModel::DeepSeek(_) => "deepseek".to_string(),
                         config::AiModel::Xai(_) => "xai".to_string(),
                         _ => {
-                            eprintln!("error: unexpected provider");
+                            errln!(out, "error: unexpected provider");
                             return vec![];
                         }
                     };
@@ -1738,12 +1907,13 @@ pub async fn prompt_ai(
                             None,
                         ),
                         _ => {
-                            eprintln!("error: unexpected provider");
+                            errln!(out, "error: unexpected provider");
                             return vec![];
                         }
                     }
                 };
             openai::send_to_openai(
+                out,
                 base_url,
                 &api_key,
                 provider_header,
@@ -1767,7 +1937,7 @@ pub async fn prompt_ai(
                     let api_key = if let Some(ref account) = session.account {
                         account.token.clone()
                     } else {
-                        eprintln!("error: you must be logged-in to use the hai-router");
+                        errln!(out, "error: you must be logged-in to use the hai-router");
                         return vec![];
                     };
                     used_hai_router = true;
@@ -1808,6 +1978,7 @@ pub async fn prompt_ai(
                 _ => None,
             };
             anthropic::send_to_anthropic(
+                out,
                 api_url.as_deref(),
                 &api_key,
                 provider_header,
@@ -1829,6 +2000,7 @@ pub async fn prompt_ai(
         }
         config::AiModel::Ollama(_) => {
             ollama::send_to_ollama(
+                out,
                 cfg.ollama
                     .as_ref()
                     .and_then(|ollama| ollama.base_url.as_deref()),
@@ -1845,6 +2017,7 @@ pub async fn prompt_ai(
         }
         config::AiModel::Void(_) => {
             void::send_to_void(
+                out,
                 config::get_ai_model_provider_name(&session.ai),
                 masked_strings,
             )
@@ -1854,13 +2027,13 @@ pub async fn prompt_ai(
     match ai_provider_response {
         Ok(chat_response) => chat_response,
         Err(e) => {
-            eprintln!("error: ai provider: {}", e);
+            errln!(out, "error: ai provider: {}", e);
             if used_hai_router
                 && e.to_string()
                     .to_ascii_lowercase()
                     .contains("402 payment required")
             {
-                eprintln!("error: account needs funds, disabling hai-router");
+                errln!(out, "error: account needs funds, disabling hai-router");
                 session::hai_router_set(session, false);
             }
             vec![]
@@ -1868,7 +2041,13 @@ pub async fn prompt_ai(
     }
 }
 
-async fn is_client_update_available(db: Arc<Mutex<rusqlite::Connection>>) -> Option<String> {
+/// # Returns
+///
+/// Latest client version if newer is available.
+async fn is_client_update_available(
+    io: &Io,
+    db: Arc<Mutex<rusqlite::Connection>>,
+) -> Option<String> {
     let db_cloned = db.clone();
     tokio::spawn(async move {
         let hai_client = mk_api_client(None);
@@ -1899,7 +2078,7 @@ async fn is_client_update_available(db: Arc<Mutex<rusqlite::Connection>>) -> Opt
         }
         Ok(_) => None,
         Err(e) => {
-            eprintln!("failed to read db: {}", e);
+            errln!(io, "failed to read db: {}", e);
             None
         }
     }

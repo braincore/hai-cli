@@ -1,4 +1,3 @@
-use colored::*;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,8 +10,8 @@ use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nu
 use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::println;
 use crate::tool;
+use crate::{errorln, io::Out, outln};
 
 //
 // Begin Anthropic Response Types
@@ -91,6 +90,7 @@ pub struct ErrorResponse {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn send_to_anthropic(
+    out: &Out,
     api_url: Option<&str>,
     api_key: &str,
     provider_header: Option<String>,
@@ -120,13 +120,12 @@ pub async fn send_to_anthropic(
         .collect();
 
     // Register ctrl+c interrupt handler
-    // NOTE: This handler prints "AI Interrupted" but the tokio code actually
-    // adds "AI Interrupted" into the output text.
     let cancel_info = if let Some(handler) = ctrlc_handler {
         let parent_cancel_token = CancellationToken::new();
         let cancel_token_child = parent_cancel_token.clone();
         let handler_id = handler.add_handler(move || {
-            println!("AI Interrupted");
+            // Signal handler kept light to avoid deadlocking by printing to
+            // `out`.
             cancel_token_child.cancel();
         });
         Some((parent_cancel_token, handler_id, handler))
@@ -361,6 +360,7 @@ pub async fn send_to_anthropic(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
         }
     };
@@ -398,6 +398,7 @@ pub async fn send_to_anthropic(
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
             }
+            outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
                 return Ok(vec![chat::ChatCompletionResponse::Message {
@@ -431,24 +432,24 @@ pub async fn send_to_anthropic(
                         match stream_resp {
                             MessageStreamResponse::ContentBlockDelta { index, delta } => {
                                 if index < cur_content_block_index {
-                                    eprintln!("error: unexpected index went backwards: {}", index);
+                                    errorln!(out, "unexpected index went backwards: {}", index);
                                 } else {
                                     cur_content_block_index = index;
                                 }
                                 match delta {
                                     ContentDelta::TextDelta { text: delta_text } => {
-                                        text_accumulator.acc(&delta_text);
+                                        text_accumulator.acc(&delta_text, out);
                                     }
                                     ContentDelta::ThinkingDelta {
                                         thinking: delta_thinking,
                                     } => {
-                                        thinking_accumulator.acc(&delta_thinking);
+                                        thinking_accumulator.acc(&delta_thinking, out);
                                     }
                                     ContentDelta::InputJsonDelta { partial_json } => {
                                         if let Some(json_accumulator) = tool_calls.get_mut(&index) {
-                                            json_accumulator.acc(&partial_json)
+                                            json_accumulator.acc(&partial_json, out)
                                         } else {
-                                            eprintln!("error: unexpected tool call ID: {}", index);
+                                            errorln!(out, "unexpected tool call ID: {}", index);
                                         }
                                     }
                                     ContentDelta::SignatureDelta { .. } => {}
@@ -459,33 +460,33 @@ pub async fn send_to_anthropic(
                                 content_block,
                             } => {
                                 if index < cur_content_block_index {
-                                    eprintln!("error: unexpected index went backwards: {}", index);
+                                    errorln!(out, "unexpected index went backwards: {}", index);
                                 } else {
                                     cur_content_block_index = index;
                                 }
                                 content_blocks.insert(index, content_block.clone());
                                 if index > 0 {
                                     // Space out from previous content block
-                                    println!();
+                                    outln!(out);
                                 }
                                 match content_block {
                                     ContentBlockType::Text {
                                         text: content_block_text,
                                     } => {
-                                        text_accumulator.acc(&content_block_text);
+                                        text_accumulator.acc(&content_block_text, out);
                                     }
                                     ContentBlockType::Thinking {
                                         thinking: thinking_text,
                                         ..
                                     } => {
-                                        println!("{}", "🧠 begin".white().on_black());
-                                        println!();
-                                        text_accumulator.acc(&thinking_text);
+                                        outln!(out, "{}", "🧠 begin");
+                                        outln!(out);
+                                        thinking_accumulator.acc(&thinking_text, out);
                                     }
                                     ContentBlockType::ToolUse { id, name } => {
                                         // Bit of a HACK, but an extra space tends to be necessary
                                         // before tool-use instructions.
-                                        println!();
+                                        outln!(out);
                                         tool_calls.insert(
                                             index,
                                             JsonObjectAccumulator::new(
@@ -503,16 +504,27 @@ pub async fn send_to_anthropic(
                                 }
                             }
                             MessageStreamResponse::ContentBlockStop { index } => {
-                                if let Some(ContentBlockType::Thinking { .. }) =
+                                if let Some(ContentBlockType::Text { .. }) =
                                     content_blocks.get(&index)
                                 {
-                                    println!();
-                                    println!();
-                                    println!("{}", "🧠 end".white().on_black());
+                                    text_accumulator.end(out);
+                                } else if let Some(ContentBlockType::Thinking { .. }) =
+                                    content_blocks.get(&index)
+                                {
+                                    thinking_accumulator.end(out);
+                                    outln!(out);
+                                    outln!(out);
+                                    outln!(out, "🧠 end");
+                                } else if let Some(ContentBlockType::ToolUse { .. }) =
+                                    content_blocks.get(&index)
+                                {
+                                    if let Some(tool_call) = tool_calls.get_mut(&index) {
+                                        tool_call.end(out);
+                                    }
                                 }
                             }
                             MessageStreamResponse::Error { error } => {
-                                eprintln!("unexpected error: {}: {}", error.type_, error.message);
+                                errorln!(out, "unexpected: {}: {}", error.type_, error.message);
                             }
                             _ => {}
                         }
@@ -531,14 +543,9 @@ pub async fn send_to_anthropic(
             }
         }
     }
-    // Mark accumulators as done to clear buffers
-    text_accumulator.end();
-    for tool_call in tool_calls.values_mut() {
-        tool_call.end();
-    }
 
     // Final newline after streaming is complete
-    println!();
+    outln!(out);
     if let Some((_, handler_id, handler)) = cancel_info {
         handler.remove_handler(handler_id);
     }

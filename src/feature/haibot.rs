@@ -17,7 +17,9 @@ use tokio::sync::{Notify, RwLock};
 use zeroize::Zeroizing;
 
 use crate::api::types::asset::AssetEntry;
+use crate::io::Out;
 use crate::{config, db};
+use crate::{errorln, outln, warnln};
 
 // --
 
@@ -380,6 +382,7 @@ fn get_pid_file() -> PathBuf {
 /// If `launch_as_daemon` is true, the bot is started in a background process
 /// and detached. Otherwise, the bot is started in this process.
 pub async fn start_bot(
+    out: &Out,
     cfg: config::Config,
     account: Option<db::Account>,
     force_ai_model: Option<config::AiModel>,
@@ -391,36 +394,37 @@ pub async fn start_bot(
     if !is_daemon_child {
         if let Some(pid) = read_pid() {
             if is_process_running(pid).await {
-                eprintln!("Bot is already running (PID: {})", pid);
+                errorln!(out, "Bot is already running (PID: {})", pid);
                 return Ok(());
             }
         }
     }
 
     if launch_as_daemon && !is_daemon_child {
-        spawn_background()?;
+        let pid = spawn_background()?;
+        outln!(out, "Bot started (PID: {})", pid);
     } else {
-        match run_bot_loop(cfg, account, force_ai_model).await {
-            Ok(_) => println!("Bot exited normally"),
-            Err(e) => eprintln!("Bot exited with error: {}", e),
+        match run_bot_loop(out, cfg, account, force_ai_model).await {
+            Ok(_) => outln!(out, "Bot exited normally"),
+            Err(e) => errorln!(out, "Bot exited with error: {}", e),
         }
     }
 
     Ok(())
 }
 
-pub async fn stop_bot() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn stop_bot(out: &Out) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(pid) = read_pid() {
         if is_process_running(pid).await {
             kill_process(pid, false).await?;
-            println!("Stopped bot (PID: {})", pid);
+            outln!(out, "Stopped bot (PID: {})", pid);
         } else {
-            println!("Bot was not running");
+            outln!(out, "Bot was not running");
         }
 
         std::fs::remove_file(get_pid_file()).ok();
     } else {
-        println!("No bot PID file found");
+        outln!(out, "No bot PID file found");
     }
 
     Ok(())
@@ -475,15 +479,15 @@ async fn kill_process(pid: u32, force: bool) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-pub async fn bot_status() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn bot_status(out: &Out) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(pid) = read_pid() {
         if is_process_running(pid).await {
-            println!("Bot is running (PID: {})", pid);
+            outln!(out, "Bot is running (PID: {})", pid);
         } else {
-            println!("Bot is not running (stale PID file)");
+            outln!(out, "Bot is not running (stale PID file)");
         }
     } else {
-        println!("Bot is not running");
+        outln!(out, "Bot is not running");
     }
     Ok(())
 }
@@ -515,7 +519,7 @@ async fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
     use std::process::{Command, Stdio};
 
     let current_binary = std::env::current_exe()?;
@@ -536,12 +540,11 @@ fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
     let mut pid_file = File::create(get_pid_file())?;
     writeln!(pid_file, "{}", pid)?;
 
-    println!("Bot started (PID: {})", pid);
-    Ok(())
+    Ok(pid)
 }
 
 #[cfg(windows)]
-fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
@@ -565,8 +568,7 @@ fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
     let mut pid_file = File::create(get_pid_file())?;
     writeln!(pid_file, "{}", child.id())?;
 
-    println!("Bot started (PID: {})", child.id());
-    Ok(())
+    Ok(child.id())
 }
 
 // --
@@ -576,11 +578,12 @@ fn spawn_background() -> Result<(), Box<dyn std::error::Error>> {
 /// Responsible for fetching list of jobs, setting up a listener to track
 /// changes to jobs, and launching the scheduler to execute them.
 pub async fn run_bot_loop(
+    out: &Out,
     cfg: config::Config,
     account: Option<db::Account>,
     force_ai_model: Option<config::AiModel>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("Bot running...");
+    outln!(out, "Bot running...");
 
     let start_msg = format!("Bot starting at {:?}\n", std::time::SystemTime::now());
     std::fs::write(config::get_bot_log_path(), &start_msg).ok();
@@ -588,6 +591,7 @@ pub async fn run_bot_loop(
     let repl_mode = crate::session::ReplMode::Normal;
     let incognito = false;
     let session = crate::session::SessionState::new_from_cfg(
+        out,
         repl_mode,
         &cfg,
         account.clone(),
@@ -599,10 +603,13 @@ pub async fn run_bot_loop(
     let prefix = "haibot/jobs/".to_string();
 
     // Initial fetch of job list
-    let (initial_jobs, initial_cursor) = fetch_job_list(&api_client, &prefix).await?;
+    let (initial_jobs, initial_cursor) = fetch_job_list(out, &api_client, &prefix).await?;
 
     if initial_jobs.is_empty() {
-        println!("No jobs found. Add assets with prefix 'haibot/jobs/' to get started.");
+        outln!(
+            out,
+            "No jobs found. Add assets with prefix 'haibot/jobs/' to get started."
+        );
     }
 
     // Shared state
@@ -621,8 +628,10 @@ pub async fn run_bot_loop(
         crate::session::get_api_base_url().replace("http", "ws")
     );
 
+    let out_clone = out.clone();
     let _listener_handle = tokio::spawn(async move {
         listen_for_changes(
+            &out_clone,
             api_client_for_listener,
             prefix_clone,
             initial_cursor,
@@ -635,7 +644,7 @@ pub async fn run_bot_loop(
 
     // Run the scheduler (which will also spawn asset change listeners)
     let api_client_for_scheduler = crate::session::mk_api_client(Some(&session));
-    run_scheduler(job_groups, schedule_notify, api_client_for_scheduler).await
+    run_scheduler(out, job_groups, schedule_notify, api_client_for_scheduler).await
 }
 
 /// Fetching the list of jobs is equivalent to listing all assets at a given
@@ -644,6 +653,7 @@ pub async fn run_bot_loop(
 /// If pool does not exist, will keep trying until it does so that a cursor can
 /// be returned.
 async fn fetch_job_list(
+    out: &Out,
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
 ) -> Result<
@@ -682,12 +692,12 @@ async fn fetch_job_list(
             }
             Err(e) => match &e {
                 crate::api::client::RequestError::Route(AssetEntryIterError::Empty) => {
-                    eprintln!("No cursor available, will retry...");
+                    warnln!(out, "No cursor available, will retry...");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     continue;
                 }
                 _ => {
-                    eprintln!("error fetching task list: {}", e);
+                    errorln!(out, "Failed to fetch task list: {}", e);
                     return Err(Box::new(e));
                 }
             },
@@ -696,6 +706,7 @@ async fn fetch_job_list(
 }
 
 async fn listen_for_changes(
+    out: &Out,
     api_client: crate::api::client::HaiClient,
     prefix: String,
     initial_cursor: String,
@@ -723,17 +734,17 @@ async fn listen_for_changes(
         let (mut ws_stream, _) = match connect_async(&listen_url).await {
             Ok(res) => res,
             Err(e) => {
-                eprintln!("error: failed to connect: {}", e);
+                errorln!(out, "Failed to connect: {}", e);
                 attempt += 1;
                 let backoff_duration = std::time::Duration::from_secs(2_u64.pow(attempt).min(60));
-                eprintln!("retrying in {} seconds...", backoff_duration.as_secs());
+                warnln!(out, "Retrying in {} seconds...", backoff_duration.as_secs());
                 tokio::time::sleep(backoff_duration).await;
                 continue;
             }
         };
 
         if attempt > 0 {
-            println!("listener connected");
+            outln!(out, "Listener connected");
             attempt = 0;
         }
 
@@ -741,7 +752,7 @@ async fn listen_for_changes(
             .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
             .await
         {
-            eprintln!("error sending listen arg: {}", e);
+            errorln!(out, "Error sending listen arg: {}", e);
             continue;
         }
 
@@ -749,7 +760,7 @@ async fn listen_for_changes(
             match msg {
                 Ok(_msg) => {
                     // Received a notification - use iter_next to get changes
-                    println!("Received change notification, scanning for changes...");
+                    outln!(out, "Received change notification, scanning for changes...");
                     use crate::api::types::asset::AssetEntryIterNextArg;
 
                     match api_client
@@ -776,14 +787,15 @@ async fn listen_for_changes(
                                 {
                                     Ok(next_res) => iter_res = next_res,
                                     Err(e) => {
-                                        eprintln!("error during iter_next pagination: {}", e);
+                                        errorln!(out, "Error during iter_next pagination: {}", e);
                                         break;
                                     }
                                 }
                             }
 
                             if !changed_entries.is_empty() {
-                                println!(
+                                outln!(
+                                    out,
                                     "Detected {} changed entries, updating job list...",
                                     changed_entries.len()
                                 );
@@ -797,19 +809,19 @@ async fn listen_for_changes(
                                     if changed.asset.url.is_some() {
                                         job_groups_guard.push(changed.clone());
                                     } else {
-                                        println!("Entry removed: {}", changed.name);
+                                        outln!(out, "Entry removed: {}", changed.name);
                                     }
                                 }
                                 drop(job_groups_guard);
 
                                 notify.notify_one();
-                                println!("Job list updated");
+                                outln!(out, "Job list updated");
                             }
                         }
                         Err(e) => {
-                            eprintln!("error fetching changes via iter_next: {}", e);
+                            errorln!(out, "Error fetching changes via iter_next: {}", e);
                             // Fallback: full refresh
-                            match fetch_job_list(&api_client, &prefix).await {
+                            match fetch_job_list(out, &api_client, &prefix).await {
                                 Ok((new_jobs, new_cursor)) => {
                                     let mut job_groups_guard = job_groups.write().await;
                                     *job_groups_guard = new_jobs;
@@ -818,7 +830,7 @@ async fn listen_for_changes(
                                     notify.notify_one();
                                 }
                                 Err(e2) => {
-                                    eprintln!("error during fallback refresh: {}", e2);
+                                    errorln!(out, "Error during fallback refresh: {}", e2);
                                 }
                             }
                         }
@@ -829,7 +841,7 @@ async fn listen_for_changes(
                         .to_string()
                         .contains("Connection reset without closing handshake")
                     {
-                        eprintln!("error: websocket: {}", e);
+                        errorln!(out, "websocket: {}", e);
                     }
                     break; // Reconnect
                 }
@@ -1127,6 +1139,7 @@ struct AssetWatcherState {
 //
 
 async fn run_scheduler(
+    out: &Out,
     job_groups: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
     api_client: crate::api::client::HaiClient,
@@ -1178,7 +1191,7 @@ async fn run_scheduler(
 
                     // Calculate next run time
                     if let Some(next) = calculate_next_run(&job.schedule, &job.timezone, now) {
-                        println!("Next run at: {:?}", next);
+                        outln!(out, "Next run at: {:?}", next);
                         next_runs.insert(job_key, next);
                     }
                 }
@@ -1537,8 +1550,8 @@ async fn parse_all_job_groups(asset_entries: &[AssetEntry]) -> Vec<ScheduledJob>
             log_scheduler(&format!("Asset {} has no URL, skipping", asset_entry.name));
             continue;
         };
-        match crate::asset_reader::get_asset_raw(&data_url).await {
-            Some(toml_content) => {
+        match crate::asset_reader::download_with_new_client(&data_url).await {
+            Ok(toml_content) => {
                 let toml_str = String::from_utf8_lossy(&toml_content);
                 match toml::from_str::<JobGroupConfig>(&toml_str) {
                     Ok(group_config) => {
@@ -1595,7 +1608,7 @@ async fn parse_all_job_groups(asset_entries: &[AssetEntry]) -> Vec<ScheduledJob>
                     }
                 }
             }
-            None => {
+            Err(_) => {
                 log_scheduler(&format!("Failed to download asset: {}", asset_entry.name));
             }
         }
