@@ -4639,7 +4639,7 @@ mod tests {
     #[test]
     fn test_cmds_with_markdown_body_re() {
         assert!(get_cmds_with_markdown_body_re().is_match("/prep "));
-        assert!(get_cmds_with_markdown_body_re().is_match("/prep("));
+        assert!(get_cmds_with_markdown_body_re().is_match("/prep.a"));
         assert!(get_cmds_with_markdown_body_re().is_match("/prep\n"));
         assert!(!get_cmds_with_markdown_body_re().is_match("/prepz"));
         assert!(!get_cmds_with_markdown_body_re().is_match("/prep["));
