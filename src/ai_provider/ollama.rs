@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 use crate::ai_provider::tool_schema::get_tool_schema;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
-use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
 use crate::{errorln, io::Out, outln};
@@ -28,7 +27,7 @@ pub async fn send_to_ollama(
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
 
@@ -181,9 +180,8 @@ pub async fn send_to_ollama(
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut tool_calls = HashMap::<u32, JsonObjectAccumulator>::new();
 
-    if debug {
-        config::write_to_debug_log(format!("--- ollama {:?}\n", tool_policy))?;
-    }
+    let _span = tracing::debug_span!("--- ollama", ?tool_policy).entered();
+
     if res.status() != reqwest::StatusCode::OK {
         let err_msg = format!(
             "{}: {}",
@@ -215,9 +213,7 @@ pub async fn send_to_ollama(
         }
     } {
         let chunk_str = String::from_utf8_lossy(&chunk);
-        if debug {
-            config::write_to_debug_log(chunk_str.to_string())?;
-        }
+        tracing::debug!(%chunk_str, "ollama chunk");
         buffer.push_str(&chunk_str);
         loop {
             let json_start = buffer.find('{');

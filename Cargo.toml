@@ -88,6 +88,9 @@ tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-webpki-roots"]
 tokio-util = "0.7.13"
 toml = "0.8.19"
 toml_edit = "0.22.22"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 two-face = { version = "0.4.3", default-features = false, features = ["syntect-default-fancy"] }
 unicode-width = "0.2.2"
 urlencoding = "2.1.3"

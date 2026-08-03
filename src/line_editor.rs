@@ -121,7 +121,6 @@ impl LineEditor {
 
     pub fn set_line_completer(
         &mut self,
-        debug: bool,
         autocomplete_repl_cmds: Vec<String>,
         autocomplete_repl_ai_models: Vec<String>,
         api_client: HaiClient,
@@ -131,7 +130,6 @@ impl LineEditor {
         let temp = Reedline::create();
         self.reedline =
             mem::replace(&mut self.reedline, temp).with_completer(Box::new(CmdAndFileCompleter {
-                debug,
                 autocomplete_repl_cmds,
                 autocomplete_repl_ai_models,
                 api_client,
@@ -371,7 +369,6 @@ fn format_tok_count(number: u32) -> String {
 // --
 
 struct CmdAndFileCompleter {
-    debug: bool,
     autocomplete_repl_cmds: Vec<String>,
     autocomplete_repl_ai_models: Vec<String>,
     api_client: HaiClient,
@@ -549,9 +546,7 @@ fn get_current_token(line: &str) -> (u32, &str, usize) {
 
 impl Completer for CmdAndFileCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
-        if self.debug {
-            let _ = config::write_to_debug_log(format!("completer init: {} pos={}\n", line, pos,));
-        }
+        tracing::debug!(line, pos, "completer init");
         // Auto-completion never looks ahead of the cursor.
         let line = &line[..pos];
         let (completions, fallback_ok) = if line.starts_with('/') || line.starts_with("!!") {
@@ -579,7 +574,7 @@ impl Completer for CmdAndFileCompleter {
                     .map(|i| i + cmd_length)
                     .unwrap_or(0);
                 let mut completions = self.file_completer2(arg1_prefix, cmd_word == "/cd");
-                realign_suggestions(&mut completions, arg1_index, self.debug);
+                realign_suggestions(&mut completions, arg1_index);
                 (completions, false)
             } else if is_cmd_input(line, "/task")
                 || is_cmd_input(line, "/t")
@@ -611,13 +606,13 @@ impl Completer for CmdAndFileCompleter {
                         .map(|s| s.as_str())
                         .collect::<Vec<_>>(),
                 );
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 (completions, false)
             } else if is_cmd_input(line, "/std") {
                 let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
                 let mut completions =
                     self.simple_completer(arg_prefix, &["now", "new-day-alert", "which"]);
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 (completions, false)
             } else if is_cmd_input(line, "/asset")
                 || is_cmd_input(line, "/a")
@@ -644,18 +639,9 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/chat-resume")
             {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "completer init: {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
-                        line,
-                        cmd_word,
-                        arg_index,
-                        arg_prefix,
-                        line.find(arg_prefix).unwrap()
-                    ));
-                }
+                tracing::debug!(line, cmd_word, arg_index, arg_prefix, "completer init");
                 let mut completions = self.asset_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 (completions, true)
             } else if is_cmd_input(line, "/asset-read")
                 || is_cmd_input(line, "/read")
@@ -667,33 +653,21 @@ impl Completer for CmdAndFileCompleter {
                 || is_cmd_input(line, "/asset-copy")
             {
                 let (cmd_word, _ignored_args, arg_prefix, arg_index) = split_cmd_and_last_arg(line);
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "completer init: {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
-                        line,
-                        cmd_word,
-                        arg_index,
-                        arg_prefix,
-                        line.find(arg_prefix).unwrap()
-                    ));
-                }
+                tracing::debug!(line, cmd_word, arg_index, arg_prefix, "completer init");
                 let mut completions = self.asset_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 (completions, false)
             } else if is_cmd_input(line, "/asset-folder-new") {
                 let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "completer init (folder-new): {} cmd_word={:?} arg_index={:?} arg_prefix={:?} {:?}\n",
-                        line,
-                        cmd_word,
-                        arg_index,
-                        arg_prefix,
-                        line.find(arg_prefix).unwrap()
-                    ));
-                }
+                tracing::debug!(
+                    line,
+                    cmd_word,
+                    arg_index,
+                    arg_prefix,
+                    "completer init (folder-new)"
+                );
                 let mut completions = self.asset_folder_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 (completions, true)
             } else if is_cmd_input(line, "/exec")
                 || line.starts_with("!!")
@@ -709,19 +683,19 @@ impl Completer for CmdAndFileCompleter {
                             .map(|s| s.as_str())
                             .collect::<Vec<_>>(),
                     );
-                    realign_suggestions(&mut completions, cur_token_offset, self.debug);
+                    realign_suggestions(&mut completions, cur_token_offset);
                     (completions, true)
                 } else {
                     // Find/extract current token
                     // If the token starts with '@@', it's an asset lookup
                     if let Some(asset_prefix) = cur_token.strip_prefix("@@") {
                         let mut completions = self.asset_completer(asset_prefix);
-                        realign_suggestions(&mut completions, cur_token_offset + 2, self.debug);
+                        realign_suggestions(&mut completions, cur_token_offset + 2);
                         (completions, false)
                     } else {
                         // Fallback to file completion
                         let mut completions = self.file_completer2(cur_token, false);
-                        realign_suggestions(&mut completions, cur_token_offset, self.debug);
+                        realign_suggestions(&mut completions, cur_token_offset);
                         (completions, false)
                     }
                 }
@@ -743,25 +717,23 @@ impl Completer for CmdAndFileCompleter {
                 } else {
                     None
                 };
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "completer init: {} cmd_length={} cmd_word={:?} arg1_index={:?} arg1_prefix={:?} arg2_index={:?} arg2_prefix={:?}\n",
-                        line,
-                        cmd_length,
-                        cmd_word,
-                        arg1_index,
-                        arg1_prefix,
-                        arg2_index,
-                        arg2_prefix,
-                    ));
-                }
+                tracing::debug!(
+                    line,
+                    cmd_length,
+                    cmd_word,
+                    arg1_index,
+                    arg1_prefix,
+                    arg2_index,
+                    arg2_prefix,
+                    "completer init"
+                );
                 if let Some(arg2_prefix) = arg2_prefix {
                     let mut completions = self.file_completer2(arg2_prefix, false);
-                    realign_suggestions(&mut completions, arg2_index.unwrap(), self.debug);
+                    realign_suggestions(&mut completions, arg2_index.unwrap());
                     (completions, false)
                 } else {
                     let mut completions = self.asset_completer(arg1_prefix);
-                    realign_suggestions(&mut completions, arg1_index, self.debug);
+                    realign_suggestions(&mut completions, arg1_index);
                     (completions, false)
                 }
             } else if is_cmd_input(line, "/asset-revision-temp") {
@@ -774,7 +746,7 @@ impl Completer for CmdAndFileCompleter {
                     (vec![], false)
                 } else {
                     let mut completions = self.asset_completer(arg1_prefix);
-                    realign_suggestions(&mut completions, arg1_index, self.debug);
+                    realign_suggestions(&mut completions, arg1_index);
                     (completions, false)
                 }
             } else {
@@ -811,22 +783,17 @@ impl Completer for CmdAndFileCompleter {
                 None => (0, &line),
             };
 
-            if self.debug {
-                let _ = config::write_to_debug_log(format!(
-                    "fallback completer: line={} arg_index={} current_token={:?}\n",
-                    line, arg_index, current_token
-                ));
-            }
+            tracing::debug!(line, arg_index, current_token, "fallback completer");
 
             // If the token starts with '@@', complete with assets
             if let Some(asset_prefix) = current_token.strip_prefix("@@") {
                 let mut completions = self.asset_completer(asset_prefix);
-                realign_suggestions(&mut completions, arg_index + 2, self.debug);
+                realign_suggestions(&mut completions, arg_index + 2);
                 completions
             } else {
                 // Fallback to file completion
                 let mut completions = self.file_completer2(current_token, false);
-                realign_suggestions(&mut completions, arg_index, self.debug);
+                realign_suggestions(&mut completions, arg_index);
                 completions
             }
         } else {
@@ -835,16 +802,16 @@ impl Completer for CmdAndFileCompleter {
     }
 }
 
-fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize, debug: bool) {
+fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize) {
     for suggestion in suggestions {
         suggestion.span.start += offset;
         suggestion.span.end += offset;
-        if debug {
-            let _ = config::write_to_debug_log(format!(
-                "suggestion: value={} offset={} (span-start={}) (span-end={:?})\n",
-                suggestion.value, offset, suggestion.span.start, suggestion.span.end
-            ));
-        }
+        tracing::debug!(
+            value=?suggestion.value,
+            offset,
+            span_start=suggestion.span.start,
+            span_end=suggestion.span.end,
+            "suggestion");
     }
 }
 
@@ -911,12 +878,12 @@ impl CmdAndFileCompleter {
                 .to_owned()
         };
 
-        if self.debug {
-            let _ = config::write_to_debug_log(format!(
-                "file_completer: {:?} {:?} {:?}\n",
-                current_dir, dir_to_search, partial_path
-            ));
-        }
+        tracing::debug!(
+            ?current_dir,
+            ?dir_to_search,
+            ?partial_path,
+            "file_completer"
+        );
 
         let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
 
@@ -999,17 +966,15 @@ impl CmdAndFileCompleter {
         let shellexpand_applied = path_prefix != expanded_path_line;
         let partial_path = Path::new(&expanded_path_line);
 
-        if self.debug {
-            let _ = config::write_to_debug_log(format!(
-                "file_completer start: path_prefix={:?} dir_only={:?} cur_dir={:?} expanded_path_line={:?} shellexpand_applied={:?} partial_path={:?}\n",
-                path_prefix,
-                dir_only,
-                current_dir,
-                expanded_path_line,
-                shellexpand_applied,
-                partial_path
-            ));
-        }
+        tracing::debug!(
+            path_prefix,
+            ?dir_only,
+            ?current_dir,
+            ?expanded_path_line,
+            ?shellexpand_applied,
+            ?partial_path,
+            "file_completer start"
+        );
 
         // If set, it means the cursor is at the root of a directory and the
         // entire directory's contents are valid suggestions. An empty
@@ -1035,12 +1000,7 @@ impl CmdAndFileCompleter {
                 .to_owned()
         };
 
-        if self.debug {
-            let _ = config::write_to_debug_log(format!(
-                "file_completer: dir_to_search={:?} scan_full_dir={:?}\n",
-                dir_to_search, scan_full_dir
-            ));
-        }
+        tracing::debug!(?dir_to_search, ?scan_full_dir, "file_completer");
 
         let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
 
@@ -1162,11 +1122,7 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    if self.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "error: failed to list asset pools"
-                        ));
-                    }
+                    tracing::debug!("error: failed to list asset pools");
                     return vec![];
                 }
             }
@@ -1240,12 +1196,7 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "error: could not fetch list of matching assets: {}",
-                        e
-                    ));
-                }
+                tracing::debug!(?e, "error: could not fetch list of matching assets");
                 vec![]
             }
         }
@@ -1295,11 +1246,7 @@ impl CmdAndFileCompleter {
                     return completions;
                 }
                 Err(_) => {
-                    if self.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "error: failed to list asset pools"
-                        ));
-                    }
+                    tracing::debug!("error: failed to list asset pools");
                     return vec![];
                 }
             }
@@ -1389,12 +1336,7 @@ impl CmdAndFileCompleter {
                 completions
             }
             Err(e) => {
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "error: could not fetch list of matching assets: {}",
-                        e
-                    ));
-                }
+                tracing::debug!(?e, "error: could not fetch list of matching assets");
                 vec![]
             }
         }
@@ -1407,12 +1349,13 @@ impl CmdAndFileCompleter {
         task_prefix: &str,
         arg_index: usize,
     ) -> Vec<Suggestion> {
-        if self.debug {
-            let _ = config::write_to_debug_log(format!(
-                "task_completer: line_length={} cmd_length={} task_prefix={} arg_index={}\n",
-                line_length, cmd_length, task_prefix, arg_index
-            ));
-        }
+        tracing::debug!(
+            ?line_length,
+            ?cmd_length,
+            ?task_prefix,
+            ?arg_index,
+            "task_completer"
+        );
         let mut completions = Vec::new();
         if let Some((username, _task_name_prefix)) = task_prefix.split_once('/') {
             use crate::api::types::account::AccountWhoisArg;
@@ -1425,12 +1368,11 @@ impl CmdAndFileCompleter {
             });
             match result {
                 Ok(res) => {
-                    if self.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "task_completer: username={} task_prefix={} tasks={:?}\n",
-                            username, task_prefix, res.tasks
-                        ));
-                    }
+                    tracing::debug!(
+                        username,
+                        ?task_prefix,
+                        ?res.tasks,
+                        "task_completer");
                     let mut sorted_tasks = res.tasks;
                     sorted_tasks.sort_by(|a, b| numeric_sort::cmp(&a.task_fqn, &b.task_fqn));
                     for task in sorted_tasks {
@@ -1451,16 +1393,11 @@ impl CmdAndFileCompleter {
                             });
                         }
                     }
-                    realign_suggestions(&mut completions, arg_index, self.debug);
+                    realign_suggestions(&mut completions, arg_index);
                     completions
                 }
                 Err(e) => {
-                    if self.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "error: could not fetch list of matching assets: {}",
-                            e
-                        ));
-                    }
+                    tracing::debug!(?e, "error: could not fetch list of matching assets",);
                     vec![]
                 }
             }
@@ -1489,12 +1426,12 @@ impl CmdAndFileCompleter {
                 suggestion.span.start += cmd_length;
                 suggestion.span.end += cmd_length;
                 suggestion.span.end -= task_cache_prefix_offset;
-                if self.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "suggestion: value={} (span-start={}) (span-end={:?})\n",
-                        suggestion.value, suggestion.span.start, suggestion.span.end
-                    ));
-                }
+                tracing::debug!(
+                    value = suggestion.value,
+                    span_start = suggestion.span.start,
+                    span_end = suggestion.span.end,
+                    "suggestion",
+                );
             }
             completions
         }

@@ -37,6 +37,7 @@ mod feature;
 mod io;
 mod line_editor;
 mod loader;
+mod logging;
 mod repl_remote;
 mod session;
 mod term;
@@ -169,6 +170,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if config_path_override.is_none() {
         config::create_config_dir_if_missing().expect("Could not create dir");
     }
+
+    //
+    // Setup logging
+    //
+
+    // Keep _guard around to ensure logs are flushed on exit
+    let _guard = logging::init(args.debug);
+    // Log panics
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("panic: {info}");
+    }));
 
     // Typically, reedline (line-editor) is intercepting signals. However, when
     // a tool subprocess is running, reedline isn't blocking, and therefore
@@ -424,7 +436,7 @@ async fn repl(
         Err(_e) => (config::get_asset_blob_cache_path(), true),
     };
     let asset_blob_cache = Arc::new(
-        asset_cache::AssetBlobCache::new(asset_blob_path, debug)
+        asset_cache::AssetBlobCache::new(asset_blob_path)
             .with_cache_disabled(disable_asset_cache)
             .with_max_size(cfg.asset_blob_cache_size),
     );
@@ -898,7 +910,6 @@ async fn repl(
                     .map(|mcp_name| format!("/mcp_{}", mcp_name)),
             );
             cur_line_editor.set_line_completer(
-                debug,
                 autocomplete_repl_cmds,
                 autocomplete_repl_ai_models.clone(),
                 mk_api_client(Some(&session)),

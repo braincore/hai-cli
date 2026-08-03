@@ -277,19 +277,17 @@ impl SyntaxHighlighterPrinter {
                 } else {
                     ((line_width - 1) / terminal_width) + 1
                 };
-                let _ = crate::config::write_to_debug_log(format!(
-                    "FIRST line: {:?}\n",
-                    full_first_line
-                ));
-                let _ = crate::config::write_to_debug_log(format!(
-                    "term: cursor=({}, {}) term-size=({}, {}) line-width={} height={}\n",
-                    _cursor_x_preprint,
-                    cursor_y_preprint,
+
+                tracing::debug!(%full_first_line, "acc first line");
+                tracing::debug!(
+                    cursor_x = _cursor_x_preprint,
+                    cursor_y = cursor_y_preprint,
                     terminal_width,
                     terminal_height,
                     line_width,
-                    height
-                ));
+                    height,
+                    "acc term"
+                );
 
                 if out.is_terminal() {
                     // For rewriting the line with syntax highlighting.
@@ -308,7 +306,7 @@ impl SyntaxHighlighterPrinter {
 
             // All lines in the middle are printed fully
             for middle_line in &lines[1..lines.len() - 1] {
-                let _ = crate::config::write_to_debug_log(format!("MID line: {:?}\n", middle_line));
+                tracing::debug!(%middle_line, "acc mid line");
                 self.lang_token_check_end(middle_line);
                 let middle_line_with_ending = format!("{}\n", middle_line);
                 out.code_bg(&middle_line_with_ending, self.lang_token.as_deref(), bg);
@@ -317,10 +315,7 @@ impl SyntaxHighlighterPrinter {
 
             // The last line is only partial (unless this is the last acc() call)
             let last_line_partial = &lines[lines.len() - 1].to_owned();
-            let _ = crate::config::write_to_debug_log(format!(
-                "LAST line partial: {:?}\n",
-                last_line_partial
-            ));
+            tracing::debug!(%last_line_partial, "acc last line");
             if self.one_shot {
                 out.code_bg(last_line_partial, self.lang_token.as_deref(), bg);
             } else {
@@ -367,10 +362,7 @@ impl SyntaxHighlighterPrinter {
                 (line_width - 1) / terminal_width
             };
 
-            let _ = crate::config::write_to_debug_log(format!(
-                "UNCLOSED END: {} {} {:?}\n",
-                line_width, height, &self.buffer,
-            ));
+            tracing::debug!(%line_width, height, %self.buffer, "acc unclosed end");
 
             // WARN: In some terminals, MoveToPreviousLine(0) will
             // default to 1 which is undesirable so it's handled

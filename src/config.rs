@@ -1795,23 +1795,6 @@ pub fn purge_cached_task(task_fqn: &str) -> Result<(), Box<dyn Error>> {
 
 // ---
 
-fn get_debug_log_path() -> PathBuf {
-    let mut path = get_config_folder_path();
-    path.push("debug.log");
-    path
-}
-
-pub fn write_to_debug_log(log: String) -> std::io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(get_debug_log_path())?;
-    file.write_all(log.as_bytes())?;
-    Ok(())
-}
-
-// ---
-
 pub fn get_sqlite_db_path() -> PathBuf {
     let mut path = get_config_folder_path();
     path.push("data.db");

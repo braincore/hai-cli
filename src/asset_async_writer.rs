@@ -50,7 +50,7 @@ pub async fn worker_update_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     mut rx: tokio::sync::mpsc::Receiver<WorkerAssetMsg>,
     _db: Arc<Mutex<rusqlite::Connection>>,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
 ) {
     // asset_name -> (entry_id, asset_rev_id, UNENCRYPTED_content_sha256_hash)
     let mut asset_bottom_map: HashMap<String, (String, String, Vec<u8>)> = HashMap::new();
@@ -106,12 +106,7 @@ pub async fn worker_update_asset(
                 if let Some((_, _, last_hash)) = asset_bottom_map.get(&asset_name)
                     && &new_hash == last_hash
                 {
-                    if debug {
-                        let _ = crate::config::write_to_debug_log(format!(
-                            "worker-update-asset: skipped update for '{}' (hash unchanged)\n",
-                            asset_name
-                        ));
-                    }
+                    tracing::debug!(%asset_name, "worker-update-asset: skipped update hash unchanged");
                     continue;
                 }
                 let (new_hash_str, new_contents) = if let Some(akm_info) = akm_info.as_ref() {
@@ -140,12 +135,7 @@ pub async fn worker_update_asset(
                         .await
                     {
                         Ok(res) => {
-                            if debug {
-                                let _ = crate::config::write_to_debug_log(format!(
-                                    "asset-push-result: {:?}\n",
-                                    res
-                                ));
-                            }
+                            tracing::debug!(?res, "asset-push-result");
                             if res
                                 .entry
                                 .metadata
@@ -198,12 +188,7 @@ pub async fn worker_update_asset(
                             .await
                         {
                             Ok(res) => {
-                                if debug {
-                                    let _ = crate::config::write_to_debug_log(format!(
-                                        "asset-replace-result: {:?}\n",
-                                        res
-                                    ));
-                                }
+                                tracing::debug!(?res, "asset-replace-result");
                                 if matches!(res.entry.op.clone(), AssetEntryOp::Fork) {
                                     // Since this isn't an error, it doesn't
                                     // need to printed immediately to the
@@ -252,12 +237,7 @@ pub async fn worker_update_asset(
                             .await
                         {
                             Ok(res) => {
-                                if debug {
-                                    let _ = crate::config::write_to_debug_log(format!(
-                                        "asset-put-result: {:?}\n",
-                                        res
-                                    ));
-                                }
+                                tracing::debug!(?res, "asset-put-result");
                                 if res
                                     .entry
                                     .metadata
@@ -321,12 +301,7 @@ pub async fn worker_update_asset(
                 }
             }
             WorkerAssetMsg::Done(asset_name) => {
-                if debug {
-                    let _ = crate::config::write_to_debug_log(format!(
-                        "worker-update-asset: done: {}\n",
-                        asset_name
-                    ));
-                }
+                tracing::debug!(%asset_name, "worker-update-asset: done");
                 asset_bottom_map.remove(&asset_name);
                 let errors = asset_errors.remove(&asset_name);
                 if let Some(errors) = errors

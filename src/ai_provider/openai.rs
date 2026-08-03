@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::ai_provider::tool_schema::get_tool_schema;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
-use crate::config::{self, OpenAiReasoningEffort, OpenAiVerbosity};
+use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
 use crate::{errorln, io::Out, outln};
@@ -62,7 +62,7 @@ pub async fn send_to_openai(
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
     reasoning_effort: &Option<OpenAiReasoningEffort>,
     verbosity: &Option<OpenAiVerbosity>,
     deepseek_flatten_nonuser_content: bool, // DeepSeek specific
@@ -269,9 +269,8 @@ pub async fn send_to_openai(
     // Deepseek-reasoner only
     let mut reasoning_accumulator = TextAccumulator::new(masked_strings.clone());
 
-    if debug {
-        config::write_to_debug_log(format!("--- openai {:?}\n", tool_policy))?;
-    }
+    let _span = tracing::debug_span!("--- openai", ?tool_policy).entered();
+
     if res.status() != reqwest::StatusCode::OK {
         let err_msg = format!(
             "{}: {}",
@@ -303,9 +302,7 @@ pub async fn send_to_openai(
         }
     } {
         let chunk_str = String::from_utf8_lossy(&chunk);
-        if debug {
-            config::write_to_debug_log(chunk_str.to_string())?;
-        }
+        tracing::debug!(%chunk_str, "openai chunk");
         buffer.push_str(&chunk_str);
         loop {
             let json_start = buffer.find('{');
@@ -359,12 +356,7 @@ pub async fn send_to_openai(
                                         masked_strings.clone(),
                                     ),
                                 );
-                                if debug {
-                                    config::write_to_debug_log(format!(
-                                        "found: tool_id: {}\n",
-                                        tool_id
-                                    ))?;
-                                }
+                                tracing::debug!(tool_id, "found tool");
                             }
                             if let Some(json_accumulator) = tool_calls.get_mut(&tool_response.index)
                             {

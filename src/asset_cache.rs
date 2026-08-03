@@ -8,14 +8,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::asset_reader;
-use crate::config::write_to_debug_log;
 
 pub struct AssetBlobCache {
     cache_dir: PathBuf,
     in_flight: Arc<Mutex<HashSet<String>>>, // tracks hashes being downloaded
     disable_cache: bool,
     max_cache_size_bytes: Option<u64>, // None = unlimited
-    debug: bool,
 }
 
 impl AssetBlobCache {
@@ -23,14 +21,12 @@ impl AssetBlobCache {
     ///
     /// # Arguments
     /// * `cache_dir` - The directory to use for caching assets.
-    /// * `debug` - If true, logs cache hits & misses.
-    pub fn new(cache_dir: PathBuf, debug: bool) -> Self {
+    pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             cache_dir,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             disable_cache: false,
             max_cache_size_bytes: None,
-            debug,
         }
     }
 
@@ -68,14 +64,11 @@ impl AssetBlobCache {
                 .await
                 .map_err(|_e| DownloadAssetError::FsFailed)?
             {
-                if self.debug {
-                    let _ = write_to_debug_log(format!("cache hit for hash {}", hash));
-                }
+                tracing::debug!(%hash, "cache hit");
                 return Ok(data);
             }
-            if self.debug {
-                let _ = write_to_debug_log(format!("cache miss for hash {}", hash));
-            }
+
+            tracing::debug!(%hash, "cache miss");
 
             // Slow path: ensure only one download per hash
             let mut in_flight = self.in_flight.lock().await;
@@ -148,9 +141,7 @@ impl AssetBlobCache {
             // Fast path: check cache without lock
             let cache_path = self.cache_dir.join(hash);
             if self.is_in_cache(hash).await {
-                if self.debug {
-                    let _ = write_to_debug_log(format!("cache hit for hash {}", hash));
-                }
+                tracing::debug!(%hash, "cache hit");
                 // Copy from cache to destination
                 let dest = dest_path.to_path_buf();
                 let cache = cache_path.clone();
@@ -167,9 +158,7 @@ impl AssetBlobCache {
                 return Ok(());
             }
 
-            if self.debug {
-                let _ = write_to_debug_log(format!("cache miss for hash {}", hash));
-            }
+            tracing::debug!(%hash, "cache miss");
 
             // Slow path: ensure only one download per hash
             let mut in_flight = self.in_flight.lock().await;
@@ -242,9 +231,7 @@ impl AssetBlobCache {
             // Fast path: check cache without lock
             let cache_path = self.cache_dir.join(hash);
             if self.is_in_cache(hash).await {
-                if self.debug {
-                    let _ = write_to_debug_log(format!("cache hit for hash {}", hash));
-                }
+                tracing::debug!(%hash, "cache hit");
                 // Copy from cache to temp file
                 let dest = temp_file.path().to_path_buf();
                 let cache = cache_path.clone();
@@ -260,9 +247,7 @@ impl AssetBlobCache {
                 return Ok(temp_file);
             }
 
-            if self.debug {
-                let _ = write_to_debug_log(format!("cache miss for hash {}", hash));
-            }
+            tracing::debug!(%hash, "cache miss");
 
             // Slow path: ensure only one download per hash
             let mut in_flight = self.in_flight.lock().await;
@@ -385,7 +370,6 @@ impl AssetBlobCache {
         };
 
         let cache_dir = self.cache_dir.clone();
-        let debug = self.debug;
 
         tokio::task::spawn_blocking(move || {
             // Collect all cache files with their metadata
@@ -443,11 +427,13 @@ impl AssetBlobCache {
                 }
             }
 
-            if debug && evicted_count > 0 {
-                let _ = crate::config::write_to_debug_log(format!(
-                    "info: evicted {} cache files (limits: {} files, {} bytes)\n",
-                    evicted_count, MAX_FILES, max_size
-                ));
+            if evicted_count > 0 {
+                tracing::info!(
+                    evicted = evicted_count,
+                    max_files = MAX_FILES,
+                    max_bytes = max_size,
+                    "evicted cache files"
+                );
             }
 
             Ok(())

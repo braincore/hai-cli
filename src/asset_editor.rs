@@ -24,7 +24,6 @@ pub async fn edit_with_editor_api(
     is_push: bool,
     tx: Sender<WorkerAssetMsg>,
     akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
-    debug: bool,
 ) -> io::Result<Vec<u8>> {
     // Create a temporary file with an extension to assist editors that use the
     // extension for syntax highlighting (e.g. vim)
@@ -66,12 +65,7 @@ pub async fn edit_with_editor_api(
             let akm_info = akm_info_cloned.clone();
             match res {
                 Ok(event) => {
-                    if debug {
-                        let _ = crate::config::write_to_debug_log(format!(
-                            "asset-watcher: {}: {:?}: {:?}\n",
-                            asset_name, asset_entry_ref, event
-                        ));
-                    }
+                    tracing::debug!(%asset_name, ?asset_entry_ref, ?event, "asset-watcher");
                     if let notify::EventKind::Modify(notify::event::ModifyKind::Data(_)) =
                         event.kind
                         && let Ok(new_contents) = fs::read(&file_path)

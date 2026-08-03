@@ -108,7 +108,7 @@ pub async fn send_to_anthropic(
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
     // Prepare messages in Anthropic format
     // Assuming similar format, modify as per actual API requirements if needed
@@ -390,9 +390,8 @@ pub async fn send_to_anthropic(
     let mut thinking_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut tool_calls = HashMap::<u32, JsonObjectAccumulator>::new();
 
-    if debug {
-        config::write_to_debug_log("--- anthropic\n".to_string())?;
-    }
+    let _span = tracing::debug_span!("--- anthropic").entered();
+
     if res.status() != reqwest::StatusCode::OK {
         let err_msg = format!(
             "{}: {}",
@@ -424,9 +423,7 @@ pub async fn send_to_anthropic(
         }
     } {
         let chunk_str = String::from_utf8_lossy(&chunk);
-        if debug {
-            config::write_to_debug_log(chunk_str.to_string())?;
-        }
+        tracing::debug!(%chunk_str, "anthropic chunk");
         buffer.push_str(&chunk_str);
         loop {
             let json_start = buffer.find('{');

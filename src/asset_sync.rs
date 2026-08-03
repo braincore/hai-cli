@@ -17,7 +17,6 @@ use crate::api::{
 };
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader;
-use crate::config;
 use crate::crypt;
 use crate::feature::{
     asset_crypt::{self, KeyRecipient},
@@ -186,13 +185,10 @@ pub async fn sync_down(
                 if let Some(prefix) = prefix {
                     if resolution.state.remote_prefix != prefix {
                         if resolution.is_ancestor {
-                            if debug {
-                                let _ = config::write_to_debug_log(format!(
-                                    "sync: using ancestor .haisync at '{}' with prefix '{}'\n",
-                                    resolution.sync_root.display(),
-                                    resolution.state.remote_prefix
-                                ));
-                            }
+                            tracing::debug!(
+                                sync_root=%resolution.sync_root.display(),
+                                remote_prefix=%resolution.state.remote_prefix,
+                                "sync: using ancestor .haisync");
                             resolution
                         } else {
                             return Err(format!(
@@ -204,25 +200,19 @@ pub async fn sync_down(
                             ));
                         }
                     } else {
-                        if debug {
-                            let _ = config::write_to_debug_log(format!(
-                                "sync: resuming with .haisync at '{}' (cursor: {:?})\n",
-                                resolution.sync_root.display(),
-                                resolution.state.cursor
-                            ));
-                        }
+                        tracing::debug!(
+                            sync_root=?resolution.sync_root.display(),
+                            cursor=?resolution.state.cursor,
+                            "sync: resuming with .haisync");
                         resolution
                     }
                 } else {
                     // No prefix provided — use whatever is in .haisync
-                    if debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "sync: using .haisync at '{}' with prefix '{}' (cursor: {:?})\n",
-                            resolution.sync_root.display(),
-                            resolution.state.remote_prefix,
-                            resolution.state.cursor
-                        ));
-                    }
+                    tracing::debug!(
+                        sync_root=%resolution.sync_root.display(),
+                        remote_prefix=%resolution.state.remote_prefix,
+                        cursor=?resolution.state.cursor,
+                        "sync: using .haisync");
                     resolution
                 }
             }
@@ -303,12 +293,9 @@ pub async fn sync_down(
     } else {
         match create_dir_all(path).await {
             Ok(_) => {
-                if debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "Created directory: {}\n",
-                        effective_target_path
-                    ));
-                }
+                tracing::debug!(
+                    %effective_target_path,
+                    "created directory");
             }
             Err(e) => {
                 return Err(format!(
@@ -330,9 +317,7 @@ pub async fn sync_down(
 
     if let Some(cursor) = haisync_state.cursor.clone() {
         // Resume from existing cursor
-        if debug {
-            let _ = config::write_to_debug_log(format!("sync: resuming from cursor\n"));
-        }
+        tracing::debug!(cursor, "sync: resuming");
 
         let mut iter_res = api_client
             .asset_entry_iter_next(AssetEntryIterNextArg { cursor, limit: 200 })
@@ -448,12 +433,10 @@ pub async fn sync_down(
     }
     if let Err(e) = haisync_state.write_to_dir(&sync_root) {
         warnln!(io, "failed to write .haisync: {}", e);
-    } else if debug {
-        let _ = config::write_to_debug_log(format!(
-            "sync: wrote .haisync to '{}'\n",
-            sync_root.display()
-        ));
     }
+    tracing::debug!(
+        sync_root=%sync_root.display(),
+        "sync: wrote .haisync");
 
     Ok(())
 }
@@ -844,7 +827,7 @@ pub async fn sync_down_entries(
     sync_source: AssetSyncSource,
     persist: Option<(&str, &str)>, // (folder_prefix, target_path)
     max_concurrent_downloads: Option<usize>,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
 ) -> Vec<(
     AssetSourceMinimal,
     Option<tempfile::NamedTempFile>,
@@ -963,20 +946,14 @@ pub async fn sync_down_entries(
                     LocalAssetFileSyncDownPolicy::Sync
                     | LocalAssetFileSyncDownPolicy::SyncOnlyXattrs => {
                         // SyncOnlyXattrs is unexpected for deletion
-                        if debug {
-                            let _ = config::write_to_debug_log(format!(
-                                "Deleting: {}\n",
-                                asset_final_path
-                            ));
-                        }
+                        tracing::debug!(
+                            %asset_final_path,
+                            "deleting");
                         let _ = tokio::fs::remove_file(asset_final_path).await;
                         if let Some(metadata_final_path) = metadata_final_path.as_deref() {
-                            if debug {
-                                let _ = config::write_to_debug_log(format!(
-                                    "Deleting: {}\n",
-                                    metadata_final_path
-                                ));
-                            }
+                            tracing::debug!(
+                                %metadata_final_path,
+                                "deleting metadata");
                             let _ = tokio::fs::remove_file(metadata_final_path).await;
                         }
                         return Ok((source, None, None));
@@ -1005,12 +982,10 @@ pub async fn sync_down_entries(
                         if let Ok(expected_hash) = hex_to_bytes(metadata_hash)
                             && existing_hash == expected_hash
                         {
-                            if debug {
-                                let _ = config::write_to_debug_log(format!(
-                                    "sync: metadata for {} already up to date at '{}'\n",
-                                    source.asset_name, metadata_final_path
-                                ));
-                            }
+                            tracing::debug!(
+                                asset_name=%source.asset_name,
+                                %metadata_final_path,
+                                "metadata already up to date");
                             true
                         } else {
                             false
@@ -1186,10 +1161,9 @@ pub async fn sync_down_entries(
                             (Some(decrypted_asset_contents_temp_file), decrypted_hash)
                         }
                         Err(_) => {
-                            let _ = config::write_to_debug_log(format!(
-                                "sync: failed to get decryption key for {}\n",
-                                source.asset_name
-                            ));
+                            tracing::debug!(
+                                asset_name=%source.asset_name,
+                                "sync: failed to get decryption key");
                             (None, None)
                         }
                     }
@@ -1561,11 +1535,10 @@ pub async fn sync_up(
                     if resolution.is_ancestor {
                         // Ancestor has a different prefix — use the ancestor's sync root
                         if options.debug {
-                            let _ = config::write_to_debug_log(format!(
-                                "sync_up: using ancestor .haisync at '{}' with prefix '{}'\n",
-                                resolution.sync_root.display(),
-                                resolution.state.remote_prefix
-                            ));
+                            tracing::debug!(
+                                sync_root=%resolution.sync_root.display(),
+                                remote_prefix=%resolution.state.remote_prefix,
+                                "sync_up: using ancestor .haisync");
                         }
                         (
                             resolution.sync_root.to_string_lossy().to_string(),
@@ -1583,11 +1556,10 @@ pub async fn sync_up(
                 } else {
                     // Prefix matches
                     if options.debug {
-                        let _ = config::write_to_debug_log(format!(
-                            "sync_up: using .haisync at '{}' with prefix '{}'\n",
-                            resolution.sync_root.display(),
-                            resolution.state.remote_prefix
-                        ));
+                        tracing::debug!(
+                            sync_root=%resolution.sync_root.display(),
+                            remote_prefix=%resolution.state.remote_prefix,
+                            "sync_up: using .haisync");
                     }
                     if resolution.is_ancestor {
                         (
@@ -1605,11 +1577,10 @@ pub async fn sync_up(
             } else {
                 // No prefix provided — use whatever is in .haisync
                 if options.debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "sync_up: using .haisync at '{}' with prefix '{}'\n",
-                        resolution.sync_root.display(),
-                        resolution.state.remote_prefix
-                    ));
+                    tracing::debug!(
+                        sync_root=%resolution.sync_root.display(),
+                        remote_prefix=%resolution.state.remote_prefix,
+                        "sync_up: using .haisync");
                 }
                 if resolution.is_ancestor {
                     (
@@ -1716,10 +1687,7 @@ pub async fn sync_up(
     }
 
     if options.debug {
-        let _ = config::write_to_debug_log(format!(
-            "sync_up: found {} files to process\n",
-            file_pairs.len()
-        ));
+        tracing::debug!(count=%file_pairs.len(), "sync_up: found files to process");
     }
 
     let dry_run = options.dry_run;
@@ -1751,12 +1719,10 @@ pub async fn sync_up(
         if is_move && !is_metadata {
             let old_asset_name = previous_asset_name.unwrap();
 
-            if debug {
-                let _ = config::write_to_debug_log(format!(
-                    "sync_up: detected move '{}' -> '{}'\n",
-                    old_asset_name, asset_name
-                ));
-            }
+            tracing::debug!(
+                old_asset_name=%old_asset_name,
+                new_asset_name=%asset_name,
+                "sync_up: detected move");
 
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
@@ -1851,7 +1817,7 @@ async fn sync_up_data_file(
     asset_name: &str,
     sync_new_files: bool,
     dry_run: bool,
-    debug: bool,
+    #[allow(unused_variables)] debug: bool,
 ) -> SyncUpResult {
     // Check if this file was originally synced down (has xattrs)
     let existing_rev_id =
@@ -1868,12 +1834,10 @@ async fn sync_up_data_file(
 
     // If not previously synced and we're not syncing new files, skip
     if !is_previously_synced && !sync_new_files {
-        if debug {
-            let _ = config::write_to_debug_log(format!(
-                "sync_up: skipping new file '{}' (sync_new_files=false)\n",
-                file_path
-            ));
-        }
+        tracing::debug!(
+            %file_path,
+            "sync_up: skipping new file (sync_new_files=false)",
+        );
         return SyncUpResult {
             file_path: file_path.to_string(),
             asset_name: asset_name.to_string(),
@@ -1905,12 +1869,9 @@ async fn sync_up_data_file(
 
     if let Some(existing) = hash_to_compare {
         if current_hash.eq_ignore_ascii_case(existing) {
-            if debug {
-                let _ = config::write_to_debug_log(format!(
-                    "sync_up: skipping unchanged file '{}'\n",
-                    file_path
-                ));
-            }
+            tracing::debug!(
+                %file_path,
+                "sync_up: skipping unchanged file");
             return SyncUpResult {
                 file_path: file_path.to_string(),
                 asset_name: asset_name.to_string(),
@@ -1968,18 +1929,18 @@ async fn sync_up_data_file(
     };
 
     let is_update = asset_entry_ref.is_some();
-    if debug {
-        if is_update {
-            let _ = config::write_to_debug_log(format!(
-                "sync_up: updating '{}' -> '{}' (entry_id: {:?}, rev_id: {:?})\n",
-                file_path, asset_name, existing_entry_id, existing_rev_id
-            ));
-        } else {
-            let _ = config::write_to_debug_log(format!(
-                "sync_up: creating '{}' -> '{}'\n",
-                file_path, asset_name
-            ));
-        }
+    if is_update {
+        tracing::debug!(
+            %file_path,
+            %asset_name,
+            ?existing_entry_id,
+            ?existing_rev_id,
+            "sync_up: updating");
+    } else {
+        tracing::debug!(
+            %file_path,
+            %asset_name,
+            "sync_up: creating");
     }
 
     if dry_run {
@@ -2106,10 +2067,9 @@ async fn sync_up_metadata_file(
     // If not previously synced and we're not syncing new files, skip
     if !is_previously_synced && !sync_new_files {
         if debug {
-            let _ = config::write_to_debug_log(format!(
-                "sync_up: skipping new metadata file '{}' (sync_new_files=false)\n",
-                file_path
-            ));
+            tracing::debug!(
+                %file_path,
+                "sync_up: skipping new metadata file (sync_new_files=false)");
         }
         return SyncUpResult {
             file_path: file_path.to_string(),
@@ -2139,12 +2099,9 @@ async fn sync_up_metadata_file(
     // Compare with existing hash
     if let Some(existing) = &existing_hash {
         if current_hash.eq_ignore_ascii_case(existing) {
-            if debug {
-                let _ = config::write_to_debug_log(format!(
-                    "sync_up: skipping unchanged metadata file '{}'\n",
-                    file_path
-                ));
-            }
+            tracing::debug!(
+                %file_path,
+                "sync_up: skipping unchanged metadata file");
             return SyncUpResult {
                 file_path: file_path.to_string(),
                 asset_name: asset_name.to_string(),
@@ -2172,10 +2129,10 @@ async fn sync_up_metadata_file(
     };
 
     if debug {
-        let _ = config::write_to_debug_log(format!(
-            "sync_up: uploading metadata '{}' -> '{}'\n",
-            file_path, asset_name
-        ));
+        tracing::debug!(
+            %file_path,
+            %asset_name,
+            "sync_up: uploading metadata");
     }
 
     let metadata_contents = match serde_json::from_slice(&file_contents) {
@@ -2289,12 +2246,11 @@ async fn sync_up_move(
     dry_run: bool,
     debug: bool,
 ) -> Vec<SyncUpResult> {
-    if debug {
-        let _ = config::write_to_debug_log(format!(
-            "sync_up_move: moving '{}' -> '{}' (file: '{}')\n",
-            old_asset_name, new_asset_name, file_path
-        ));
-    }
+    tracing::debug!(
+        %old_asset_name,
+        %new_asset_name,
+        %file_path,
+        "sync_up_move: moving");
 
     if dry_run {
         return vec![SyncUpResult {
@@ -2359,12 +2315,9 @@ async fn sync_up_move(
             };
 
             if content_changed {
-                if debug {
-                    let _ = config::write_to_debug_log(format!(
-                        "sync_up_move: content also changed for '{}', syncing data\n",
-                        file_path
-                    ));
-                }
+                tracing::debug!(
+                    %file_path,
+                    "sync_up_move: content also changed, syncing data");
 
                 let data_result = sync_up_data_file(
                     io,

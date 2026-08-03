@@ -2117,7 +2117,6 @@ pub async fn process_cmd(
                     false,
                     update_asset_tx,
                     akm_info,
-                    debug,
                 )
                 .await;
                 ProcessCmdResult::loop_next()
@@ -2182,7 +2181,6 @@ pub async fn process_cmd(
                     true,
                     update_asset_tx,
                     akm_info,
-                    debug,
                 )
                 .await;
             }
