@@ -1092,6 +1092,7 @@ pub async fn process_cmd(
                                 "FILE",
                                 file_contents,
                                 &file_path.to_string_lossy(),
+                                None,
                                 show_line_numbers,
                             );
                             let token_count = bpe_tokenizer
@@ -2569,10 +2570,11 @@ pub async fn process_cmd(
                         errorln!(io, "{}", err_msg);
                     }
                     for (asset_name, fetch_res) in &asset_map {
-                        let decrypted_asset_contents = match fetch_res {
+                        let (decrypted_asset_contents, asset_entry) = match fetch_res {
                             Ok(asset_reader::AssetFetchResult {
                                 data: asset_contents,
                                 metadata: Some(md_contents),
+                                asset_entry,
                             }) => {
                                 if let Some(rec_key_info) =
                                     asset_crypt::parse_metadata_for_encryption_info(
@@ -2597,8 +2599,14 @@ pub async fn process_cmd(
                                             let enc_content =
                                                 crypt::EncryptedContent::from_bytes(asset_contents)
                                                     .unwrap();
-                                            crypt::decrypt_content(&enc_content, &sym_info.aes_key)
-                                                .unwrap()
+                                            (
+                                                crypt::decrypt_content(
+                                                    &enc_content,
+                                                    &sym_info.aes_key,
+                                                )
+                                                .unwrap(),
+                                                asset_entry,
+                                            )
                                         }
                                         Err(e) => {
                                             errorln!(
@@ -2611,13 +2619,14 @@ pub async fn process_cmd(
                                         }
                                     }
                                 } else {
-                                    asset_contents.clone()
+                                    (asset_contents.clone(), asset_entry)
                                 }
                             }
                             Ok(asset_reader::AssetFetchResult {
                                 data: asset_contents,
                                 metadata: None,
-                            }) => asset_contents.clone(),
+                                asset_entry,
+                            }) => (asset_contents.clone(), asset_entry),
                             Err(e) => {
                                 match e {
                                     asset_reader::GetAssetError::BadName => {
@@ -2637,6 +2646,7 @@ pub async fn process_cmd(
                                     "ASSET",
                                     &asset_contents_string,
                                     &asset_name,
+                                    Some(&format!("rev_id={}", asset_entry.asset.rev_id)),
                                     show_line_numbers,
                                 );
                                 let token_count = bpe_tokenizer
@@ -2958,7 +2968,7 @@ pub async fn process_cmd(
                 }
             };
             if revision_cursor.is_none() {
-                return ProcessCmdResult::loop_next();
+                return ProcessCmdResult::loop_next().with_history_entries(history_entries);
             }
             loop {
                 if let Some(n) = remaining {
@@ -2979,7 +2989,8 @@ pub async fn process_cmd(
                                 .contains(crossterm::event::KeyModifiers::CONTROL)
                         {
                             let _ = crossterm::terminal::disable_raw_mode();
-                            return ProcessCmdResult::loop_next();
+                            return ProcessCmdResult::loop_next()
+                                .with_history_entries(history_entries);
                         }
                     }
                     let _ = crossterm::terminal::disable_raw_mode();
@@ -7352,12 +7363,16 @@ fn add_content_delimiters(
     source_type: &str,
     contents: &str,
     path: &str,
+    more_info: Option<&str>,
     show_line_numbers: bool,
 ) -> String {
     format!(
-        "<<<<<< BEGIN_{}: {}{} >>>>>>\n{}\n<<<<<< END_{}: {} >>>>>>",
+        "<<<<<< BEGIN_{}: {}{}{} >>>>>>\n{}\n<<<<<< END_{}: {} >>>>>>",
         source_type.to_uppercase(),
         path,
+        more_info
+            .map(|s| format!(" ({})", s))
+            .unwrap_or("".to_string()),
         if show_line_numbers {
             " (with line numbers)"
         } else {
@@ -7505,7 +7520,8 @@ async fn print_revision(
                         let contents_with_delimiters = add_content_delimiters(
                             "REVISION",
                             contents,
-                            &format!("{}@{}", asset_name, revision.asset.rev_id),
+                            asset_name,
+                            Some(&format!("rev_id={}", revision.asset.rev_id)),
                             show_line_numbers,
                         );
                         Some(HistoryEntry::UserText(contents_with_delimiters))

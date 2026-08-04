@@ -997,6 +997,7 @@ pub fn create_empty_temp_file(
 pub struct AssetFetchResult {
     pub data: Vec<u8>,
     pub metadata: Option<Vec<u8>>,
+    pub asset_entry: AssetEntry,
 }
 
 pub type AssetExtendedFetchMap = HashMap<String, Result<AssetFetchResult, GetAssetError>>;
@@ -1123,6 +1124,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                 .map(|r| AssetFetchResult {
                     data: r.data,
                     metadata: r.metadata,
+                    asset_entry: r.asset_entry,
                 })
                 .map_err(|dl_err| match dl_err {
                     DownloadAssetError::FsFailed => {
@@ -1153,6 +1155,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
 pub struct AssetDownloadResult {
     pub data: Vec<u8>,
     pub metadata: Option<Vec<u8>>,
+    pub asset_entry: AssetEntry,
 }
 
 pub type AssetExtendedDownloadMap =
@@ -1162,6 +1165,13 @@ pub type AssetExtendedDownloadMap =
 enum DownloadKind {
     Data(String),     // asset name
     Metadata(String), // asset name
+}
+
+// Internal accumulator for a single asset's in-flight results
+struct PendingAsset {
+    asset_entry: AssetEntry,
+    data: Option<Result<Vec<u8>, DownloadAssetError>>,
+    metadata: Option<Result<Vec<u8>, DownloadAssetError>>,
 }
 
 async fn download_assets_extended_parallel_in_memory(
@@ -1226,19 +1236,20 @@ async fn download_assets_extended_parallel_in_memory(
 
     let results = join_all(handles).await;
 
-    // Intermediate storage: name -> (Option<data_result>, Option<metadata_result>)
-    let mut intermediate: HashMap<
-        String,
-        (
-            Option<Result<Vec<u8>, DownloadAssetError>>,
-            Option<Result<Vec<u8>, DownloadAssetError>>,
-        ),
-    > = HashMap::new();
+    // Intermediate storage: name -> pending results + the originating asset entry
+    let mut intermediate: HashMap<String, PendingAsset> = HashMap::new();
 
     // Initialize entries for all assets that have data URLs
     for asset_entry in asset_entries {
         if asset_entry.asset.url.is_some() && asset_entry.asset.hash.is_some() {
-            intermediate.insert(asset_entry.name.clone(), (None, None));
+            intermediate.insert(
+                asset_entry.name.clone(),
+                PendingAsset {
+                    asset_entry: asset_entry.clone(),
+                    data: None,
+                    metadata: None,
+                },
+            );
         }
     }
 
@@ -1248,12 +1259,12 @@ async fn download_assets_extended_parallel_in_memory(
             Ok((kind, download_result)) => match kind {
                 DownloadKind::Data(name) => {
                     if let Some(entry) = intermediate.get_mut(&name) {
-                        entry.0 = Some(download_result);
+                        entry.data = Some(download_result);
                     }
                 }
                 DownloadKind::Metadata(name) => {
                     if let Some(entry) = intermediate.get_mut(&name) {
-                        entry.1 = Some(download_result);
+                        entry.metadata = Some(download_result);
                     }
                 }
             },
@@ -1266,19 +1277,29 @@ async fn download_assets_extended_parallel_in_memory(
     // Build final map
     let mut asset_map: AssetExtendedDownloadMap = HashMap::new();
 
-    for (name, (data_opt, metadata_opt)) in intermediate {
-        let result = match data_opt {
+    for (
+        name,
+        PendingAsset {
+            asset_entry,
+            data,
+            metadata,
+        },
+    ) in intermediate
+    {
+        let result = match data {
             Some(Ok(data)) => {
                 // Data succeeded, check metadata
-                match metadata_opt {
+                match metadata {
                     Some(Ok(metadata)) => Ok(AssetDownloadResult {
                         data,
                         metadata: Some(metadata),
+                        asset_entry,
                     }),
                     Some(Err(e)) => Err(e), // Metadata download failed
                     None => Ok(AssetDownloadResult {
                         data,
                         metadata: None, // No metadata for this asset
+                        asset_entry,
                     }),
                 }
             }
