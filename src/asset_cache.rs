@@ -1,23 +1,39 @@
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use crate::asset_reader;
 
+/// Returns true if `hash` is a well-formed SHA-256 hex digest.
+///
+/// It's important to validate the hash since it's used to construct a path
+/// inside the cache directory. Without this check, an attacker can maliciously
+/// provide a hash that escapes the cache directory.
+fn is_valid_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 pub struct AssetBlobCache {
     cache_dir: PathBuf,
-    in_flight: Arc<Mutex<HashSet<String>>>, // tracks hashes being downloaded
+    /// Tracks {hashes} being downloaded
+    in_flight: Arc<Mutex<HashSet<String>>>,
+    /// Serialize evictions since underlying alg doesn't support concurrency.
+    evict_lock: Arc<Mutex<()>>,
     disable_cache: bool,
     max_cache_size_bytes: Option<u64>, // None = unlimited
 }
 
 impl AssetBlobCache {
-    /// Create a new AssetBlobCache
+    /// Create a new AssetBlobCache.
     ///
     /// # Arguments
     /// * `cache_dir` - The directory to use for caching assets.
@@ -25,6 +41,7 @@ impl AssetBlobCache {
         Self {
             cache_dir,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
+            evict_lock: Arc::new(Mutex::new(())),
             disable_cache: false,
             max_cache_size_bytes: None,
         }
@@ -42,7 +59,9 @@ impl AssetBlobCache {
         self
     }
 
-    /// Get or download an asset, returning the data as a Vec<u8>
+    /// Get or download an asset.
+    ///
+    /// Download and validation is done in memory.
     ///
     /// # Arguments
     /// * `url` - The URL of the asset to download
@@ -52,6 +71,10 @@ impl AssetBlobCache {
         url: &str,
         hash: &str,
     ) -> Result<Vec<u8>, DownloadAssetError> {
+        if !is_valid_hash(hash) {
+            return Err(DownloadAssetError::HashMismatch);
+        }
+
         // Fast path: cache disabled, just download
         if self.disable_cache {
             return download_and_verify(url, hash).await;
@@ -132,6 +155,10 @@ impl AssetBlobCache {
         hash: &str,
         dest_path: &Path,
     ) -> Result<(), DownloadAssetError> {
+        if !is_valid_hash(hash) {
+            return Err(DownloadAssetError::HashMismatch);
+        }
+
         // Fast path: cache disabled, just download directly
         if self.disable_cache {
             return download_and_verify_to_path(url, hash, dest_path).await;
@@ -145,17 +172,25 @@ impl AssetBlobCache {
                 // Copy from cache to destination
                 let dest = dest_path.to_path_buf();
                 let cache = cache_path.clone();
-                tokio::task::spawn_blocking(move || {
+                let copied = tokio::task::spawn_blocking(move || {
                     std::fs::copy(&cache, &dest)?;
                     // Touch the cache file to mark as recently accessed
                     filetime::set_file_mtime(&cache, filetime::FileTime::now()).ok();
                     Ok::<_, std::io::Error>(())
                 })
                 .await
-                .map_err(|_| DownloadAssetError::FsFailed)?
                 .map_err(|_| DownloadAssetError::FsFailed)?;
 
-                return Ok(());
+                match copied {
+                    Ok(()) => return Ok(()),
+                    // TOCTOU: eviction removed the entry between the check and
+                    // the copy. That is a cache miss, not a failure.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::debug!(%hash, "cache entry vanished after check; retrying");
+                        continue;
+                    }
+                    Err(_) => return Err(DownloadAssetError::FsFailed),
+                }
             }
 
             tracing::debug!(%hash, "cache miss");
@@ -221,6 +256,10 @@ impl AssetBlobCache {
         hash: &str,
         temp_file: tempfile::NamedTempFile,
     ) -> Result<tempfile::NamedTempFile, DownloadAssetError> {
+        if !is_valid_hash(hash) {
+            return Err(DownloadAssetError::HashMismatch);
+        }
+
         // Fast path: cache disabled, just download
         if self.disable_cache {
             download_and_verify_to_path(url, hash, temp_file.path()).await?;
@@ -235,16 +274,24 @@ impl AssetBlobCache {
                 // Copy from cache to temp file
                 let dest = temp_file.path().to_path_buf();
                 let cache = cache_path.clone();
-                tokio::task::spawn_blocking(move || {
+                let copied = tokio::task::spawn_blocking(move || {
                     std::fs::copy(&cache, &dest)?;
                     filetime::set_file_mtime(&cache, filetime::FileTime::now()).ok();
                     Ok::<_, std::io::Error>(())
                 })
                 .await
-                .map_err(|_| DownloadAssetError::FsFailed)?
                 .map_err(|_| DownloadAssetError::FsFailed)?;
 
-                return Ok(temp_file);
+                match copied {
+                    Ok(()) => return Ok(temp_file),
+                    // TOCTOU: eviction removed the entry between the check and
+                    // the copy. That is a cache miss, not a failure.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        tracing::debug!(%hash, "cache entry vanished after check; retrying");
+                        continue;
+                    }
+                    Err(_) => return Err(DownloadAssetError::FsFailed),
+                }
             }
 
             tracing::debug!(%hash, "cache miss");
@@ -298,20 +345,11 @@ impl AssetBlobCache {
 
     async fn is_in_cache(&self, hash: &str) -> bool {
         let path = self.cache_dir.join(hash);
-        let hash_clone = hash.to_string();
+        let hash = hash.to_string();
 
-        tokio::task::spawn_blocking(move || {
-            if !path.exists() {
-                return false;
-            }
-            // Verify the cached file isn't corrupted
-            match std::fs::read(&path) {
-                Ok(data) => verify_sha256_in_memory(&hash_clone, &data),
-                Err(_) => false,
-            }
-        })
-        .await
-        .unwrap_or(false)
+        tokio::task::spawn_blocking(move || verify_sha256_of_file(&hash, &path).unwrap_or(false))
+            .await
+            .unwrap_or(false)
     }
 
     async fn try_read_cache(&self, hash: &str) -> std::io::Result<Option<Vec<u8>>> {
@@ -344,6 +382,12 @@ impl AssetBlobCache {
     /// # Returns
     /// A result indicating success or failure
     pub async fn write_cache(&self, hash: &str, data: &[u8]) -> std::io::Result<()> {
+        if !is_valid_hash(hash) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "invalid cache hash",
+            ));
+        }
         let path = self.cache_dir.join(hash);
         let data = data.to_vec();
         let hash_clone = hash.to_string();
@@ -362,80 +406,93 @@ impl AssetBlobCache {
     }
 
     async fn evict_if_needed(&self) -> std::io::Result<()> {
+        use std::io::ErrorKind;
+        use std::time::SystemTime;
+
         const MAX_FILES: usize = 100;
 
         let max_size = match self.max_cache_size_bytes {
             Some(size) => size,
-            None => return Ok(()), // No limit set
+            None => return Ok(()),
+        };
+
+        // Only one pass at a time. If another is already running it will
+        // observe whatever we just wrote, so skipping is always safe.
+        let _guard = match self.evict_lock.try_lock() {
+            Ok(g) => g,
+            Err(_) => return Ok(()),
         };
 
         let cache_dir = self.cache_dir.clone();
 
         tokio::task::spawn_blocking(move || {
-            // Collect all cache files with their metadata
-            let entries = std::fs::read_dir(&cache_dir)?;
-            let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+            let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
 
-            for entry in entries {
-                let entry = entry?;
+            for entry in std::fs::read_dir(&cache_dir)? {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e),
+                };
                 let path = entry.path();
 
-                // Skip temp files and directories
                 if path.extension().and_then(|s| s.to_str()) == Some("tmp") {
                     continue;
                 }
-                if !path.is_file() {
+
+                // Single stat, and the file is allowed to vanish underneath us.
+                let metadata = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                    Err(e) => return Err(e),
+                };
+                if !metadata.is_file() {
                     continue;
                 }
 
-                let metadata = entry.metadata()?;
-                let size = metadata.len();
-                let mtime = metadata.modified()?;
-
-                files.push((path, size, mtime));
+                let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                files.push((path, metadata.len(), mtime));
             }
 
-            // Calculate total size and count
-            let total_size: u64 = files.iter().map(|(_, size, _)| size).sum();
-            let file_count = files.len();
+            let mut current_size: u64 = files.iter().map(|(_, s, _)| *s).sum();
+            let mut current_count = files.len();
 
-            // Check if we're under both limits
-            if total_size <= max_size && file_count <= MAX_FILES {
-                return Ok(()); // Under both limits, nothing to do
+            if current_size <= max_size && current_count <= MAX_FILES {
+                return Ok(());
             }
 
-            // Sort by mtime (oldest first)
             files.sort_by_key(|(_, _, mtime)| *mtime);
 
-            // Evict oldest files until under BOTH limits
-            let mut current_size = total_size;
-            let mut current_count = file_count;
-            let mut evicted_count = 0;
-
+            let mut evicted = 0usize;
             for (path, size, _) in files {
-                // Stop if we're under both limits
                 if current_size <= max_size && current_count <= MAX_FILES {
                     break;
                 }
-
-                if let Err(e) = std::fs::remove_file(&path) {
-                    eprintln!("warning: failed to evict cache file {:?}: {}", path, e);
-                } else {
-                    current_size -= size;
-                    current_count -= 1;
-                    evicted_count += 1;
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        current_size = current_size.saturating_sub(size);
+                        current_count -= 1;
+                        evicted += 1;
+                    }
+                    // Someone beat us to it: the space really is freed.
+                    Err(e) if e.kind() == ErrorKind::NotFound => {
+                        current_size = current_size.saturating_sub(size);
+                        current_count -= 1;
+                    }
+                    Err(e) => {
+                        tracing::warn!(?path, error = %e, "failed to evict cache file");
+                    }
                 }
             }
 
-            if evicted_count > 0 {
+            if evicted > 0 {
                 tracing::info!(
-                    evicted = evicted_count,
+                    evicted,
                     max_files = MAX_FILES,
                     max_bytes = max_size,
                     "evicted cache files"
                 );
             }
-
             Ok(())
         })
         .await?
@@ -594,36 +651,24 @@ pub fn compute_sha256_in_memory(contents: &[u8]) -> (String, Vec<u8>) {
     (format!("{:x}", hash), hash.to_vec())
 }
 
-#[allow(dead_code)]
-pub async fn verify_sha256_from_file(hash: &str, path: &Path) -> Result<bool, std::io::Error> {
-    let mut file = tokio::fs::File::open(path).await?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
-
-    loop {
-        let bytes_read = file.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-
-    let computed_hash = format!("{:x}", hasher.finalize());
-    Ok(computed_hash == hash)
+/// Streams `path` through SHA-256 and compares against `hash`.
+/// Peak memory is one buffer, regardless of file size.
+fn verify_sha256_of_file(hash: &str, path: &Path) -> std::io::Result<bool> {
+    let (hash_str, _hash_bytes) = compute_sha256_of_file(path)?;
+    Ok(hash_str == hash)
 }
 
-#[allow(dead_code)]
-pub async fn compute_sha256_from_file(path: &Path) -> Result<(String, Vec<u8>), std::io::Error> {
-    let mut file = tokio::fs::File::open(path).await?;
+pub fn compute_sha256_of_file(path: &Path) -> std::io::Result<(String, Vec<u8>)> {
+    let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 8192];
+    let mut buf = vec![0u8; 128 * 1024];
 
     loop {
-        let bytes_read = file.read(&mut buffer).await?;
+        let bytes_read = file.read(&mut buf)?;
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]);
+        hasher.update(&buf[..bytes_read]);
     }
 
     let hash = hasher.finalize();
