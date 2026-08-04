@@ -286,7 +286,7 @@ Available Commands:
 
 --
 
-/file-read <glob>     - Load files into the conversation (e.g., `/load src/**/*.py`)
+/file-read <glob>     - Load files into the conversation (e.g., `/file-read src/**/*.py`)
                         Supports text files or PNG/JPG images
                         .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                         .hq=BOOL   If it's an image, whether to load the high-res version (default: false)

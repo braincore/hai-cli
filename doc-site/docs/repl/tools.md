@@ -262,7 +262,7 @@ The LLM knows how to use the REPL.
 ```
 ↓↓↓
 
-- /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+- /http-get https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
 - /prompt Who was the founder of the Silk Road marketplace?
 
 ⚙ ⚙ ⚙

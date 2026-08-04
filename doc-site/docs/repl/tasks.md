@@ -304,7 +304,7 @@ to delete or exfiltrate your data. Be careful when running any task. All
 potentially dangerous commands require a "yes/no" confirmation.
 
 Specifically, tasks may `/exec` commands on your machine which can both delete
-and exfiltrate data (e.g. make an http request). Tasks may `/load` data that can
-then be exfiltrated. Tasks may use a tool (e.g. `!sh` or `!py`) which can delete
-and exfiltrate. Tasks may use the `!hai` tool which may generate a list of
-commands that can delete and exfiltrate.
+and exfiltrate data (e.g. make an http request). Tasks may `/file-read` data
+that can then be exfiltrated. Tasks may use a tool (e.g. `!sh` or `!py`) which
+can delete and exfiltrate. Tasks may use the `!hai` tool which may generate a
+list of commands that can delete and exfiltrate.

@@ -528,7 +528,7 @@ pub async fn process_cmd(
                 if matches!(session.repl_mode, ReplMode::Task(..)) {
                     outln!(
                         io,
-                        "Task restarted additional /pin(s) and /load(s) retained"
+                        "Task restarted; /pin /asset-read /file-read /http-get retained"
                     );
                 } else {
                     outln!(
@@ -1575,7 +1575,7 @@ pub async fn process_cmd(
                 outln!(io, "  - /new -- restarts the task");
                 outln!(
                     io,
-                    "  - /reset -- restarts the task while retaining additional /pin and /load commands"
+                    "  - /reset -- restarts the task while retaining /pin /asset-read /file-read /http-get"
                 );
                 outln!(
                     io,
@@ -6610,7 +6610,7 @@ const HELP_MSG: &str = r##"Available Commands:
 /? /h /help                  - Show this help menu
 /q /quit                     - Bye (CTRL+D works too)
 /n /new                      - New conversation
-/r /reset                    - New conversation but retain /load-ed & /pin-ed data
+/r /reset                    - New conversation but retains /pin /asset-read /file-read /http-get
 
 --
 
@@ -6654,7 +6654,7 @@ const HELP_MSG: &str = r##"Available Commands:
 
 --
 
-/file-read <glob path>       - Load files into the conversation (e.g., `/load src/**/*.py`)
+/file-read <glob path>       - Load files into the conversation (e.g., `/file-read src/**/*.py`)
                                Supports text files or PNG/JPG images
                                .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
                                .hq=BOOL   If it's an image, whether to load the high-res version (default: false)

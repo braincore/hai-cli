@@ -131,6 +131,6 @@ The following environment variables are recognized:
 | `DEEPSEEK_API_KEY`     | API key for DeepSeek. |
 | `XAI_API_KEY`          | API key for xAI. |
 | `HAI_NO_PRETTY_IMAGES` | Disables high-resolution terminal image protocols (set to any value to enable). |
-| `HAI_IMAGE_HEIGHT`     | Set height of images drawn in terminal with `/load` (default: 20). |
+| `HAI_IMAGE_HEIGHT`     | Set height of images drawn in terminal with `/read` (default: 20). |
 | `HAI_USER`             | Set the default account to use. |
 | `HAI_MODEL`            | Set the default LLM model to use. |

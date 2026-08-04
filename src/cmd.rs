@@ -12,7 +12,7 @@ pub enum Cmd {
     Noop,
     /// New conversation
     New,
-    /// Reset conversation but retain /load-ed and /pin-ed data
+    /// Reset conversation but retains /pin /asset-read /file-read /http-get
     Reset,
     /// Quit the REPL
     Quit,
