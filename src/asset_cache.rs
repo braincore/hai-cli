@@ -1,31 +1,18 @@
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use crate::asset_reader;
 
-/// Returns true if `hash` is a well-formed SHA-256 hex digest.
-///
-/// It's important to validate the hash since it's used to construct a path
-/// inside the cache directory. Without this check, an attacker can maliciously
-/// provide a hash that escapes the cache directory.
-fn is_valid_hash(hash: &str) -> bool {
-    hash.len() == 64
-        && hash
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 pub struct AssetBlobCache {
     cache_dir: PathBuf,
-    /// Tracks {hashes} being downloaded
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    /// Per-hash single-flight locks for in-progress downloads.
+    locks: Arc<KeyedLocks>,
     /// Serialize evictions since underlying alg doesn't support concurrency.
     evict_lock: Arc<Mutex<()>>,
     disable_cache: bool,
@@ -40,7 +27,7 @@ impl AssetBlobCache {
     pub fn new(cache_dir: PathBuf) -> Self {
         Self {
             cache_dir,
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            locks: Arc::new(KeyedLocks::default()),
             evict_lock: Arc::new(Mutex::new(())),
             disable_cache: false,
             max_cache_size_bytes: None,
@@ -80,64 +67,40 @@ impl AssetBlobCache {
             return download_and_verify(url, hash).await;
         }
 
-        loop {
-            // Fast path: check cache without lock
-            if let Some(data) = self
-                .try_read_cache(hash)
-                .await
-                .map_err(|_e| DownloadAssetError::FsFailed)?
-            {
-                tracing::debug!(%hash, "cache hit");
-                return Ok(data);
-            }
-
-            tracing::debug!(%hash, "cache miss");
-
-            // Slow path: ensure only one download per hash
-            let mut in_flight = self.in_flight.lock().await;
-
-            // Check again in case another task just finished
-            if let Some(data) = self
-                .try_read_cache(hash)
-                .await
-                .map_err(|_e| DownloadAssetError::FsFailed)?
-            {
-                return Ok(data);
-            }
-
-            // Not in cache, download.
-            if in_flight.insert(hash.to_string()) {
-                drop(in_flight); // Release lock during download
-
-                let result = async {
-                    let data = download_asset(url).await?;
-                    if !verify_sha256_in_memory(hash, &data) {
-                        return Err(DownloadAssetError::HashMismatch);
-                    }
-                    self.write_cache(hash, &data)
-                        .await
-                        .map_err(|_e| DownloadAssetError::FsFailed)?;
-
-                    // Evict if needed (do this after write completes)
-                    if let Err(e) = self.evict_if_needed().await {
-                        eprintln!("warning: cache eviction failed: {:?}", e);
-                    }
-
-                    Ok(data)
-                }
-                .await;
-
-                // Remove from in-flight
-                self.in_flight.lock().await.remove(hash);
-
-                return result;
-            }
-
-            // Another task is downloading, wait and retry
-            drop(in_flight);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            // Loop will retry
+        // 1. Optimistic cache hit: no locks
+        if let Some(data) = self
+            .try_read_cache(hash)
+            .await
+            .map_err(|_e| DownloadAssetError::FsFailed)?
+        {
+            tracing::debug!(%hash, "cache hit");
+            return Ok(data);
         }
+
+        tracing::debug!(%hash, "cache miss");
+
+        // 2. Acquire lock to populate cache for this hash
+        let _g = self.locks.lock(hash).await;
+
+        // 3. Now that lock is acquired, re-check if hash was added already.
+        if let Some(data) = self
+            .try_read_cache(hash)
+            .await
+            .map_err(|_e| DownloadAssetError::FsFailed)?
+        {
+            return Ok(data);
+        }
+
+        // 4. Hash locked: do the download and caching
+        let data = download_asset(url).await?;
+        if !verify_sha256_in_memory(hash, &data) {
+            return Err(DownloadAssetError::HashMismatch);
+        }
+        if let Err(e) = self.write_cache(hash, &data).await {
+            tracing::warn!(%hash, error = ?e, "cache insert failed; serving download anyway");
+        }
+        let _ = self.evict_if_needed().await;
+        Ok(data)
     }
 
     /// Get or download an asset to a file path (e.g., from tempfile)
@@ -164,82 +127,29 @@ impl AssetBlobCache {
             return download_and_verify_to_path(url, hash, dest_path).await;
         }
 
-        loop {
-            // Fast path: check cache without lock
-            let cache_path = self.cache_dir.join(hash);
-            if self.is_in_cache(hash).await {
-                tracing::debug!(%hash, "cache hit");
-                // Copy from cache to destination
-                let dest = dest_path.to_path_buf();
-                let cache = cache_path.clone();
-                let copied = tokio::task::spawn_blocking(move || {
-                    std::fs::copy(&cache, &dest)?;
-                    // Touch the cache file to mark as recently accessed
-                    filetime::set_file_mtime(&cache, filetime::FileTime::now()).ok();
-                    Ok::<_, std::io::Error>(())
-                })
-                .await
-                .map_err(|_| DownloadAssetError::FsFailed)?;
-
-                match copied {
-                    Ok(()) => return Ok(()),
-                    // TOCTOU: eviction removed the entry between the check and
-                    // the copy. That is a cache miss, not a failure.
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        tracing::debug!(%hash, "cache entry vanished after check; retrying");
-                        continue;
-                    }
-                    Err(_) => return Err(DownloadAssetError::FsFailed),
-                }
-            }
-
-            tracing::debug!(%hash, "cache miss");
-
-            // Slow path: ensure only one download per hash
-            let mut in_flight = self.in_flight.lock().await;
-
-            // Check again in case another task just finished
-            if self.is_in_cache(hash).await {
-                drop(in_flight);
-                continue; // Retry from the top to copy from cache
-            }
-
-            // Not in cache, download.
-            if in_flight.insert(hash.to_string()) {
-                drop(in_flight); // Release lock during download
-
-                let result = async {
-                    // Download directly to destination (hashes while streaming)
-                    download_and_verify_to_path(url, hash, dest_path).await?;
-
-                    // Copy to cache (streaming copy)
-                    let dest = dest_path.to_path_buf();
-                    let cache = cache_path.clone();
-                    tokio::task::spawn_blocking(move || std::fs::copy(&dest, &cache))
-                        .await
-                        .map_err(|_| DownloadAssetError::FsFailed)?
-                        .map_err(|_| DownloadAssetError::FsFailed)?;
-
-                    // Evict if needed
-                    if let Err(e) = self.evict_if_needed().await {
-                        eprintln!("warning: cache eviction failed: {:?}", e);
-                    }
-
-                    Ok(())
-                }
-                .await;
-
-                // Remove from in-flight
-                self.in_flight.lock().await.remove(hash);
-
-                return result;
-            }
-
-            // Another task is downloading, wait and retry
-            drop(in_flight);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            // Loop will retry
+        // 1. Optimistic cache hit: no locks
+        if self.copy_from_cache(hash, dest_path).await? {
+            tracing::debug!(%hash, "cache hit");
+            return Ok(());
         }
+
+        tracing::debug!(%hash, "cache miss");
+
+        // 2. Acquire lock to populate cache for this hash
+        let _g = self.locks.lock(hash).await;
+
+        // 3. Now that lock is acquired, re-check if hash was added already.
+        if self.copy_from_cache(hash, dest_path).await? {
+            return Ok(());
+        }
+
+        // 4. Hash locked: do the download and caching
+        download_and_verify_to_path(url, hash, dest_path).await?;
+        if let Err(e) = self.insert_into_cache(hash, dest_path).await {
+            tracing::warn!(%hash, error = ?e, "cache insert failed; serving download anyway");
+        }
+        let _ = self.evict_if_needed().await;
+        Ok(())
     }
 
     /// Get or download an asset to a NamedTempFile
@@ -266,81 +176,72 @@ impl AssetBlobCache {
             return Ok(temp_file);
         }
 
-        loop {
-            // Fast path: check cache without lock
-            let cache_path = self.cache_dir.join(hash);
-            if self.is_in_cache(hash).await {
-                tracing::debug!(%hash, "cache hit");
-                // Copy from cache to temp file
-                let dest = temp_file.path().to_path_buf();
-                let cache = cache_path.clone();
-                let copied = tokio::task::spawn_blocking(move || {
-                    std::fs::copy(&cache, &dest)?;
-                    filetime::set_file_mtime(&cache, filetime::FileTime::now()).ok();
-                    Ok::<_, std::io::Error>(())
-                })
-                .await
-                .map_err(|_| DownloadAssetError::FsFailed)?;
-
-                match copied {
-                    Ok(()) => return Ok(temp_file),
-                    // TOCTOU: eviction removed the entry between the check and
-                    // the copy. That is a cache miss, not a failure.
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        tracing::debug!(%hash, "cache entry vanished after check; retrying");
-                        continue;
-                    }
-                    Err(_) => return Err(DownloadAssetError::FsFailed),
-                }
-            }
-
-            tracing::debug!(%hash, "cache miss");
-
-            // Slow path: ensure only one download per hash
-            let mut in_flight = self.in_flight.lock().await;
-
-            // Check again in case another task just finished
-            if self.is_in_cache(hash).await {
-                drop(in_flight);
-                continue; // Retry from the top to copy from cache
-            }
-
-            // Not in cache, download.
-            if in_flight.insert(hash.to_string()) {
-                drop(in_flight); // Release lock during download
-
-                let result = async {
-                    // Download directly to temp file (hashes while streaming)
-                    download_and_verify_to_path(url, hash, temp_file.path()).await?;
-
-                    // Copy to cache (streaming copy)
-                    let source = temp_file.path().to_path_buf();
-                    let cache = cache_path.clone();
-                    tokio::task::spawn_blocking(move || std::fs::copy(&source, &cache))
-                        .await
-                        .map_err(|_| DownloadAssetError::FsFailed)?
-                        .map_err(|_| DownloadAssetError::FsFailed)?;
-
-                    // Evict if needed
-                    if let Err(e) = self.evict_if_needed().await {
-                        eprintln!("warning: cache eviction failed: {:?}", e);
-                    }
-
-                    Ok(temp_file)
-                }
-                .await;
-
-                // Remove from in-flight
-                self.in_flight.lock().await.remove(hash);
-
-                return result;
-            }
-
-            // Another task is downloading, wait and retry
-            drop(in_flight);
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            // Loop will retry
+        // 1. Optimistic cache hit: no locks
+        if self.copy_from_cache(hash, temp_file.path()).await? {
+            tracing::debug!(%hash, "cache hit");
+            return Ok(temp_file);
         }
+
+        tracing::debug!(%hash, "cache miss");
+
+        // 2. Acquire lock to populate cache for this hash
+        let _g = self.locks.lock(hash).await;
+
+        // 3. Now that lock is acquired, re-check if hash was added already.
+        if self.copy_from_cache(hash, temp_file.path()).await? {
+            return Ok(temp_file);
+        }
+
+        // 4. Hash locked: do the download and caching
+        download_and_verify_to_path(url, hash, temp_file.path()).await?;
+        if let Err(e) = self.insert_into_cache(hash, temp_file.path()).await {
+            tracing::warn!(%hash, error = ?e, "cache insert failed; serving download anyway");
+        }
+        let _ = self.evict_if_needed().await;
+        Ok(temp_file)
+    }
+
+    /// Copy a cached entry to `dest`, touching its mtime on success.
+    ///
+    /// Returns `Ok(true)` on a hit, `Ok(false)` on a miss (including the
+    /// TOCTOU case where eviction removed the entry after we checked), and
+    /// `Err` only on a genuine filesystem failure.
+    async fn copy_from_cache(&self, hash: &str, dest: &Path) -> Result<bool, DownloadAssetError> {
+        if !self.is_in_cache(hash).await {
+            return Ok(false);
+        }
+        let cache = self.cache_dir.join(hash);
+        let dest = dest.to_path_buf();
+        let copied = tokio::task::spawn_blocking(move || {
+            std::fs::copy(&cache, &dest)?;
+            // Touch the cache file to mark as recently accessed.
+            filetime::set_file_mtime(&cache, filetime::FileTime::now()).ok();
+            Ok::<_, std::io::Error>(())
+        })
+        .await
+        .map_err(|_| DownloadAssetError::FsFailed)?;
+
+        match copied {
+            Ok(()) => Ok(true),
+            // TOCTOU: eviction removed the entry between the check and the
+            // copy. That is a cache miss, not a failure.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!(%hash, "cache entry vanished after check; treating as miss");
+                Ok(false)
+            }
+            Err(_) => Err(DownloadAssetError::FsFailed),
+        }
+    }
+
+    /// Streaming-copy the already-verified file at `src` into the cache.
+    async fn insert_into_cache(&self, hash: &str, src: &Path) -> std::io::Result<()> {
+        let cache = self.cache_dir.join(hash);
+        let src = src.to_path_buf();
+        tokio::task::spawn_blocking(move || std::fs::copy(&src, &cache).map(|_| ()))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::Other, "cache copy task panicked")
+            })?
     }
 
     async fn is_in_cache(&self, hash: &str) -> bool {
@@ -673,4 +574,68 @@ pub fn compute_sha256_of_file(path: &Path) -> std::io::Result<(String, Vec<u8>)>
 
     let hash = hasher.finalize();
     Ok((format!("{:x}", hash), hash.to_vec()))
+}
+
+// --
+
+/// Per-key single-flight coordination.
+///
+/// Each key maps to an async mutex. Acquiring the key returns a guard that,
+/// when dropped (including via task cancellation), releases the lock and
+/// reclaims the map entry if nobody else is waiting on it.
+#[derive(Default)]
+struct KeyedLocks(StdMutex<HashMap<String, Arc<Mutex<()>>>>);
+
+impl KeyedLocks {
+    /// # Returns
+    ///
+    /// A guard that when dropped releases the key.
+    async fn lock(self: &Arc<Self>, key: &str) -> KeyGuard {
+        let m = {
+            let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            map.entry(key.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let guard = m.clone().lock_owned().await;
+        KeyGuard {
+            locks: self.clone(),
+            key: key.to_owned(),
+            _guard: guard,
+        }
+    }
+}
+
+struct KeyGuard {
+    locks: Arc<KeyedLocks>,
+    key: String,
+    _guard: OwnedMutexGuard<()>,
+}
+
+impl Drop for KeyGuard {
+    fn drop(&mut self) {
+        tracing::debug!("trying to drop KeyGuard for key {}", self.key);
+        let mut map = self.locks.0.lock().unwrap_or_else(|e| e.into_inner());
+        // If count is 2 (OwnedMutexGuard + map), then nobody else is waiting
+        // and it's safe to reclaim.
+        if map
+            .get(&self.key)
+            .is_some_and(|m| Arc::strong_count(m) <= 2)
+        {
+            tracing::debug!("drop key {}!", self.key);
+            map.remove(&self.key);
+        }
+    }
+}
+
+/// Returns true if `hash` is a well-formed SHA-256 hex digest.
+///
+/// It's important to validate the hash since it's used to construct a path
+/// inside the cache directory. Without this check, an attacker can maliciously
+/// provide a hash that escapes the cache directory.
+fn is_valid_hash(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
