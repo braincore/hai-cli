@@ -1,6 +1,24 @@
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use two_face::re_exports::syntect::easy::HighlightLines;
 use two_face::re_exports::syntect::parsing::SyntaxSet;
+
+// --
+
+// Notes:
+//
+// # Muted state is orthogonal to recording state
+//
+// - Muting prevents any output from being sent to the backend.
+// - Whether muted or not, recording controls whether output is saved to a
+//   transcript for later use.
+//
+// # Terminal vs. non-terminal backends
+//
+// - Terminal backends (stdio, web) can render styling and/or cursor movement.
+// - Non-terminal backends (file, pipe) cannot, and must treat all output as
+//   plain text.
+//
 
 // --
 
@@ -69,13 +87,12 @@ macro_rules! err_flush {
 }
 
 //
-// Show-one-thing / record-another.
+// <out>_as: (Show-one-thing, record-another)
 //
-// Both arms are single expressions (comma-separated), so if you need
-// interpolation, wrap that arm in `format!` yourself:
+// Both arms are single expressions so if you need interpolation, use
+// `format!`. Example:
 //
-//   outln_as!(io, format!("✓ {}", name.green()), name);
-//   out_as!(io, spinner_frame, "downloading");
+//     outln_as!(io, format!("✓ {}", name.green()), name);
 //
 
 /// Print to stdout (no newline); record a possibly-different string.
@@ -205,6 +222,37 @@ impl Io {
     // Input
     //
 
+    /// Only applicable if the input backend drives the REPL.
+    /// Stdio input does not (reedline does); web backends do.
+    pub fn next_repl(
+        &self,
+        index: u32,
+        model: String,
+        use_hai_router: session::HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    ) -> Answer {
+        self.input.lock().unwrap().next_repl(
+            index,
+            model,
+            use_hai_router,
+            input_tokens,
+            task_mode,
+            tool_mode,
+            incognito,
+            agentic,
+        )
+    }
+
+    /// True if the input backend drives the REPL, i.e. it produces REPL input.
+    pub fn drives_repl(&self) -> bool {
+        self.input.lock().unwrap().drives_repl()
+    }
+
+    /// Query the user for the answer to a question
     pub fn query(&self, q: &Query) -> Answer {
         let answer = self.input.lock().unwrap().ask(q);
         if q.record_message || q.record_answer {
@@ -329,6 +377,31 @@ pub trait Input: Send {
     /// Block until the user answers `prompt`, or the input source
     /// signals cancel/eof.
     fn ask(&mut self, query: &Query) -> Answer;
+
+    /// Block until the client submits the next REPL cell/line.
+    ///
+    /// Only applicable if the input backend drives the REPL.
+    /// Stdio input does not (reedline does); web backends do.
+    fn next_repl(
+        &mut self,
+        _index: u32,
+        _model: String,
+        _use_hai_router: session::HaiRouterState,
+        _input_tokens: u32,
+        _task_mode: Option<String>,
+        _tool_mode: Option<String>,
+        _incognito: bool,
+        _agentic: bool,
+    ) -> Answer {
+        self.ask(&Query::line("").with_record_message(false))
+    }
+
+    /// True if the input backend drives the REPL, i.e. it produces REPL input.
+    /// False if the input backend is passive (e.g. stdio) where the caller
+    /// has its own REPL loop (reedline).
+    fn drives_repl(&self) -> bool {
+        false
+    }
 }
 
 /// A request for input. Backends decide how to present it.
@@ -342,7 +415,8 @@ pub struct Query {
     pub record_answer: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
 pub enum QueryKind {
     /// Free-form input line
     Line,
@@ -434,18 +508,22 @@ pub trait Output: Send {
     /// boundaries.
     fn push_code_reset(&mut self) {}
 
-    /// Out-of-band output: text the caller has *already* output on its own
-    /// (raw `print!`, cursor rewinds, syntax highlighting) that should be
-    /// reported to other backends.
-    ///
-    /// Contract:
-    ///   - If this backend owns the same surface the caller wrote to raw
-    ///     (i.e. the terminal), it must NOT emit again.
-    ///   - If this backend is blind to those raw writes (web, captured,
-    ///     tee-to-file, ...), it SHOULD emit so the text reaches its surface.
+    /// Out-of-band output: text the caller has already output to the terminal
+    /// that should be reported to other backends.
     ///
     /// This is only for exceptional cases!
-    fn push_out_of_band(&mut self, _s: &str, _stream: OutOfBandStream) {}
+    fn push_out_of_band(&mut self, s: &str, stream: OutOfBandStream) {
+        if matches!(self.terminal_capability(), TerminalCapability::None) {
+            // Since this is not a terminal, it's out-of-band and should
+            // produce output.
+            match stream {
+                OutOfBandStream::Out => self.push_out(s),
+                OutOfBandStream::Err => self.push_err(s),
+            }
+        } else {
+            // If the backend is the terminal, don't emit anything.
+        }
+    }
 
     /// Ephemeral, terminal-only output.
     ///
@@ -720,14 +798,15 @@ impl Out {
     // Recording
     //
 
-    /// Record output into the transcript for text the caller has *already*
-    /// output itself (raw `print!`, cursor rewinds, syntax highlighting).
+    /// Record output into the transcript.
+    ///
+    /// Intended to be used for output the caller has already printed.
     ///
     /// Two steps:
     /// 1. The text is appended to the transcript (if recording flag set).
     /// 2. The text is sent to the backend via `push_out_of_band`, which emits
-    ///    it only if the backend is blind to the caller's raw writes. The
-    ///    stdio backend keeps the default no-op to avoid double printing.
+    ///    it only if the backend is a terminal. The stdio backend keeps the
+    ///    default no-op to avoid double printing.
     pub fn record_out(&self, s: &str) {
         self.record(Rec::Out(s.to_string()));
         if self.muted() {
@@ -778,7 +857,7 @@ impl Out {
     //
     // Muting
     //
-    // A global on/off switch for *visible* output. When muted, nothing is
+    // A global on/off switch for visible output. When muted, nothing is
     // written to the backend, but recording into the transcript is
     // unaffected. All clones of this `Out` share the same mute state.
     //
@@ -854,7 +933,7 @@ impl Out {
 //
 
 /// Semantic intent of a message. Presentation is decided by the backend.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Level {
     Error,
     Warn,
@@ -1271,7 +1350,7 @@ fn term_is_dumb() -> bool {
 
 // --
 
-use crate::term_color;
+use crate::{session, term_color};
 use base64::Engine;
 use base64::engine::general_purpose;
 

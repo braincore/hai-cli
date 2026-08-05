@@ -20,6 +20,7 @@ use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
 use crate::errorln;
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
+use crate::feature::kernel;
 use crate::io::Io;
 use crate::session::{self, CmdInputReply};
 use crate::{
@@ -98,12 +99,19 @@ pub enum Perm {
         prefix_perm: AssetPrefixPerm,
     },
     LlmPrompt,
+    /// NOTE: This isn't intended to be used long-term. It's a temporary
+    /// measure since the hai kernel has no capability for restricting
+    /// permissions.
+    Everything,
 }
 
 impl Perm {
     /// Check if this single permission grants the requested access
     fn grants(&self, request: &AccessRequest<'_>) -> bool {
         match (self, request) {
+            // The Everything permission grants all access
+            (Perm::Everything, _) => true,
+
             // Exact name match for read
             (Perm::AssetName { name, perm }, AccessRequest::ReadByName { name: req_name }) => {
                 name == *req_name && perm.read
@@ -210,6 +218,7 @@ impl Perm {
                 | Perm::AssetPrefix { .. }
                 | Perm::SharedAssetName { .. }
                 | Perm::SharedAssetPrefix { .. }
+                | Perm::Everything
         )
     }
 }
@@ -261,12 +270,30 @@ pub enum AccessRequest<'a> {
     ListPrefix { prefix: &'a str },
     /// Prompt LLM
     LlmPrompt,
+    /// Everything
+    Everything,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermCheckError {
     Unauthorized,
 }
+
+// --
+
+pub type KernelId = String;
+
+pub struct KernelHandle {
+    pub child: tokio::process::Child,
+    #[allow(dead_code)]
+    pub port: u16,
+    #[allow(dead_code)]
+    pub token: String,
+    #[allow(dead_code)]
+    pub created_at: std::time::Instant,
+}
+
+pub type KernelMap = Arc<Mutex<HashMap<KernelId, KernelHandle>>>;
 
 // -- Minimal HTTP parsing/response helpers --
 
@@ -686,6 +713,8 @@ pub struct ViteProxy {
     pub asset_prefix: String,
 }
 
+pub const GATEWAY_BASE_PORT: u16 = 1339;
+
 /// Launches a gateway server (websocket + http).
 ///
 /// # Arguments
@@ -714,18 +743,7 @@ pub async fn launch_gateway(
     vite_proxy: Option<ViteProxy>,
 ) -> std::io::Result<(SocketAddr, SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
-    let token = auth_token.map_or_else(
-        || {
-            (0..32)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect()
-        },
-        |t| t.to_string(),
-    );
+    let token = auth_token.map_or_else(generate_token, |t| t.to_string());
 
     // Main gateway listener
     let mut port = 1339;
@@ -807,6 +825,9 @@ pub async fn launch_gateway(
     let perm_request_map: PermRequestMap = Arc::new(Mutex::new(HashMap::new()));
     let perm_request_map_clone = perm_request_map.clone();
 
+    let kernel_map: KernelMap = Arc::new(Mutex::new(HashMap::new()));
+    let kernel_map_clone = kernel_map.clone();
+
     let io_clone = io.clone();
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
@@ -850,6 +871,7 @@ pub async fn launch_gateway(
                     let clients_inner = clients_clone.clone();
                     let perms_inner = perms_clone.clone();
                     let perm_request_map_inner = perm_request_map_clone.clone();
+                    let kernel_map_inner = kernel_map_clone.clone();
                     let username_inner = username_owned.clone();
                     let service_name_inner = service_name_clone.clone();
                     let update_asset_tx_inner = update_asset_tx_clone.clone();
@@ -870,6 +892,7 @@ pub async fn launch_gateway(
                             clients_inner,
                             perms_inner,
                             perm_request_map_inner,
+                            kernel_map_inner,
                             username_inner.as_deref(),
                             &service_name_inner,
                             update_asset_tx_inner,
@@ -961,6 +984,7 @@ async fn handle_connection(
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
@@ -1005,6 +1029,7 @@ async fn handle_connection(
             clients,
             perms,
             perm_request_map,
+            kernel_map,
             username,
             service_name,
             update_asset_tx,
@@ -1090,6 +1115,7 @@ async fn handle_websocket_connection(
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
@@ -1211,6 +1237,7 @@ async fn handle_websocket_connection(
                             &api_client,
                             perms.clone(),
                             perm_request_map.clone(),
+                            kernel_map.clone(),
                             username.as_deref(),
                             update_asset_tx.clone(),
                             &mut ws_sink,
@@ -1962,16 +1989,49 @@ async fn handle_put_metadata(
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ClientMessageAuthRequest {
-    token: Option<String>,
+pub struct ClientMessageAuthRequest {
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = ".tag", rename_all = "snake_case")]
-enum ClientMessageAuthResponse {
+pub enum ClientMessageAuthResponse {
     Ok { version: String },
     BadToken,
     BadRequest,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplKernelSpawnArg {
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplKernelSpawnResult {
+    kernel_id: String,
+    port: u16,
+    token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplKernelSpawnError {
+    SpawnFailed { message: String },
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplKernelTeardownArg {
+    kernel_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplKernelTeardownResult {
+    /// True if a kernel with that ID existed and was killed. Otherwise, false.
+    ok: bool,
 }
 
 // --
@@ -2282,6 +2342,7 @@ async fn handle_client_message(
     api_client: &HaiClient,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     ws_sink: &mut futures_util::stream::SplitSink<
@@ -2302,6 +2363,138 @@ async fn handle_client_message(
     let ClientMessageRequest { mid, route, arg } = client_msg;
 
     match route.as_str() {
+        "repl/kernel/spawn" => {
+            if let Err(PermCheckError::Unauthorized) =
+                check_access_async(&perms, &AccessRequest::Everything).await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            let spawn_arg: ReplKernelSpawnArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(a) => a,
+                Err(_) => {
+                    send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                    return;
+                }
+            };
+
+            let (exe, mut args) = crate::feature::self_invocation();
+            if let Some(model) = spawn_arg.model {
+                args.push("-m".into());
+                args.push(model);
+            }
+            args.push("--kernel".into());
+
+            let mut child = match tokio::process::Command::new(&exe)
+                .args(&args)
+                .stdin(std::process::Stdio::null())
+                // Stdout must be piped to read kernel's ready message
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true) // For clean up on exit
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    send_response::<ReplKernelSpawnResult, ReplKernelSpawnError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplKernelSpawnError::SpawnFailed {
+                            message: e.to_string(),
+                        })),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            // Waiting for kernel is necessary to ensure it's ready to accept a
+            // connection, and also to get the port it's bound to and token for
+            // authentication.
+            match kernel::wait_for_kernel_ready(&mut child, std::time::Duration::from_secs(10))
+                .await
+            {
+                Ok(ready) => {
+                    let kernel_id = generate_kernel_id();
+                    kernel_map.lock().await.insert(
+                        kernel_id.clone(),
+                        KernelHandle {
+                            child,
+                            port: ready.port,
+                            token: ready.token.clone(),
+                            created_at: std::time::Instant::now(),
+                        },
+                    );
+                    let result = ReplKernelSpawnResult {
+                        kernel_id,
+                        port: ready.port,
+                        token: ready.token.clone(),
+                    };
+                    send_response::<ReplKernelSpawnResult, ReplKernelSpawnError>(
+                        ws_sink,
+                        mid,
+                        Ok(result),
+                        false,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    // Something went wrong. Fully kill the child process in
+                    // case it's still alive.
+                    let _ = child.kill().await; // SIGKILL
+                    let _ = child.wait().await; // Zombie reaper
+                    send_response::<ReplKernelSpawnResult, ReplKernelSpawnError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplKernelSpawnError::SpawnFailed {
+                            message: e,
+                        })),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+        "repl/kernel/teardown" => {
+            if let Err(PermCheckError::Unauthorized) =
+                check_access_async(&perms, &AccessRequest::Everything).await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            let arg: ReplKernelTeardownArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(a) => a,
+                Err(_) => {
+                    send_bad_request_error(ws_sink, "Invalid argument").await;
+                    return;
+                }
+            };
+            let handle = kernel_map.lock().await.remove(&arg.kernel_id);
+            match handle {
+                Some(mut h) => {
+                    let _ = h.child.kill().await; // SIGKILL
+                    let _ = h.child.wait().await; // Zombie reaper
+                    send_response::<ReplKernelTeardownResult, ()>(
+                        ws_sink,
+                        mid,
+                        Ok(ReplKernelTeardownResult { ok: true }),
+                        false,
+                    )
+                    .await;
+                }
+                None => {
+                    send_response::<ReplKernelTeardownResult, ()>(
+                        ws_sink,
+                        mid,
+                        Ok(ReplKernelTeardownResult { ok: false }),
+                        false,
+                    )
+                    .await;
+                }
+            }
+        }
         "repl/prompt" => {
             if let Err(PermCheckError::Unauthorized) =
                 check_access_async(&perms, &AccessRequest::LlmPrompt).await
@@ -2538,22 +2731,10 @@ async fn handle_client_message(
             };
 
             // Generate request_id
-            let request_id: String = (0..10)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect();
+            let request_id: String = generate_random_string(10);
 
             // Generate CSRF token
-            let csrf_token: String = (0..32)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect();
+            let csrf_token = generate_token();
 
             // Store with 5-minute expiry
             {
@@ -4526,6 +4707,11 @@ fn format_perm_toggle(
             format!("LLM Prompting"),
             "Converse without tools or system-level permissions".to_string(),
         ),
+        Perm::Everything => (
+            "🌍",
+            format!("Everything"),
+            "Full access to all resources and actions".to_string(),
+        ),
     }
 }
 
@@ -4633,4 +4819,24 @@ async fn does_keyring_need_unlock(
     } else {
         None
     }
+}
+
+// --
+
+fn generate_random_string(length: usize) -> String {
+    (0..length)
+        .map(|_| {
+            let idx = rand::rng().random_range(0..62);
+            let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            chars[idx] as char
+        })
+        .collect()
+}
+
+fn generate_kernel_id() -> String {
+    generate_random_string(12)
+}
+
+pub fn generate_token() -> String {
+    generate_random_string(32)
 }

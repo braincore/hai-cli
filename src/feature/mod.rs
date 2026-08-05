@@ -6,12 +6,17 @@ pub mod gateway;
 pub mod haibot;
 pub mod haivar;
 pub mod html_tool;
+pub mod kernel;
 pub mod mcp;
 pub mod queue_listen;
 
 /// Returns the command and args needed to re-invoke this program.
+///
+/// - Re-invokes using `cargo run` if it was running under cargo.
+/// - Re-invokes with the debug flag if it was present in the current
+///   invocation.
 fn self_invocation() -> (String, Vec<String>) {
-    // For dev: check if running under `cargo`` which sets `CARGO` env var.
+    // For dev: check if running under `cargo`, which sets the `CARGO` env var.
     if let Ok(cargo) = std::env::var("CARGO") {
         // Silence build output
         let mut args = vec!["run".to_string(), "-q".to_string()];
@@ -21,15 +26,28 @@ fn self_invocation() -> (String, Vec<String>) {
             args.push("-p".to_string());
             args.push(pkg);
         }
+
+        // Everything after `--` is passed to our binary
         args.push("--".to_string());
-        return (cargo, args);
+
+        // Propagate the debug flag if present
+        if let Some(flag) = debug_flag() {
+            args.push(flag);
+        }
+
+        (cargo, args)
+    } else {
+        // Production/non-dev: use the current executable
+        let exe = std::env::current_exe()
+            .expect("Failed to determine current executable path")
+            .to_string_lossy()
+            .to_string();
+
+        (exe, debug_flag().into_iter().collect())
     }
+}
 
-    // Production/non-dev: use the current executable
-    let exe = std::env::current_exe()
-        .expect("Failed to determine current executable path")
-        .to_string_lossy()
-        .to_string();
-
-    (exe, vec![])
+/// Returns the `-d` / `--debug` flag if this process was invoked with it.
+fn debug_flag() -> Option<String> {
+    std::env::args().find(|a| a == "-d" || a == "--debug")
 }
