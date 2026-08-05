@@ -10,6 +10,7 @@ pub async fn send_to_void(
     model: &str,
     masked_strings: &Vec<String>,
 ) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+    out.code_reset();
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
 
     if model == "terminal-width" {

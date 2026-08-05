@@ -1,7 +1,6 @@
 use nu_ansi_term::Color::{self, Fixed, Rgb};
 use nu_ansi_term::{self, Style};
 use regex::Regex;
-use std::io::IsTerminal;
 use std::io::Write;
 use std::sync::OnceLock;
 use two_face::re_exports::syntect::highlighting::{self, FontStyle};
@@ -115,7 +114,11 @@ pub fn env_var_color_policy() -> Option<bool> {
 
 fn should_use_colors_stdout() -> bool {
     // Finally, fall back to terminal detection
-    env_var_color_policy().unwrap_or(std::io::stdout().is_terminal())
+    let terminal_capability = crate::io::detect_terminal_capability();
+    env_var_color_policy().unwrap_or(matches!(
+        terminal_capability,
+        crate::io::TerminalCapability::Styled | crate::io::TerminalCapability::Interactive
+    ))
 }
 
 pub fn terminal_color_capability() -> Option<ColorCapability> {

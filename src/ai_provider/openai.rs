@@ -271,6 +271,8 @@ pub async fn send_to_openai(
 
     let _span = tracing::debug_span!("--- openai", ?tool_policy).entered();
 
+    out.code_reset();
+
     if res.status() != reqwest::StatusCode::OK {
         let err_msg = format!(
             "{}: {}",

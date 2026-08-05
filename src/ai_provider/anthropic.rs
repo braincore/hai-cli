@@ -474,6 +474,7 @@ pub async fn send_to_anthropic(
                                 index,
                                 content_block,
                             } => {
+                                out.code_reset();
                                 if index < cur_content_block_index {
                                     errorln!(out, "unexpected index went backwards: {}", index);
                                 } else {

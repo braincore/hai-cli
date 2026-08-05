@@ -1,4 +1,6 @@
 use std::sync::{Arc, Mutex};
+use two_face::re_exports::syntect::easy::HighlightLines;
+use two_face::re_exports::syntect::parsing::SyntaxSet;
 
 // --
 
@@ -189,8 +191,14 @@ impl Io {
         Io::new(StdioOutput::new(), StdinInput::new())
     }
 
+    pub fn terminal_capability(&self) -> TerminalCapability {
+        self.out.terminal_capability()
+    }
     pub fn is_terminal(&self) -> bool {
-        self.out.is_terminal()
+        self.out.terminal_capability().can_style()
+    }
+    pub fn can_cursor(&self) -> bool {
+        self.out.terminal_capability().can_cursor()
     }
 
     //
@@ -263,12 +271,20 @@ impl Io {
         self.out.code_bg(text, lang, bg)
     }
 
+    pub fn code_reset(&self) {
+        self.out.code_reset()
+    }
+
     pub fn out_as(&self, shown: &str, recorded: &str) {
         self.out.out_as(shown, recorded);
     }
 
     pub fn err_as(&self, shown: &str, recorded: &str) {
         self.out.err_as(shown, recorded);
+    }
+
+    pub fn terminal_transient(&self, s: &str) -> bool {
+        self.out.terminal_transient(s)
     }
 
     pub fn record_out(&self, s: &str) {
@@ -414,6 +430,10 @@ pub trait Output: Send {
         self.push_code(text, lang);
     }
 
+    /// Reset any incremental syntax-highlighting state. Call at document
+    /// boundaries.
+    fn push_code_reset(&mut self) {}
+
     /// Out-of-band output: text the caller has *already* output on its own
     /// (raw `print!`, cursor rewinds, syntax highlighting) that should be
     /// reported to other backends.
@@ -427,15 +447,29 @@ pub trait Output: Send {
     /// This is only for exceptional cases!
     fn push_out_of_band(&mut self, _s: &str, _stream: OutOfBandStream) {}
 
-    /// Whether this backend writes to a real interactive terminal that the
-    /// process's raw stdout also targets. When true, callers may perform
-    /// out-of-band terminal manipulation (cursor moves, line rewrites) via
-    /// crossterm and trust it lands on the same surface.
+    /// Ephemeral, terminal-only output.
     ///
-    /// Default is false: most backends (web, captured, tee) are blind to
-    /// raw terminal writes.
-    fn is_terminal(&self) -> bool {
+    /// Primary use case is for text that will be written via cursor moves.
+    ///
+    /// - Emit ONLY if backend owns a cursor-capable screen, otherwise no-op.
+    /// - Never recorded into the transcript.
+    ///
+    /// # Returns
+    ///
+    /// True if the text was emitted.
+    fn push_terminal_transient(&mut self, _s: &str) -> bool {
         false
+    }
+
+    /// `TerminalCapability::None` if non-terminal.
+    fn terminal_capability(&self) -> TerminalCapability {
+        TerminalCapability::None
+    }
+
+    /// Whether the backend writes to a real screen the process's raw
+    /// stdout also targets.
+    fn is_terminal(&self) -> bool {
+        self.terminal_capability().can_style()
     }
 }
 
@@ -522,13 +556,23 @@ impl Out {
         Out::new(StdioOutput::new())
     }
 
-    /// Whether the backend owns a real interactive terminal, so callers may
-    /// do out-of-band cursor manipulation. Also false while muted.
-    pub fn is_terminal(&self) -> bool {
+    /// Terminal capabilities of the backend. `TerminalCapability::None` while
+    /// muted, since nothing we emit reaches a screen.
+    pub fn terminal_capability(&self) -> TerminalCapability {
         if self.muted() {
-            return false;
+            return TerminalCapability::None;
         }
-        self.backend.lock().unwrap().is_terminal()
+        self.backend.lock().unwrap().terminal_capability()
+    }
+
+    /// Safe to emit styling escapes.
+    pub fn is_terminal(&self) -> bool {
+        self.terminal_capability().can_style()
+    }
+
+    /// Safe to move the cursor / rewrite lines / enter raw mode.
+    pub fn can_cursor(&self) -> bool {
+        self.terminal_capability().can_cursor()
     }
 
     //
@@ -618,6 +662,15 @@ impl Out {
         self.backend.lock().unwrap().push_code_bg(text, lang, bg);
     }
 
+    /// Start a new highlighting "document". Transport-level, not content,
+    /// so it isn't recorded.
+    pub fn code_reset(&self) {
+        if self.muted() {
+            return;
+        }
+        self.backend.lock().unwrap().push_code_reset();
+    }
+
     //
     // Alerts: banners / notifications with semantic intent.
     // Exact presentation decided by backend.
@@ -652,6 +705,15 @@ impl Out {
             return;
         }
         self.backend.lock().unwrap().push_err(shown);
+    }
+
+    /// Write directly to a cursor-capable terminal, bypassing the
+    /// transcript and any backend that isn't a real screen.
+    pub fn terminal_transient(&self, s: &str) -> bool {
+        if self.muted() {
+            return false;
+        }
+        self.backend.lock().unwrap().push_terminal_transient(s)
     }
 
     //
@@ -892,25 +954,56 @@ enum Stream {
 pub struct StdioOutput {
     color_out: bool,
     color_err: bool,
-    stdout_is_tty: bool,
-    /// Lazily-built, per-language syntect highlight state. Kept in the
-    /// backend (not the call site) so cross-line parse state survives a
-    /// stream of `push_code` calls for the same language. Keyed by the
-    /// language token that produced it.
-    highlighter: Option<(
-        String,
-        two_face::re_exports::syntect::easy::HighlightLines<'static>,
-    )>,
+    terminal_capability: TerminalCapability,
+
+    /// Highlight state for markdown which is treated as the mark up. It's kept
+    /// alive across embedded code blocks so returning to markdown resumes the
+    /// same context stack (open fences, lists, ...) instead of restarting as
+    /// if at the top of a fresh document.
+    doc_hl: Option<(String, HighlightLines<'static>)>,
+
+    /// Highlight state for the current embedded code block. Rebuilt every
+    /// time we (re-)enter a block language, so one block's unterminated
+    /// string can't leak into the next.
+    block_hl: Option<(String, HighlightLines<'static>)>,
+
+    /// Language token of the previous `push_code_bg` call.
+    last_lang: Option<String>,
+}
+
+fn is_doc_lang(token: &str) -> bool {
+    matches!(token, "markdown" | "md" | "mdown" | "mkd")
+}
+
+fn new_highlighter(
+    ps: &'static SyntaxSet,
+    token: &str,
+    doc: bool,
+) -> Option<HighlightLines<'static>> {
+    use two_face::theme::EmbeddedThemeName;
+    let ts = crate::term_color::get_theme_set();
+    let syntax = ps.find_syntax_by_token(token)?;
+    let theme = if doc {
+        // The markdown theme was chosen for these properties:
+        // - Headers are bolded and highlighted (light blue)
+        // - Bolded text is bolded but still white
+        // - Ordered and unordered lists are highlighted (pink)
+        ts.get(EmbeddedThemeName::ColdarkDark)
+    } else {
+        ts.get(EmbeddedThemeName::VisualStudioDarkPlus)
+    };
+    Some(HighlightLines::new(syntax, theme))
 }
 
 impl StdioOutput {
     pub fn new() -> Self {
-        use std::io::IsTerminal;
         StdioOutput {
             color_out: color_enabled_for(Stream::Stdout),
             color_err: color_enabled_for(Stream::Stderr),
-            stdout_is_tty: std::io::stdout().is_terminal(),
-            highlighter: None,
+            terminal_capability: detect_terminal_capability(),
+            doc_hl: None,
+            block_hl: None,
+            last_lang: None,
         }
     }
 
@@ -932,38 +1025,35 @@ impl StdioOutput {
         let lang_token = if lang == "jsx" { "tsx" } else { lang };
 
         let ps = crate::term_color::get_syntax_set();
-
         // Convert the RGB background (if any) into a syntect color once.
         let bg_color = bg.map(
             |(r, g, b)| two_face::re_exports::syntect::highlighting::Color { r, g, b, a: 255 },
         );
 
-        // (Re)build the highlighter when the language changes. This resets
-        // syntect's parse state, which is what we want at a language boundary.
-        let need_new = match &self.highlighter {
-            Some((cur, _)) => cur != lang_token,
-            None => true,
-        };
-        if need_new {
-            use two_face::re_exports::syntect::easy::HighlightLines;
-            let ts = crate::term_color::get_theme_set();
-            let syntax = ps.find_syntax_by_token(lang_token)?;
-            let hl = HighlightLines::new(
-                syntax,
-                if lang == "markdown" {
-                    // The markdown theme was chosen for these properties:
-                    // - Headers are bolded and highlighted (light blue)
-                    // - Bolded text is bolded but still white
-                    // - Ordered and unordered lists are highlighted (pink)
-                    ts.get(two_face::theme::EmbeddedThemeName::ColdarkDark)
-                } else {
-                    ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus)
-                },
-            );
-            self.highlighter = Some((lang_token.to_string(), hl));
-        }
+        let doc = is_doc_lang(lang_token);
+        let continuing = self.last_lang.as_deref() == Some(lang_token);
 
-        let (_, highlighter) = self.highlighter.as_mut()?;
+        let highlighter: &mut HighlightLines<'static> = if doc {
+            // Build once per session to allow for resumption
+            if self.doc_hl.as_ref().map(|(l, _)| l.as_str()) != Some(lang_token) {
+                self.doc_hl = Some((
+                    lang_token.to_string(),
+                    new_highlighter(ps, lang_token, true)?,
+                ));
+            }
+            &mut self.doc_hl.as_mut()?.1
+        } else {
+            // Fresh state on every entry into a block language.
+            if !continuing {
+                self.block_hl = None;
+                let hl = new_highlighter(ps, lang_token, false)?;
+                self.block_hl = Some((lang_token.to_string(), hl));
+            }
+            &mut self.block_hl.as_mut()?.1
+        };
+
+        self.last_lang = Some(lang_token.to_string());
+
         let mut out = String::new();
         // Highlight line-by-line so syntect's per-line state advances
         // correctly, preserving the original text's newlines.
@@ -1083,6 +1173,12 @@ impl Output for StdioOutput {
         }
     }
 
+    fn push_code_reset(&mut self) {
+        self.doc_hl = None;
+        self.block_hl = None;
+        self.last_lang = None;
+    }
+
     fn push_display(&mut self, mime: &str, data: &str) {
         match mime {
             "image/png" | "image/jpeg" | "image/webp" | "image/gif" => {
@@ -1098,10 +1194,82 @@ impl Output for StdioOutput {
         }
     }
 
-    fn is_terminal(&self) -> bool {
-        self.stdout_is_tty
+    fn push_terminal_transient(&mut self, s: &str) -> bool {
+        if !self.terminal_capability.clone().can_cursor() {
+            return false;
+        }
+        use std::io::Write;
+        let mut o = std::io::stdout();
+        let _ = o.write_all(s.as_bytes());
+        // Transient text is almost always a partial line, so always flush.
+        let _ = o.flush();
+        true
+    }
+
+    fn terminal_capability(&self) -> TerminalCapability {
+        self.terminal_capability.clone()
     }
 }
+
+// --
+
+#[derive(Clone, Debug)]
+pub enum TerminalCapability {
+    /// No capability. For example, pipe, file, or web backend.
+    None,
+    /// Supports escape sequences for colors.
+    Styled,
+    /// Fully interactive terminal: cursor position, move cursor, rewrite
+    /// lines, ...
+    Interactive,
+}
+
+impl TerminalCapability {
+    /// Safe to emit SGR/color escapes.
+    pub fn can_style(self) -> bool {
+        matches!(
+            self,
+            TerminalCapability::Styled | TerminalCapability::Interactive
+        )
+    }
+
+    /// Safe to emit cursor motion, line clears, raw mode, alt screen.
+    pub fn can_cursor(self) -> bool {
+        matches!(self, TerminalCapability::Interactive)
+    }
+}
+
+pub fn detect_terminal_capability() -> TerminalCapability {
+    use std::io::IsTerminal;
+
+    if !std::io::stdout().is_terminal() {
+        // Redirected to a file/pipe
+        return TerminalCapability::None;
+    }
+
+    // Screen is real, but do we own the cursor?
+    let interactive = std::io::stdin().is_terminal()
+        && !term_is_dumb()
+        && std::env::var_os("CI").is_none()
+        && std::env::var_os("HAI_NO_CURSOR").is_none();
+
+    if interactive {
+        TerminalCapability::Interactive
+    } else {
+        TerminalCapability::Styled
+    }
+}
+
+fn term_is_dumb() -> bool {
+    match std::env::var("TERM") {
+        Ok(t) => t.is_empty() || t == "dumb",
+        // No TERM on unix: assume dumb. On Windows, ConPTY handles ANSI
+        // without TERM being set, so don't penalize it.
+        Err(_) => cfg!(unix),
+    }
+}
+
+// --
 
 use crate::term_color;
 use base64::Engine;

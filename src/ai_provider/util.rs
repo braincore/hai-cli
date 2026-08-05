@@ -221,6 +221,16 @@ impl SyntaxHighlighterPrinter {
     /// the entire first line as `next` or you set `one_shot` to `true` in
     /// `new()` so that it syntax highlights regardless of an explicit newline
     /// end.
+    ///
+    /// Perspective on terminal-out, non-terminal-out, and transcript
+    /// recordings:
+    ///
+    /// - Recorded transcripts of output shouldn't be used since `printed_text`
+    ///   is comprehensive and does not mask strings.
+    /// - Non-terminal output is printed entirely with out()/code() calls.
+    ///   code() can fallback to out().
+    /// - Terminals with cursor support have additional terminal_transient()
+    ///   calls which aren't recorded. These lines are replaced with code().
     pub fn acc(&mut self, next: &str, out: &Out) {
         let bg = self.bg_rgb();
         let mut stdout = io::stdout().lock();
@@ -228,7 +238,11 @@ impl SyntaxHighlighterPrinter {
         let lines: Vec<String> = next.split('\n').map(|s| s.to_string()).collect();
         if lines.len() > 1 {
             // Record the position in case we need to reprint it.
-            let cursor_pos_preprint = crossterm::cursor::position().ok();
+            let cursor_pos_preprint = if out.can_cursor() {
+                crossterm::cursor::position().ok()
+            } else {
+                None
+            };
 
             let full_first_line = format!("{}{}", self.buffer, &lines[0]);
             self.buffer.clear();
@@ -241,14 +255,17 @@ impl SyntaxHighlighterPrinter {
                 false
             } else {
                 // Either finishing the current line or there was no highlighter set
-                if self.lang_token.is_some() {
-                    // If the line is going to be reprinted with syntax
-                    // highlighting, then don't record it in the transcript
-                    // now.
-                    let was_recording = out.record_off();
-                    outln!(out, "{}", &lines[0]);
-                    out.record_set(was_recording);
-                    true
+                if let Some(lang) = self.lang_token.as_deref() {
+                    // If output was able to be printed transiently, then we
+                    // mark it as requiring reprint.
+                    let line_with_ending = format!("{}\n", &lines[0]);
+                    let printed = out.terminal_transient(&line_with_ending);
+                    if printed {
+                        true
+                    } else {
+                        out.code_bg(&line_with_ending, Some(lang), bg);
+                        false
+                    }
                 } else {
                     outln!(out, "{}", &lines[0]);
                     false
@@ -259,12 +276,16 @@ impl SyntaxHighlighterPrinter {
             // triggering the highlight logic.
             self.lang_token_check_end(&full_first_line);
 
-            // If highlighter is set, clear the previous line and reprint with
+            // If reprint is needed, clear the previous line and reprint with
             // colors.
             if need_reprint
                 && let Some(lang) = self.lang_token.as_mut()
                 && let Some((_cursor_x_preprint, cursor_y_preprint)) = cursor_pos_preprint.as_ref()
             {
+                debug_assert!(
+                    out.can_cursor(),
+                    "unexpected: reprint set without terminal cursor capability"
+                );
                 let line_width = ansi_width::ansi_width(full_first_line.as_str()) as u16;
                 let (terminal_width, terminal_height) = crossterm::terminal::size().unwrap();
                 // This is a bit tricky.
@@ -289,11 +310,8 @@ impl SyntaxHighlighterPrinter {
                     "acc term"
                 );
 
-                if out.is_terminal() {
-                    // For rewriting the line with syntax highlighting.
-                    // This only applies if it's a terminal backend.
-                    crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
-                }
+                // For rewriting the line with syntax highlighting.
+                crossterm::queue!(stdout, crossterm::cursor::MoveUp(height),).unwrap();
 
                 let line_with_ending = format!("{}\n", full_first_line);
                 out.code_bg(&line_with_ending, Some(lang), bg);
@@ -319,10 +337,7 @@ impl SyntaxHighlighterPrinter {
             if self.one_shot {
                 out.code_bg(last_line_partial, self.lang_token.as_deref(), bg);
             } else {
-                // NOTE: This case may not be fully thought through
-                let was_recording = out.record_off();
                 out_flush!(out, "{}", last_line_partial);
-                out.record_set(was_recording);
             }
             self.cur_line_partial = !last_line_partial.is_empty();
             self.buffer.push_str(last_line_partial);
@@ -331,12 +346,7 @@ impl SyntaxHighlighterPrinter {
         } else {
             self.cur_line_partial = true;
             self.buffer.push_str(next);
-
-            // Turn off recording because it's a partial line that will be
-            // rewritten or fully written later.
-            let was_recording = out.record_off();
             out_flush!(out, "{}", next); // Flush to skip line-buffer
-            out.record_set(was_recording);
         }
     }
 
@@ -353,7 +363,9 @@ impl SyntaxHighlighterPrinter {
         // activated, the current line should be cleared and reprinted with
         // highlighting. This is only an issue when the output ends with ```
         // w/o a trailing newline.
-        if let Some(lang) = self.lang_token.as_mut() {
+        if out.can_cursor()
+            && let Some(lang) = self.lang_token.as_mut()
+        {
             let line_width = ansi_width::ansi_width(self.buffer.as_str()) as u16;
             let (terminal_width, _terminal_height) = crossterm::terminal::size().unwrap();
             let height = if line_width == 0 {
@@ -367,13 +379,10 @@ impl SyntaxHighlighterPrinter {
             // WARN: In some terminals, MoveToPreviousLine(0) will
             // default to 1 which is undesirable so it's handled
             // separately.
-            if out.is_terminal() {
-                if height > 0 {
-                    crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height))
-                        .unwrap();
-                } else {
-                    crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
-                }
+            if height > 0 {
+                crossterm::queue!(stdout, crossterm::cursor::MoveToPreviousLine(height)).unwrap();
+            } else {
+                crossterm::queue!(stdout, crossterm::cursor::MoveToColumn(0)).unwrap();
             }
 
             out.code_bg(&self.buffer, Some(lang), bg);
