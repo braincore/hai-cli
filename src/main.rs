@@ -35,6 +35,7 @@ mod ctrlc_handler;
 mod db;
 mod feature;
 mod io;
+mod io_ws;
 mod line_editor;
 mod loader;
 mod logging;
@@ -72,6 +73,10 @@ struct Cli {
     /// Use specific AI model
     #[arg(short = 'm', long = "model")]
     model: Option<String>,
+
+    /// Kernel mode
+    #[arg(short = 'k', long = "kernel")]
+    kernel: bool,
 
     /// Non-default path to config file (defaults to ~/.hai/hai.toml)
     #[arg(short = 'c', long = "config", value_name = "FILE")]
@@ -387,7 +392,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let force_model = args
             .model
             .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
-        let io = Io::stdio();
+
+        let (io, actor_handle) = if args.kernel {
+            crate::feature::kernel::run_kernel()
+                .await
+                .map(|(io, actor_handle)| (io, Some(actor_handle)))
+                .expect("Failed to start kernel")
+        } else {
+            (Io::stdio(), None)
+        };
+
+        // FIXME: Remove all process exits!
         repl(
             &io,
             &config_path_override,
@@ -401,8 +416,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
             exit_when_done,
             force_yes,
             mute_all_but_final,
+            args.kernel,
         )
         .await?;
+
+        drop(io);
+        if let Some(actor_handle) = actor_handle {
+            let _ = actor_handle.await;
+        }
     }
     Ok(())
 }
@@ -421,6 +442,7 @@ async fn repl(
     exit_when_done: bool,
     force_yes: bool,
     mute_all_but_final_ai_response: bool,
+    kernel_mode: bool,
 ) -> Result<(), Box<dyn Error>> {
     let mut cfg = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
@@ -747,7 +769,7 @@ async fn repl(
     //
     // Welcome message (omitted in hai-bye mode)
     //
-    if !exit_when_done {
+    if !exit_when_done && !kernel_mode {
         let newer_client_version = if cfg.check_for_updates {
             is_client_update_available(io, db.clone()).await
         } else {
@@ -857,7 +879,31 @@ async fn repl(
                 print_step(io, &step_badge, &cmd_info.input, &masked_strings);
             }
             cmd_info
+        } else if io.drives_repl() {
+            //
+            // Kernel/web: the next REPL line arrives over the socket. No reedline,
+            // no editor prompt — the client owns line editing.
+            //
+            use crate::io::Answer;
+            match io.next_repl() {
+                Answer::Text(buffer) => session::CmdInput {
+                    input: buffer,
+                    source: session::CmdSource::User,
+                    reply_channel: None,
+                },
+                // Client cancelled this line (their equivalent of CtrlC): loop.
+                Answer::Cancelled => continue,
+                // Client sent EOF (closed / CtrlD): same semantics as reedline EOF.
+                Answer::Eof => match on_eof(&session, io) {
+                    Some(cmd_input) => cmd_input,
+                    None => break,
+                },
+            }
         } else {
+            //
+            // stdio/reedline: caller drives its own line editor.
+            //
+
             //
             // Set editor prompt info for display purposes
             //
@@ -883,8 +929,6 @@ async fn repl(
             editor_prompt.set_agentic(session.agentic);
             editor_prompt.set_is_dev(env::var("HAI_BASE_URL").is_ok());
             if multiple_accounts {
-                // Show username if they have multiple accounts to help mitigate
-                // account-confusion mistakes.
                 editor_prompt.set_username(
                     session
                         .account
@@ -936,24 +980,12 @@ async fn repl(
                 Ok(Signal::CtrlC) => {
                     continue;
                 }
-                Ok(Signal::CtrlD) => {
-                    if session.tool_mode.is_some() {
-                        session::CmdInput {
-                            input: "!exit".to_string(),
-                            source: session::CmdSource::Internal,
-                            reply_channel: None,
-                        }
-                    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
-                        session::CmdInput {
-                            input: "/task-end".to_string(),
-                            source: session::CmdSource::Internal,
-                            reply_channel: None,
-                        }
-                    } else {
-                        outln!(io, "バイバイ！");
-                        break;
-                    }
-                }
+                // CtrlD now routes through the shared helper so kernel EOF and
+                // terminal EOF behave identically.
+                Ok(Signal::CtrlD) => match on_eof(&session, io) {
+                    Some(cmd_input) => cmd_input,
+                    None => break,
+                },
                 unk => {
                     outln!(io, "Event: {:?}", unk);
                     continue;
@@ -1225,7 +1257,13 @@ async fn repl(
 
         loop {
             outln!(io);
-            outln!(io, "{}", "↓↓↓".truecolor(128, 128, 128));
+            if io.is_terminal() {
+                let was_recording = io.record_off();
+                outln!(io, "{}", "↓↓↓".truecolor(128, 128, 128));
+                io.record_set(was_recording);
+            } else {
+                outln!(io, "{}", "↓↓↓");
+            }
             outln!(io);
 
             if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_ai_response {
@@ -1676,7 +1714,13 @@ async fn repl(
             };
 
             outln!(io);
-            outln!(io, "{}", "---".truecolor(128, 128, 128));
+            if io.is_terminal() {
+                let was_recording = io.record_off();
+                outln!(io, "{}", "---".truecolor(128, 128, 128));
+                io.record_set(was_recording);
+            } else {
+                outln!(io, "{}", "---");
+            }
             outln!(io);
             if let Some(follow_up) = ai_follow_up_requested {
                 outln!(io, "{}", follow_up);
@@ -1713,6 +1757,30 @@ async fn repl(
     wrapup_and_cleanup(&session, update_asset_tx).await;
 
     Ok(())
+}
+
+// --
+
+/// Handle end-of-input (reedline CtrlD or `Answer::Eof` from a kernel
+/// client). Returns the synthetic command to run, or `None` to break the
+/// REPL loop.
+fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
+    if session.tool_mode.is_some() {
+        Some(session::CmdInput {
+            input: "!exit".to_string(),
+            source: session::CmdSource::Internal,
+            reply_channel: None,
+        })
+    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
+        Some(session::CmdInput {
+            input: "/task-end".to_string(),
+            source: session::CmdSource::Internal,
+            reply_channel: None,
+        })
+    } else {
+        outln!(io, "バイバイ！");
+        None
+    }
 }
 
 // --

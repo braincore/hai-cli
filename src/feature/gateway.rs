@@ -20,6 +20,7 @@ use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
 use crate::errorln;
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
+use crate::feature::kernel;
 use crate::io::Io;
 use crate::session::{self, CmdInputReply};
 use crate::{
@@ -267,6 +268,22 @@ pub enum AccessRequest<'a> {
 pub enum PermCheckError {
     Unauthorized,
 }
+
+// --
+
+pub type KernelId = String;
+
+pub struct KernelHandle {
+    pub child: tokio::process::Child,
+    #[allow(dead_code)]
+    pub port: u16,
+    #[allow(dead_code)]
+    pub token: String,
+    #[allow(dead_code)]
+    pub created_at: std::time::Instant,
+}
+
+pub type KernelMap = Arc<Mutex<HashMap<KernelId, KernelHandle>>>;
 
 // -- Minimal HTTP parsing/response helpers --
 
@@ -686,6 +703,8 @@ pub struct ViteProxy {
     pub asset_prefix: String,
 }
 
+pub const GATEWAY_BASE_PORT: u16 = 1339;
+
 /// Launches a gateway server (websocket + http).
 ///
 /// # Arguments
@@ -714,18 +733,7 @@ pub async fn launch_gateway(
     vite_proxy: Option<ViteProxy>,
 ) -> std::io::Result<(SocketAddr, SocketAddr, Clients, CancellationToken, String)> {
     // Generate a random authentication token
-    let token = auth_token.map_or_else(
-        || {
-            (0..32)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect()
-        },
-        |t| t.to_string(),
-    );
+    let token = auth_token.map_or_else(generate_token, |t| t.to_string());
 
     // Main gateway listener
     let mut port = 1339;
@@ -807,6 +815,9 @@ pub async fn launch_gateway(
     let perm_request_map: PermRequestMap = Arc::new(Mutex::new(HashMap::new()));
     let perm_request_map_clone = perm_request_map.clone();
 
+    let kernel_map: KernelMap = Arc::new(Mutex::new(HashMap::new()));
+    let kernel_map_clone = kernel_map.clone();
+
     let io_clone = io.clone();
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
@@ -850,6 +861,7 @@ pub async fn launch_gateway(
                     let clients_inner = clients_clone.clone();
                     let perms_inner = perms_clone.clone();
                     let perm_request_map_inner = perm_request_map_clone.clone();
+                    let kernel_map_inner = kernel_map_clone.clone();
                     let username_inner = username_owned.clone();
                     let service_name_inner = service_name_clone.clone();
                     let update_asset_tx_inner = update_asset_tx_clone.clone();
@@ -870,6 +882,7 @@ pub async fn launch_gateway(
                             clients_inner,
                             perms_inner,
                             perm_request_map_inner,
+                            kernel_map_inner,
                             username_inner.as_deref(),
                             &service_name_inner,
                             update_asset_tx_inner,
@@ -961,6 +974,7 @@ async fn handle_connection(
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
@@ -1005,6 +1019,7 @@ async fn handle_connection(
             clients,
             perms,
             perm_request_map,
+            kernel_map,
             username,
             service_name,
             update_asset_tx,
@@ -1090,6 +1105,7 @@ async fn handle_websocket_connection(
     clients: Clients,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
@@ -1211,6 +1227,7 @@ async fn handle_websocket_connection(
                             &api_client,
                             perms.clone(),
                             perm_request_map.clone(),
+                            kernel_map.clone(),
                             username.as_deref(),
                             update_asset_tx.clone(),
                             &mut ws_sink,
@@ -1962,16 +1979,59 @@ async fn handle_put_metadata(
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ClientMessageAuthRequest {
-    token: Option<String>,
+pub struct ClientMessageAuthRequest {
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = ".tag", rename_all = "snake_case")]
-enum ClientMessageAuthResponse {
+pub enum ClientMessageAuthResponse {
     Ok { version: String },
     BadToken,
     BadRequest,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplSpawnArg {
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplSpawnResult {
+    kernel_id: String,
+    port: u16,
+    token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplSpawnError {
+    SpawnFailed { message: String },
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplTeardownArg {
+    kernel_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplTeardownResult {
+    /// True if a kernel with that id existed and was killed; false if the id
+    /// was unknown (already gone / never existed).
+    ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplTeardownError {
+    // Reserved for future failure modes (e.g. kill failed). Teardown of an
+    // unknown id is not an error — it's `ok: false` — so this is currently
+    // empty but kept for protocol symmetry / forward-compat.
+    KillFailed { message: String },
 }
 
 // --
@@ -2282,6 +2342,7 @@ async fn handle_client_message(
     api_client: &HaiClient,
     perms: Perms,
     perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     ws_sink: &mut futures_util::stream::SplitSink<
@@ -2302,6 +2363,172 @@ async fn handle_client_message(
     let ClientMessageRequest { mid, route, arg } = client_msg;
 
     match route.as_str() {
+        "repl/spawn" => {
+            // Reuse whatever perm gate makes sense. A spawned kernel can prompt
+            // the LLM, so LlmPrompt is the natural minimum.
+
+            // FIXME: Bring this back!
+            /*if let Err(PermCheckError::Unauthorized) =
+                check_access_async(&perms, &AccessRequest::LlmPrompt).await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }*/
+
+            let spawn_arg: ReplSpawnArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(a) => a,
+                Err(_) => {
+                    send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                    return;
+                }
+            };
+
+            //let port = pick_kernel_port(&kernel_map).await;
+            //let kernel_token: String = generate_token(); // same generator as gateway token
+
+            let (exe, mut args) = crate::feature::self_invocation();
+            if let Some(model) = spawn_arg.model {
+                args.push("-m".into());
+                args.push(model);
+            }
+            args.push("--kernel".into());
+            //args.push("--kernel-port".into());
+            //args.push(port.to_string());
+            println!("Spawning kernel: {:?} {:?}", exe, args);
+
+            let mut child = match tokio::process::Command::new(&exe)
+                .args(&args)
+                // FIXME: Perhaps have process generate
+                //.env("HAI_KERNEL_TOKEN", &kernel_token) // token via env, not argv
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped()) // keep for readiness + logs
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true) // Important for clean up
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    send_response::<ReplSpawnResult, ReplSpawnError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplSpawnError::SpawnFailed {
+                            message: e.to_string(),
+                        })),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            // Wait for readiness: either the child prints HAI_KERNEL_READY on stdout,
+            // or we poll-connect to the port with a timeout.
+            let kernel_id = generate_kernel_id();
+            match kernel::wait_for_kernel_ready(&mut child, std::time::Duration::from_secs(10))
+                .await
+            {
+                Ok(ready) => {
+                    kernel_map.lock().await.insert(
+                        kernel_id.clone(),
+                        KernelHandle {
+                            child,
+                            port: ready.port,
+                            token: ready.token.clone(),
+                            created_at: std::time::Instant::now(),
+                        },
+                    );
+                    let result = ReplSpawnResult {
+                        kernel_id,
+                        port: ready.port,
+                        token: ready.token.clone(),
+                    };
+                    send_response::<ReplSpawnResult, ReplSpawnError>(
+                        ws_sink,
+                        mid,
+                        Ok(result),
+                        false,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    // The child may STILL BE ALIVE here. `wait_for_kernel_ready` can
+                    // fail for a reason that doesn't imply the child is dead:
+                    //   - timeout: the child is hung but running, holding a port.
+                    //   - malformed readiness line: the child bound a port, printed
+                    //     garbage, and is now happily serving on it.
+                    // If we just drop `child` here without kill_on_drop, or if we want
+                    // deterministic cleanup, we must kill it — otherwise we leak an
+                    // orphaned kernel holding a port, which is exactly the disease we're
+                    // trying to cure.
+                    let _ = child.kill().await;
+                    let _ = child.wait().await; // reap the zombie
+                    send_response::<ReplSpawnResult, ReplSpawnError>(
+                        ws_sink,
+                        mid,
+                        Err(RequestError::Route(ReplSpawnError::SpawnFailed {
+                            message: e,
+                        })),
+                        false,
+                    )
+                    .await;
+                    return;
+                }
+            }
+            /*match wait_for_kernel_ready(&mut /* child stdout */, port).await {
+                Ok(()) => {
+                    kernel_map.lock().await.insert(id.clone(), KernelHandle {
+                        child, port, token: kernel_token.clone(),
+                        created_at: std::time::Instant::now(),
+                    });
+                    let result = ReplSpawnResult { id, port, token: kernel_token };
+                    send_response::<ReplSpawnResult, ReplSpawnError>(
+                        ws_sink, mid, Ok(result), false,
+                    ).await;
+                }
+                Err(e) => {
+                    let _ = /* child */ .kill().await;
+                    send_response::<ReplSpawnResult, ReplSpawnError>(
+                        ws_sink, mid,
+                        Err(RequestError::Route(ReplSpawnError::SpawnFailed { message: e })),
+                        false,
+                    ).await;
+                }
+            }*/
+        }
+        "repl/teardown" => {
+            let arg: ReplTeardownArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(a) => a,
+                Err(_) => {
+                    send_bad_request_error(ws_sink, "Invalid argument").await;
+                    return;
+                }
+            };
+            let handle = kernel_map.lock().await.remove(&arg.kernel_id);
+            match handle {
+                Some(mut h) => {
+                    // Graceful first, then hard. On unix, SIGTERM; tokio's kill() is SIGKILL.
+                    // If you want graceful, send SIGTERM via nix/libc, wait briefly, then kill.
+                    let _ = h.child.kill().await;
+                    let _ = h.child.wait().await;
+                    send_response::<ReplTeardownResult, ()>(
+                        ws_sink,
+                        mid,
+                        Ok(ReplTeardownResult { ok: true }),
+                        false,
+                    )
+                    .await;
+                }
+                None => {
+                    send_response::<ReplTeardownResult, ()>(
+                        ws_sink,
+                        mid,
+                        Ok(ReplTeardownResult { ok: false }),
+                        false,
+                    )
+                    .await;
+                }
+            }
+        }
         "repl/prompt" => {
             if let Err(PermCheckError::Unauthorized) =
                 check_access_async(&perms, &AccessRequest::LlmPrompt).await
@@ -2538,22 +2765,10 @@ async fn handle_client_message(
             };
 
             // Generate request_id
-            let request_id: String = (0..10)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect();
+            let request_id: String = generate_random_string(10);
 
             // Generate CSRF token
-            let csrf_token: String = (0..32)
-                .map(|_| {
-                    let idx = rand::rng().random_range(0..62);
-                    let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                    chars[idx] as char
-                })
-                .collect();
+            let csrf_token = generate_token();
 
             // Store with 5-minute expiry
             {
@@ -4633,4 +4848,24 @@ async fn does_keyring_need_unlock(
     } else {
         None
     }
+}
+
+// --
+
+fn generate_random_string(length: usize) -> String {
+    (0..length)
+        .map(|_| {
+            let idx = rand::rng().random_range(0..62);
+            let chars = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+            chars[idx] as char
+        })
+        .collect()
+}
+
+fn generate_kernel_id() -> String {
+    generate_random_string(12)
+}
+
+pub fn generate_token() -> String {
+    generate_random_string(32)
 }

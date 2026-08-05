@@ -205,6 +205,18 @@ impl Io {
     // Input
     //
 
+    /// Only applicable if the input backend drives the REPL.
+    /// Stdio input does not (reedline does); web backends do.
+    pub fn next_repl(&self) -> Answer {
+        self.input.lock().unwrap().next_repl()
+    }
+
+    /// True if the input backend drives the REPL, i.e. it produces REPL input.
+    pub fn drives_repl(&self) -> bool {
+        self.input.lock().unwrap().drives_repl()
+    }
+
+    /// Query the user for the answer to a question
     pub fn query(&self, q: &Query) -> Answer {
         let answer = self.input.lock().unwrap().ask(q);
         if q.record_message || q.record_answer {
@@ -329,6 +341,21 @@ pub trait Input: Send {
     /// Block until the user answers `prompt`, or the input source
     /// signals cancel/eof.
     fn ask(&mut self, query: &Query) -> Answer;
+
+    /// Block until the client submits the next REPL cell/line.
+    ///
+    /// Only applicable if the input backend drives the REPL.
+    /// Stdio input does not (reedline does); web backends do.
+    fn next_repl(&mut self) -> Answer {
+        self.ask(&Query::line("").with_record_message(false))
+    }
+
+    /// True if the input backend drives the REPL, i.e. it produces REPL input.
+    /// False if the input backend is passive (e.g. stdio) where the caller
+    /// has its own REPL loop (reedline).
+    fn drives_repl(&self) -> bool {
+        false
+    }
 }
 
 /// A request for input. Backends decide how to present it.
