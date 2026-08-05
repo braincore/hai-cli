@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::io;
 
 use crate::term_color;
-use crate::{errorln, io::Out, out, out_flush, outln};
+use crate::{errorln, io::Out, out, outln};
 
 /// If json is an object, removes top-level keys that are null.
 pub fn remove_nulls(json: &mut Value) {
@@ -337,7 +337,10 @@ impl SyntaxHighlighterPrinter {
             if self.one_shot {
                 out.code_bg(last_line_partial, self.lang_token.as_deref(), bg);
             } else {
-                out_flush!(out, "{}", last_line_partial);
+                // terminal_transient() flushes which will skip line-buffer
+                if !out.terminal_transient(&last_line_partial) {
+                    out.code_bg(last_line_partial, self.lang_token.as_deref(), bg);
+                }
             }
             self.cur_line_partial = !last_line_partial.is_empty();
             self.buffer.push_str(last_line_partial);
@@ -346,7 +349,10 @@ impl SyntaxHighlighterPrinter {
         } else {
             self.cur_line_partial = true;
             self.buffer.push_str(next);
-            out_flush!(out, "{}", next); // Flush to skip line-buffer
+            // terminal_transient() flushes which will skip line-buffer
+            if !out.terminal_transient(&next) {
+                out.code_bg(next, self.lang_token.as_deref(), bg);
+            }
         }
     }
 

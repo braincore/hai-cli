@@ -35,6 +35,7 @@ mod ctrlc_handler;
 mod db;
 mod feature;
 mod io;
+mod io_ws;
 mod line_editor;
 mod loader;
 mod logging;
@@ -72,6 +73,10 @@ struct Cli {
     /// Use specific AI model
     #[arg(short = 'm', long = "model")]
     model: Option<String>,
+
+    /// Kernel mode
+    #[arg(short = 'k', long = "kernel")]
+    kernel: bool,
 
     /// Non-default path to config file (defaults to ~/.hai/hai.toml)
     #[arg(short = 'c', long = "config", value_name = "FILE")]
@@ -163,7 +168,7 @@ enum BotSubcommand {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> process::ExitCode {
     let args = Cli::parse();
 
     let config_path_override = args.config;
@@ -196,19 +201,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     &"api_key".to_string(),
                     &key,
                 );
-                process::exit(0);
+                process::ExitCode::from(0)
             }
             _ => {
                 eprintln!("error: unsupported provider: {}", provider);
-                process::exit(1);
+                process::ExitCode::from(1)
             }
-        };
+        }
     } else if let Some(CliSubcommand::Listen {
         address,
         whitelisted_origin,
     }) = args.subcommand
     {
         crate::feature::queue_listen::listen(&address, whitelisted_origin).await;
+        process::ExitCode::from(0)
     } else {
         let (repl_mode, init_cmds, exit_when_done, force_yes, mute_all_but_final) = if let Some(
             CliSubcommand::Bye {
@@ -250,7 +256,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     !print_all,
                 )
         } else if let Some(CliSubcommand::Bot { command }) = args.subcommand {
-            let db = Arc::new(Mutex::new(db::open_db()?));
+            let db = match db::open_db() {
+                Ok(db) => Arc::new(Mutex::new(db)),
+                Err(e) => {
+                    eprintln!("error: failed to open database: {}", e);
+                    return process::ExitCode::from(1);
+                }
+            };
             let force_username = args
                 .username
                 .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
@@ -262,7 +274,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 Ok(cfg) => cfg,
                 Err(e) => {
                     eprintln!("error: failed to read config: {}", e);
-                    process::exit(1);
+                    return process::ExitCode::from(1);
                 }
             };
 
@@ -270,26 +282,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if force_username == "_" {
                     None
                 } else {
-                    match db::get_account_by_username(&*db.lock().await, &force_username)? {
-                        Some(account) => Some(account),
-                        None => {
+                    match db::get_account_by_username(&*db.lock().await, &force_username) {
+                        Ok(Some(account)) => Some(account),
+                        Ok(None) => {
                             eprintln!(
                                 "error: `{}` is unavailable (try /account-login)",
                                 force_username
                             );
-                            process::exit(1);
+                            return process::ExitCode::from(1);
+                        }
+                        Err(e) => {
+                            eprintln!("error: failed to get account: {}", e);
+                            return process::ExitCode::from(1);
                         }
                     }
                 }
             } else {
-                db::get_active_account(&*db.lock().await)?
+                match db::get_active_account(&*db.lock().await) {
+                    Ok(account) => account,
+                    Err(e) => {
+                        eprintln!("error: failed to get active account: {}", e);
+                        return process::ExitCode::from(1);
+                    }
+                }
             };
             let force_ai_model = if let Some(force_ai_model) = force_ai_model {
                 if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
                     Some(ai_model)
                 } else {
                     eprintln!("error: unknown model {}", force_ai_model);
-                    process::exit(1);
+                    return process::ExitCode::from(1);
                 }
             } else {
                 None
@@ -305,15 +327,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         daemon,
                     )
                     .await;
-                    return Ok(());
+                    return process::ExitCode::from(0);
                 }
                 BotSubcommand::Stop => {
                     let _ = crate::feature::haibot::stop_bot(&out).await;
-                    return Ok(());
+                    return process::ExitCode::from(0);
                 }
                 BotSubcommand::Status => {
                     let _ = crate::feature::haibot::bot_status(&out).await;
-                    return Ok(());
+                    return process::ExitCode::from(0);
                 }
             }
         } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
@@ -387,8 +409,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let force_model = args
             .model
             .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
-        let io = Io::stdio();
-        repl(
+
+        let (io, actor_handle) = if args.kernel {
+            crate::feature::kernel::run_kernel()
+                .await
+                .map(|(io, actor_handle)| (io, Some(actor_handle)))
+                .expect("Failed to start kernel")
+        } else {
+            (Io::stdio(), None)
+        };
+
+        let repl_res = repl(
             &io,
             &config_path_override,
             args.debug,
@@ -401,12 +432,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
             exit_when_done,
             force_yes,
             mute_all_but_final,
+            args.kernel,
         )
-        .await?;
+        .await;
+
+        drop(io);
+        if let Some(actor_handle) = actor_handle {
+            let _ = actor_handle.await;
+        }
+
+        match repl_res {
+            Ok(exit_code) => process::ExitCode::from(exit_code),
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::ExitCode::from(1)
+            }
+        }
     }
-    Ok(())
 }
 
+/// The main REPL loop.
+///
+/// # Returns
+///
+/// Process exit code.
 #[allow(clippy::too_many_arguments)]
 async fn repl(
     io: &Io,
@@ -421,12 +470,13 @@ async fn repl(
     exit_when_done: bool,
     force_yes: bool,
     mute_all_but_final_ai_response: bool,
-) -> Result<(), Box<dyn Error>> {
+    kernel_mode: bool,
+) -> Result<u8, Box<dyn Error>> {
     let mut cfg = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
         Err(e) => {
             errln!(io, "error: failed to read config: {}", e);
-            process::exit(1);
+            return Ok(1);
         }
     };
     let db = Arc::new(Mutex::new(db::open_db()?));
@@ -685,7 +735,7 @@ async fn repl(
             Some(ai_model)
         } else {
             errln!(io, "error: unknown model {}", force_ai_model);
-            process::exit(1);
+            return Ok(1);
         }
     } else {
         None
@@ -703,7 +753,7 @@ async fn repl(
                         "error: `{}` is unavailable (try /account-login)",
                         force_account
                     );
-                    process::exit(1);
+                    return Ok(1);
                 }
             }
         }
@@ -747,7 +797,7 @@ async fn repl(
     //
     // Welcome message (omitted in hai-bye mode)
     //
-    if !exit_when_done {
+    if !exit_when_done && !kernel_mode {
         let newer_client_version = if cfg.check_for_updates {
             is_client_update_available(io, db.clone()).await
         } else {
@@ -821,7 +871,9 @@ async fn repl(
 
         //
         // REPL Read
-        // - Either reads from a queue of waiting cmds or from user input.
+        // - Can read from queue of waiting cmds
+        // - Can read from CLI stdin (reedline)
+        // - Can read from WebSocket (kernel mode)
         //
         let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.pop_front() {
             if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
@@ -857,7 +909,55 @@ async fn repl(
                 print_step(io, &step_badge, &cmd_info.input, &masked_strings);
             }
             cmd_info
+        } else if io.drives_repl() {
+            //
+            // Kernel: Read input line via generic I/O which for now is
+            // exclusively WebSockets.
+            //
+            use crate::io::Answer;
+            let index = session.history.len().try_into().unwrap();
+            let llm_model_name = config::get_ai_model_display_name(&session.ai).to_string();
+            let task_mode = if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
+                Some(task_fqn.to_owned())
+            } else {
+                None
+            };
+            let tool_mode = session.tool_mode.clone().map(|tool_mode_cmd| {
+                tool::tool_to_cmd(
+                    &tool_mode_cmd.tool,
+                    tool_mode_cmd.user_confirmation,
+                    tool_mode_cmd.force_tool,
+                )
+            });
+
+            match io.next_repl(
+                index,
+                llm_model_name,
+                session.use_hai_router.clone(),
+                session.input_tokens + session.input_loaded_tokens,
+                task_mode,
+                tool_mode,
+                incognito,
+                session.agentic,
+            ) {
+                Answer::Text(buffer) => session::CmdInput {
+                    input: buffer,
+                    source: session::CmdSource::User,
+                    reply_channel: None,
+                },
+                // Client cancelled this line (their equivalent of CtrlC): loop.
+                Answer::Cancelled => continue,
+                // Client sent EOF (closed / CtrlD): same semantics as reedline EOF.
+                Answer::Eof => match on_eof(&session, io) {
+                    Some(cmd_input) => cmd_input,
+                    None => break,
+                },
+            }
         } else {
+            //
+            // CLI drives its own read (REPL) via reedline over stdin.
+            //
+
             //
             // Set editor prompt info for display purposes
             //
@@ -883,8 +983,6 @@ async fn repl(
             editor_prompt.set_agentic(session.agentic);
             editor_prompt.set_is_dev(env::var("HAI_BASE_URL").is_ok());
             if multiple_accounts {
-                // Show username if they have multiple accounts to help mitigate
-                // account-confusion mistakes.
                 editor_prompt.set_username(
                     session
                         .account
@@ -936,24 +1034,12 @@ async fn repl(
                 Ok(Signal::CtrlC) => {
                     continue;
                 }
-                Ok(Signal::CtrlD) => {
-                    if session.tool_mode.is_some() {
-                        session::CmdInput {
-                            input: "!exit".to_string(),
-                            source: session::CmdSource::Internal,
-                            reply_channel: None,
-                        }
-                    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
-                        session::CmdInput {
-                            input: "/task-end".to_string(),
-                            source: session::CmdSource::Internal,
-                            reply_channel: None,
-                        }
-                    } else {
-                        outln!(io, "バイバイ！");
-                        break;
-                    }
-                }
+                // CtrlD now routes through the shared helper so kernel EOF and
+                // terminal EOF behave identically.
+                Ok(Signal::CtrlD) => match on_eof(&session, io) {
+                    Some(cmd_input) => cmd_input,
+                    None => break,
+                },
                 unk => {
                     outln!(io, "Event: {:?}", unk);
                     continue;
@@ -989,7 +1075,7 @@ async fn repl(
             && let cmd::Cmd::Noop = cmd
         {
             wrapup_and_cleanup(&session, update_asset_tx).await;
-            process::exit(0);
+            return Ok(0);
         }
 
         // Block further progress until tokenizer has been loaded. Rarely
@@ -1154,7 +1240,7 @@ async fn repl(
             cmd_processor::ProcessCmdNext::Loop => {
                 if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                     wrapup_and_cleanup(&session, update_asset_tx).await;
-                    process::exit(0);
+                    return Ok(0);
                 };
                 continue;
             }
@@ -1225,7 +1311,13 @@ async fn repl(
 
         loop {
             outln!(io);
-            outln!(io, "{}", "↓↓↓".truecolor(128, 128, 128));
+            if io.is_terminal() {
+                let was_recording = io.record_off();
+                outln!(io, "{}", "↓↓↓".truecolor(128, 128, 128));
+                io.record_set(was_recording);
+            } else {
+                outln!(io, "{}", "↓↓↓");
+            }
             outln!(io);
 
             if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_ai_response {
@@ -1672,11 +1764,17 @@ async fn repl(
 
             if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                 wrapup_and_cleanup(&session, update_asset_tx).await;
-                process::exit(0);
+                return Ok(0);
             };
 
             outln!(io);
-            outln!(io, "{}", "---".truecolor(128, 128, 128));
+            if io.is_terminal() {
+                let was_recording = io.record_off();
+                outln!(io, "{}", "---".truecolor(128, 128, 128));
+                io.record_set(was_recording);
+            } else {
+                outln!(io, "{}", "---");
+            }
             outln!(io);
             if let Some(follow_up) = ai_follow_up_requested {
                 outln!(io, "{}", follow_up);
@@ -1712,7 +1810,31 @@ async fn repl(
 
     wrapup_and_cleanup(&session, update_asset_tx).await;
 
-    Ok(())
+    Ok(0)
+}
+
+// --
+
+/// Handle end-of-input (reedline CtrlD or `Answer::Eof` from a kernel
+/// client). Returns the synthetic command to run, or `None` to break the
+/// REPL loop.
+fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
+    if session.tool_mode.is_some() {
+        Some(session::CmdInput {
+            input: "!exit".to_string(),
+            source: session::CmdSource::Internal,
+            reply_channel: None,
+        })
+    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
+        Some(session::CmdInput {
+            input: "/task-end".to_string(),
+            source: session::CmdSource::Internal,
+            reply_channel: None,
+        })
+    } else {
+        outln!(io, "バイバイ！");
+        None
+    }
 }
 
 // --
