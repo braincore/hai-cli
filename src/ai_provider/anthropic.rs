@@ -454,11 +454,19 @@ pub async fn send_to_anthropic(
                                     ContentDelta::ThinkingDelta {
                                         thinking: delta_thinking,
                                     } => {
-                                        if thinking_accumulator.printed_text.is_empty() {
-                                            outln!(out, "{}", "🧠 begin");
-                                            outln!(out);
+                                        // Observed in the wild (very common),
+                                        // which is odd since it's:
+                                        // "content_block":{"type":"thinking","thinking":"","signature":""}
+                                        // followed by:
+                                        // "delta":{"type":"thinking_delta","thinking":""}
+                                        // and ends with a proper `signature_delta`.
+                                        if !delta_thinking.is_empty() {
+                                            if thinking_accumulator.printed_text.is_empty() {
+                                                outln!(out, "{}", "🧠 begin");
+                                                outln!(out);
+                                            }
+                                            thinking_accumulator.acc(&delta_thinking, out);
                                         }
-                                        thinking_accumulator.acc(&delta_thinking, out);
                                     }
                                     ContentDelta::InputJsonDelta { partial_json } => {
                                         if let Some(json_accumulator) = tool_calls.get_mut(&index) {
