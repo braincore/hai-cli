@@ -9,9 +9,7 @@ use reedline::{
     PromptViMode, Reedline, ReedlineEvent, ReedlineMenu, Span, Suggestion, Vi,
     default_vi_insert_keybindings, default_vi_normal_keybindings,
 };
-use regex::Regex;
 use std::borrow::Cow;
-use std::cmp;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -19,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, atomic::AtomicBool};
 
 use crate::api::client::HaiClient;
+use crate::cmd_registry;
 use crate::db::Account;
 use crate::{HaiRouterState, asset_helper, config};
 
@@ -121,8 +120,7 @@ impl LineEditor {
 
     pub fn set_line_completer(
         &mut self,
-        autocomplete_repl_cmds: Vec<String>,
-        autocomplete_repl_ai_models: Vec<String>,
+        cmd_registry: cmd_registry::Registry,
         api_client: HaiClient,
         account: Option<Account>,
     ) {
@@ -130,8 +128,7 @@ impl LineEditor {
         let temp = Reedline::create();
         self.reedline =
             mem::replace(&mut self.reedline, temp).with_completer(Box::new(CmdAndFileCompleter {
-                autocomplete_repl_cmds,
-                autocomplete_repl_ai_models,
+                cmd_registry,
                 api_client,
                 account,
             }));
@@ -369,131 +366,9 @@ fn format_tok_count(number: u32) -> String {
 // --
 
 struct CmdAndFileCompleter {
-    autocomplete_repl_cmds: Vec<String>,
-    autocomplete_repl_ai_models: Vec<String>,
+    cmd_registry: cmd_registry::Registry,
     api_client: HaiClient,
     account: Option<Account>,
-}
-
-fn is_task_file_path_arg(line: &str, task_cmd: &str) -> bool {
-    // This pattern ignores command args
-    let pattern = format!(
-        r"^{cmd}(?:\([^\)]*\))?\s+[./~]",
-        cmd = regex::escape(task_cmd)
-    );
-    let re = Regex::new(&pattern).unwrap();
-    re.is_match(line)
-}
-
-fn is_cmd_input(line: &str, cmd: &str) -> bool {
-    line.starts_with(&format!("{} ", cmd))
-        || line.starts_with(&format!("{}(", cmd))
-        || line.starts_with(&format!("{}.", cmd))
-}
-
-/// Splits the line into two parts: command word and everything else as a
-/// single argument.
-///
-/// # Arguments
-///
-/// - `line` -  The input line to process.
-///
-/// # Returns
-/// (command word, argument prefix, argument index)
-fn split_cmd_and_args(line: &str) -> (&str, &str, usize) {
-    let (cmd_word, arg_prefix) = line
-        .split_once(char::is_whitespace)
-        .map(|(cmd, args)| (cmd, args.trim_start()))
-        .unwrap_or((line, ""));
-    let cmd_length = cmd_word.len();
-    let arg_index = if arg_prefix.is_empty() {
-        // if arg_prefix hasn't been specified yet, use the current cursor
-        line.len()
-    } else {
-        line[cmd_length..]
-            .find(arg_prefix)
-            .map(|i| i + cmd_length)
-            .unwrap_or(0)
-    };
-    (cmd_word, arg_prefix, arg_index)
-}
-
-/// Splits the line into three meaningful parts: command word, all the
-/// arguments in the middle, and finally the last argument.
-///
-/// # Arguments
-///
-/// - `line` - The input line to process.
-///
-/// # Returns
-/// (command word, ignored middle arguments, last argument prefix, last argument start index)
-fn split_cmd_and_last_arg(line: &str) -> (&str, &str, &str, usize) {
-    // Split command from all arguments
-    let (cmd_word, all_args) = line
-        .split_once(char::is_whitespace)
-        .map(|(cmd, args)| (cmd, args.trim_start()))
-        .unwrap_or((line, ""));
-
-    if all_args.is_empty() {
-        // No arguments at all
-        return (cmd_word, "", "", line.len());
-    }
-
-    // Find the last argument by finding the last whitespace sequence
-    let last_arg_start = all_args.rfind(char::is_whitespace).map(|i| {
-        // Skip past the whitespace to get to the actual arg
-        let after_space = &all_args[i..];
-        let trimmed = after_space.trim_start();
-        all_args.len() - trimmed.len()
-    });
-
-    match last_arg_start {
-        Some(idx) if idx > 0 => {
-            let middle_args = all_args[..idx].trim_end();
-            let last_arg = all_args[idx..].trim_start();
-            // Calculate absolute index in original line
-            let abs_index = line.len() - last_arg.len();
-            (cmd_word, middle_args, last_arg, abs_index)
-        }
-        _ => {
-            // Only one argument (no middle args)
-            let abs_index = line.len() - all_args.len();
-            (cmd_word, "", all_args, abs_index)
-        }
-    }
-}
-
-/// Parses the input string into a vector of token indices, where each token is
-/// represented by a tuple of (start_index, end_index).
-fn parse_tokens(s: &str) -> Vec<(usize, usize)> {
-    let mut indices = Vec::new();
-
-    let mut in_token = false;
-    let mut token_start = 0;
-    let mut end_in_whitespace = false;
-
-    for (i, c) in s.char_indices() {
-        if c.is_whitespace() {
-            end_in_whitespace = true;
-            if in_token {
-                indices.push((token_start, i));
-                in_token = false;
-            }
-        } else {
-            end_in_whitespace = false;
-            if !in_token {
-                token_start = i;
-                in_token = true;
-            }
-        }
-    }
-    // Handle last token if string doesn't end with whitespace
-    if in_token {
-        indices.push((token_start, s.len()));
-    } else if end_in_whitespace {
-        indices.push((s.len(), s.len()));
-    }
-    indices
 }
 
 /// Finds all programs in the PATH that start with the given prefix.
@@ -523,285 +398,193 @@ fn find_programs_with_prefix(prefix: &str) -> Vec<String> {
     results
 }
 
-/// # Returns
-/// (token ID (counting from left, 0 is cmd), token, token index in line)
-fn get_current_token(line: &str) -> (u32, &str, usize) {
-    let (_cmd_word, all_args, all_args_index) = if let Some(stripped) = line.strip_prefix("!!") {
-        ("!!", stripped, 2)
-    } else {
-        split_cmd_and_args(line)
-    };
-
-    let mut tokens = parse_tokens(all_args);
-    if let Some((cur_token_start, cur_token_end)) = tokens.pop() {
-        (
-            tokens.len() as u32 + 1,
-            &all_args[cur_token_start..cur_token_end],
-            all_args_index + cur_token_start,
-        )
-    } else {
-        (1, "", all_args_index)
-    }
-}
-
 impl Completer for CmdAndFileCompleter {
     fn complete(&mut self, line: &str, pos: usize) -> Vec<Suggestion> {
         tracing::debug!(line, pos, "completer init");
-        // Auto-completion never looks ahead of the cursor.
-        let line = &line[..pos];
-        let (completions, fallback_ok) = if line.starts_with('/') || line.starts_with("!!") {
-            if is_cmd_input(line, "/load")
-                || is_cmd_input(line, "/l")
-                || is_cmd_input(line, "/file-read")
-                || is_cmd_input(line, "/file-cat")
-                || is_cmd_input(line, "/file-write")
-                || is_cmd_input(line, "/file-patch")
-                || is_cmd_input(line, "/cd")
-                || is_cmd_input(line, "/task-publish")
-                || is_task_file_path_arg(line, "/t")
-                || is_task_file_path_arg(line, "/task")
-                || is_task_file_path_arg(line, "/task-include")
-                || is_task_file_path_arg(line, "/task-forget")
-                || is_task_file_path_arg(line, "/task-cat")
-            {
-                let (cmd_word, arg1_prefix) = line
-                    .split_once(char::is_whitespace)
-                    .map(|(cmd, args)| (cmd, args.trim_start()))
-                    .unwrap_or((line, ""));
-                let cmd_length = cmd_word.len();
-                let arg1_index = line[cmd_length..]
-                    .find(arg1_prefix)
-                    .map(|i| i + cmd_length)
-                    .unwrap_or(0);
-                let mut completions = self.file_completer2(arg1_prefix, cmd_word == "/cd");
-                realign_suggestions(&mut completions, arg1_index);
-                (completions, false)
-            } else if is_cmd_input(line, "/task")
-                || is_cmd_input(line, "/t")
-                || is_cmd_input(line, "/task-cat")
-                || is_cmd_input(line, "/task-edit")
-                || is_cmd_input(line, "/task-purge")
-                || is_cmd_input(line, "/task-forget")
-                || is_cmd_input(line, "/task-fetch")
-                || is_cmd_input(line, "/task-update")
-            {
-                let (cmd_word, arg_prefix) = line
-                    .split_once(" ")
-                    .expect("unexpected missing space-delimiter");
-                let cmd_length = cmd_word.len();
-                let arg_index = line[cmd_length..]
-                    .find(arg_prefix)
-                    .map(|i| i + cmd_length)
-                    .unwrap_or(0);
-                let completions =
-                    self.task_completer(line.len(), cmd_word.len(), arg_prefix, arg_index);
-                (completions, false)
-            } else if is_cmd_input(line, "/ai") || is_cmd_input(line, "/ai-default") {
-                let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                let mut completions = self.simple_completer(
-                    arg_prefix,
-                    &self
-                        .autocomplete_repl_ai_models
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>(),
-                );
-                realign_suggestions(&mut completions, arg_index);
-                (completions, false)
-            } else if is_cmd_input(line, "/std") {
-                let (_cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                let mut completions =
-                    self.simple_completer(arg_prefix, &["now", "new-day-alert", "which"]);
-                realign_suggestions(&mut completions, arg_index);
-                (completions, false)
-            } else if is_cmd_input(line, "/asset")
-                || is_cmd_input(line, "/a")
-                || is_cmd_input(line, "/asset-write")
-                || is_cmd_input(line, "/write")
-                || is_cmd_input(line, "/asset-patch")
-                || is_cmd_input(line, "/patch")
-                || is_cmd_input(line, "/asset-temp")
-                || is_cmd_input(line, "/asset-push")
-                || is_cmd_input(line, "/asset-link")
-                || is_cmd_input(line, "/asset-revisions")
-                || is_cmd_input(line, "/asset-remove")
-                || is_cmd_input(line, "/asset-list")
-                || is_cmd_input(line, "/ls")
-                || is_cmd_input(line, "/asset-md-get")
-                || is_cmd_input(line, "/asset-acl-get")
-                || is_cmd_input(line, "/asset-acl-get-effective")
-                || is_cmd_input(line, "/asset-listen")
-                || is_cmd_input(line, "/asset-app")
-                || is_cmd_input(line, "/asset-open")
-                || is_cmd_input(line, "/open")
-                || is_cmd_input(line, "/asset-attachment-new")
-                || is_cmd_input(line, "/asset-attachment-new-push")
-                || is_cmd_input(line, "/chat-resume")
-            {
-                let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                tracing::debug!(line, cmd_word, arg_index, arg_prefix, "completer init");
-                let mut completions = self.asset_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index);
-                (completions, true)
-            } else if is_cmd_input(line, "/asset-read")
-                || is_cmd_input(line, "/read")
-                || is_cmd_input(line, "/asset-load")
-                || is_cmd_input(line, "/asset-view")
-                || is_cmd_input(line, "/asset-cat")
-                || is_cmd_input(line, "/cat")
-                || is_cmd_input(line, "/asset-move")
-                || is_cmd_input(line, "/asset-copy")
-            {
-                let (cmd_word, _ignored_args, arg_prefix, arg_index) = split_cmd_and_last_arg(line);
-                tracing::debug!(line, cmd_word, arg_index, arg_prefix, "completer init");
-                let mut completions = self.asset_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index);
-                (completions, false)
-            } else if is_cmd_input(line, "/asset-folder-new") {
-                let (cmd_word, arg_prefix, arg_index) = split_cmd_and_args(line);
-                tracing::debug!(
-                    line,
-                    cmd_word,
-                    arg_index,
-                    arg_prefix,
-                    "completer init (folder-new)"
-                );
-                let mut completions = self.asset_folder_completer(arg_prefix);
-                realign_suggestions(&mut completions, arg_index);
-                (completions, true)
-            } else if is_cmd_input(line, "/exec")
-                || line.starts_with("!!")
-                || is_cmd_input(line, "!!")
-            {
-                let (cur_token_id, cur_token, cur_token_offset) = get_current_token(line);
-                if cur_token_id == 1 {
-                    // Handle executables
-                    let mut completions = self.simple_completer(
-                        cur_token,
-                        &find_programs_with_prefix(cur_token)
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>(),
+
+        let comp_res = cmd_registry::complete(&self.cmd_registry, line, pos);
+        match comp_res {
+            cmd_registry::Completion::Command { prefix, candidates } => {
+                for candidate in &candidates {
+                    tracing::debug!(?candidate.name, prefix, "registry completion: cmd: candidate");
+                }
+                candidates
+                    .iter()
+                    .map(|cand| Suggestion {
+                        value: cand.name.to_string(),
+                        display_override: None,
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span {
+                            start: pos - prefix.len(),
+                            end: pos,
+                        },
+                        append_whitespace: true,
+                        match_indices: None,
+                    })
+                    .collect()
+            }
+            cmd_registry::Completion::OptName {
+                cmd: _,
+                prefix,
+                candidates,
+            } => {
+                for candidate in &candidates {
+                    tracing::debug!(?candidate.name, prefix, "registry completion: opt-name: candidate");
+                }
+                candidates
+                    .iter()
+                    .map(|cand| Suggestion {
+                        value: cand.name.to_string(),
+                        display_override: None,
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span {
+                            start: pos - prefix.len(),
+                            end: pos,
+                        },
+                        append_whitespace: prefix == *cand.name,
+                        match_indices: None,
+                    })
+                    .collect()
+            }
+            cmd_registry::Completion::OptValue {
+                cmd: _,
+                opt: _,
+                prefix,
+                candidates,
+            } => {
+                for candidate in &candidates {
+                    tracing::debug!(
+                        ?candidate,
+                        prefix,
+                        "registry completion: opt-value: candidate"
                     );
-                    realign_suggestions(&mut completions, cur_token_offset);
-                    (completions, true)
-                } else {
-                    // Find/extract current token
-                    // If the token starts with '@@', it's an asset lookup
-                    if let Some(asset_prefix) = cur_token.strip_prefix("@@") {
-                        let mut completions = self.asset_completer(asset_prefix);
-                        realign_suggestions(&mut completions, cur_token_offset + 2);
-                        (completions, false)
-                    } else {
-                        // Fallback to file completion
-                        let mut completions = self.file_completer2(cur_token, false);
-                        realign_suggestions(&mut completions, cur_token_offset);
-                        (completions, false)
+                }
+                candidates
+                    .iter()
+                    .map(|cand| Suggestion {
+                        value: cand.to_string(),
+                        display_override: None,
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span {
+                            start: pos - prefix.len(),
+                            end: pos,
+                        },
+                        append_whitespace: prefix == *cand,
+                        match_indices: None,
+                    })
+                    .collect()
+            }
+            cmd_registry::Completion::Arg {
+                cmd,
+                index: _,
+                kind,
+                prefix,
+            } => {
+                tracing::debug!(?cmd.name, ?kind, prefix, "registry completion: arg");
+                match kind {
+                    cmd_registry::ArgKind::AssetName { glob_ok: _ } => {
+                        let mut completions = self.asset_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::AssetPrefix => {
+                        let mut completions = self.asset_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::AssetFolder => {
+                        let mut completions = self.asset_folder_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::FilePath {
+                        accepts,
+                        glob_ok: _,
+                    } => {
+                        let mut completions = self.file_completer(
+                            &prefix,
+                            matches!(accepts, cmd_registry::FilePathAccepts::Dir),
+                        );
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::TaskRef => {
+                        let mut completions = self.task_ref_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::TaskFqn => {
+                        if let Some((username, _task_name_prefix)) = prefix.split_once('/') {
+                            let mut completions = self.task_fqn_completer(&prefix, username);
+                            realign_suggestions(&mut completions, pos - prefix.len());
+                            completions
+                        } else {
+                            // Without a username, let's not auto-complete to
+                            // avoid mistakes choosing the wrong task (or a
+                            // malicious user trying to create a similar
+                            // task collection).
+                            vec![]
+                        }
+                    }
+                    cmd_registry::ArgKind::Username => {
+                        let mut completions = self.username_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ArgKind::ModelName => {
+                        let mut completions = self
+                            .simple_completer(&prefix, config::AUTOCOMPLETE_AI_MODEL_SUGGESTIONS);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    _ => vec![],
+                }
+            }
+            cmd_registry::Completion::Shell { word, prefix, .. } => {
+                tracing::debug!(?word, prefix, "auto-complete: shellcmd:");
+                match word {
+                    cmd_registry::ShellWord::Program => {
+                        let mut completions = self.simple_completer(
+                            &prefix,
+                            &find_programs_with_prefix(&prefix)
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>(),
+                        );
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ShellWord::Path => {
+                        let mut completions = self.file_completer(&prefix, false);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
+                    }
+                    cmd_registry::ShellWord::AssetName => {
+                        let mut completions = self.asset_completer(&prefix);
+                        realign_suggestions(&mut completions, pos - prefix.len());
+                        completions
                     }
                 }
-            } else if is_cmd_input(line, "/asset-export") || is_cmd_input(line, "/asset-import") {
-                let (cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
-                let cmd_length = cmd_word.len();
-                let (arg1_prefix, arg2_prefix) = arg_prefix
-                    .split_once(char::is_whitespace)
-                    .map(|(arg1, arg2)| (arg1, Some(arg2.trim_start())))
-                    .unwrap_or((arg_prefix, None));
-                let arg2_index = if let Some(arg2_prefix) = arg2_prefix {
-                    if arg2_prefix.is_empty() {
-                        Some(line.len())
-                    } else {
-                        line[cmd_length + arg1_prefix.len()..]
-                            .find(arg2_prefix)
-                            .map(|i| i + cmd_length + arg1_prefix.len())
-                    }
-                } else {
-                    None
-                };
-                tracing::debug!(
-                    line,
-                    cmd_length,
-                    cmd_word,
-                    arg1_index,
-                    arg1_prefix,
-                    arg2_index,
-                    arg2_prefix,
-                    "completer init"
-                );
-                if let Some(arg2_prefix) = arg2_prefix {
-                    let mut completions = self.file_completer2(arg2_prefix, false);
-                    realign_suggestions(&mut completions, arg2_index.unwrap());
-                    (completions, false)
-                } else {
-                    let mut completions = self.asset_completer(arg1_prefix);
-                    realign_suggestions(&mut completions, arg1_index);
-                    (completions, false)
-                }
-            } else if is_cmd_input(line, "/asset-revision-temp") {
-                let (_cmd_word, arg_prefix, arg1_index) = split_cmd_and_args(line);
-                let (arg1_prefix, arg2_prefix) = arg_prefix
-                    .split_once(char::is_whitespace)
-                    .map(|(arg1, arg2)| (arg1, Some(arg2.trim_start())))
-                    .unwrap_or((arg_prefix, None));
-                if arg2_prefix.is_some() {
-                    (vec![], false)
-                } else {
-                    let mut completions = self.asset_completer(arg1_prefix);
-                    realign_suggestions(&mut completions, arg1_index);
-                    (completions, false)
-                }
-            } else {
-                (
-                    self.simple_completer(
-                        line,
-                        &self
-                            .autocomplete_repl_cmds
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>(),
-                    ),
-                    true,
-                )
             }
-        } else if line.starts_with('!') {
-            (
-                self.simple_completer(
-                    line,
-                    &[
-                        "!!", "!py", "!?py", "!pyuv", "!?pyuv", "!sh", "!?sh", "!hai", "!?hai",
-                        "!html", "!?html", "!clip", "!fn-py", "!fn-pyuv", "!fn-sh", "!exit",
-                    ],
-                ),
-                true,
-            )
-        } else {
-            (vec![], true)
-        };
-        if completions.is_empty() && fallback_ok {
-            // Fallback to asset/file completion across all inputs
-            let (arg_index, current_token) = match line.rfind(char::is_whitespace) {
-                Some(whitespace_pos) => (whitespace_pos + 1, &line[whitespace_pos..].trim_start()),
-                None => (0, &line),
-            };
-
-            tracing::debug!(line, arg_index, current_token, "fallback completer");
-
-            // If the token starts with '@@', complete with assets
-            if let Some(asset_prefix) = current_token.strip_prefix("@@") {
-                let mut completions = self.asset_completer(asset_prefix);
-                realign_suggestions(&mut completions, arg_index + 2);
-                completions
-            } else {
-                // Fallback to file completion
-                let mut completions = self.file_completer2(current_token, false);
-                realign_suggestions(&mut completions, arg_index);
-                completions
+            _ => {
+                tracing::debug!(?comp_res, "registry completion");
+                vec![]
             }
-        } else {
-            completions
         }
     }
 }
 
+/// Offsets the replacement span of completions/suggestions.
+///
+/// The use case is to align the span to the beginning of the REPL line since
+/// it's typically computed relative to the beginning of the word being
+/// completed.
 fn realign_suggestions(suggestions: &mut Vec<Suggestion>, offset: usize) {
     for suggestion in suggestions {
         suggestion.span.start += offset;
@@ -849,118 +632,7 @@ impl CmdAndFileCompleter {
     }
 
     /// Assumes `line` is a partial path
-    fn file_completer(&self, line: &str, _pos: usize, dir_only: bool) -> Vec<Suggestion> {
-        let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let expanded_path_line = shellexpand::full(line).unwrap().into_owned();
-        let shellexpand_applied = line != expanded_path_line;
-        let partial_path = Path::new(&expanded_path_line);
-
-        // If set, it means the cursor is at the root of a directory and the
-        // entire directory's contents are valid suggestions.
-        let scan_full_dir = partial_path.is_dir();
-
-        let dir_to_search = if scan_full_dir {
-            if partial_path.is_absolute() {
-                partial_path.to_owned()
-            } else {
-                current_dir.join(partial_path).to_owned()
-            }
-        } else if partial_path.is_absolute() {
-            partial_path
-                .parent()
-                .unwrap_or_else(|| Path::new("/"))
-                .to_owned()
-        } else {
-            current_dir
-                .join(partial_path)
-                .parent()
-                .unwrap_or(current_dir.as_path())
-                .to_owned()
-        };
-
-        tracing::debug!(
-            ?current_dir,
-            ?dir_to_search,
-            ?partial_path,
-            "file_completer"
-        );
-
-        let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
-
-        // Collect matching files and directories
-        let mut completions = Vec::new();
-        if let Ok(entries) = fs::read_dir(dir_to_search) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name();
-                let file_name_str = file_name.to_string_lossy();
-
-                if scan_full_dir
-                    || file_name_str.starts_with(
-                        partial_path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .as_ref(),
-                    )
-                {
-                    // Get the full path suggestion as a string
-                    let full_path = if partial_path.is_absolute() {
-                        entry.path()
-                    } else if scan_full_dir {
-                        Path::new(line).join(file_name_str.to_string())
-                    } else {
-                        Path::new(line)
-                            .parent()
-                            .unwrap_or(Path::new(""))
-                            .join(file_name_str.to_string())
-                    };
-
-                    let is_dir = full_path.is_dir();
-                    if dir_only && !is_dir {
-                        continue;
-                    }
-                    let abbreviated_path = if shellexpand_applied {
-                        abbreviate_path(full_path)
-                    } else {
-                        full_path.to_string_lossy().to_string()
-                    };
-
-                    let display_value = abbreviated_path + if is_dir { "/" } else { "" };
-
-                    completions.push(Suggestion {
-                        value: display_value.clone(),
-                        display_override: compute_display_override_for_path(
-                            &dir_to_search_string,
-                            &display_value,
-                        ),
-                        description: None,
-                        style: None,
-                        extra: None,
-                        span: Span {
-                            start: _pos - line.len(),
-                            end: _pos,
-                        },
-                        append_whitespace: !is_dir,
-                        match_indices: None,
-                    });
-                }
-            }
-        }
-        // Since read_dir() doesn't sort, sort it.
-        //
-        // "/" is removed because it's ordered after the alphabet so that if a
-        // folder's name is a subset of another folder's it won't be sorted
-        // correctly: src/test2/ before src/test/
-        completions.sort_by(|a, b| {
-            a.value
-                .trim_end_matches('/')
-                .cmp(b.value.trim_end_matches('/'))
-        });
-        completions
-    }
-
-    /// Assumes `line` is a partial path
-    fn file_completer2(&self, path_prefix: &str, dir_only: bool) -> Vec<Suggestion> {
+    fn file_completer(&self, path_prefix: &str, dir_only: bool) -> Vec<Suggestion> {
         let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let expanded_path_line = shellexpand::full(path_prefix).unwrap().into_owned();
         let shellexpand_applied = path_prefix != expanded_path_line;
@@ -1342,98 +1014,144 @@ impl CmdAndFileCompleter {
         }
     }
 
-    fn task_completer(
-        &self,
-        line_length: usize,
-        cmd_length: usize,
-        task_prefix: &str,
-        arg_index: usize,
-    ) -> Vec<Suggestion> {
-        tracing::debug!(
-            ?line_length,
-            ?cmd_length,
-            ?task_prefix,
-            ?arg_index,
-            "task_completer"
-        );
-        let mut completions = Vec::new();
-        if let Some((username, _task_name_prefix)) = task_prefix.split_once('/') {
-            use crate::api::types::account::AccountWhoisArg;
-            let result = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.api_client.account_whois(
-                    AccountWhoisArg {
-                        username: username.to_string(),
-                    },
-                ))
-            });
-            match result {
-                Ok(res) => {
-                    tracing::debug!(
-                        username,
-                        ?task_prefix,
-                        ?res.tasks,
-                        "task_completer");
-                    let mut sorted_tasks = res.tasks;
-                    sorted_tasks.sort_by(|a, b| numeric_sort::cmp(&a.task_fqn, &b.task_fqn));
-                    for task in sorted_tasks {
-                        if task.task_fqn.starts_with(task_prefix) {
-                            completions.push(Suggestion {
-                                value: task.task_fqn.clone(),
-                                display_override: None,
-                                description: None,
-                                style: None,
-                                extra: None,
-                                // Replace entirety of existing contents
-                                span: Span {
-                                    start: 0,
-                                    end: task_prefix.len(),
-                                },
-                                append_whitespace: true,
-                                match_indices: None,
-                            });
-                        }
-                    }
-                    realign_suggestions(&mut completions, arg_index);
-                    completions
-                }
-                Err(e) => {
-                    tracing::debug!(?e, "error: could not fetch list of matching assets",);
-                    vec![]
-                }
-            }
-        } else {
-            // This autocompletes to tasks that are fetched/cached on disk.
-            // We hide the toml extension to make the autocomplete not
-            // appear as if it's traversing a file tree.
-            let mut task_cache_prefix = config::get_config_folder_path();
-            task_cache_prefix.push("cache/task");
-            let task_cache_prefix_offset =
-                task_cache_prefix.to_string_lossy().to_string().len() + 1;
-            task_cache_prefix.push(task_prefix);
-            let offset = cmp::max(0, line_length - cmd_length + task_cache_prefix_offset);
-
-            let mut completions =
-                self.file_completer(task_cache_prefix.to_string_lossy().as_ref(), offset, false);
+    /// Completes a task reference:
+    /// 1. Local file paths (Must start with `/`, `~`, `./`, or `../`)
+    /// 2. Fully qualified task names (Must contain a `/` after the username)
+    /// 3. Cached tasks (If does not contain a `/` after the username)
+    fn task_ref_completer(&self, task_prefix: &str) -> Vec<Suggestion> {
+        tracing::debug!(?task_prefix, "task_completer");
+        if task_prefix.starts_with('/')
+            || task_prefix.starts_with('~')
+            || task_prefix.starts_with("./")
+            || task_prefix.starts_with("../")
+        {
+            let mut completions = self.file_completer(task_prefix, false);
             completions.retain(|suggestion| {
                 suggestion.value.ends_with("/") || suggestion.value.ends_with(".toml")
             });
-            for suggestion in &mut completions {
-                suggestion.value = suggestion.value[task_cache_prefix_offset..].to_string();
-                if suggestion.value.ends_with(".toml") {
-                    suggestion.value =
-                        suggestion.value[..suggestion.value.len() - ".toml".len()].to_string();
-                }
-                suggestion.span.start += cmd_length;
-                suggestion.span.end += cmd_length;
-                suggestion.span.end -= task_cache_prefix_offset;
+            return completions;
+        } else if let Some((username, _task_name_prefix)) = task_prefix.split_once('/') {
+            self.task_fqn_completer(task_prefix, username)
+        } else {
+            self.task_cache_completer(task_prefix)
+        }
+    }
+
+    fn task_fqn_completer(&self, task_prefix: &str, username: &str) -> Vec<Suggestion> {
+        tracing::debug!(?task_prefix, "task_completer");
+        use crate::api::types::account::AccountWhoisArg;
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.api_client.account_whois(
+                AccountWhoisArg {
+                    username: username.to_string(),
+                },
+            ))
+        });
+        match result {
+            Ok(res) => {
                 tracing::debug!(
-                    value = suggestion.value,
-                    span_start = suggestion.span.start,
-                    span_end = suggestion.span.end,
-                    "suggestion",
-                );
+                    username,
+                    ?task_prefix,
+                    ?res.tasks,
+                    "task_completer");
+                let mut completions = Vec::new();
+                let mut sorted_tasks = res.tasks;
+                sorted_tasks.sort_by(|a, b| numeric_sort::cmp(&a.task_fqn, &b.task_fqn));
+                for task in sorted_tasks {
+                    if task.task_fqn.starts_with(task_prefix) {
+                        completions.push(Suggestion {
+                            value: task.task_fqn.clone(),
+                            display_override: None,
+                            description: None,
+                            style: None,
+                            extra: None,
+                            span: Span {
+                                start: 0,
+                                end: task_prefix.len(),
+                            },
+                            append_whitespace: true,
+                            match_indices: None,
+                        });
+                    }
+                }
+                completions
             }
-            completions
+            Err(e) => {
+                tracing::debug!(?e, "error: could not fetch list of matching assets",);
+                vec![]
+            }
+        }
+    }
+
+    fn task_cache_completer(&self, task_prefix: &str) -> Vec<Suggestion> {
+        tracing::debug!(?task_prefix, "task_completer");
+        // This autocompletes to tasks that are fetched/cached on disk.
+        // We hide the toml extension to make the autocomplete not
+        // appear as if it's traversing a file tree.
+        let mut task_cache_prefix = config::get_config_folder_path();
+        task_cache_prefix.push("cache/task");
+        let task_cache_prefix_offset = task_cache_prefix.to_string_lossy().to_string().len() + 1;
+        task_cache_prefix.push(task_prefix);
+
+        let mut completions =
+            self.file_completer(task_cache_prefix.to_string_lossy().as_ref(), false);
+        completions.retain(|suggestion| {
+            suggestion.value.ends_with("/") || suggestion.value.ends_with(".toml")
+        });
+        for suggestion in &mut completions {
+            suggestion.value = suggestion.value[task_cache_prefix_offset..].to_string();
+            if suggestion.value.ends_with(".toml") {
+                suggestion.value =
+                    suggestion.value[..suggestion.value.len() - ".toml".len()].to_string();
+            }
+            suggestion.span.end -= task_cache_prefix_offset;
+            tracing::debug!(
+                value = suggestion.value,
+                span_start = suggestion.span.start,
+                span_end = suggestion.span.end,
+                "suggestion",
+            );
+        }
+        completions
+    }
+
+    /// # Arguments
+    /// * `username_prefix` - The prefix of the username to complete.
+    fn username_completer(&self, username_prefix: &str) -> Vec<Suggestion> {
+        use crate::api::types::account::AccountSearchArg;
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.api_client.account_search(
+                AccountSearchArg {
+                    q: username_prefix.to_string(),
+                },
+            ))
+        });
+        match result {
+            Ok(res) => {
+                let mut completions = Vec::new();
+                let mut sorted_users = res.users;
+                sorted_users.sort_by(|a, b| numeric_sort::cmp(&a.username, &b.username));
+                for user in sorted_users {
+                    completions.push(Suggestion {
+                        value: user.username.clone(),
+                        display_override: None,
+                        description: None,
+                        style: None,
+                        extra: None,
+                        span: Span {
+                            start: 0,
+                            end: username_prefix.len(),
+                        },
+                        append_whitespace: true,
+                        match_indices: None,
+                    });
+                }
+                completions
+            }
+            Err(e) => {
+                tracing::debug!(?e, "error: could not search for matching users");
+                vec![]
+            }
         }
     }
 }

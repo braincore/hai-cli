@@ -28,7 +28,9 @@ mod asset_sync;
 mod chat;
 mod clipboard;
 mod cmd;
+mod cmd_parse;
 mod cmd_processor;
+mod cmd_registry;
 mod config;
 mod crypt;
 mod ctrlc_handler;
@@ -501,213 +503,6 @@ async fn repl(
         debug,
     ));
 
-    let default_autocomplete_repl_cmds: Vec<String> = [
-        "/about",
-        "/help",
-        "/quit",
-        "/ai",
-        "/ai-default",
-        "/temperature",
-        "/cd",
-        "/new",
-        "/reset",
-        "/task",
-        "/task-end",
-        "/task-update",
-        "/task-publish",
-        "/task-edit",
-        "/task-forget",
-        "/task-purge",
-        "/task-search",
-        "/task-cat",
-        "/task-include",
-        "/task-versions",
-        "/file-read",
-        "/file-cat",
-        "/file-write",
-        "/file-patch",
-        "/http-get",
-        "/exec",
-        "/prep",
-        "/pin",
-        "/system-prompt",
-        "/forget",
-        "/keep",
-        "/clip",
-        "/printvars",
-        "/setvar",
-        "/set-key",
-        "/set-mask-secrets",
-        "/asset",
-        "/asset-push",
-        "/asset-list",
-        "/ls",
-        "/asset-search",
-        "/asset-read",
-        "/read",
-        "/asset-write",
-        "/write",
-        "/asset-cat",
-        "/cat",
-        "/asset-patch",
-        "/patch",
-        "/asset-revisions",
-        "/asset-link",
-        "/asset-import",
-        "/asset-export",
-        "/asset-temp",
-        "/asset-revision-temp",
-        "/asset-sync-down",
-        "/asset-sync-up",
-        "/asset-sync-diff",
-        "/asset-listen",
-        "/asset-acl-get",
-        "/asset-acl-get-effective",
-        "/asset-acl-set",
-        "/asset-remove",
-        "/asset-remove-recursive",
-        "/asset-move",
-        "/asset-copy",
-        "/asset-md-get",
-        "/asset-md-set",
-        "/asset-md-set-key",
-        "/asset-md-del-key",
-        "/asset-attachment-new",
-        "/asset-attachment-new-push",
-        "/asset-attachment-list",
-        "/asset-folder-new",
-        "/asset-folder-collapse",
-        "/asset-folder-expand",
-        "/asset-folder-list",
-        "/asset-crypt-lock",
-        "/asset-crypt-unlock",
-        "/asset-crypt-setup",
-        "/asset-crypt-recover",
-        "/asset-app",
-        "/asset-app-perms-list",
-        "/asset-app-perms-revoke",
-        "/asset-open",
-        "/open",
-        "/asset-pool-new",
-        "/asset-pools",
-        "/email",
-        "/notif",
-        "/fns",
-        "/std",
-        "/mcp-add",
-        "/bot-boot",
-        "/bot-get-active",
-        "/bot-probe",
-        "/bot-setup",
-        "/bot-ssh",
-        "/bot-shutdown",
-        "/account",
-        "/account-new",
-        "/account-login",
-        "/account-logout",
-        "/account-balance",
-        "/account-subscribe",
-        "/inbox-setup",
-        "/chats",
-        "/chat-save",
-        "/chat-resume",
-        "/whois",
-        "/hai-router",
-        "/web-search",
-        "/cost",
-        "/queue-pop",
-        "/agentic",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-
-    let autocomplete_repl_ai_models: Vec<String> = [
-        "41",
-        "41m",
-        "41n",
-        "4o",
-        "4om",
-        "chatgpt-4o",
-        "gemma3",
-        "gpt",
-        "gpt-41",
-        "gpt-41-mini",
-        "gpt-41-nano",
-        "gpt-5",
-        "gpt-5-chat",
-        "gpt-5-mini",
-        "gpt-5-nano",
-        "gpt-51",
-        "gpt-51-chat",
-        "gpt-52",
-        "gpt-52-chat",
-        "gpt-53-chat",
-        "gpt-54",
-        "gpt-54-mini",
-        "gpt-54-nano",
-        "gpt-55",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-oss",
-        "o1",
-        "o1-pro",
-        "o3",
-        "o3-mini",
-        "o4-mini",
-        "haiku35",
-        "opus",
-        "opus4",
-        "opus4-thinking",
-        "opus41",
-        "opus45",
-        "opus46",
-        "opus47",
-        "opus48",
-        "opus5",
-        "sonnet",
-        "sonnet35",
-        "sonnet37",
-        "sonnet37-thinking",
-        "sonnet4",
-        "sonnet4-thinking",
-        "sonnet45",
-        "sonnet46",
-        "llama32",
-        "llama32-vision",
-        "flash",
-        "flash15",
-        "flash20",
-        "flash25",
-        "flash3",
-        "flash35",
-        "flashlite31",
-        "gemini15pro",
-        "gemini25pro",
-        "gemini3pro",
-        "gemini31pro",
-        "deepseek",
-        "deepseek4-flash",
-        "deepseek4-pro",
-        "v3",
-        "r1",
-        "grok",
-        "grok-3",
-        "grok-3-fast",
-        "grok-3-mini",
-        "grok-3-mini-fast",
-        "grok-4",
-        "openai/",
-        "anthropic/",
-        "google/",
-        "xai/",
-        "ollama/",
-        "llamacpp",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-
     // Lazily initialize line editor.
     // This is important because initialization prints control characters to
     // the terminal which can be disruptive if stdout isn't a tty and there's
@@ -763,6 +558,8 @@ async fn repl(
 
     let multiple_accounts = db::list_accounts(&*db.lock().await)?.len() > 1;
 
+    let cmd_registry = cmd_registry::Registry::new();
+
     let mut session = SessionState::new_from_cfg(
         &io.out,
         repl_mode,
@@ -770,6 +567,7 @@ async fn repl(
         account.clone(),
         incognito,
         force_ai_model,
+        cmd_registry,
     );
 
     if let Some(account) = &account {
@@ -882,14 +680,26 @@ async fn repl(
                 }
                 let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
 
-                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
+                print_step(
+                    io,
+                    &session.cmd_registry,
+                    &step_badge,
+                    &cmd_info.input,
+                    &masked_strings,
+                );
             } else if let session::CmdSource::ListenQueue(queue_name, index) = &cmd_info.source {
                 let step_badge = if let Some(queue_name) = queue_name {
                     format!("queue/{}[{}]:", queue_name, index)
                 } else {
                     format!("queue[{}]:", index)
                 };
-                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
+                print_step(
+                    io,
+                    &session.cmd_registry,
+                    &step_badge,
+                    &cmd_info.input,
+                    &masked_strings,
+                );
             } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
                 // being written by `/asset-write`.
@@ -903,10 +713,22 @@ async fn repl(
                     } else {
                         cmd_info.input.clone()
                     };
-                print_step(io, &step_badge, &display_input, &masked_strings);
+                print_step(
+                    io,
+                    &session.cmd_registry,
+                    &step_badge,
+                    &display_input,
+                    &masked_strings,
+                );
             } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
                 let step_badge = format!("bye[{}]:", index);
-                print_step(io, &step_badge, &cmd_info.input, &masked_strings);
+                print_step(
+                    io,
+                    &session.cmd_registry,
+                    &step_badge,
+                    &cmd_info.input,
+                    &masked_strings,
+                );
             }
             cmd_info
         } else if io.drives_repl() {
@@ -994,22 +816,8 @@ async fn repl(
             let cur_line_editor = line_editor.get_or_insert_with(|| {
                 LineEditor::new(incognito, session.repl_break_signal.clone())
             });
-            let mut autocomplete_repl_cmds = default_autocomplete_repl_cmds.clone();
-            autocomplete_repl_cmds.extend(
-                session
-                    .ai_defined_fns
-                    .keys()
-                    .map(|fn_name| format!("/{}", fn_name)),
-            );
-            autocomplete_repl_cmds.extend(
-                session
-                    .mcps
-                    .keys()
-                    .map(|mcp_name| format!("/mcp_{}", mcp_name)),
-            );
             cur_line_editor.set_line_completer(
-                autocomplete_repl_cmds,
-                autocomplete_repl_ai_models.clone(),
+                session.cmd_registry.clone(),
                 mk_api_client(Some(&session)),
                 session.account.clone(),
             );
@@ -1061,22 +869,6 @@ async fn repl(
 
         let last_tool_cmd = session.last_tool_cmd.clone();
         let tool_mode = session.tool_mode.clone();
-        // Expectation is that if `parse_user_input` returns None, it will have
-        // also printed an error msg to the user so it's okay to ignore the
-        // input here.
-        let maybe_cmd = cmd::parse_user_input(&io.out, &cmd_input.input, last_tool_cmd, tool_mode);
-        let mut cmd = if let Some(cmd) = maybe_cmd {
-            cmd
-        } else {
-            continue;
-        };
-        if exit_when_done
-            && session.cmd_queue.lock().await.is_empty()
-            && let cmd::Cmd::Noop = cmd
-        {
-            wrapup_and_cleanup(&session, update_asset_tx).await;
-            return Ok(0);
-        }
 
         // Block further progress until tokenizer has been loaded. Rarely
         // should it take this long. NOTE: It's important that this is placed
@@ -1093,6 +885,57 @@ async fn repl(
         }
         let tokenizer_locked = tokenizer.lock().await;
         let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
+
+        let mut cmd = match cmd::parse_user_input(
+            &session.cmd_registry,
+            &cmd_input.input,
+            last_tool_cmd,
+            tool_mode,
+        ) {
+            Ok(cmd) => cmd,
+            Err(e) => match e {
+                cmd_parse::ParseError::UnknownCmd { .. } => {
+                    warnln!(io, "{}", e);
+                    cmd::Cmd::Prompt(cmd::PromptCmd {
+                        prompt: cmd_input.input.clone(),
+                        cache: false,
+                    })
+                }
+                _ => {
+                    session::session_history_add_user_cmd_and_reply_entries(
+                        &cmd_input.input,
+                        &format!("error: {}", e),
+                        &mut session,
+                        bpe_tokenizer,
+                        (false, db::LogEntryRetentionPolicy::None),
+                    );
+                    errorln!(io, "{}", e);
+                    continue;
+                }
+            },
+        };
+
+        if !cmd_input.input.starts_with("/prep")
+            && cmd_input.input.ends_with("\n\n")
+            && matches!(cmd, cmd::Cmd::Prep { .. })
+        {
+            infoln!(
+                io,
+                "Message is queued up and will be sent with your next message."
+            );
+            infoln!(io, "It was not sent because it ended with two blank lines.");
+        } else if cmd_input.input.starts_with("!") && matches!(cmd, cmd::Cmd::Prompt { .. }) {
+            warnln!(io, "No previous tool command to repeat.");
+        }
+
+        if exit_when_done
+            && session.cmd_queue.lock().await.is_empty()
+            && let cmd::Cmd::Noop = cmd
+        {
+            wrapup_and_cleanup(&session, update_asset_tx).await;
+            return Ok(0);
+        }
+
         let api_client = mk_api_client(Some(&session));
 
         if session.add_msg_on_new_day {
@@ -1674,13 +1517,11 @@ async fn repl(
                             };
                             match tool::extract_ai_defined_fn_def(arg) {
                                 Ok(fn_def) => {
-                                    let ai_defined_fn = session::AiDefinedFn {
-                                        fn_def,
-                                        fn_tool: fn_tool.clone(),
-                                    };
-                                    session.ai_defined_fns.insert(
-                                        ai_defined_tool_name.clone(),
-                                        (ai_defined_fn, is_task_mode_step),
+                                    session.add_ai_defined_fn(
+                                        &ai_defined_tool_name,
+                                        &fn_def,
+                                        fn_tool.clone(),
+                                        is_task_mode_step,
                                     );
                                     let output_text =
                                         format!("Stored as command: /{}", ai_defined_tool_name);
@@ -1856,7 +1697,13 @@ async fn wrapup_and_cleanup(
 
 /// Prints step (a REPL command from a source such as a task-step, bye-step, or
 /// hai-tool-step) with appropriate syntax highlighting and accent color.
-fn print_step(io: &Io, step_badge: &str, input: &str, masked_strings: &Vec<String>) {
+fn print_step(
+    io: &Io,
+    cmd_registry: &cmd_registry::Registry,
+    step_badge: &str,
+    input: &str,
+    masked_strings: &Vec<String>,
+) {
     let mut masked_input = input.to_string();
     for masked_string in masked_strings {
         let mask = "*".repeat(masked_string.len());
@@ -1873,9 +1720,9 @@ fn print_step(io: &Io, step_badge: &str, input: &str, masked_strings: &Vec<Strin
             out!(io, "{} ", step_badge);
         }
 
-        let color = if let Some(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
-        | Some(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
-            cmd::parse_user_input(&io.out, input, None, None)
+        let color = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
+        | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
+            cmd::parse_user_input(cmd_registry, input, None, None)
         {
             match accent {
                 Some(cmd::Accent::Danger) => Some((128, 0, 0)),
@@ -2054,6 +1901,7 @@ pub async fn prompt_ai(
                 config::get_ai_model_provider_name(&session.ai),
                 session.ai_temperature,
                 msg_history,
+                &session.cmd_registry,
                 tool_policy.as_ref(),
                 &session.shell,
                 Some(ctrlc_handler),
@@ -2137,6 +1985,7 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 temperature_deprecated,
                 msg_history,
+                &session.cmd_registry,
                 tool_policy.as_ref(),
                 &session.shell,
                 Some(ctrlc_handler),
@@ -2154,6 +2003,7 @@ pub async fn prompt_ai(
                 config::get_ai_model_provider_name(&session.ai),
                 session.ai_temperature,
                 msg_history,
+                &session.cmd_registry,
                 tool_policy.as_ref(),
                 &session.shell,
                 Some(ctrlc_handler),

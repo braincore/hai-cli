@@ -1,5 +1,5 @@
 use crate::{
-    config,
+    cmd_registry, config,
     tool::{FnTool, FnToolType, Tool},
 };
 use serde_json::{Value, json};
@@ -8,9 +8,16 @@ use serde_json::{Value, json};
 /// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.
 /// - shell: Allows AI to tailor the command especially since bash and
 ///   powershell are rather different.
-pub fn get_tool_schema(tool: &Tool, schema_key_name: &str, shell: &str, agentic: bool) -> Value {
+pub fn get_tool_schema(
+    cmd_registry: &cmd_registry::Registry,
+    tool: &Tool,
+    schema_key_name: &str,
+    shell: &str,
+    agentic: bool,
+) -> Value {
     let tool_name = get_tool_name(tool);
     let system = config::get_machine_os_arch();
+
     let mut schema = match tool {
         Tool::CopyToClipboard => json!({
             "name": tool_name,
@@ -236,319 +243,46 @@ The script should print important values to stdout."#
                 "description": "Provide the `_lang_tag` property before the `input` property in your response."
             },
         }),
-        Tool::HaiRepl => json!({
-            "name": tool_name,
-            "description": r#"
+        Tool::HaiRepl => {
+            let hai_tool_cmd_registry_rendered =
+                cmd_registry::render_llm(&cmd_registry, &cmd_registry::Filter::llm());
+            json!({
+                    "name": tool_name,
+                    "description": r#"
 Executes a series of hai-repl-commands.
 
 Do not call this tool twice in one go, just use multiple elements in `cmds`.
 
 Each hai-command can start with "/" or "!" (ask AI to use a tool). The behavior
 without either prefix is for the message to be prompted to the AI. Some commands
-can span multiple lines (e.g. /asset-write).
+can have multiple lines bodies (e.g. /asset-write).
 
 You can return 0 cmds or as many as you like. The AI will execute them in the
-order they are given. Each successive command has access to the outputs of the
-previous commands.
+order they are given.
 
-After every hai-command, the output whether it's a local program execution,
-tool use, or AI response is available in the REPL-history that the next
-hai-command can read and use.
+The output of each command is added to the conversation history before the next
+command is executed.
 
 If you don't have enough information to complete the prompt asked of you,
 consider PROMPTING YOURSELF by including a `!hai <revised prompt>` in the list
 of `cmds`.
 "#,
-            schema_key_name: {
-                "type": "object",
-                "properties": {
-                    "cmds": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "description": r#"
-Available Commands:
-
-/prompt <prompt>      - Sends a message to the AI and gets a response
-                        .cache=BOOL    Cache the result for the next execution (default: false)
-/ask-human <question> - Prompt the user with a question and add their answer to the conversation.
-                        .secret=BOOL   Hide input from terminal (default: false)
-                        .cache=BOOL    Cache the result for the next execution (default: false)
-
---
-
-/cd <path>            - Change current working directory
-
---
-
-/account              - See current and available accounts
-/whois <username>     - Look up a user (try `ken`)
-
---
-
-/file-read <glob>     - Load files into the conversation (e.g., `/file-read src/**/*.py`)
-                        Supports text files or PNG/JPG images
-                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/file-write <path> <multi-line body>
-                      - Create/replace a file at `path`. This is a MULTI-line command.
-                        Use a newline after `path` to write arbitrary multi-line content to the file.
-/file-patch <path> <multi-line body>
-    - Apply a search/replace patch to an existing file. This is a MULTI-line command.
-      The body contains a search block and a replace block separated by a delimiter line.
-      The search block must match full lines and EXACTLY ONE location in the asset.
-
-      The delimiter is the LONGEST run of `=` characters appearing on its own line in the
-      body, so it can be disambiguated from any legitimate `=` runs in your content.
-
-      Format:
-          /file-patch path/to/file
-          <search text>
-          =======
-          <replace text>
-
-      Tips:
-          - When typing manually, a single `=` works as the delimiter (as long as your
-            content has no `=` lines).
-          - LLMs should default to 7 (`=======`), and use a longer run if the content
-            itself contains lines of `=`.
-          - Use /file-read or /file-cat to grab exact text for building the search block.
-/file-cat <glob>      - Load file(s) into the conversation and print it
-                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/http-get <url>       - Load the URL into the conversation
-                        .n=BOOL   Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                        .raw=BOOL Return raw content rather than extracting markdown (default: false)
-                        .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/exec <cmd>           - Executes a shell command and adds the output to this conversation.
-                        The <cmd> can be treated as a bash shell command. One deviation
-                        is the use of `@@name` where a file would typically be specified.
-                        `@@name` will transparently be converted to the referenced asset
-                        by `name` which avoids the need to `/asset-import` them to the
-                        local filesystem. Shell output redirection (>) to `@@name` will
-                        be uploaded to the `@@name` asset obviating `/asset-export`.
-                        .cache=BOOL  Cache the result for the next execution (default: false)
-                        .i=BOOL  Run the command in interactive mode (default: false) Inherit terminal stdin/stdout/stderr (required for vim, etc.)
-/prep <msg>           - Add message to converation without prompting AI for response.
-                        .{danger,warn,info,success}=BOOL   Accent color (default: none)
-/prep <msg>           - Adds message with accent color: danger, warn, info, success
-/pin                  - Like /prep but the message is retained on /reset
-                        .{danger,warn,info,success}=BOOL   Accent color (default: none)
-/clip                 - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
-
---
-
-Available Tools:
-!sh <prompt>          - Ask AI to write shell script or pipeline that will be executed on your machine
-!py <prompt>          - Ask AI to write Python script that will be executed on your machine
-                        Searches for virtualenv in current dir & ancestors before falling back to python3
-!pyuv <prompt>        - Ask AI to write Python script with inline dependencies auto-installed via uv
-!html <prompt>        - Ask AI to write HTML/CSS/JS and open in system browser
-!'<cmd>' <prompt>     - Ask AI to write script that will be piped to this cmd through stdin
-                        e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
-                        If `{file}` present in `<cmd>`, AI output written to temporary file
-                        and substituted for `{file}` in the command
-!hai <prompt>         - Ask AI to generate REPL commands to fulfill the prompt with the
-                        full conversation as context. It's a way for an AI to recursively call
-                        itself to construct a new set of commands based on new information in
-                        the conversation.
-!clip <prompt>        - Ask AI to copy a part of the conversation to your clipboard
-! <prompt>            - Re-use previous tool with new prompt
-!                     - Re-use previous tool and prompt
-
-Function Tools:
-!fn-py <prompt>       - Ask AI to write a Python function that can be invoked with `/f<index>`.
-                        The function will take a single argument. The function will be given a name
-                        `f<index>` where `index>` is a unique number which can be used to invoke it
-                        as `/f<index>`.
-                        .cache=BOOL    Cache the result for the next execution (default: false)
-!fn-pyuv <prompt>     - Similar to `!fn-py` but `uv` is used allowing for the function to use
-                        additional library dependencies via a script dependency comment section.
-                        .cache=BOOL    Cache the result for the next execution (default: false)
-!fn-sh <prompt>       - Ask AI to write a shell script that can be invoked with `/f<index>`.
-                        The function will take a single argument. The function will be given a name
-                        `f<index>` where `index>` is a unique number which can be used to invoke it
-                        as `/f<index>`.
-                        .cache=BOOL    Cache the result for the next execution (default: false)
-/f<index> <arg>       - Invoke a AI-defined reusable function with the given index.
-                        For Python, `arg` must be a Python expression that can be evaluated.
-                        For shell, `arg` must be a shell value or expression.
-
---
-
-Standard Library Functions:
-/std now              - Print current date and time
-/std new-day-alert    - Make AI aware when a new day begins since the last interaction
-/std which <prog>     - Checks if program is available.
-
---
-
-Assets:
-
-- Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
-- Asset names that begin with `//` are expanded to `/<username>/` automatically.
-
-/asset <name> - Opens an asset in their configured editor for interactive editing by the user.
-/asset-list <prefix>    - List assets with the given (optional) prefix. Supports globs.
-                          Legend: 📁 (folder), 📥 (log), 🔒 (encrypted)
-                          .desc=BOOL   Sort by descending (default: false)
-/asset-search <query>   - Search for assets semantically
-                          .path=STRING   Specify the asset-pool to search (default: none)
-/asset-read <name> [<name> ...]   - Load asset(s) into the conversation
-                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                                    .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/asset-write <name> <multi-line body>
-                        - Create/replace an asset with `name`. This is a MULTI-line command.
-                          Use a newline after `name` to write arbitrary multi-line content.
-/asset-cat <name> [<name> ...]   - Load asset(s) into the conversation and print it
-                                    .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                                    .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/asset-patch <name> <multi-line body>
-    - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
-    The body contains a search block and a replace block separated by a delimiter line.
-    The search block must match full lines and EXACTLY ONE location in the asset.
-
-    The delimiter is the LONGEST run of `=` characters appearing on its own line in the
-    body, so it can be disambiguated from any legitimate `=` runs in your content.
-
-    Format:
-        /asset-patch path/to/file
-        <search text>
-        =======
-        <replace text>
-
-    Tips:
-        - When typing manually, a single `=` works as the delimiter (as long as your
-            content has no `=` lines).
-        - LLMs should default to 7 (`=======`), and use a longer run if the content
-            itself contains lines of `=`.
-        - Use /asset-read or /asset-cat with .n=true to grab exact text and line context
-        for building the search block.
-/asset-link <name>      - Prints link to asset (valid for 24hr) and loads into the conversation
-/asset-revisions <name> <count> - Lists <count> number of revisions of an asset
-/asset-listen <name> [<cursor>] - Blocks until a change to an asset. On a change, prints out
-                                  information about the asset. If cursor is set, begins listening
-                                  at that specific revision to ensure no changes are missed.
-/asset-push <name> <multi-line body> - Push data as a new asset revision.
-                            - Use a newline after `name` to push arbitrary multi-line content.
-                            - This is for pushing data like logs or messages that operate in an
-                              append-only fashion. The content will be stored as a new revision
-                              each time and the history can be viewed with `/asset-revisions`.
-                              This is not for editing or replacing an asset.
-/asset-import <name> <path>   - Imports local <path> into asset with <name>
-/asset-export <name> <path>   - Exports asset with name to local <path>
-/asset-temp <name> [<count>]  - Exports asset & metadata to temp files.
-                              - If count specified, that number of revisions is exported.
-/asset-revision-temp <name> [<rev_id>] - Exports revision of asset & metadata to a temporary file.
-/asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
-/asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
-/asset-sync-diff <path> - Show what assets have changed locally since last sync-down.
-/asset-remove <name>             - Removes an asset. Supports globs. Will remove a folder-asset but not its contents.
-/asset-remove-recursive <name>   - Recursively removes folder-asset and its contents. Supports globs.
-/asset-move <src> <dst> - Moves an asset from <src> to <dst>
-/asset-copy <src> <dst> - Copies an asset from <src> to <dst>
-/asset-acl-get <name> - List ACL on an asset
-/asset-acl-get-effective <name> - Show effective permissions on an asset
-/asset-acl-set <name> <principal> <ace>
-                      - Change ACL on an asset
-                        `principal` can be `everyone` or `user:<username>`
-                        `ace` is formatted as `<effect>:<permission>`
-                        effect: allow, deny, inherit
-                        permission: read-data, read-revisions, push-data
-/asset-md-get <name>    - Get the JSON-object metadata of an asset
-/asset-md-set <name> <md>    - Set metadata for an asset. Must be a JSON object
-/asset-md-set-key <name> <k> <v> - Set key to JSON value
-/asset-md-del-key <name> <k> - Delete a key from an asset's metadata
-
-Attachments:
-
-- Attachments are assets associated with a parent asset. An asset name containing `:`
-  refers to an attachment: the part before `:` is the parent asset name, and the part
-  after is the attachment name. For example, `doc.md:photo.jpg` refers to the attachment
-  `photo.jpg` of `doc.md`.
-- Attachments can be nested to any depth by chaining `:`, where each segment is an
-  attachment of the one before it. For example, `trip.md:day1.md:map.jpg` is `map.jpg`
-  attached to `day1.md`, which is itself attached to `trip.md`.
-- Use a trailing `:` to refer to an asset's list of attachments, e.g. `/asset-list doc.md:`.
-
-Referencing assets by ID:
-
-Use `/asset-list.full` to find an asset's `ID`. The ID is a stable reference to
-the asset, even if it is moved or renamed.
-
-You can reference the ID in any command that takes an asset name by prefixing
-it with `:`. For example, `/asset-read :<ID>` or `/asset-md-get :<ID>`
-
---
-
-/email <subject> <multi-line body> - Send an email to default address.
-                          - Use a newline after `subject` to specify a multi-line email body.
-/notif <title> <multi-line body> - Send a push notification to mobile app.
-                          - Use a newline after `title` to specify a multi-line notification body.
-
---
-
-Tasks
-/task <name/path>       - Enter task mode by loading task from repo (username/task-name) or file path
-                          .key=STRING   Namespace the cache (default: none)
-                          .trust=BOOL   Do not prompt for user confirmations (default: false)
-/task-search <query>    - Search for tasks in the repository
-/task-cat <name/path>   - Print a task without loading it from repo or file path
-/task-versions <name>   - List all versions of a task in the repo
-/task-publish <path>    - Publish task to repo (requires /account-login)
-
---
-
-MCPs (Experimental):
-
-/mcp-add <name> [<env>] <cmd...> - Add Model Context Protocol server.
-                                   Ex: `/mcp-add git V=1 uvx -q mcp-server-git`
-                                   New command is created to invoke with:
-                                   `/mcp_<name> <tool_name> <json_arg>`
-
-Web search:
-
-/web-search <query>             - Search the web for relevant information
-    .n=NUMBER Number of results (default: 5)
-    .pd=BOOL Results in past day
-    .pw=BOOL Results in past 7 days
-    .pm=BOOL Results in past month
-    .py=BOOL Results in past year
-    .range=STRING Results in a specific date range (Ex: "2023-01-01to2023-12-31")
-
-    The output is too noisy for user consumption so you should
-    recursively prompt yourself (/prompt subcommand) or follow up in
-    agentic mode to analyze the results and give a final answer.
-
---
-
-Usage guideline for command options:
-
-/<cmd>.<opt> (defaults option to true)
-/<cmd>.<opt>=true (explicitly set bool)
-/<cmd>.<opt>="" (set string)
-/<cmd>.<opt>=10 (set number)
-/<cmd>.<opt1>.<opt2>="" (multi-option specification)
-
-Usage guideline for <multi-line body>:
-
-Example of /asset-write
-
-```
-/asset-write path/to/asset/abc
-contents line 1
-contents line 2
-```
-
-
-"#,
-                        }
+                    schema_key_name: {
+                        "type": "object",
+                        "properties": {
+                            "cmds": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "description": hai_tool_cmd_registry_rendered,
+                                }
+                            },
+                        },
+                        "required": ["cmds"],
+                        "additionalProperties": false,
                     },
-                },
-                "required": ["cmds"],
-                "additionalProperties": false,
-            },
-        }),
+            })
+        }
     };
     if agentic {
         schema[schema_key_name]["properties"]["_continue"] = json!({

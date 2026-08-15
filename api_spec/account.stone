@@ -93,6 +93,28 @@ union AccountWhoisError
 
 # --
 
+route search(AccountSearchArg, AccountSearchResult, AccountSearchError)
+    "Search for account by username."
+
+    attrs
+        auth = "user_optional"
+
+struct AccountSearchArg
+    q String(min_length=3)
+        "Query must be at least 3 non-whitespace characters."
+
+struct AccountSearchResult
+    users List(UserSearchResult)
+
+struct UserSearchResult
+    username String
+
+union AccountSearchError
+    bad_q
+        "If query is invalid, e.g. too short after trimming."
+
+# --
+
 route set_name(AccountSetNameArg, Void, AccountSetNameError)
     "Set name for account."
 

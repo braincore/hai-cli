@@ -27,8 +27,8 @@ use crate::{
     api::{self, client::HaiClient},
     asset_async_writer,
     asset_cache::AssetBlobCache,
-    asset_editor, asset_helper, asset_reader, asset_sync, chat, clipboard, cmd, config, crypt,
-    ctrlc_handler,
+    asset_editor, asset_helper, asset_reader, asset_sync, chat, clipboard, cmd, cmd_registry,
+    config, crypt, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
     feature::{
         asset_crypt::{self, KeyRecipient},
@@ -238,7 +238,12 @@ pub async fn process_cmd(
             ProcessCmdResult::break_next().discard_cmd_and_output()
         }
         cmd::Cmd::Help(cmd::HelpCmd { history: _ }) => {
-            outln!(io, "{}\n\nFor interactive help: `/task hai/help`", HELP_MSG);
+            let cmd_filter = cmd_registry::Filter::user();
+            outln!(
+                io,
+                "{}\n\n- For quick answers, just ask the LLM.\n- `/forget` to unload help from conversation.\n- For more extensive help, use: `/task hai/help`",
+                cmd_registry::render_help(&session.cmd_registry, &cmd_filter)
+            );
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::Cd(cmd::CdCmd { path }) => {
@@ -5413,19 +5418,18 @@ pub async fn process_cmd(
                     return ProcessCmdResult::loop_next();
                 }
             };
-            session
-                .mcps
-                .insert(name.clone(), (mcp_service, is_task_mode_step));
+            let full_name = format!("mcp_{}", name);
+            session.add_mcp(&full_name, mcp_service, is_task_mode_step);
 
             let tools_str =
                 serde_json::to_string_pretty(&mcp_tools).expect("Failed to serialize tools");
 
             outln!(
                 io,
-                "{}\n\nMCP service '{}' added. Call with: \n\n    /mcp_{} <mcp_tool> <json_arg>\n",
+                "{}\n\nMCP service '{}' added. Call with: \n\n    /{} <mcp_tool> <json_arg>\n",
                 tools_str,
                 name,
-                name
+                full_name
             );
 
             ProcessCmdResult::loop_next()
@@ -6613,305 +6617,6 @@ fn simplify_path(abs_path: &str, style: &PathStyle) -> String {
         PathStyle::Absolute => abs_path.to_string(),
     }
 }
-
-// --
-
-const HELP_MSG: &str = r##"Available Commands:
-
-/? /h /help                  - Show this help menu
-/q /quit                     - Bye (CTRL+D works too)
-/n /new                      - New conversation
-/r /reset                    - New conversation but retains /pin /asset-read /file-read /http-get
-
---
-
-/ai                          - Show the current AI model
-/ai <model>                  - Switch AI model
-                               Available models: gpt5, o4mini, opus, sonnet, r1, grok, gpt-oss, ...
-                               Prefix provider for any model: openai/*, anthropic/*, ollama/*, google/*
-/ai-default                  - Show the default AI model on start up
-/ai-default <model>          - Set the default AI model on start up
-/temperature <t|none>        - Set the AI model temperature (0 for coding, higher for writing; depends on model)
-/cd <path>                   - Change current working directory
-
---
-
-/account [<username>]        - See current and available accounts
-                               If username specified, switches to it. Use `_` to switch to no-user
-/account-new                 - Make a new account
-/account-login               - Login to your account
-/account-logout [<username>] - Remove credentials of previously logged-in account
-/account-balance             - Check credits remaining for hai-router
-/account-subscribe           - Subscribe for hai-router & asset storage
-/whois <username>            - Look up a user (try `ken`)
-/hai-router <on|off>         - Turn on/off hai-router. Requires credits
-
---
-
-/t /task <name|path>         - Enter task mode by loading task from repo (username/task-name) or file path
-                               File path must start with `./`, `/`, or `~`
-                               .key=STRING   Namespace the cache (default: none)
-                               .trust=BOOL   Do not prompt for user confirmations (default: false)
-/task-search <query>         - Search for tasks in the repository
-/task-cat <name|path>        - View a task without loading it from repo or file path
-/task-versions <name>        - List all versions of a task in the repository
-/task-end                    - End task mode (CTRL+D works too)
-/task-update <name>          - Update task to latest version
-/task-publish <path>         - Publish task to repo (requires /account-login)
-/task-edit <name>            - Edit task in the repo (requires /account-login)
-/task-forget <name>          - Forget all cached /ask-human answers
-/task-purge <name>           - Remove task from your machine
-/task-include <name|path>    - Include task commands in conversation without entering task mode
-
---
-
-/file-read <glob path>       - Load files into the conversation (e.g., `/file-read src/**/*.py`)
-                               Supports text files or PNG/JPG images
-                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/file-write <path> <multi-line body>
-                             - Create/replace a file at `path`. This is a MULTI-line command.
-                               Use a newline after `path` to write arbitrary multi-line content to the file.
-/file-patch <path> <multi-line body>
-                             - Apply a search/replace patch to an existing file. This is a MULTI-line command.
-                               The body contains a search block and a replace block separated by a delimiter line.
-                               The search block must match full lines and EXACTLY ONE location in the file.
-
-                               The delimiter is the LONGEST run of `=` characters appearing on its own line in the
-                               body, so it can be disambiguated from any legitimate `=` runs in your content.
-
-                               Format:
-                                 /file-patch path/to/file
-                                 <search text>
-                                 =======
-                                 <replace text>
-
-                               Tips:
-                                 - When typing manually, a single `=` works as the delimiter (as long as your
-                                   content has no `=` lines).
-                                 - LLMs should default to 7 (`=======`), and use a longer run if the content
-                                   itself contains lines of `=`.
-                                 - Use /file-read or /file-cat to grab exact text for building the search block.
-/file-cat <glob path>        - Load file(s) into the conversation and print it
-                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/http-get <url>              - Load url into the conversation
-                               .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                               .raw=BOOL  Return raw content rather than extracting markdown (default: false)
-                               .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/e /exec <cmd>               - Executes a shell command and adds the output to this conversation
-                               @@asset can be used in place of file paths. These assets will be
-                               transparently downloaded. If specified as a shell output redirect
-                               (>), the output will be uploaded as an asset.
-                               .i=BOOL    Run the command in interactive mode (default: false)
-!!<cmd>                      - Alternative to `/exec` not to be confused with tools.
-/prep                        - Queue a message to be sent with your next message (or, end with two blank lines)
-                               .{danger,warn,info,success}=BOOL   Accent color (default: none)
-/pin                         - Like /prep but the message is retained on /reset
-                               .{danger,warn,info,success}=BOOL   Accent color (default: none)
-/system-prompt               - Set a system prompt for the conversation
-/clip                        - Copies the last message to your clipboard. Unlike !clip tool, AI is not prompted
-/forget [<n>]                - Forget the last <n> messages in the conversation. Defaults to 1.
-/keep <bottom> [<top>]       - Keep the last <bottom> messages in the conversation and forgets the rest.
-                               If top is specified, keeps the first <top> messages as well.
-
---
-
-Available Tools:
-!sh <prompt>                 - Ask AI to write shell script that will be executed on your machine
-!py <prompt>                 - Ask AI to write Python script that will be executed on your machine
-                               Searches for virtualenv in current dir & ancestors before falling back to python3
-!pyuv <prompt>               - Ask AI to write Python script with inline dependencies auto-installed via uv
-!html <prompt>               - Ask AI to write HTML/CSS/JS and open in system browser
-!'<cmd>' <prompt>            - Ask AI to write script that will be piped to this cmd through stdin
-                               e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc
-                               Vars from haivars & /setvar can be used: !'$psql' describe users table
-                               If `{file}` present in `<cmd>`, AI output written to temporary file
-                               and substituted for `{file}` in the command
-!hai <prompt>                - Ask AI to write and execute REPL command(s)
-!clip <prompt>               - Ask AI to copy a part of the conversation to your clipboard
-! <prompt>                   - Re-use previous tool with new prompt
-!                            - Re-use previous tool and prompt
-!<tool>                      - Activates tool mode for the specified tool
-                               In tool mode, all messages are treated as prompts for the tool.
-                               Use !exit or Ctrl+D to exit tool mode
-
-Function Tools:
-!fn-py <prompt>              - Ask AI to write a Python function to implement your prompt.
-                               Function is given a name (`f<index>`) to invoke with: `/f<index> <arg>`
-!fn-pyuv <prompt>            - Similar to `!fn-py` but `uv` is used allowing for the function to use
-                               additional library dependencies via a script dependency comment section.
-!fn-sh <prompt>              - Ask AI to write a shell script that can be invoked with `/f<index>`.
-                               The function will take a single argument. The function will be given a name
-                               `f<index>` where `index>` is a unique number which can be used to invoke it
-                               as `/f<index>`.
-/f<index> <arg>              - Invoke a AI-defined reusable function with the given index.
-                               For Python, `arg` must be a Python expression that can be evaluated.
-                               For shell, `arg` must be a shell value or expression.
-/fns                         - List all available functions.
-
---
-
-Standard Library Functions:
-/std now                     - Displays the current date and time.
-/std new-day-alert           - Make AI aware when a new day begins since the last interaction.
-/std which <prog>            - Checks if program is available.
-
---
-
-Assets:
-
-- Asset names that begin with `/<username>` are public assets that can be accessed by anyone.
-- Asset names that begin with `//` are expanded to `/<username>/` automatically.
-
-/a /asset <name> [<editor>]      - Open asset in editor (create if does not exist)
-/ls /asset-list <prefix>         - List assets with the given (optional) prefix. Supports globs.
-                                   Legend: 📁 (folder), 📥 (log), 🔒 (encrypted)
-                                   .desc=BOOL   Sort by descending (default: false)
-/asset-search <query>            - Search for assets semantically
-                                   .path=STRING   Specify the asset-pool to search (default: none)
-/asset-read <name> [<name> ...]  - Load asset(s) into the conversation
-                                   .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                                   .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/asset-write <name> <multi-line body>
-                                 - Create/replace an asset with `name`. This is a MULTI-line command.
-                                   Use a newline after `name` to write arbitrary multi-line content.
-/cat /asset-cat <name> [<name> ...]
-                                 - Load asset(s) into the conversation and print it
-                                   .n=BOOL    Show line numbers (default: false) (handy when asking the LLM to produce patches or refer to specific lines)
-                                   .hq=BOOL   If it's an image, whether to load the high-res version (default: false)
-/asset-patch <name> <multi-line body>
-                                 - Apply a search/replace patch to an existing asset. This is a MULTI-line command.
-                                   The body contains a search block and a replace block separated by a delimiter line.
-                                   The search block must match full lines and EXACTLY ONE location in the asset.
-
-                                   The delimiter is the LONGEST run of `=` characters appearing on its own line in the
-                                   body, so it can be disambiguated from any legitimate `=` runs in your content.
-
-                                   Format:
-                                       /asset-patch path/to/file
-                                       <search text>
-                                       =======
-                                       <replace text>
-
-                                   Tips:
-                                       - When typing manually, a single `=` works as the delimiter (as long as your
-                                         content has no `=` lines).
-                                       - LLMs should default to 7 (`=======`), and use a longer run if the content
-                                         itself contains lines of `=`.
-                                       - Use /asset-read or /asset-cat to grab exact text and line context for
-                                         building the search block.
-/asset-link <name>               - Prints link to asset (valid for 24hr) and loads it into the conversation
-/asset-revisions <name> [<n>]    - Lists revisions of an asset one at a time, waiting for user input
-                                   If `n` is set, displays `n` revisions without needing user input
-/asset-listen <name> [<cursor>]  - Blocks until a change to an asset. On a change, prints out
-                                   information about the asset. If cursor is set, begins listening
-                                   at that specific revision to ensure no changes are missed.
-/asset-push <name>               - Push data into an asset. See pushed data w/ `/asset-revisions`
-                                   This is for pushing data like logs or messages that operate in an
-                                   append-only fashion. The content will be stored as a new revision
-                                   each time and the history can be viewed with `/asset-revisions`.
-/asset-import <n> <p>            - Imports local <path> into asset with <name>
-/asset-export <n> <p>            - Exports asset with name to local <path>
-/asset-temp <name> [<count>]     - Exports asset to a temporary file.
-                                   If `count` set, the latest `count` revisions are exported.
-/asset-revision-temp <n> [<rev>] - Exports revision of asset to a temporary file. `n` is asset name.
-/asset-sync-up <path> <prefix>   - Sync local path to asset prefix. Trailing / in the path syncs the folder's contents (rsync semantics).
-/asset-sync-down <prefix> <path> - Sync assets with prefix to local path. Trailing / in the prefix syncs the folder's contents (rsync semantics).
-/asset-sync-diff <path>          - Show what assets have changed locally since last sync-down.
-/asset-remove <name>             - Removes an asset. Supports globs. Will remove a folder-asset but not its contents.
-/asset-remove-recursive <name>   - Recursively removes folder-asset and its contents. Supports globs.
-/asset-move <src> <dst>          - Moves an asset from <src> to <dst>
-/asset-copy <src> <dst>          - Copies an asset from <src> to <dst>
-/asset-acl-get <name>            - List ACL on an asset
-/asset-acl-get-effective <name>  - Show effective permissions on an asset
-/asset-acl-set <name> <principal> <ace>
-                                 - Change ACL on an asset
-                                   `principal` can be `everyone` or `user:<username>`
-                                   `ace` is formatted as `<effect>:<permission>`
-                                   effect: allow, deny, inherit
-                                   permission: read-data, read-revisions, push-data
-/asset-md-get <name>             - Get the metadata of an asset
-/asset-md-set <name> <md>        - Set metadata for an asset. Must be a JSON object.
-/asset-md-set-key <name> <k> <v> - Set key to JSON value.
-/asset-md-del-key <name> <k>     - Delete a key from an asset's metadata.
-/asset-folder-collapse <path>    - Collapse the specified folder when listing its parent, so it
-                                   appears as a single entry.
-/asset-folder-expand <path>      - Expand a previously collapsed folder, showing its contents in the
-                                   parent listing.
-/asset-folder-list [<path>]      - List all collapsed folders, optionally filtered by the given path
-                                   prefix.
-/asset-crypt-setup               - Setup asset encryption for your account.
-/asset-crypt-lock [<key_id>]     - Lock an encryption key (requires password on next use)
-/asset-crypt-unlock [<key_id>]   - Unlock an encryption key (no password until locked)
-/asset-crypt-recover             - Recover asset encryption keys using your recovery code.
-
-/asset-app <asset_name>          - Open an asset as an app in the browser.
-
-/chats                           - Interactive prompt to resume a recent conversation.
-/chat-save [<asset_name>]        - Save the conversation as an asset
-                                   If asset name omitted, name automatically generated
-                                   .fork=BOOL    If from a resumed chat, creates a new asset when re-saving (default: false)
-/chat-resume [<asset_name>]      - Replaces current chat with chat saved to asset via `/chat-save`
-                                   If asset name omitted, resumes last auto-saved chat
-                                   .fork=BOOL    Re-saves will create a new asset (default: false)
-
-Attachments:
-
-- Attachments are assets associated with a parent asset. An asset name containing `:`
-  refers to an attachment: the part before `:` is the parent asset name, and the part
-  after is the attachment name. For example, `doc.md:photo.jpg` refers to the attachment
-  `photo.jpg` of `doc.md`.
-- Attachments can be nested to any depth by chaining `:`, where each segment is an
-  attachment of the one before it. For example, `trip.md:day1.md:map.jpg` is `map.jpg`
-  attached to `day1.md`, which is itself attached to `trip.md`.
-- Use a trailing `:` to refer to an asset's list of attachments, e.g. `/asset-list doc.md:`.
-
-Referencing assets by ID:
-
-Use `/asset-list.full` to find an asset's `ID`. The ID is a stable reference to
-the asset, even if it is moved or renamed.
-
-You can reference the ID in any command that takes an asset name by prefixing
-it with `:`. For example, `/asset-read :<ID>` or `/asset-md-get :<ID>`
-
---
-
-MCPs (Experimental):
-
-/mcp-add <name> [<env>] <cmd...> - Add Model Context Protocol server.
-                                   Ex: `/mcp-add git V=1 uvx -q mcp-server-git`
-                                   New command is created to invoke with:
-                                   `/mcp_<name> <tool_name> <json_arg>`
-
---
-
-Messaging:
-
-/email <subject><NEWLINE><body>  - Send an email to default address.
-                                   Requires setup with `/task hai/add-email`
-/notif <title><NEWLINE><body>    - Send a push notification to mobile app.
-                                   Requires setup with mobile app.
-
---
-
-Web search:
-
-/web-search <query>             - Search the web for relevant information
-                                  .n=NUMBER Number of results (default: 5)
-                                  .pd=BOOL Results in past day
-                                  .pw=BOOL Results in past 7 days
-                                  .pm=BOOL Results in past month
-                                  .py=BOOL Results in past year
-                                  .range=STRING Results in a specific date range (Ex: "2023-01-01to2023-12-31")
-
---
-
-Usage guideline for command options:
-
-/<cmd>.<opt>=<value>
-/<cmd>.<opt> (defaults option to true)
-/<cmd>.<opt1>.<opt2> (multi-option)"##;
 
 // --
 

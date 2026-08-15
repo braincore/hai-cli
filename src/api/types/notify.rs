@@ -105,7 +105,8 @@ impl ::serde::ser::Serialize for ListenAsset {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct ListenAssetPool {
-    /// Cursor from asset/entry/iter.
+    /// Cursor from [`asset::entry_iter()`](crate::asset::entry_iter) or
+    /// [`asset::entry_list()`](crate::asset::entry_list).
     pub cursor: String,
 }
 

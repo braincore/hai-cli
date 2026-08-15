@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::errorln;
 use crate::{
     api::client::HaiClient,
-    chat, cmd, config,
+    chat, cmd, cmd_registry, config,
     db::{self, LogEntryRetentionPolicy},
     feature::asset_keyring::AssetKeyring,
     io::Out,
@@ -148,6 +148,10 @@ pub struct SessionState {
     /// Asset name that originates the chat (/chat-resume) and the asset name
     /// to save to (/chat-save).
     pub chat_log_asset_name: Option<String>,
+    /// The registry of available commands. It's stored here because commands
+    /// can be added and removed dynamically. In particular, this is tied to
+    /// list of added mcp/fn-tool commands.
+    pub cmd_registry: cmd_registry::Registry,
 }
 
 #[derive(Debug)]
@@ -170,6 +174,7 @@ impl SessionState {
         account: Option<db::Account>,
         incognito: bool,
         force_ai_model: Option<config::AiModel>,
+        cmd_registry: cmd_registry::Registry,
     ) -> Self {
         let mut default_ai_model = config::choose_init_ai_model(&cfg);
         if incognito && let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
@@ -189,7 +194,13 @@ impl SessionState {
             cfg.default_shell.clone().unwrap_or("bash".into())
         };
         let default_tool = if let Some(default_tool) = cfg.default_tool.clone() {
-            cmd::parse_tool_command_standalone(out, &default_tool)
+            match cmd::parse_tool_mode(&cmd_registry, &default_tool) {
+                Ok(tool_mode_cmd) => Some(tool_mode_cmd),
+                Err(e) => {
+                    errorln!(out, "failed to parse default tool {}: {}", default_tool, e);
+                    None
+                }
+            }
         } else {
             None
         };
@@ -228,6 +239,7 @@ impl SessionState {
             gateways: vec![],
             mcps: HashMap::new(),
             chat_log_asset_name: None,
+            cmd_registry,
         }
     }
 
@@ -303,11 +315,23 @@ impl SessionState {
             }
         }
         self.gateways.clear();
-        self.ai_defined_fns
-            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        let removed_ai_defined_fns: Vec<_> = self
+            .ai_defined_fns
+            .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_ai_defined_fns {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        let removed_mcps: Vec<_> = self
+            .mcps
+            .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_mcps {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
         self.chat_log_asset_name = None;
     }
 
@@ -337,11 +361,24 @@ impl SessionState {
             }
         }
         self.gateways.clear();
-        self.ai_defined_fns
-            .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        let removed_ai_defined_fns: Vec<_> = self
+            .ai_defined_fns
+            .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_ai_defined_fns {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
+
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
+        let removed_mcps: Vec<_> = self
+            .mcps
+            .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_mcps {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
         self.chat_log_asset_name = None;
     }
 
@@ -368,6 +405,41 @@ impl SessionState {
             }
             _ => false,
         }
+    }
+
+    pub fn add_ai_defined_fn(
+        &mut self,
+        name: &str,
+        fn_def: &str,
+        fn_tool: tool::FnTool,
+        is_task_step: bool,
+    ) {
+        let ai_defined_fn = AiDefinedFn {
+            fn_def: fn_def.to_string(),
+            fn_tool,
+        };
+        self.ai_defined_fns
+            .insert(name.to_string(), (ai_defined_fn, is_task_step));
+        let cmd_spec = cmd_registry::fn_tool_cmd(name.to_string(), "Custom defined function");
+        self.cmd_registry.add_cmd(
+            cmd_spec,
+            cmd_registry::InsertAt::AfterFamily("fn-tool".to_string()),
+        );
+    }
+
+    pub fn add_mcp(
+        &mut self,
+        name: &str,
+        mcp_service: crate::feature::mcp::McpService,
+        is_task_step: bool,
+    ) {
+        self.mcps
+            .insert(name.to_string(), (mcp_service, is_task_step));
+        let cmd_spec = cmd_registry::mcp_cmd(name.to_string(), "Custom defined MCP service");
+        self.cmd_registry.add_cmd(
+            cmd_spec,
+            cmd_registry::InsertAt::AfterFamily("mcp".to_string()),
+        );
     }
 }
 

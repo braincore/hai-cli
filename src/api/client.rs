@@ -178,6 +178,17 @@ impl HaiClient {
         .await
     }
 
+    pub async fn account_search(
+        &self,
+        arg: account::AccountSearchArg,
+    ) -> Result<account::AccountSearchResult, RequestError<account::AccountSearchError>> {
+        self.mk_api_request::<_, account::AccountSearchResult, account::AccountSearchError>(
+            "/account/search",
+            &arg,
+        )
+        .await
+    }
+
     pub async fn account_get_balance(
         &self,
         arg: (),

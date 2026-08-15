@@ -4,7 +4,7 @@ use predicates::str::{contains, ends_with};
 fn default_cmd() -> Command {
     let mut cmd = Command::cargo_bin("hai").unwrap();
     cmd.current_dir(env!("CARGO_MANIFEST_DIR")); // Set to crate root
-    cmd.arg("-u").arg("_").arg("bye");
+    cmd.arg("-u").arg("_").arg("bye").arg("-p");
     cmd
 }
 

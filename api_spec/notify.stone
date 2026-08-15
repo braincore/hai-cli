@@ -1,5 +1,7 @@
 namespace notify
 
+import asset
+
 # For the unlisted route `notify/listen`. Unlisted because it's a websocket
 # route. It requires no authentication, but the cursors come from authenticated
 # routes.
@@ -7,7 +9,7 @@ union NotifyListenArg
     asset_pool ListenAssetPool
         struct
             cursor String
-                "Cursor from asset/entry/iter."
+                "Cursor from :route:`asset.entry/iter` or :route:`asset.entry/list`."
     asset ListenAsset
         struct
             cursor String

@@ -22,6 +22,7 @@ pub async fn send_to_ollama(
     model: &str,
     temperature: Option<f32>,
     history: &[chat::Message],
+    cmd_registry: &crate::cmd_registry::Registry,
     tool_policy: Option<&tool::ToolPolicy>,
     shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
@@ -48,7 +49,13 @@ pub async fn send_to_ollama(
     // Create JSON payload
     let mut tool_schemas = vec![];
     if let Some(tp) = tool_policy {
-        tool_schemas.push(get_tool_schema(&tp.tool, "parameters", shell, tp.agentic))
+        tool_schemas.push(get_tool_schema(
+            cmd_registry,
+            &tp.tool,
+            "parameters",
+            shell,
+            tp.agentic,
+        ))
     }
     let mut request_body = if tool_schemas.is_empty() {
         json!({
