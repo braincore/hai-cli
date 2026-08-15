@@ -146,7 +146,6 @@ pub async fn save_chat_as_asset(
                 .to_formatted_string(&Locale::en)
         );
         flush!(io);
-        // FIXME: prompt_ai_simple needs to use out?
         prompt_ai_simple(
             &io.out,
             &format!(

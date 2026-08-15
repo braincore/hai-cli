@@ -590,6 +590,7 @@ pub async fn run_bot_loop(
 
     let repl_mode = crate::session::ReplMode::Normal;
     let incognito = false;
+    let cmd_registry = crate::cmd_registry::Registry::new();
     let session = crate::session::SessionState::new_from_cfg(
         out,
         repl_mode,
@@ -597,6 +598,7 @@ pub async fn run_bot_loop(
         account.clone(),
         incognito,
         force_ai_model,
+        cmd_registry,
     );
 
     let api_client = crate::session::mk_api_client(Some(&session));

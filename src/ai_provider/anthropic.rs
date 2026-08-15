@@ -103,6 +103,7 @@ pub async fn send_to_anthropic(
     temperature: Option<f32>,
     temperature_deprecated: bool,
     history: &[chat::Message],
+    cmd_registry: &crate::cmd_registry::Registry,
     tool_policy: Option<&tool::ToolPolicy>,
     shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
@@ -156,7 +157,13 @@ pub async fn send_to_anthropic(
     let mut tool_schemas = vec![];
     let tool_choice = if let Some(tp) = tool_policy {
         let tool_name = get_tool_name(&tp.tool);
-        tool_schemas.push(get_tool_schema(&tp.tool, "input_schema", shell, tp.agentic));
+        tool_schemas.push(get_tool_schema(
+            cmd_registry,
+            &tp.tool,
+            "input_schema",
+            shell,
+            tp.agentic,
+        ));
         if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))
         } else {

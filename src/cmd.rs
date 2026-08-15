@@ -1,9 +1,7 @@
 use regex::Regex;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::tool;
-use crate::{errln, infoln, io::Out, warnln};
+use crate::{cmd_parse, tool};
 
 #[derive(Clone, Debug)]
 /// Represents all possible commands in the program's REPL
@@ -1002,29 +1000,6 @@ pub struct QueuePopCmd {
     pub queue_name: Option<String>,
 }
 
-fn get_cmd_re() -> &'static Regex {
-    static CMD_RE: OnceLock<Regex> = OnceLock::new();
-    CMD_RE.get_or_init(|| Regex::new(r"^([a-z!?]?[a-z0-9-_]*)(\.| |\(|$)").unwrap())
-}
-
-fn get_tool_re() -> &'static Regex {
-    static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE
-        .get_or_init(|| Regex::new(r"^([a-z]+[a-z0-9-]*|'(?:\\'|[^'])*')?(\.| |\?|\(|$)").unwrap())
-}
-
-fn get_ai_def_tool_re() -> &'static Regex {
-    static TOOL_RE: OnceLock<Regex> = OnceLock::new();
-    TOOL_RE.get_or_init(|| {
-        Regex::new(r"^f([0-9]+|_[A-Za-z]+(?:_[A-Za-z]+)*|'(?:\\'|[^'])*')?(\.| |$)").unwrap()
-    })
-}
-
-fn get_mcp_invoke_re() -> &'static Regex {
-    static MCP_RE: OnceLock<Regex> = OnceLock::new();
-    MCP_RE.get_or_init(|| Regex::new("^mcp_([A-Za-z_][A-Za-z0-9_]*)$").unwrap())
-}
-
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
     static CMDS_WITH_MARKDOWN_BODY_RE: OnceLock<Regex> = OnceLock::new();
     CMDS_WITH_MARKDOWN_BODY_RE.get_or_init(|| {
@@ -1035,22 +1010,24 @@ pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
 
 /// Parses user/task input.
 ///
-/// Errors are printed to the screen so the caller is not expected to.
-///
 /// In general, command-like strings that don't exactly match one of our
 /// commands are treated as prompts rather than errors. This is to minimize
 /// conflicts between prompts from the user (especially pasted code) and our
 /// command list. For example, we don't want a "//comment" input to trigger an
 /// error even though if you squint it looks like a cmd.
 pub fn parse_user_input(
-    out: &Out,
+    cmd_registry: &crate::cmd_registry::Registry,
     input: &str,
     last_tool_cmd: Option<ToolCmd>,
     tool_mode: Option<ToolModeCmd>,
-) -> Option<Cmd> {
+) -> Result<Cmd, cmd_parse::ParseError> {
     if input.trim().is_empty() {
-        return Some(Cmd::Noop);
+        return Ok(Cmd::Noop);
     }
+    // NOTE: We intentionally preserve whitespace at the start of the input.
+    // Why? Because a space at the start is the easiest way for a user to
+    // indicate that their message is definitely not a command, but a prompt.
+
     // EXPERIMENT: Add $cmd as a short hand for exec. It's not ideal b/c it's
     // similar to the tool notations (! and !?). But, "/e " has proven to be
     // rather awkward to type. The "/" is tough to reach and the " " before the
@@ -1067,2662 +1044,959 @@ pub fn parse_user_input(
     } else {
         input.to_string()
     };
-    // NOTE: We intentionally preserve whitespace at the start of the input.
-    // Why? Because a space at the start is the easiest way for a user to
-    // indicate that their message is definitely not a command, but a prompt.
-    if let Some(mut remaining) = input.strip_prefix('/') {
-        // Try parsing as a command
-        let input = input.trim_end();
-        let cmd_re = get_cmd_re();
-        let (remaining, cmd_name) = match cmd_re.captures(remaining) {
-            Some(captures) => {
-                if let Some(m) = captures.get(1) {
-                    remaining = &input[m.end() + 1..];
-                    (remaining, m.as_str())
-                } else {
-                    warnln!(out, "Did you intend to invoke a /command?");
-                    return Some(Cmd::Prompt(PromptCmd {
-                        prompt: input.into(),
-                        cache: false,
-                    }));
-                }
-            }
-            None => {
-                warnln!(out, "Did you intend to invoke a /command?");
-                return Some(Cmd::Prompt(PromptCmd {
-                    prompt: input.into(),
-                    cache: false,
-                }));
-            }
-        };
-        let (options, remaining) = if remaining.starts_with('.') {
-            parse_dot_options(remaining)
-        } else if remaining.starts_with('(') {
-            // Legacy parenthetical options syntax
-            let options_re = Regex::new(r"(\([^)]*\))?( |$)").unwrap();
-            match options_re.captures(remaining) {
-                Some(captures) => {
-                    if let Some(m) = captures.get(1) {
-                        let opts = parse_options(m.as_str());
-                        let rest = remaining[m.end()..].trim_start();
-                        (opts, rest)
-                    } else {
-                        (HashMap::new(), remaining)
-                    }
-                }
-                None => (HashMap::new(), remaining),
-            }
-        } else {
-            (HashMap::new(), remaining)
-        };
-        parse_command(out, cmd_name, options.clone(), remaining, input)
-    } else if let Some(mut remaining) = input.strip_prefix('!') {
-        // Try parsing as a tool-command
-        let input = input.trim_end();
-        let user_confirmation = if remaining.starts_with("?") {
-            remaining = &remaining[1..];
-            true
-        } else {
-            false
-        };
-        // If the next char is blank, then we assume the user intends to use a
-        // previous tool so we leave the tool_name empty.
-        let (mut remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
-            (remaining, "".to_string())
-        } else {
-            let tool_re = get_tool_re();
-            match tool_re.captures(remaining) {
-                Some(captures) => {
-                    if let Some(m) = captures.get(1) {
-                        remaining = &remaining[m.end()..];
-                        (remaining, m.as_str().replace("\\'", "'"))
-                    } else {
-                        warnln!(out, "Did you intend to invoke a tool?");
-                        return Some(Cmd::Prompt(PromptCmd {
-                            prompt: input.into(),
-                            cache: false,
-                        }));
-                    }
-                }
-                None => {
-                    warnln!(out, "Did you intend to invoke a tool?");
-                    return Some(Cmd::Prompt(PromptCmd {
-                        prompt: input.into(),
-                        cache: false,
-                    }));
-                }
-            }
-        };
-        let force_tool = if remaining.starts_with("?") {
-            remaining = &remaining[1..];
-            false
-        } else {
-            true
-        };
-        let (options, remaining) = if remaining.starts_with('.') {
-            parse_dot_options(remaining)
-        } else if remaining.starts_with('(') {
-            // Legacy parenthetical options syntax
-            let options_re = Regex::new(r"(\([^)]*\))?( |$)").unwrap();
-            match options_re.captures(remaining) {
-                Some(captures) => {
-                    if let Some(m) = captures.get(1) {
-                        let opts = parse_options(m.as_str());
-                        let rest = remaining[m.end()..].trim_start();
-                        (opts, rest)
-                    } else {
-                        (HashMap::new(), remaining)
-                    }
-                }
-                None => (HashMap::new(), remaining),
-            }
-        } else {
-            (HashMap::new(), remaining)
-        };
-        parse_tool_command(
-            out,
-            tool_name.as_str(),
-            user_confirmation,
-            force_tool,
-            last_tool_cmd,
-            options.clone(),
-            remaining,
-            input,
-        )
-    } else if input.ends_with("\n\n") {
-        let input = input.trim_end();
-        infoln!(
-            out,
-            "Message is queued up and will be sent with your next message."
-        );
-        infoln!(
-            out,
-            "It was not sent because it ended with two blank lines."
-        );
-        Some(Cmd::Prep(PrepCmd {
-            message: input.into(),
-            accent: None,
-        }))
-    } else {
-        let input = input.trim_end();
-        if let Some(tool_mode) = tool_mode {
-            Some(Cmd::Tool(ToolCmd {
-                tool: tool_mode.tool,
-                prompt: input.into(),
-                user_confirmation: tool_mode.user_confirmation,
-                force_tool: tool_mode.force_tool,
-                cache: false,
-            }))
-        } else {
-            Some(Cmd::Prompt(PromptCmd {
-                prompt: input.into(),
-                cache: false,
-            }))
-        }
-    }
-}
 
-fn split_arg_and_optional_body(s: &str) -> (String, Option<String>) {
-    s.split_once("\n")
-        .map(|(l, r)| (l.to_string(), Some(r.to_string())))
-        .unwrap_or((s.to_string(), None))
-}
+    // FUTURE: Ideally, these would be handled by the cmd_registry. Revisit
+    // when refactoring to allow any command to be made into a tool.
+    let (peeled_input, confirm, force) = peel_bang_modifiers(&input);
 
-/// A single arg can't have spaces (see catchall variant)
-fn parse_one_arg(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace()) {
-        None
-    } else {
-        Some(trimmed.into())
-    }
-}
-
-/// Split on whitespace and collect into Vec<String>
-fn parse_n_args(s: &str) -> Option<Vec<String>> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(
-            trimmed
-                .split_whitespace()
-                .map(|part| part.to_string())
-                .collect(),
-        )
-    }
-}
-
-/// The one arg has space around it trimmed, but otherwise can contain
-/// internal whitespace.
-fn parse_one_arg_catchall(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.into())
-    }
-}
-
-fn parse_two_arg(s: &str) -> Option<(String, String)> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        let args = trimmed.split_whitespace().collect::<Vec<&str>>();
-        if args.len() != 2 {
-            None
-        } else {
-            Some((args[0].into(), args[1].into()))
-        }
-    }
-}
-
-fn parse_two_arg_catchall(s: &str) -> Option<(String, String)> {
-    let trimmed = s.trim();
-    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
-
-    let first = parts.next();
-    let rest = parts.next();
-
-    match (first, rest) {
-        (Some(first), Some(rest)) => Some((first.to_string(), rest.to_string())),
-        _ => None,
-    }
-}
-
-fn parse_two_arg_one_optional_catchall(s: &str) -> Option<(String, Option<String>)> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
-
-    let first = parts.next();
-    let rest = parts.next();
-
-    match (first, rest) {
-        (Some(first), rest) => Some((first.to_string(), rest.map(|s| s.to_string()))),
-        _ => None,
-    }
-}
-
-fn parse_three_arg_catchall(s: &str) -> Option<(String, String, String)> {
-    let trimmed = s.trim();
-    let mut parts = trimmed.splitn(3, |c: char| c.is_whitespace());
-
-    let first = parts.next();
-    let second = parts.next();
-    let rest = parts.next();
-
-    match (first, second, rest) {
-        (Some(first), Some(second), Some(rest)) => {
-            Some((first.to_string(), second.to_string(), rest.to_string()))
-        }
-        _ => None,
-    }
-}
-
-/// If None is returned, it prints an error usage string.
-fn parse_command(
-    out: &Out,
-    cmd_name: &str,
-    options: HashMap<String, String>,
-    remaining: &str,
-    full_input: &str, // Only for the fallback case
-) -> Option<Cmd> {
-    let ai_def_tool_re = get_ai_def_tool_re();
-    if let Some(captures) = ai_def_tool_re.captures(cmd_name)
-        && let Some(m) = captures.get(1)
-    {
-        let fn_name = format!("f{}", m.as_str());
-        return Some(Cmd::FnExec(FnExecCmd {
-            fn_name,
-            arg: remaining.trim().to_string(),
-        }));
-    }
-    let mcp_invoke_re = get_mcp_invoke_re();
-    if let Some(captures) = mcp_invoke_re.captures(cmd_name)
-        && let Some(name_match) = captures.get(1)
-    {
-        let mcp_name = name_match.as_str().to_string();
-        let (tool_name, json_arg) = match remaining.trim().split_once(' ') {
-            Some((first, rest)) => (first.to_string(), rest.trim().to_string()),
-            None => (remaining.trim().to_string(), String::new()),
-        };
-        return Some(Cmd::McpToolCall(McpToolCallCmd {
-            name: mcp_name,
-            tool_name,
-            json_arg,
-        }));
+    // `!'<program>' <prompt>`: resolve the tool ourselves since it isn't in
+    // the registry. Delegates tail to the generic parser.
+    if let Some((shell_cmd, tail)) = split_custom_tool(&peeled_input) {
+        let resolved = cmd_parse::parse_with_spec(crate::cmd_registry::CUSTOM_TOOL_SPEC, tail)?;
+        return Ok(apply_tool_modifiers(
+            build_custom_tool(resolved, shell_cmd)?,
+            confirm,
+            force,
+        ));
     }
 
-    if let Some(captures) = mcp_invoke_re.captures(cmd_name)
-        && let Some(name_match) = captures.get(1)
-        && let Some(tool_match) = captures.get(2)
-    {
-        let mcp_name = name_match.as_str().to_string();
-        let tool_name = tool_match.as_str().to_string();
-        return Some(Cmd::McpToolCall(McpToolCallCmd {
-            name: mcp_name,
-            tool_name,
-            json_arg: remaining.trim().to_string(),
-        }));
-    }
-    match cmd_name {
-        "quit" | "q" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Quit)
-        }
-        "help" | "h" | "?" => {
-            // `history` is DEPRECATED. Output always added to history.
-            if !validate_options_and_print_err(out, cmd_name, &options, &["history"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("history".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let history = options.get("history").map(|v| v == "true").unwrap_or(false);
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Help(HelpCmd { history }))
-        }
-        "new" | "n" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::New)
-        }
-        "reset" | "r" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Reset)
-        }
-        "clip" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Clip)
-        }
-        "printvars" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::PrintVars)
-        }
-        "dump" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Dump)
-        }
-        "dump-session" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::DumpSession)
-        }
-        "about" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::About)
-        }
-        "cd" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::Cd(CdCmd {
-                path: parse_one_arg_catchall(remaining)?,
-            }))
-        }
-        "ai" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::Ai(AiCmd {
-                model: parse_one_arg(remaining),
-            }))
-        }
-        "ai-default" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AiDefault(AiDefaultCmd {
-                model: parse_one_arg(remaining),
-            }))
-        }
-        "set-key" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg(remaining) {
-                Some((provider, key)) => Some(Cmd::SetKey(SetKeyCmd { provider, key })),
-                None => {
-                    errln!(out, "Usage: /set-key <provider> <key>");
-                    errln!(out, "providers: openai, anthropic, deepseek, google, xai");
-                    None
-                }
-            }
-        }
-        "set-mask-secrets" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(arg) => {
-                    if arg != "on" && arg != "off" {
-                        errln!(out, "Usage: /set-mask-secrets <on/off>");
-                        None
-                    } else {
-                        Some(Cmd::SetMaskSecrets(SetMaskSecretsCmd {
-                            on: Some(arg == "on"),
-                        }))
-                    }
-                }
-                None => Some(Cmd::SetMaskSecrets(SetMaskSecretsCmd { on: None })),
-            }
-        }
-        "hai-router" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(arg) => {
-                    if arg != "on" && arg != "off" {
-                        errln!(out, "Usage: /hai-router <on|off>");
-                        None
-                    } else {
-                        Some(Cmd::HaiRouter(HaiRouterCmd {
-                            on: Some(arg == "on"),
-                        }))
-                    }
-                }
-                None => Some(Cmd::HaiRouter(HaiRouterCmd { on: None })),
-            }
-        }
-        "agentic" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(arg) => {
-                    if arg != "on" && arg != "on-without-cache" && arg != "off" {
-                        errln!(out, "Usage: /{cmd_name} <on|on-without-cache|off>");
-                        None
-                    } else {
-                        Some(Cmd::Agentic(AgenticCmd {
-                            on: Some((arg == "on" || arg == "on-without-cache", arg == "on")),
-                        }))
-                    }
-                }
-                None => Some(Cmd::Agentic(AgenticCmd { on: None })),
-            }
-        }
-        "temperature" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(arg) => {
-                    if arg == "none" {
-                        None
-                    } else {
-                        match arg.parse::<f32>() {
-                            Ok(value) => Some(Cmd::Temperature(TemperatureCmd {
-                                temperature: Some(value),
-                            })),
-                            Err(_) => {
-                                errln!(out, "Error: Temperature must be a number or `none`.");
-                                None
-                            }
-                        }
-                    }
-                }
-                None => Some(Cmd::Temperature(TemperatureCmd { temperature: None })),
-            }
-        }
-        "setvar" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((key, value)) => Some(Cmd::SetVar(SetVarCmd { key, value })),
-                None => {
-                    errln!(out, "Usage: /setvar <key> <value...>");
-                    None
-                }
-            }
-        }
-        "file-read" | "load" | "l" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("n".to_string(), OptionType::Bool),
-                ("hq".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(path) => Some(Cmd::FileRead(FileReadCmd {
-                    path,
-                    show_line_numbers: n,
-                    image_hq: hq,
-                })),
-                None => {
-                    errln!(out, "Usage: /file-read <glob path>");
-                    errln!(out, "Options:");
-                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                    errln!(
-                        out,
-                        "  .hq=BOOL  Use high-resolution images (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "file-cat" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("n".to_string(), OptionType::Bool),
-                ("hq".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(path) => Some(Cmd::FileCat(FileCatCmd {
-                    path,
-                    show_line_numbers: n,
-                    image_hq: hq,
-                })),
-                None => {
-                    errln!(out, "Usage: /file-cat <glob path>");
-                    errln!(out, "Options:");
-                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                    errln!(
-                        out,
-                        "  .hq=BOOL  Use high-resolution images (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "file-write" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let expected_types = HashMap::from([]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            match parse_one_arg(&cmd_arg) {
-                Some(path) => Some(Cmd::FileWrite(FileWriteCmd { path, contents })),
-                None => {
-                    errln!(out, "Usage: /file-write <path> [<NEWLINE><body>]");
-                    None
-                }
-            }
-        }
-        "file-patch" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-
-            fn print_file_patch_usage(out: &Out) {
-                errln!(out, "Usage: /file-patch <name>");
-                errln!(out, "  <search string>");
-                errln!(out, "  =======");
-                errln!(out, "  <replace string>");
-                errln!(out);
-                errln!(
-                    out,
-                    "The divider is the line with the LONGEST run of '=' characters."
-                );
-                errln!(
-                    out,
-                    "Use a single '=' for simple edits, or more (e.g. 100) if your"
-                );
-                errln!(
-                    out,
-                    "search/replace text contains lines of '=' that would collide."
-                );
-            }
-
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            let contents = match contents {
-                Some(c) => c,
-                None => {
-                    print_file_patch_usage(out);
-                    return None;
-                }
-            };
-
-            let path = match parse_one_arg(&cmd_arg) {
-                Some(name) => name,
-                None => {
-                    print_file_patch_usage(out);
-                    return None;
-                }
-            };
-
-            match split_search_replace(&contents) {
-                Ok((search, replace)) => Some(Cmd::FilePatch(FilePatchCmd {
-                    path,
-                    search,
-                    replace,
-                })),
-                Err(e) => {
-                    errln!(out, "Error: {}", e);
-                    print_file_patch_usage(out);
-                    None
-                }
-            }
-        }
-        "http-get" | "load-url" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["raw", "n", "hq"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("raw".to_string(), OptionType::Bool),
-                ("n".to_string(), OptionType::Bool),
-                ("hq".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let raw = options.get("raw").map(|v| v == "true").unwrap_or(false);
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(url) => Some(Cmd::HttpGet(HttpGetCmd {
-                    url,
-                    raw,
-                    show_line_numbers: n,
-                    image_hq: hq,
-                })),
-                None => {
-                    errln!(out, "Usage: /http-get <url>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .raw=BOOL      Return raw content rather than extracting markdown (default: false)"
-                    );
-                    errln!(out, "  .n=BOOL         Show line numbers (default: false)");
-                    errln!(
-                        out,
-                        "  .hq=BOOL        Use high-resolution images (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "prep" => {
-            if !validate_options_and_print_err(
-                out,
-                cmd_name,
-                &options,
-                &["danger", "warn", "info", "success"],
-            ) {
-                return None;
-            }
-            let accent = parse_accent(out, &options);
-            match parse_one_arg_catchall(remaining) {
-                Some(message) => Some(Cmd::Prep(PrepCmd { message, accent })),
-                None => {
-                    errln!(out, "Usage: /prep <message>");
-                    None
-                }
-            }
-        }
-        "pin" => {
-            if !validate_options_and_print_err(
-                out,
-                cmd_name,
-                &options,
-                &["danger", "warn", "info", "success"],
-            ) {
-                return None;
-            }
-            let accent = parse_accent(out, &options);
-            match parse_one_arg_catchall(remaining) {
-                Some(message) => Some(Cmd::Pin(PinCmd { message, accent })),
-                None => {
-                    errln!(out, "Usage: /pin <message>");
-                    None
-                }
-            }
-        }
-        "assistant" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg_catchall(remaining) {
-                Some(message) => Some(Cmd::Assistant(AssistantCmd { message })),
-                None => {
-                    errln!(out, "Usage: /assistant <message>");
-                    None
-                }
-            }
-        }
-        "system-prompt" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::SystemPrompt(SystemPromptCmd {
-                prompt: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "forget" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let arg = parse_one_arg_catchall(remaining);
-            let n = if let Some(n_str) = arg {
-                match n_str.parse::<u32>() {
-                    Ok(n) => n,
-                    Err(_) => {
-                        errln!(out, "Usage: /forget <number>");
-                        return None;
-                    }
-                }
-            } else {
-                1
-            };
-            Some(Cmd::Forget(ForgetCmd { n }))
-        }
-        "keep" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let (top, bottom) = match parse_two_arg_one_optional_catchall(remaining) {
-                Some((bottom_str, top_str)) => {
-                    let bottom = match bottom_str.parse::<u32>() {
-                        Ok(n) => n,
-                        Err(_) => {
-                            errln!(out, "Usage: /keep <bottom> [<top>]");
-                            return None;
-                        }
-                    };
-                    let top = if let Some(top_str) = top_str {
-                        match top_str.parse::<u32>() {
-                            Ok(n) => Some(n),
-                            Err(_) => {
-                                errln!(out, "Usage: /keep <bottom> [<top>]");
-                                return None;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    (top, bottom)
-                }
-                None => {
-                    errln!(out, "Usage: /keep <bottom> [<top>]");
-                    return None;
-                }
-            };
-            Some(Cmd::Keep(KeepCmd { bottom, top }))
-        }
-        "exec" | "e" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["cache", "i"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("cache".to_string(), OptionType::Bool),
-                ("i".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let interactive = options.get("i").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(command) => Some(Cmd::Exec(ExecCmd {
-                    command,
-                    cache,
-                    interactive,
-                })),
-                None => {
-                    errln!(out, "Usage: /exec <command>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    errln!(
-                        out,
-                        "  .i=BOOL        Run the command in interactive mode (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "ask-human" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["secret", "cache"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("secret".to_string(), OptionType::Bool),
-                ("cache".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let secret = options.get("secret").map(|v| v == "true").unwrap_or(false);
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-
-            match parse_one_arg_catchall(remaining) {
-                Some(question) => Some(Cmd::AskHuman(AskHumanCmd {
-                    question,
-                    secret,
-                    cache,
-                })),
-                None => {
-                    errln!(out, "Usage: /ask-human <question>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .secret=BOOL   Hide input from terminal (default: false)"
-                    );
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "task" | "t" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["key", "trust"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("key".to_string(), OptionType::String),
-                ("trust".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let key = options.get("key").map(|v| trim_string_value(v).to_string());
-            let trust = options.get("trust").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::Task(TaskCmd {
-                    task_ref,
-                    key,
-                    trust,
-                })),
-                None => {
-                    errln!(out, "Usage: /task <task_ref>");
-                    errln!(out, "Options:");
-                    errln!(out, "  .key=STRING    Namespace the cache (default: none)");
-                    errln!(
-                        out,
-                        "  .trust=BOOL    Do not prompt for user confirmations (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "task-end" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::TaskEnd)
-        }
-        "task-forget" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["key"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let key = options.get("key").map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::TaskForget(TaskForgetCmd { task_ref, key })),
-                None => {
-                    errln!(out, "Usage: /task-forget <task_ref>");
-                    None
-                }
-            }
-        }
-        "task-purge" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(task_fqn) => Some(Cmd::TaskPurge(TaskPurgeCmd { task_fqn })),
-                None => {
-                    errln!(out, "Usage: /task-purge <task_fqn>");
-                    None
-                }
-            }
-        }
-        "task-publish" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg_catchall(remaining) {
-                Some(task_path) => Some(Cmd::TaskPublish(TaskPublishCmd { task_path })),
-                None => {
-                    errln!(out, "Usage: /task-publish <task_path>");
-                    None
-                }
-            }
-        }
-        "task-edit" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(task_fqn) => Some(Cmd::TaskEdit(TaskEditCmd { task_fqn })),
-                None => {
-                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
-                    None
-                }
-            }
-        }
-        "task-fetch" | "task-update" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(task_fqn) => Some(Cmd::TaskFetch(TaskFetchCmd { task_fqn })),
-                None => {
-                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
-                    None
-                }
-            }
-        }
-        "task-include" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["key"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("key".to_string(), OptionType::String)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let key = options.get("key").map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(task_ref) => Some(Cmd::TaskInclude(TaskIncludeCmd { task_ref, key })),
-                None => {
-                    errln!(out, "Usage: /task-include <task_ref>");
-                    None
-                }
-            }
-        }
-        "task-search" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg_catchall(remaining) {
-                Some(q) => Some(Cmd::TaskSearch(TaskSearchCmd { q })),
-                None => {
-                    errln!(out, "Usage: /task-search <query>");
-                    None
-                }
-            }
-        }
-        "task-cat" | "task-view" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(task_ref) => Some(Cmd::TaskCat(TaskCatCmd { task_ref })),
-                None => {
-                    errln!(out, "Usage: /{} <task_ref>", cmd_name);
-                    None
-                }
-            }
-        }
-        "task-versions" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(task_fqn) => Some(Cmd::TaskVersions(TaskVersionsCmd { task_fqn })),
-                None => {
-                    errln!(out, "Usage: /{} <task_fqn>", cmd_name);
-                    None
-                }
-            }
-        }
-        "asset" | "a" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["no_create"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("no_create".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let no_create = options
-                .get("no_create")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((asset_name, editor)) => Some(Cmd::Asset(AssetCmd {
-                    asset_name,
-                    editor,
-                    no_create,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset <name>");
-                    errln!(
-                        out,
-                        "  .no_create=BOOL   Do not create if does not exist (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "asset-push" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            match parse_one_arg(&cmd_arg) {
-                Some(asset_name) => Some(Cmd::AssetPush(AssetPushCmd {
-                    asset_name,
-                    contents,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-push <name> [<NEWLINE><body>]");
-                    None
-                }
-            }
-        }
-        "asset-list" | "ls" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["desc", "full"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("desc".to_string(), OptionType::Bool),
-                ("full".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let desc = options.get("desc").map(|v| v == "true").unwrap_or(false);
-            let full = options.get("full").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(prefix) => Some(Cmd::AssetList(AssetListCmd { prefix, desc, full })),
-                None => Some(Cmd::AssetList(AssetListCmd {
-                    prefix: "".to_string(),
-                    desc,
-                    full,
-                })),
-            }
-        }
-        "asset-search" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["path"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("path".to_string(), OptionType::String)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let path = options
-                .get("path")
-                .map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(q) => Some(Cmd::AssetSearch(AssetSearchCmd { q, path })),
-                None => {
-                    errln!(out, "Usage: /asset-search <query>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .path=STRING   Specify the asset-pool to search (default: none)"
-                    );
-                    None
-                }
-            }
-        }
-        "read" | "asset-read" | "asset-load" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("n".to_string(), OptionType::Bool),
-                ("hq".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
-            match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetRead(AssetReadCmd {
-                    asset_names: args,
-                    show_line_numbers: n,
-                    image_hq: hq,
-                })),
-                _ => {
-                    errln!(out, "Usage: /asset-read <name> [<name> ...]");
-                    errln!(out, "Options:");
-                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                    errln!(
-                        out,
-                        "  .hq=BOOL  Use high-resolution images (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "write" | "asset-write" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["encrypt"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("encrypt".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let encrypt = options.get("encrypt").map(|v| v == "true").unwrap_or(false);
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            match parse_one_arg(&cmd_arg) {
-                Some(asset_name) => Some(Cmd::AssetWrite(AssetWriteCmd {
-                    asset_name,
-                    contents,
-                    encrypt,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-write <name> <multi-line body>]");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .encrypt=BOOL   Force encryption of the asset (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "cat" | "asset-cat" | "asset-view" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["n", "hq"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("n".to_string(), OptionType::Bool),
-                ("hq".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            let hq = options.get("hq").map(|v| v == "true").unwrap_or(false);
-            match parse_n_args(remaining) {
-                Some(args) => Some(Cmd::AssetCat(AssetCatCmd {
-                    asset_names: args,
-                    show_line_numbers: n,
-                    image_hq: hq,
-                })),
-                _ => {
-                    errln!(out, "Usage: /asset-cat <name> [<name> ...]");
-                    errln!(out, "Options:");
-                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                    errln!(
-                        out,
-                        "  .hq=BOOL  Use high-resolution images (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "asset-patch" | "patch" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-
-            fn print_asset_patch_usage(out: &Out) {
-                errln!(out, "Usage: /asset-patch <name>");
-                errln!(out, "  <search string>");
-                errln!(out, "  =======");
-                errln!(out, "  <replace string>");
-                errln!(out);
-                errln!(
-                    out,
-                    "The divider is the line with the LONGEST run of '=' characters."
-                );
-                errln!(
-                    out,
-                    "Use a single '=' for simple edits, or more (e.g. 100) if your"
-                );
-                errln!(
-                    out,
-                    "search/replace text contains lines of '=' that would collide."
-                );
-            }
-
-            let (cmd_arg, contents) = split_arg_and_optional_body(remaining);
-            let contents = match contents {
-                Some(c) => c,
-                None => {
-                    print_asset_patch_usage(out);
-                    return None;
-                }
-            };
-
-            let asset_name = match parse_one_arg(&cmd_arg) {
-                Some(name) => name,
-                None => {
-                    print_asset_patch_usage(out);
-                    return None;
-                }
-            };
-
-            match split_search_replace(&contents) {
-                Ok((search, replace)) => Some(Cmd::AssetPatch(AssetPatchCmd {
-                    asset_name,
-                    search,
-                    replace,
-                })),
-                Err(e) => {
-                    errln!(out, "Error: {}", e);
-                    print_asset_patch_usage(out);
-                    None
-                }
-            }
-        }
-        "asset-revisions" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["n"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("n".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options.get("n").map(|v| v == "true").unwrap_or(false);
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((asset_name, count_str)) => {
-                    let count = if let Some(count_str) = count_str {
-                        match count_str.parse::<u32>() {
-                            Ok(count) => Some(count),
-                            Err(_) => {
-                                errln!(out, "Usage: /asset-revisions <name> [<count>]");
-                                errln!(out, "Options:");
-                                errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                                return None;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    Some(Cmd::AssetRevisions(AssetRevisionsCmd {
-                        asset_name,
-                        count,
-                        show_line_numbers: n,
-                    }))
-                }
-                None => {
-                    errln!(out, "Usage: /asset-revisions <name> [<count>]");
-                    errln!(out, "Options:");
-                    errln!(out, "  .n=BOOL   Show line numbers (default: false)");
-                    None
-                }
-            }
-        }
-        "asset-follow" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetFollow(AssetFollowCmd { asset_name })),
-                None => {
-                    errln!(out, "Usage: /asset-follow <name>");
-                    None
-                }
-            }
-        }
-        "asset-listen" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((asset_name, cursor)) => {
-                    Some(Cmd::AssetListen(AssetListenCmd { asset_name, cursor }))
-                }
-                None => {
-                    errln!(out, "Usage: /asset-listen <name> [<cursor>]");
-                    None
-                }
-            }
-        }
-        "asset-link" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetLink(AssetLinkCmd { asset_name })),
-                None => {
-                    errln!(out, "Usage: /asset-link <name>");
-                    None
-                }
-            }
-        }
-        "asset-remove" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd {
-                    asset_name,
-                    recursive: false,
-                })),
-                None => {
-                    errln!(out, "Usage: {cmd_name} <name>");
-                    None
-                }
-            }
-        }
-        "asset-remove-recursive" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetRemove(AssetRemoveCmd {
-                    asset_name,
-                    recursive: true,
-                })),
-                None => {
-                    errln!(out, "Usage: {cmd_name} <name>");
-                    None
-                }
-            }
-        }
-        "asset-move" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg(remaining) {
-                Some((source_asset_name, dest_asset_name)) => Some(Cmd::AssetMove(AssetMoveCmd {
-                    source_asset_name,
-                    dest_asset_name,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-move <source_name> <dest_name>");
-                    None
-                }
-            }
-        }
-        "asset-copy" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg(remaining) {
-                Some((source_asset_name, dest_asset_name)) => Some(Cmd::AssetCopy(AssetCopyCmd {
-                    source_asset_name,
-                    dest_asset_name,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-copy <source_name> <dest_name>");
-                    None
-                }
-            }
-        }
-        "asset-import" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((asset_name, file_path)) => Some(Cmd::AssetImport(AssetImportCmd {
-                    target_asset_name: asset_name,
-                    source_file_path: file_path,
-                })),
-                None => {
-                    errln!(
-                        out,
-                        "Usage: /asset-import <target_asset_name> <source_file_path>"
-                    );
-                    None
-                }
-            }
-        }
-        "asset-export" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((asset_name, file_path)) => Some(Cmd::AssetExport(AssetExportCmd {
-                    source_asset_name: asset_name,
-                    target_file_path: file_path,
-                })),
-                None => {
-                    errln!(
-                        out,
-                        "Usage: /asset-export <source_asset_name> <target_file_path>"
-                    );
-                    None
-                }
-            }
-        }
-        "asset-temp" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((asset_name, count_str)) => {
-                    let count = if let Some(count_str) = count_str {
-                        match count_str.parse::<u32>() {
-                            Ok(count) => Some(count),
-                            Err(_) => {
-                                errln!(out, "Usage: /asset-temp <name> [<count>]");
-                                return None;
-                            }
-                        }
-                    } else {
-                        None
-                    };
-                    Some(Cmd::AssetTemp(AssetTempCmd { asset_name, count }))
-                }
-                None => {
-                    errln!(out, "Usage: /asset-temp <asset_name> [<count>]");
-                    None
-                }
-            }
-        }
-        "asset-revision-temp" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg(remaining) {
-                Some((asset_name, rev_id)) => Some(Cmd::AssetRevisionTemp(AssetRevisionTempCmd {
-                    asset_name,
-                    rev_id,
-                })),
-                None => {
-                    errln!(out, "Usage: /{} <asset_name> <rev_id>", cmd_name);
-                    None
-                }
-            }
-        }
-        "asset-sync-down" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((prefix, target_path)) => Some(Cmd::AssetSyncDown(AssetSyncDownCmd {
-                    prefix,
-                    target_path,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-sync-down <prefix> <target_path>");
-                    None
-                }
-            }
-        }
-        "asset-sync-up" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["new", "dry"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("new".to_string(), OptionType::Bool),
-                ("dry".to_string(), OptionType::Bool),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let new = options.get("new").map(|v| v == "true").unwrap_or(false);
-            let dry = options.get("dry").map(|v| v == "true").unwrap_or(false);
-            match parse_two_arg_catchall(remaining) {
-                Some((prefix, target_path)) => Some(Cmd::AssetSyncUp(AssetSyncUpCmd {
-                    source_path: prefix,
-                    target_prefix: target_path,
-                    sync_new_files: new,
-                    dry_run: dry,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-sync-up <source_path> <target_prefix>");
-                    None
-                }
-            }
-        }
-        "asset-sync-diff" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["", ""]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(path) => Some(Cmd::AssetSyncDiff(AssetSyncDiffCmd { path })),
-                None => {
-                    errln!(out, "Usage: /asset-sync-diff <path>");
-                    None
-                }
-            }
-        }
-        "asset-acl-get" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetAclGet(AssetAclGetCmd { asset_name })),
-                None => {
-                    errln!(out, "Usage: /asset-acl-get <name>");
-                    None
-                }
-            }
-        }
-        "asset-acl-get-effective" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetAclGetEffective(AssetAclGetEffectiveCmd {
-                    asset_name,
-                })),
-                None => {
-                    errln!(out, "Usage: /{} <name>", cmd_name);
-                    None
-                }
-            }
-        }
-        "asset-acl-set" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_three_arg_catchall(remaining) {
-                Some((asset_name, principal_raw, acl_cmd)) => {
-                    let asset_ace_principal = if principal_raw == "everyone" {
-                        AssetAcePrincipal::Everyone
-                    } else if let Some((kind, username)) = principal_raw.split_once(":") {
-                        match kind.trim() {
-                            "user" => {
-                                let username = username.trim();
-                                if username.is_empty() {
-                                    errln!(
-                                        out,
-                                        "error: user principal requires a username: try `user:<username>`"
-                                    );
-                                    return None;
-                                }
-                                AssetAcePrincipal::User(username.to_string())
-                            }
-                            _ => {
-                                errln!(
-                                    out,
-                                    "error: unknown principal: try `everyone` or `user:<username>`"
-                                );
-                                return None;
-                            }
-                        }
-                    } else {
-                        errln!(
-                            out,
-                            "error: unknown principal: try `everyone` or `user:<username>`"
-                        );
-                        return None;
-                    };
-                    if let Some((ace_effect_raw, ace_perm_raw)) = acl_cmd.split_once(":") {
-                        let asset_ace_effect = match ace_effect_raw {
-                            "allow" => AssetAceEffect::Allow,
-                            "deny" => AssetAceEffect::Deny,
-                            "inherit" => AssetAceEffect::Inherit,
-                            _ => {
-                                errln!(out, "error: unknown type: try allow, deny, inherit");
-                                return None;
-                            }
-                        };
-                        let asset_ace_perm = match ace_perm_raw {
-                            "read-data" => AssetAcePermission::ReadData,
-                            "read-revisions" => AssetAcePermission::ReadRevisions,
-                            "write-data" => AssetAcePermission::WriteData,
-                            "push-data" => AssetAcePermission::PushData,
-                            _ => {
-                                errln!(out, "error: unknown permission");
-                                return None;
-                            }
-                        };
-                        Some(Cmd::AssetAclSet(AssetAclSetCmd {
-                            asset_name,
-                            ace_principal: asset_ace_principal,
-                            ace_permission: asset_ace_perm,
-                            ace_effect: asset_ace_effect,
-                        }))
-                    } else {
-                        errln!(out, "error: bad format: try `allow:read-data`");
-                        None
-                    }
-                }
-                None => {
-                    errln!(
-                        out,
-                        "Usage: /asset-acl-set <asset_name> <principal> <allow|deny|inherit>:<acl>"
-                    );
-                    None
-                }
-            }
-        }
-        "asset-md-get" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetMdGet(AssetMdGetCmd { asset_name })),
-                None => {
-                    errln!(out, "Usage: /asset-md-get <name>");
-                    None
-                }
-            }
-        }
-        "asset-md-set" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((asset_name, metadata)) => Some(Cmd::AssetMdSet(AssetMdSetCmd {
-                    asset_name,
-                    metadata,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-md-set <asset_name> <metadata>");
-                    None
-                }
-            }
-        }
-        "asset-md-set-key" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_three_arg_catchall(remaining) {
-                Some((asset_name, key, value)) => Some(Cmd::AssetMdSetKey(AssetMdSetKeyCmd {
-                    asset_name,
-                    key,
-                    value,
-                })),
-                None => {
-                    errln!(out, "Usage: /asset-md-set-key <asset_name> <key> <value>");
-                    None
-                }
-            }
-        }
-        "asset-md-del-key" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((asset_name, key)) => {
-                    Some(Cmd::AssetMdDelKey(AssetMdDelKeyCmd { asset_name, key }))
-                }
-                None => {
-                    errln!(out, "Usage: /asset-md-del-key <asset_name> <key>");
-                    None
-                }
-            }
-        }
-        "asset-folder-new" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(name) => Some(Cmd::AssetFolderNew(AssetFolderNewCmd { name })),
-                None => {
-                    errln!(out, "Usage: /asset-folder-new <name>");
-                    None
-                }
-            }
-        }
-        "asset-folder-collapse" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(prefix) => Some(Cmd::AssetFolderCollapse(AssetFolderCollapseCmd { prefix })),
-                None => {
-                    errln!(out, "Usage: /asset-folder-collapse <prefix>");
-                    None
-                }
-            }
-        }
-        "asset-folder-expand" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(prefix) => Some(Cmd::AssetFolderExpand(AssetFolderExpandCmd { prefix })),
-                None => {
-                    errln!(out, "Usage: /asset-folder-expand <prefix>");
-                    None
-                }
-            }
-        }
-        "asset-folder-list" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AssetFolderList(AssetFolderListCmd {
-                prefix: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "asset-crypt-setup" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::AssetCryptSetup)
-        }
-        "asset-crypt-unlock" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AssetCryptUnlock(AssetCryptUnlockCmd {
-                enc_key_id: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "asset-crypt-lock" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AssetCryptLock(AssetCryptLockCmd {
-                enc_key_id: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "asset-crypt-recover" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AssetCryptRecover(AssetCryptRecoverCmd {
-                enc_key_id: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "asset-app" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["no_open", "dev"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("no_open".to_string(), OptionType::Bool),
-                ("dev".to_string(), OptionType::String),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let no_open = options.get("no_open").map(|v| v == "true").unwrap_or(false);
-            let dev_mode = options.get("dev").map(|v| trim_string_value(v).to_string());
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetApp(AssetAppCmd {
-                    asset_name,
-                    no_open,
-                    dev_mode,
-                })),
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <asset_name>");
-                    None
-                }
-            }
-        }
-        "asset-app-perms-list" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => {
-                    Some(Cmd::AssetAppPermsList(AssetAppPermsListCmd { asset_name }))
-                }
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <asset_name>");
-                    None
-                }
-            }
-        }
-        "asset-app-perms-revoke" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetAppPermsRevoke(AssetAppPermsRevokeCmd {
-                    asset_name,
-                })),
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <asset_name>");
-                    None
-                }
-            }
-        }
-        "open" | "asset-open" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(asset_name) => Some(Cmd::AssetOpen(AssetOpenCmd { asset_name })),
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <asset_name>");
-                    None
-                }
-            }
-        }
-        "asset-pool-new" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_n_args(remaining) {
-                Some(usernames) => Some(Cmd::AssetPoolNew(AssetPoolNewCmd { usernames })),
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <username> [<username> ...]");
-                    None
-                }
-            }
-        }
-        "asset-pools" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AssetPools)
-        }
-        "gateway" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::Gateway(GatewayCmd {
-                auth_token: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "chats" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Chats)
-        }
-        "chat-resume" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["fork"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
-            Some(Cmd::ChatResume(ChatResumeCmd {
-                chat_log_name: parse_one_arg_catchall(remaining),
-                fork,
-            }))
-        }
-        "chat-save" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["fork"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("fork".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let fork = options.get("fork").map(|v| v == "true").unwrap_or(false);
-            Some(Cmd::ChatSave(ChatSaveCmd {
-                chat_log_name: parse_one_arg(remaining),
-                fork,
-            }))
-        }
-        "email" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let (cmd_arg, body) = split_arg_and_optional_body(remaining);
-            match parse_one_arg_catchall(&cmd_arg) {
-                Some(subject) => Some(Cmd::Email(EmailCmd { subject, body })),
-                None => {
-                    errln!(out, "Usage: /email <subject> [<NEWLINE><body>]");
-                    None
-                }
-            }
-        }
-        "notif" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            let (cmd_arg, body) = split_arg_and_optional_body(remaining);
-            match parse_one_arg_catchall(&cmd_arg) {
-                Some(title) => Some(Cmd::Notif(NotifCmd { title, body })),
-                None => {
-                    errln!(out, "Usage: /notif <title> [<NEWLINE><body>]");
-                    None
-                }
-            }
-        }
-        "fns" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Fns)
-        }
-        "std" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((fn_name, fn_arg)) => {
-                    if fn_name == "now" {
-                        if fn_arg.is_none() {
-                            Some(Cmd::Std(StdCmd::Now))
-                        } else {
-                            errln!(out, "Usage: {fn_name} takes no arguments");
-                            None
-                        }
-                    } else if fn_name == "new-day-alert" {
-                        if fn_arg.is_none() {
-                            Some(Cmd::Std(StdCmd::NewDayAlert))
-                        } else {
-                            errln!(out, "Usage: {fn_name} takes no arguments");
-                            None
-                        }
-                    } else if fn_name == "which" {
-                        if let Some(prog) = fn_arg {
-                            Some(Cmd::Std(StdCmd::Which(prog)))
-                        } else {
-                            errln!(out, "Usage: {fn_name} <prog>");
-                            None
-                        }
-                    } else {
-                        errln!(out, "Unknown stdlib function: {fn_name}");
-                        None
-                    }
-                }
-                None => {
-                    errln!(out, "Usage: /{cmd_name} <fn_name> [<fn_arg>]");
-                    None
-                }
-            }
-        }
-        "mcp-add" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_two_arg_catchall(remaining) {
-                Some((name, cmd)) => Some(Cmd::McpAdd(McpAddCmd { name, cmd })),
-                None => {
-                    errln!(out, "Usage: /mcp-add <name> <cmd>");
-                    None
-                }
-            }
-        }
-        "bot-boot" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotBoot(BotBootCmd {
-                hai_version: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "bot-get-active" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotGetActive)
-        }
-        "bot-probe" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotProbe)
-        }
-        "bot-setup" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotSetup)
-        }
-        "bot-ssh" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotSsh)
-        }
-        "bot-shutdown" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::BotShutdown)
-        }
-        "account" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::Account(AccountCmd {
-                username: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "account-new" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::AccountNew)
-        }
-        "account-login" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            // The ability to specify the username/password is for internal use
-            // and is not advertised to the user.
-            match parse_two_arg_one_optional_catchall(remaining) {
-                Some((username, password)) => Some(Cmd::AccountLogin(AccountLoginCmd {
-                    username: Some(username),
-                    password,
-                })),
-                None => Some(Cmd::AccountLogin(AccountLoginCmd {
-                    username: None,
-                    password: None,
-                })),
-            }
-        }
-        "account-logout" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::AccountLogout(AccountLogoutCmd {
-                username: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "account-balance" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::AccountBalance)
-        }
-        "account-subscribe" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::AccountSubscribe)
-        }
-        "inbox-setup" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::InboxSetup)
-        }
-        "whois" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            match parse_one_arg(remaining) {
-                Some(username) => Some(Cmd::Whois(WhoisCmd { username })),
-                None => {
-                    errln!(out, "Usage: /whois username");
-                    None
-                }
-            }
-        }
-        "web-search" => {
-            if !validate_options_and_print_err(
-                out,
-                cmd_name,
-                &options,
-                &["n", "pd", "pw", "pm", "py", "range"],
-            ) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("n".to_string(), OptionType::Number),
-                ("pd".to_string(), OptionType::Bool),
-                ("pw".to_string(), OptionType::Bool),
-                ("pm".to_string(), OptionType::Bool),
-                ("py".to_string(), OptionType::Bool),
-                ("range".to_string(), OptionType::String),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let n = options
-                .get("n")
-                .map(|v| v.parse().unwrap_or(5))
-                .unwrap_or(5);
-            let pd = options.get("pd").map(|v| v == "true").unwrap_or(false);
-            let pw = options.get("pw").map(|v| v == "true").unwrap_or(false);
-            let pm = options.get("pm").map(|v| v == "true").unwrap_or(false);
-            let py = options.get("py").map(|v| v == "true").unwrap_or(false);
-            let range = options
-                .get("range")
-                .map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(q) => Some(Cmd::WebSearch(WebSearchCmd {
-                    q,
-                    n,
-                    pd,
-                    pw,
-                    pm,
-                    py,
-                    range,
-                })),
-                None => {
-                    errln!(out, "Usage: /web-search <query>");
-                    None
-                }
-            }
-        }
-        "cost" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            if parse_one_arg_catchall(remaining).is_some() {
-                errln!(out, "Usage: /{cmd_name} takes no arguments");
-                return None;
-            }
-            Some(Cmd::Cost)
-        }
-        "queue-pop" | "qpop" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::QueuePop(QueuePopCmd {
-                queue_name: parse_one_arg_catchall(remaining),
-            }))
-        }
-        "prompt" => {
-            if !validate_options_and_print_err(out, cmd_name, &options, &["cache"]) {
-                return None;
-            }
-            let expected_types = HashMap::from([("cache".to_string(), OptionType::Bool)]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => Some(Cmd::Prompt(PromptCmd { prompt, cache })),
-                None => {
-                    errln!(out, "Usage: /prompt <message>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        _ => {
-            errln!(out, "Warning: Did you intend to invoke a /command?");
-            if !validate_options_and_print_err(out, cmd_name, &options, &[]) {
-                return None;
-            }
-            Some(Cmd::Prompt(PromptCmd {
-                prompt: full_input.to_owned(),
-                cache: false,
-            }))
-        }
-    }
-}
-
-pub fn parse_tool_command_standalone(out: &Out, input: &str) -> Option<ToolModeCmd> {
-    if let Some(mut remaining) = input.strip_prefix('!') {
-        // Try parsing as a tool-command
-        let input = input.trim_end();
-        let user_confirmation = if remaining.starts_with("?") {
-            remaining = &remaining[1..];
-            true
-        } else {
-            false
-        };
-        // If the next char is blank, then we assume the user intends to use a
-        // previous tool so we leave the tool_name empty.
-        let (mut remaining, tool_name) = if remaining.is_empty() || remaining.starts_with(' ') {
-            errln!(out, "error: No tool name specified");
-            return None;
-        } else {
-            let tool_re = get_tool_re();
-            match tool_re.captures(remaining) {
-                Some(captures) => {
-                    if let Some(m) = captures.get(1) {
-                        remaining = &remaining[m.end()..];
-                        (remaining, m.as_str().replace("\\'", "'"))
-                    } else {
-                        errln!(out, "error: Bad tool specification");
-                        return None;
-                    }
-                }
-                None => {
-                    errln!(out, "error: Bad tool specification");
-                    return None;
-                }
-            }
-        };
-        let force_tool = if remaining.starts_with("?") {
-            remaining = &remaining[1..];
-            false
-        } else {
-            true
-        };
-        let (options, remaining) = if remaining.starts_with('.') {
-            parse_dot_options(remaining)
-        } else {
-            (HashMap::new(), remaining)
-        };
-        if remaining.len() > 0 {
-            errln!(
-                out,
-                "error: Tool specification had unexpected trailing characters: {}",
-                remaining
-            );
-            return None;
-        }
-        parse_tool_command(
-            out,
-            tool_name.as_str(),
-            user_confirmation,
-            force_tool,
-            None,
-            options.clone(),
-            "",
-            input,
-        )
-        .and_then(|cmd| match cmd {
-            Cmd::ToolMode(tool_mode_cmd) => Some(tool_mode_cmd),
-            _ => {
-                errln!(
-                    out,
-                    "error: Expected a tool mode command, but got a different command"
-                );
-                None
-            }
-        })
-    } else {
-        errln!(out, "error: invalid tool {}: must start with '!'", input);
-        None
-    }
-}
-
-/// If None is returned, it prints an error usage string.
-pub fn parse_tool_command(
-    out: &Out,
-    tool_name: &str,
-    user_confirmation: bool,
-    force_tool: bool,
-    last_tool_cmd: Option<ToolCmd>,
-    options: HashMap<String, String>,
-    remaining: &str,
-    full_input: &str, // Only for the fallback case
-) -> Option<Cmd> {
-    match tool_name {
-        "clip" => {
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => {
-                    Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::CopyToClipboard,
-                        // Include !clip as it nudges AI to use the tool
-                        prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::CopyToClipboard,
-                            user_confirmation,
-                            &prompt,
-                        ),
-                        user_confirmation,
-                        force_tool,
-                        cache: false,
-                    }))
-                }
-                None => {
-                    errln!(out, "Usage: !clip <prompt: what to clip>");
-                    None
-                }
-            }
-        }
-        "py" => {
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => {
-                    Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::ExecPythonScript,
-                        // Include !py as it nudges AI to use the tool
-                        prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::ExecPythonScript,
-                            user_confirmation,
-                            &prompt,
-                        ),
-                        user_confirmation,
-                        force_tool,
-                        cache: false,
-                    }))
-                }
-                None => Some(Cmd::ToolMode(ToolModeCmd {
-                    tool: tool::Tool::ExecPythonScript,
-                    user_confirmation,
-                    force_tool,
-                })),
-            }
-        }
-        "pyuv" => {
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => {
-                    Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::ExecPythonUvScript,
-                        // Include !py as it nudges AI to use the tool
-                        prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::ExecPythonUvScript,
-                            user_confirmation,
-                            &prompt,
-                        ),
-                        user_confirmation,
-                        force_tool,
-                        cache: false,
-                    }))
-                }
-                None => Some(Cmd::ToolMode(ToolModeCmd {
-                    tool: tool::Tool::ExecPythonUvScript,
-                    user_confirmation,
-                    force_tool,
-                })),
-            }
-        }
-        "sh" | "shscript" => {
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => {
-                    Some(Cmd::Tool(ToolCmd {
-                        tool: tool::Tool::ShellScriptExec,
-                        // Exclude !sh as it tends to make its way into the command itself
-                        prompt: get_tool_prefixed_prompt(
-                            &tool::Tool::ShellScriptExec,
-                            user_confirmation,
-                            &prompt,
-                        ),
-                        user_confirmation,
-                        force_tool,
-                        cache: false,
-                    }))
-                }
-                None => Some(Cmd::ToolMode(ToolModeCmd {
-                    tool: tool::Tool::ShellScriptExec,
-                    user_confirmation,
-                    force_tool,
-                })),
-            }
-        }
-        "hai" | "h" => match parse_one_arg_catchall(remaining) {
-            Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::HaiRepl,
-                prompt: get_tool_prefixed_prompt(&tool::Tool::HaiRepl, user_confirmation, &prompt),
-                user_confirmation,
-                force_tool,
-                cache: false,
-            })),
-            None => Some(Cmd::ToolMode(ToolModeCmd {
-                tool: tool::Tool::HaiRepl,
-                user_confirmation,
-                force_tool,
-            })),
+    match crate::cmd_parse::parse(cmd_registry, &peeled_input) {
+        Ok(resolved_cmd_spec) => match build(resolved_cmd_spec) {
+            Ok(cmd) => Ok(apply_tool_modifiers(cmd, confirm, force)),
+            Err(e) => Err(e),
         },
-        "html" => match parse_one_arg_catchall(remaining) {
-            Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::Html,
-                prompt: get_tool_prefixed_prompt(&tool::Tool::Html, user_confirmation, &prompt),
-                user_confirmation,
-                force_tool,
-                cache: false,
-            })),
-            None => Some(Cmd::ToolMode(ToolModeCmd {
-                tool: tool::Tool::Html,
-                user_confirmation,
-                force_tool,
-            })),
-        },
-        "fn-py" => {
-            if !validate_options_and_print_err_for_tool(
-                out,
-                tool_name,
-                &options,
-                &["cache", "name"],
-            ) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("cache".to_string(), OptionType::Bool),
-                ("name".to_string(), OptionType::String),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options
-                .get("name")
-                .map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool {
-                        kind: tool::FnToolType::FnPy,
-                        name,
-                    }),
-                    prompt,
-                    user_confirmation,
-                    force_tool,
-                    cache,
-                })),
-                None => {
-                    errln!(out, "Usage: !fn-py <prompt: function to implement>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "fn-pyuv" => {
-            if !validate_options_and_print_err_for_tool(
-                out,
-                tool_name,
-                &options,
-                &["cache", "name"],
-            ) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("cache".to_string(), OptionType::Bool),
-                ("name".to_string(), OptionType::String),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options
-                .get("name")
-                .map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool {
-                        kind: tool::FnToolType::FnPyUv,
-                        name,
-                    }),
-                    prompt,
-                    user_confirmation,
-                    force_tool,
-                    cache,
-                })),
-                None => {
-                    errln!(out, "Usage: !fn-pyuv <prompt: function to implement>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "fn-sh" => {
-            if !validate_options_and_print_err_for_tool(
-                out,
-                tool_name,
-                &options,
-                &["cache", "name"],
-            ) {
-                return None;
-            }
-            let expected_types = HashMap::from([
-                ("cache".to_string(), OptionType::Bool),
-                ("name".to_string(), OptionType::String),
-            ]);
-            if let Err(type_error) = validate_option_types(&options, &expected_types) {
-                errln!(out, "Error: {}", type_error);
-                return None;
-            }
-            let cache = options.get("cache").map(|v| v == "true").unwrap_or(false);
-            let name = options
-                .get("name")
-                .map(|v| trim_string_value(v).to_string());
-            match parse_one_arg_catchall(remaining) {
-                Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                    tool: tool::Tool::Fn(tool::FnTool {
-                        kind: tool::FnToolType::FnSh,
-                        name,
-                    }),
-                    prompt,
-                    user_confirmation,
-                    force_tool,
-                    cache,
-                })),
-                None => {
-                    errln!(out, "Usage: !fn-sh <prompt: function to implement>");
-                    errln!(out, "Options:");
-                    errln!(
-                        out,
-                        "  .cache=BOOL    Cache the result for the next execution (default: false)"
-                    );
-                    None
-                }
-            }
-        }
-        "exit" => Some(Cmd::ToolModeExit),
-        "" => {
-            // Tool (and possibly prompt) re-use
-            if let Some(last_tool_cmd) = last_tool_cmd {
-                match parse_one_arg_catchall(remaining) {
-                    // Repeat tool with new prompt
-                    Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                        tool: last_tool_cmd.tool.clone(),
-                        prompt: get_tool_prefixed_prompt(
-                            &last_tool_cmd.tool,
-                            user_confirmation,
-                            &prompt,
-                        ),
-                        user_confirmation,
-                        force_tool,
-                        cache: false,
-                    })),
-                    // Repeat tool and prompt
-                    None => Some(Cmd::Tool(ToolCmd {
+        Err(ParseError::NotACommand) => {
+            if peeled_input.ends_with("\n\n") {
+                // NOTE: Caller should alert user why their message was
+                // converted into a prep.
+                let message = peeled_input.trim_end();
+                Ok(Cmd::Prep(PrepCmd {
+                    message: message.into(),
+                    accent: None,
+                }))
+            } else if peeled_input.trim_end() == "!" {
+                if let Some(last_tool_cmd) = last_tool_cmd {
+                    let merged_user_confirmation = if confirm {
+                        true
+                    } else {
+                        last_tool_cmd.user_confirmation
+                    };
+                    let merged_force_tool = if !force {
+                        false
+                    } else {
+                        last_tool_cmd.force_tool
+                    };
+                    let tool_cmd = Cmd::Tool(ToolCmd {
                         tool: last_tool_cmd.tool,
-                        prompt: last_tool_cmd.prompt,
-                        user_confirmation,
-                        force_tool,
+                        prompt: last_tool_cmd.prompt.clone(),
+                        user_confirmation: merged_user_confirmation,
+                        force_tool: merged_force_tool,
                         cache: false,
-                    })),
-                }
-            } else {
-                errln!(out, "Error: No tool was previously used");
-                None
-            }
-        }
-        _ => {
-            // Custom tool
-            if tool_name.starts_with("'") {
-                let shell_cmd = tool_name.trim_matches('\'').to_string();
-                let file_placeholder_re = tool::get_file_placeholder_re();
-                let tool = if let Some(caps) = file_placeholder_re.captures(&shell_cmd) {
-                    let ext = caps.get(1).map(|m| m.as_str().to_string());
-                    tool::Tool::ShellExecWithFile(shell_cmd.clone(), ext)
+                    });
+                    Ok(tool_cmd)
                 } else {
-                    tool::Tool::ShellExecWithStdin(shell_cmd.clone())
-                };
-                match parse_one_arg_catchall(remaining) {
-                    Some(prompt) => Some(Cmd::Tool(ToolCmd {
-                        tool: tool.clone(),
-                        prompt: get_tool_prefixed_prompt(&tool, user_confirmation, &prompt),
-                        user_confirmation,
-                        force_tool,
+                    // NOTE: Caller should alert user why their tool shorthand
+                    // was converted into a prompt.
+                    Ok(Cmd::Prompt(PromptCmd {
+                        prompt: input.into(),
                         cache: false,
-                    })),
-                    None => Some(Cmd::ToolMode(ToolModeCmd {
-                        tool,
-                        user_confirmation,
-                        force_tool,
-                    })),
+                    }))
                 }
+            } else if let Some(remaining) = peeled_input.strip_prefix("! ") {
+                if let Some(last_tool_cmd) = last_tool_cmd {
+                    let merged_user_confirmation = if confirm {
+                        true
+                    } else {
+                        last_tool_cmd.user_confirmation
+                    };
+                    let merged_force_tool = if !force {
+                        false
+                    } else {
+                        last_tool_cmd.force_tool
+                    };
+                    let tool_cmd = Cmd::Tool(ToolCmd {
+                        tool: last_tool_cmd.tool,
+                        prompt: remaining.into(),
+                        user_confirmation: merged_user_confirmation,
+                        force_tool: merged_force_tool,
+                        cache: false,
+                    });
+                    return Ok(apply_tool_modifiers(
+                        tool_cmd,
+                        merged_user_confirmation,
+                        merged_force_tool,
+                    ));
+                } else {
+                    // NOTE: Caller should alert user why their tool shorthand
+                    // was converted into a prompt.
+                    Ok(Cmd::Prompt(PromptCmd {
+                        prompt: input.into(),
+                        cache: false,
+                    }))
+                }
+            } else if let Some(tool_mode) = tool_mode {
+                let tool_cmd = Cmd::Tool(ToolCmd {
+                    tool: tool_mode.tool,
+                    prompt: input.into(),
+                    user_confirmation: tool_mode.user_confirmation,
+                    force_tool: tool_mode.force_tool,
+                    cache: false,
+                });
+                return Ok(apply_tool_modifiers(
+                    tool_cmd,
+                    tool_mode.user_confirmation,
+                    tool_mode.force_tool,
+                ));
             } else {
-                // Since the tool didn't match a known one, treat it as if the
-                // user never intended to make a !tool call and send it to the
-                // AI as a prompt.
-                errln!(out, "Warning: Did you intend to invoke a tool?");
-                Some(Cmd::Prompt(PromptCmd {
-                    prompt: full_input.to_owned(),
+                Ok(Cmd::Prompt(PromptCmd {
+                    prompt: input.into(),
                     cache: false,
                 }))
             }
         }
+        Err(e) => Err(e),
     }
 }
 
-fn parse_accent(out: &Out, options: &HashMap<String, String>) -> Option<Accent> {
-    let expected_types = HashMap::from([
-        ("danger".to_string(), OptionType::Bool),
-        ("warn".to_string(), OptionType::Bool),
-        ("info".to_string(), OptionType::Bool),
-        ("success".to_string(), OptionType::Bool),
-    ]);
-    if let Err(type_error) = validate_option_types(options, &expected_types) {
-        errln!(out, "Error: {}", type_error);
-        return None;
-    }
-    if options.get("danger").map(|v| v == "true").unwrap_or(false) {
-        Some(Accent::Danger)
-    } else if options.get("warn").map(|v| v == "true").unwrap_or(false) {
-        Some(Accent::Warn)
-    } else if options.get("info").map(|v| v == "true").unwrap_or(false) {
-        Some(Accent::Info)
-    } else if options.get("success").map(|v| v == "true").unwrap_or(false) {
-        Some(Accent::Success)
-    } else {
-        None
+// --
+
+/// The registry parser doesn't understand the `!?<tool>` and `!<tool>?`
+/// modifiers. For example:
+///
+///   !?sh ...  -> user_confirmation = true
+///   !sh? ...  -> force_tool = false
+///
+/// While ideally these would be moved to the parser, it's currently easier
+/// just to keep track of these at this layer and pass an unmodified version to
+/// the registry parser.
+fn peel_bang_modifiers(input: &str) -> (String, bool, bool) {
+    let (mut confirm, mut force) = (false, true);
+
+    let Some(rest) = input.strip_prefix('!') else {
+        return (input.to_string(), confirm, force);
+    };
+    let rest = match rest.strip_prefix('?') {
+        Some(r) => {
+            confirm = true;
+            r
+        }
+        None => rest,
+    };
+
+    // End of the tool word: a quoted string, or a run of name chars.
+    let end = match rest.chars().next() {
+        Some(q @ ('\'' | '"')) => {
+            let mut it = rest.char_indices().skip(1);
+            loop {
+                match it.next() {
+                    Some((_, '\\')) => {
+                        it.next();
+                    }
+                    Some((i, c)) if c == q => break i + c.len_utf8(),
+                    Some(_) => {}
+                    // Unterminated: hand it back untouched and let the old
+                    // path report it.
+                    None => return (input.to_string(), false, true),
+                }
+            }
+        }
+        _ => rest
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+            .unwrap_or(rest.len()),
+    };
+
+    let tail = match rest[end..].strip_prefix('?') {
+        Some(t) => {
+            force = false;
+            t
+        }
+        None => &rest[end..],
+    };
+    (format!("!{}{}", &rest[..end], tail), confirm, force)
+}
+
+/// Applies `user_confirmation` and `force_tool` to a `Cmd` since these flags
+/// were determined by `peel_bang_modifiers` rather than by the registry
+/// parser.
+///
+/// Also, adds the `!tool` prefix to the prompt for `Cmd::Tool` to assist the
+/// LLM.
+fn apply_tool_modifiers(cmd: Cmd, user_confirmation: bool, force_tool: bool) -> Cmd {
+    match cmd {
+        Cmd::Tool(c) => {
+            // Conditionally add !tool to prompt + flags
+            let prompt = get_tool_prefixed_prompt(&c.tool, user_confirmation, &c.prompt);
+            Cmd::Tool(ToolCmd {
+                prompt,
+                user_confirmation,
+                force_tool,
+                ..c
+            })
+        }
+        Cmd::ToolMode(c) => Cmd::ToolMode(ToolModeCmd {
+            user_confirmation,
+            force_tool,
+            ..c
+        }),
+        other => other,
     }
 }
+
+// --
+
+// Conversion of `ResolvedCmdSpec` into the `Cmd` the REPL executes.
+//
+// Everything here is a mechanical translation. Arity, enums, option types and
+// bodies were already validated by the parser; the only failures raised here
+// are semantic coercions (ACL strings, numbers in text slots).
+
+use crate::cmd_parse::{Opts, ParseError, ResolvedCmdSpec};
+use crate::cmd_registry::Sigil;
+
+//
+// Coercions
+//
+
+fn accent(opts: &Opts) -> Option<Accent> {
+    opts.first_set(&["danger", "warn", "info", "success"])
+        .map(|n| match n {
+            "danger" => Accent::Danger,
+            "warn" => Accent::Warn,
+            "info" => Accent::Info,
+            _ => Accent::Success,
+        })
+}
+
+fn parse_principal(s: &str) -> Option<AssetAcePrincipal> {
+    if s == "everyone" {
+        return Some(AssetAcePrincipal::Everyone);
+    }
+    s.strip_prefix("user:")
+        .filter(|u| !u.is_empty())
+        .map(|u| AssetAcePrincipal::User(u.to_string()))
+}
+
+fn parse_ace(s: &str) -> Option<(AssetAceEffect, AssetAcePermission)> {
+    let (effect, perm) = s.split_once(':')?;
+    let effect = match effect {
+        "allow" => AssetAceEffect::Allow,
+        "deny" => AssetAceEffect::Deny,
+        "inherit" => AssetAceEffect::Inherit,
+        _ => return None,
+    };
+    let perm = match perm {
+        "read-data" => AssetAcePermission::ReadData,
+        "read-revisions" => AssetAcePermission::ReadRevisions,
+        "write-data" => AssetAcePermission::WriteData,
+        "push-data" => AssetAcePermission::PushData,
+        _ => return None,
+    };
+    Some((effect, perm))
+}
+
+/// `/f1`, `/f_summarize`, ... — injected at runtime by the function-tool machinery.
+fn is_fn_cmd(name: &str) -> bool {
+    name.starts_with("f_")
+        || (name.len() > 1
+            && name.starts_with('f')
+            && name[1..].chars().all(|c| c.is_ascii_digit()))
+}
+
+//
+// !tool handler
+//
+
+/// Warning: Does not handle custom tools: ExecWithStdin or ExecWithFile
+fn get_tool_from_resolved_cmd_spec(r: &ResolvedCmdSpec) -> Option<tool::Tool> {
+    use tool::Tool;
+    Some(match r.spec.name.as_ref() {
+        "sh" => Tool::ShellScriptExec,
+        "py" => Tool::ExecPythonScript,
+        "pyuv" => Tool::ExecPythonUvScript,
+        "html" => Tool::Html,
+        "hai" => Tool::HaiRepl,
+        "clip" => Tool::CopyToClipboard,
+        "fn-py" => Tool::Fn(tool::FnTool {
+            kind: tool::FnToolType::FnPy,
+            name: r.opts.string("name"),
+        }),
+        "fn-pyuv" => Tool::Fn(tool::FnTool {
+            kind: tool::FnToolType::FnPyUv,
+            name: r.opts.string("name"),
+        }),
+        "fn-sh" => Tool::Fn(tool::FnTool {
+            kind: tool::FnToolType::FnSh,
+            name: r.opts.string("name"),
+        }),
+        _ => return None,
+    })
+}
+
+/// `!<tool> [<prompt>]`. An empty prompt enters tool mode.
+///
+/// `user_confirmation` is left false: the `?` in `!?sh` is stripped by the
+/// bespoke `!` grammar before `parse_with_spec`, so that layer owns the flag.
+/// Use `set_user_confirmation` on the result.
+fn build_tool(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
+    if r.spec.name == "exit" {
+        return Ok(Cmd::ToolModeExit);
+    }
+    let Some(tool) = get_tool_from_resolved_cmd_spec(&r) else {
+        debug_assert!(false, "no tool mapping for !{}", r.spec.name);
+        return Err(ParseError::UnknownCmd {
+            sigil: Sigil::Bang,
+            name: r.spec.name.to_string(),
+            suggestion: None,
+        });
+    };
+    // Not every tool declares .cache; querying an undeclared option trips a
+    // debug_assert in Opts.
+    let cache = r.spec.find_opt("cache").is_some() && r.opts.bool("cache");
+    let prompt = r.take(0);
+
+    Ok(if prompt.trim().is_empty() {
+        Cmd::ToolMode(ToolModeCmd {
+            tool,
+            user_confirmation: false,
+            force_tool: true,
+        })
+    } else {
+        Cmd::Tool(ToolCmd {
+            tool,
+            prompt,
+            user_confirmation: false,
+            force_tool: true,
+            cache,
+        })
+    })
+}
+
+//
+// Build cmd: ResolvedCmdSpec -> Cmd
+//
+
+pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
+    if r.spec.sigil == Sigil::Bang {
+        return build_tool(r);
+    }
+    let name = r.spec.name.as_ref();
+
+    Ok(match name {
+        //
+        // Meta commands
+        //
+        "help" => Cmd::Help(HelpCmd {
+            // DEPRECATED: output is always added to history.
+            history: true,
+        }),
+        "quit" => Cmd::Quit,
+        "new" => Cmd::New,
+        "reset" => Cmd::Reset,
+
+        //
+        // LLM options
+        //
+        "set-key" => Cmd::SetKey(SetKeyCmd {
+            provider: r.take(0),
+            key: r.take(1),
+        }),
+        "ai" => Cmd::Ai(AiCmd {
+            model: r.opt_take(0),
+        }),
+        "ai-default" => Cmd::AiDefault(AiDefaultCmd {
+            model: r.opt_take(0),
+        }),
+        "agentic" => Cmd::Agentic(AgenticCmd {
+            // (agentic-mode, use-prompt-cache)
+            on: Some(match r.arg(0) {
+                "on" => (true, true),
+                "on-without-cache" => (true, false),
+                _ => (false, false),
+            }),
+        }),
+        "temperature" => Cmd::Temperature(TemperatureCmd {
+            temperature: {
+                let t = r.arg(0);
+                if t.is_empty() || t.eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    r.num::<f32>(0)?
+                }
+            },
+        }),
+
+        //
+        // Account management
+        //
+        "account" => Cmd::Account(AccountCmd {
+            username: r.opt_take(0),
+        }),
+        "account-new" => Cmd::AccountNew,
+        "account-login" => Cmd::AccountLogin(AccountLoginCmd {
+            username: None,
+            password: None,
+        }),
+        "account-logout" => Cmd::AccountLogout(AccountLogoutCmd {
+            username: r.opt_take(0),
+        }),
+        "account-balance" => Cmd::AccountBalance,
+        "account-subscribe" => Cmd::AccountSubscribe,
+        "whois" => Cmd::Whois(WhoisCmd {
+            username: r.take(0),
+        }),
+        "hai-router" => Cmd::HaiRouter(HaiRouterCmd {
+            // ArgKind::Enum already restricted this to on|off.
+            on: Some(r.arg(0) == "on"),
+        }),
+
+        //
+        // Files
+        //
+        "file-read" => Cmd::FileRead(FileReadCmd {
+            path: r.take_rest(0).join(" "),
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+        }),
+        "file-cat" => Cmd::FileCat(FileCatCmd {
+            path: r.take_rest(0).join(" "),
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+        }),
+        "file-write" => Cmd::FileWrite(FileWriteCmd {
+            path: r.take(0),
+            contents: r.body.take(),
+        }),
+        "file-patch" => {
+            let (search, replace) = {
+                let p = r.patch_or_err()?;
+                (p.search.clone(), p.replace.clone())
+            };
+            Cmd::FilePatch(FilePatchCmd {
+                path: r.take(0),
+                search,
+                replace,
+            })
+        }
+        "cd" => Cmd::Cd(CdCmd { path: r.take(0) }),
+
+        //
+        // HTTP
+        //
+        "http-get" => Cmd::HttpGet(HttpGetCmd {
+            url: r.take(0),
+            raw: r.opts.bool("raw"),
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+        }),
+
+        //
+        // Exec
+        //
+        "exec" => Cmd::Exec(ExecCmd {
+            command: r.take(0),
+            cache: r.opts.bool("cache"),
+            interactive: r.opts.bool("i"),
+        }),
+
+        //
+        // Conversation management
+        //
+        "prep" => Cmd::Prep(PrepCmd {
+            accent: accent(&r.opts),
+            message: r.take(0),
+        }),
+        "pin" => Cmd::Pin(PinCmd {
+            accent: accent(&r.opts),
+            message: r.take(0),
+        }),
+        "system-prompt" => Cmd::SystemPrompt(SystemPromptCmd {
+            prompt: r.opt_take(0),
+        }),
+        "clip" => Cmd::Clip,
+        "forget" => Cmd::Forget(ForgetCmd {
+            n: r.num(0)?.unwrap_or(1),
+        }),
+        "keep" => Cmd::Keep(KeepCmd {
+            bottom: r
+                .num(0)?
+                .ok_or_else(|| r.bad_value(0, "expected a number"))?,
+            top: r.num(1)?,
+        }),
+
+        //
+        // Function tools
+        //
+        "fns" => Cmd::Fns,
+
+        // Stdlib fns
+        "std" => {
+            let sub = r.sub.as_ref().expect("Sub arg is Required");
+            Cmd::Std(match sub.spec.name.as_ref() {
+                "now" => StdCmd::Now,
+                "new-day-alert" => StdCmd::NewDayAlert,
+                "which" => StdCmd::Which(sub.arg(0).to_string()),
+                other => unreachable!("std subcommand {other} has no build arm"),
+            })
+        }
+
+        //
+        // Assets
+        //
+        "asset" => Cmd::Asset(AssetCmd {
+            no_create: r.opts.bool("no_create"),
+            asset_name: r.take(0),
+            editor: r.opt_take(1),
+        }),
+        "asset-list" => Cmd::AssetList(AssetListCmd {
+            desc: r.opts.bool("desc"),
+            full: r.opts.bool("full"),
+            prefix: r.take(0),
+        }),
+        "asset-search" => Cmd::AssetSearch(AssetSearchCmd {
+            path: r.opts.string("path"),
+            q: r.take(0),
+        }),
+        "asset-read" => Cmd::AssetRead(AssetReadCmd {
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+            asset_names: r.take_rest(0),
+        }),
+        "asset-write" => Cmd::AssetWrite(AssetWriteCmd {
+            encrypt: r.opts.bool("encrypt"),
+            asset_name: r.take(0),
+            contents: r.body.take(),
+        }),
+        "asset-cat" => Cmd::AssetCat(AssetCatCmd {
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+            asset_names: r.take_rest(0),
+        }),
+        "asset-patch" => {
+            let (search, replace) = {
+                let p = r.patch_or_err()?;
+                (p.search.clone(), p.replace.clone())
+            };
+            Cmd::AssetPatch(AssetPatchCmd {
+                asset_name: r.take(0),
+                search,
+                replace,
+            })
+        }
+        "asset-link" => Cmd::AssetLink(AssetLinkCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-revisions" => Cmd::AssetRevisions(AssetRevisionsCmd {
+            show_line_numbers: r.opts.bool("n"),
+            count: r.num(1)?,
+            asset_name: r.take(0),
+        }),
+        "asset-listen" => Cmd::AssetListen(AssetListenCmd {
+            asset_name: r.take(0),
+            cursor: r.opt_take(1),
+        }),
+        "asset-follow" => Cmd::AssetFollow(AssetFollowCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-push" => Cmd::AssetPush(AssetPushCmd {
+            asset_name: r.take(0),
+            contents: r.body.take(),
+        }),
+        "asset-import" => Cmd::AssetImport(AssetImportCmd {
+            target_asset_name: r.take(0),
+            source_file_path: r.take(1),
+        }),
+        "asset-export" => Cmd::AssetExport(AssetExportCmd {
+            source_asset_name: r.take(0),
+            target_file_path: r.take(1),
+        }),
+        "asset-temp" => Cmd::AssetTemp(AssetTempCmd {
+            count: r.num(1)?,
+            asset_name: r.take(0),
+        }),
+        "asset-revision-temp" => Cmd::AssetRevisionTemp(AssetRevisionTempCmd {
+            asset_name: r.take(0),
+            rev_id: r.take(1),
+        }),
+        "asset-sync-up" => Cmd::AssetSyncUp(AssetSyncUpCmd {
+            sync_new_files: r.opts.bool("new"),
+            dry_run: r.opts.bool("dry"),
+            source_path: r.take(0),
+            target_prefix: r.take(1),
+        }),
+        "asset-sync-down" => Cmd::AssetSyncDown(AssetSyncDownCmd {
+            prefix: r.take(0),
+            target_path: r.take(1),
+        }),
+        "asset-sync-diff" => Cmd::AssetSyncDiff(AssetSyncDiffCmd { path: r.take(0) }),
+        "asset-remove" => Cmd::AssetRemove(AssetRemoveCmd {
+            asset_name: r.take(0),
+            recursive: false,
+        }),
+        "asset-remove-recursive" => Cmd::AssetRemove(AssetRemoveCmd {
+            asset_name: r.take(0),
+            recursive: true,
+        }),
+        "asset-move" => Cmd::AssetMove(AssetMoveCmd {
+            source_asset_name: r.take(0),
+            dest_asset_name: r.take(1),
+        }),
+        "asset-copy" => Cmd::AssetCopy(AssetCopyCmd {
+            source_asset_name: r.take(0),
+            dest_asset_name: r.take(1),
+        }),
+        "asset-acl-get" => Cmd::AssetAclGet(AssetAclGetCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-acl-get-effective" => Cmd::AssetAclGetEffective(AssetAclGetEffectiveCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-acl-set" => {
+            let principal = parse_principal(r.arg(1))
+                .ok_or_else(|| r.bad_value(1, "expected `everyone` or `user:<username>`"))?;
+            let (effect, permission) = parse_ace(r.arg(2)).ok_or_else(|| {
+                r.bad_value(
+                    2,
+                    "expected <effect>:<permission>, e.g. allow:read-data \
+                     (effect: allow|deny|inherit, permission: \
+                     read-data|read-revisions|write-data|push-data)",
+                )
+            })?;
+            Cmd::AssetAclSet(AssetAclSetCmd {
+                asset_name: r.take(0),
+                ace_principal: principal,
+                ace_permission: permission,
+                ace_effect: effect,
+            })
+        }
+        "asset-md-get" => Cmd::AssetMdGet(AssetMdGetCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-md-set" => Cmd::AssetMdSet(AssetMdSetCmd {
+            asset_name: r.take(0),
+            metadata: r.take(1),
+        }),
+        "asset-md-set-key" => Cmd::AssetMdSetKey(AssetMdSetKeyCmd {
+            asset_name: r.take(0),
+            key: r.take(1),
+            value: r.take(2),
+        }),
+        "asset-md-del-key" => Cmd::AssetMdDelKey(AssetMdDelKeyCmd {
+            asset_name: r.take(0),
+            key: r.take(1),
+        }),
+        "asset-folder-new" => Cmd::AssetFolderNew(AssetFolderNewCmd { name: r.take(0) }),
+        "asset-folder-collapse" => {
+            Cmd::AssetFolderCollapse(AssetFolderCollapseCmd { prefix: r.take(0) })
+        }
+        "asset-folder-expand" => Cmd::AssetFolderExpand(AssetFolderExpandCmd { prefix: r.take(0) }),
+        "asset-folder-list" => Cmd::AssetFolderList(AssetFolderListCmd {
+            prefix: r.opt_take(0),
+        }),
+        "asset-pools" => Cmd::AssetPools,
+        "asset-pool-new" => Cmd::AssetPoolNew(AssetPoolNewCmd {
+            usernames: r.take_rest(0),
+        }),
+        "asset-crypt-setup" => Cmd::AssetCryptSetup,
+        "asset-crypt-lock" => Cmd::AssetCryptLock(AssetCryptLockCmd {
+            enc_key_id: r.opt_take(0),
+        }),
+        "asset-crypt-unlock" => Cmd::AssetCryptUnlock(AssetCryptUnlockCmd {
+            enc_key_id: r.opt_take(0),
+        }),
+        "asset-crypt-recover" => Cmd::AssetCryptRecover(AssetCryptRecoverCmd { enc_key_id: None }),
+        "inbox-setup" => Cmd::InboxSetup,
+
+        //
+        // Asset apps
+        //
+        "asset-app" => Cmd::AssetApp(AssetAppCmd {
+            no_open: r.opts.bool("no_open"),
+            dev_mode: r.opts.string("dev_mode"),
+            asset_name: r.take(0),
+        }),
+        "asset-app-perms-list" => Cmd::AssetAppPermsList(AssetAppPermsListCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-app-perms-revoke" => Cmd::AssetAppPermsRevoke(AssetAppPermsRevokeCmd {
+            asset_name: r.take(0),
+        }),
+        "asset-open" => Cmd::AssetOpen(AssetOpenCmd {
+            asset_name: r.take(0),
+        }),
+
+        //
+        // Chats
+        //
+        "chats" => Cmd::Chats,
+        "chat-save" => Cmd::ChatSave(ChatSaveCmd {
+            fork: r.opts.bool("fork"),
+            chat_log_name: r.opt_take(0),
+        }),
+        "chat-resume" => Cmd::ChatResume(ChatResumeCmd {
+            fork: r.opts.bool("fork"),
+            chat_log_name: r.opt_take(0),
+        }),
+
+        //
+        // Tasks
+        //
+        "task" => Cmd::Task(TaskCmd {
+            key: r.opts.string("key"),
+            trust: r.opts.bool("trust"),
+            task_ref: r.take(0),
+        }),
+        "task-search" => Cmd::TaskSearch(TaskSearchCmd { q: r.take(0) }),
+        "task-cat" => Cmd::TaskCat(TaskCatCmd {
+            task_ref: r.take(0),
+        }),
+        "task-versions" => Cmd::TaskVersions(TaskVersionsCmd {
+            task_fqn: r.take(0),
+        }),
+        "task-end" => Cmd::TaskEnd,
+        // `/task-update` is the user-facing name for a fetch of the latest version.
+        "task-update" | "task-fetch" => Cmd::TaskFetch(TaskFetchCmd {
+            task_fqn: r.take(0),
+        }),
+        "task-publish" => Cmd::TaskPublish(TaskPublishCmd {
+            task_path: r.take(0),
+        }),
+        "task-edit" => Cmd::TaskEdit(TaskEditCmd {
+            task_fqn: r.take(0),
+        }),
+        "task-forget" => Cmd::TaskForget(TaskForgetCmd {
+            key: r.opts.string("key"),
+            task_ref: r.take(0),
+        }),
+        "task-purge" => Cmd::TaskPurge(TaskPurgeCmd {
+            task_fqn: r.take(0),
+        }),
+        "task-include" => Cmd::TaskInclude(TaskIncludeCmd {
+            task_ref: r.take(0),
+            key: None,
+        }),
+
+        // Prompting
+        "prompt" => Cmd::Prompt(PromptCmd {
+            cache: r.opts.bool("cache"),
+            prompt: r.take(0),
+        }),
+        "ask-human" => Cmd::AskHuman(AskHumanCmd {
+            secret: r.opts.bool("secret"),
+            cache: r.opts.bool("cache"),
+            question: r.take(0),
+        }),
+
+        //
+        // MCP
+        //
+        "mcp-add" => {
+            let name = r.take(0);
+            let env = r.take(1);
+            let cmd = r.take(2);
+            Cmd::McpAdd(McpAddCmd {
+                name,
+                // McpAddCmd has no env field; the KEY=VALUE prefix rides along
+                // on the command line, which is how the doc example reads.
+                cmd: if env.is_empty() {
+                    cmd
+                } else {
+                    format!("{env} {cmd}")
+                },
+            })
+        }
+
+        // Bot
+        "bot-boot" => Cmd::BotBoot(BotBootCmd {
+            hai_version: r.opt_take(0),
+        }),
+        "bot-get-active" => Cmd::BotGetActive,
+        "bot-probe" => Cmd::BotProbe,
+        "bot-setup" => Cmd::BotSetup,
+        "bot-ssh" => Cmd::BotSsh,
+        "bot-shutdown" => Cmd::BotShutdown,
+
+        // Messaging
+        "email" => Cmd::Email(EmailCmd {
+            subject: r.take(0),
+            body: r.body.take(),
+        }),
+        "notif" => Cmd::Notif(NotifCmd {
+            title: r.take(0),
+            body: r.body.take(),
+        }),
+
+        // Web search
+        "web-search" => Cmd::WebSearch(WebSearchCmd {
+            n: r.opts.u32("n").unwrap_or(5),
+            pd: r.opts.bool("pd"),
+            pw: r.opts.bool("pw"),
+            pm: r.opts.bool("pm"),
+            py: r.opts.bool("py"),
+            range: r.opts.string("range"),
+            q: r.take(0),
+        }),
+
+        // Utils
+        "cost" => Cmd::Cost,
+        "setvar" => Cmd::SetVar(SetVarCmd {
+            key: r.take(0),
+            value: r.take(1),
+        }),
+        "printvars" => Cmd::PrintVars,
+        "set-mask-secrets" => Cmd::SetMaskSecrets(SetMaskSecretsCmd {
+            on: match r.arg(0) {
+                "" => None,
+                s => Some(s == "on"),
+            },
+        }),
+        "queue-pop" => Cmd::QueuePop(QueuePopCmd {
+            queue_name: r.opt_take(0),
+        }),
+        "assistant" => Cmd::Assistant(AssistantCmd { message: r.take(0) }),
+        "about" => Cmd::About,
+
+        //
+        // Debugging
+        //
+        "dump" => Cmd::Dump,
+        "dump-session" => Cmd::DumpSession,
+        "gateway" => Cmd::Gateway(GatewayCmd {
+            auth_token: r.opt_take(0),
+        }),
+
+        //
+        // Dynamic (runtime-injected)
+        //
+        n if is_fn_cmd(n) => Cmd::FnExec(FnExecCmd {
+            fn_name: n.to_string(),
+            arg: r.take(0),
+        }),
+        n if n.starts_with("mcp_") => Cmd::McpToolCall(McpToolCallCmd {
+            name: n.to_string(),
+            tool_name: r.take(0),
+            json_arg: r.take(1),
+        }),
+
+        other => {
+            // Loud in tests, graceful in release: a registry entry with no
+            // build arm behaves like an unknown command rather than panicking
+            // in the middle of someone's REPL session.
+            debug_assert!(false, "no build arm for /{other}");
+            return Err(ParseError::UnknownCmd {
+                sigil: r.spec.sigil,
+                name: other.to_string(),
+                suggestion: None,
+            });
+        }
+    })
+}
+
+// --
+
+/// Splits `!'<program>' <tail>` into the program text and the remaining tail.
+/// Returns `None` for anything that isn't the custom-tool form.
+fn split_custom_tool(input: &str) -> Option<(String, &str)> {
+    let rest = input.strip_prefix('!')?;
+    let quote = match rest.chars().next()? {
+        q @ ('\'' | '"') => q,
+        _ => return None,
+    };
+    let mut cmd = String::new();
+    let mut it = rest.char_indices().skip(1);
+    loop {
+        match it.next()? {
+            // Only the quote char is escapable; a literal `\` stays a `\` so
+            // shell commands aren't mangled.
+            (_, '\\') => match it.next()? {
+                (_, c) if c == quote => cmd.push(c),
+                (_, c) => {
+                    cmd.push('\\');
+                    cmd.push(c);
+                }
+            },
+            (i, c) if c == quote => return Some((cmd, &rest[i + c.len_utf8()..])),
+            (_, c) => cmd.push(c),
+        }
+    }
+}
+
+/// Builds custom tool cmd from: `!'<program>' [<prompt>]`.
+///
+/// Switches between Tool::ShellExecWithFile and Tool::ShellExecWithStdin
+/// based on whether the shell command contains a file placeholder.
+///
+/// Like regular tools, an empty prompt returns a ToolMode cmd.
+fn build_custom_tool(mut r: ResolvedCmdSpec, shell_cmd: String) -> Result<Cmd, ParseError> {
+    let tool = match tool::get_file_placeholder_re().captures(&shell_cmd) {
+        Some(caps) => {
+            let ext = caps.get(1).map(|m| m.as_str().to_string());
+            tool::Tool::ShellExecWithFile(shell_cmd, ext)
+        }
+        None => tool::Tool::ShellExecWithStdin(shell_cmd),
+    };
+    let prompt = r.take(0);
+
+    Ok(if prompt.trim().is_empty() {
+        Cmd::ToolMode(ToolModeCmd {
+            tool,
+            user_confirmation: false,
+            force_tool: true,
+        })
+    } else {
+        Cmd::Tool(ToolCmd {
+            tool,
+            prompt,
+            user_confirmation: false,
+            force_tool: true,
+            cache: false,
+        })
+    })
+}
+
+/// Parses a bare tool invocation: `!py`, `!?'psql -U postgres'`, `!sh?`
+/// This differs from build_tool in that it's for config parsing, not the REPL.
+///
+/// - No trailing prompt
+/// - No bare `!`
+pub fn parse_tool_mode(
+    cmd_registry: &crate::cmd_registry::Registry,
+    input: &str,
+) -> Result<ToolModeCmd, String> {
+    let input = input.trim();
+    if !input.starts_with('!') {
+        return Err(format!("invalid tool {input:?}: must start with `!`"));
+    }
+    let (peeled, confirm, force) = peel_bang_modifiers(input);
+
+    let cmd = if let Some((shell_cmd, tail)) = split_custom_tool(&peeled) {
+        let r = cmd_parse::parse_with_spec(crate::cmd_registry::CUSTOM_TOOL_SPEC, tail)
+            .map_err(|e| e.to_string())?;
+        build_custom_tool(r, shell_cmd).map_err(|e| e.to_string())?
+    } else {
+        match cmd_parse::parse(cmd_registry, &peeled) {
+            Ok(r) => build(r).map_err(|e| e.to_string())?,
+            // `!`, `! foo`, `!!` — scan_name finds nothing to look up.
+            Err(ParseError::NotACommand) => {
+                return Err("no tool specified: expected `!<tool>`, e.g. `!py`".into());
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    };
+    match cmd {
+        Cmd::ToolMode(c) => Ok(ToolModeCmd {
+            user_confirmation: confirm,
+            force_tool: force,
+            ..c
+        }),
+        Cmd::Tool(_) => Err(format!(
+            "{input:?} takes no prompt here — configure the tool only, e.g. `!py`"
+        )),
+        Cmd::ToolModeExit => Err("`!exit` ends tool mode; it can't be entered".into()),
+        _ => Err(format!("{input:?} is not a tool")),
+    }
+}
+
+// --
 
 /// Some tool calls are better handled by the AI when the tool-cmd is prefixed
 /// to the prompt. For other tool calls (e.g. !sh), the tool-cmd confuses the
@@ -3731,8 +2005,9 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
     let tool_call_type = if user_confirmation { "!?" } else { "!" };
     let tool_call = match tool {
         tool::Tool::CopyToClipboard => format!("{}clip ", tool_call_type),
+        tool::Tool::ShellScriptExec => "".to_string(),
         tool::Tool::ExecPythonScript => format!("{}py ", tool_call_type),
-        // !py may be understandable than !pyuv to the LLM--this is unscientific.
+        // !py may be more understandable than !pyuv to the LLM--this is unscientific.
         tool::Tool::ExecPythonUvScript => format!("{}py ", tool_call_type),
         tool::Tool::HaiRepl => format!("{}hai ", tool_call_type),
         tool::Tool::Html => format!("{}html ", tool_call_type),
@@ -3744,315 +2019,10 @@ fn get_tool_prefixed_prompt(tool: &tool::Tool, user_confirmation: bool, prompt: 
     format!("{}{}", tool_call, prompt)
 }
 
-/// Parse command options: /cmd(key1=value, key2, ...)
-///
-/// If a key is specified without a value, the value is set to `true`.
-///
-/// FUTURE: This function is terribly naive. It doesn't support escaping in
-/// quoted strings.
-///
-/// # Arguments
-/// - `options_input`- The portion of the input between the parentheses. Do not
-///   include the `/cmd` nor what follows the command.
-fn parse_options(options_input: &str) -> HashMap<String, String> {
-    let mut options = HashMap::new();
-    let content = options_input.trim();
-    if content.starts_with('(') && content.ends_with(')') {
-        let content = &content[1..content.len() - 1];
-        let mut pairs = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        let chars = content.chars().peekable();
-
-        for c in chars {
-            match c {
-                '"' => {
-                    current.push(c);
-                    in_quotes = !in_quotes;
-                }
-                ',' if !in_quotes => {
-                    pairs.push(current.trim().to_string());
-                    current.clear();
-                }
-                _ => {
-                    current.push(c);
-                }
-            }
-        }
-        if !current.trim().is_empty() {
-            pairs.push(current.trim().to_string());
-        }
-
-        for pair in pairs {
-            if let Some((key, value)) = pair.split_once('=') {
-                options.insert(key.trim().to_string(), value.trim().to_string());
-            } else {
-                options.insert(pair.trim().to_string(), "true".to_string());
-            }
-        }
-    }
-    options
-}
-
-/// Parse command options: /cmd.key1=value.key2.key3="quoted value"
-///
-/// If a key is specified without a value, the value is set to `true`.
-/// Supports quoted values containing dots.
-///
-/// # Arguments
-/// - `options_input` - The portion of the input after the command name, starting with `.`
-///   e.g., `.recursive.path="/ken/docs".limit=10`
-///
-/// # Returns
-/// - Tuple of (HashMap of options, remaining unparsed input after options)
-fn parse_dot_options(options_input: &str) -> (HashMap<String, String>, &str) {
-    let mut options = HashMap::new();
-
-    if !options_input.starts_with('.') {
-        return (options, options_input);
-    }
-
-    let mut chars = options_input.char_indices().peekable();
-    chars.next(); // consume initial '.'
-
-    let mut current_key = String::new();
-    let mut current_value = String::new();
-    let mut in_value = false;
-    let mut in_quotes = false;
-    let mut end_idx = options_input.len();
-
-    while let Some((idx, c)) = chars.next() {
-        match c {
-            ' ' if !in_quotes => {
-                end_idx = idx;
-                break;
-            }
-            '"' => {
-                in_quotes = !in_quotes;
-                if in_value {
-                    current_value.push(c);
-                }
-            }
-            '.' if !in_quotes => {
-                if !current_key.is_empty() {
-                    let value = if in_value {
-                        current_value.clone()
-                    } else {
-                        "true".to_string()
-                    };
-                    options.insert(current_key, value);
-                }
-                current_key = String::new();
-                current_value = String::new();
-                in_value = false;
-            }
-            '=' if !in_quotes && !in_value => {
-                in_value = true;
-            }
-            _ => {
-                if in_value {
-                    current_value.push(c);
-                } else {
-                    current_key.push(c);
-                }
-            }
-        }
-    }
-
-    if !current_key.is_empty() {
-        let value = if in_value {
-            current_value
-        } else {
-            "true".to_string()
-        };
-        options.insert(current_key, value);
-    }
-
-    let remaining = &options_input[end_idx..].trim_start();
-    (options, remaining)
-}
-
-/// Validates the options for a command.
-///
-/// - `options`: The parsed options from the command.
-/// - `valid_keys`: A slice of valid keys for the command.
-///
-/// Returns:
-/// - `Ok(())` if all options are valid.
-/// - `Err(Vec<String>)` containing invalid keys if any invalid options are found.
-fn validate_options(
-    options: &HashMap<String, String>,
-    valid_keys: &[&str],
-) -> Result<(), Vec<String>> {
-    let invalid_keys: Vec<String> = options
-        .keys()
-        .filter(|key| !valid_keys.contains(&key.as_str()))
-        .cloned()
-        .collect();
-
-    if invalid_keys.is_empty() {
-        Ok(())
-    } else {
-        Err(invalid_keys)
-    }
-}
-
-fn validate_options_and_print_err(
-    out: &Out,
-    cmd: &str,
-    options: &HashMap<String, String>,
-    valid_keys: &[&str],
-) -> bool {
-    if let Err(invalid_keys) = validate_options(options, valid_keys) {
-        let invalid_keys_pretty = invalid_keys.join(", ");
-        errln!(
-            out,
-            "Error: Invalid option(s) for /{}: {}",
-            cmd,
-            invalid_keys_pretty
-        );
-        false
-    } else {
-        true
-    }
-}
-
-fn validate_options_and_print_err_for_tool(
-    out: &Out,
-    tool_name: &str,
-    options: &HashMap<String, String>,
-    valid_keys: &[&str],
-) -> bool {
-    if let Err(invalid_keys) = validate_options(options, valid_keys) {
-        let invalid_keys_pretty = invalid_keys.join(", ");
-        errln!(
-            out,
-            "Error: Invalid option(s) for !{}: {}",
-            tool_name,
-            invalid_keys_pretty
-        );
-        false
-    } else {
-        true
-    }
-}
-
-fn trim_string_value(s: &str) -> &str {
-    s.strip_prefix('"')
-        .unwrap_or(s)
-        .strip_suffix('"')
-        .unwrap_or(s)
-}
-
-enum OptionType {
-    Bool,
-    #[allow(dead_code)]
-    Number,
-    String,
-}
-
-/// Validates the types for a set of options.
-///
-/// - `options`: The parsed options from the command.
-/// - `expected_types`: A map specifying the expected type (`OptionType`) for each valid key.
-///
-/// Returns:
-/// - `Ok(())` if all options have valid types.
-/// - `Err(String)` containing an error message if a type mismatch is found.
-fn validate_option_types(
-    options: &HashMap<String, String>,
-    expected_types: &HashMap<String, OptionType>,
-) -> Result<(), String> {
-    for (key, value) in options {
-        if let Some(expected_type) = expected_types.get(key) {
-            match expected_type {
-                OptionType::Bool => {
-                    if value != "true" && value != "false" {
-                        return Err(format!(
-                            "Invalid value for '{}': expected a boolean (true/false), got '{}'",
-                            key, value
-                        ));
-                    }
-                }
-                OptionType::Number => {
-                    if value.parse::<f64>().is_err() {
-                        return Err(format!(
-                            "Invalid value for '{}': expected a number, got '{}'",
-                            key, value
-                        ));
-                    }
-                }
-                OptionType::String => {
-                    // Ensure value is surrounded by quotes.
-                    if !value.starts_with('"') || !value.ends_with('"') {
-                        return Err(format!(
-                            "Invalid value for '{}': expected a quoted string, got '{}'",
-                            key, value
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Splits a multi-line body into (search, replace) using the line that
-/// consists solely of `=` characters and has the LONGEST run of them as
-/// the divider. This lets a single `=` work in simple cases, while longer
-/// runs act as an escape hatch when the search/replace text itself
-/// contains lines of `=`.
-fn split_search_replace(body: &str) -> Result<(String, String), String> {
-    // A candidate divider is a line that, after trimming, is non-empty
-    // and consists entirely of '=' characters.
-    let mut longest: Option<(usize, usize)> = None; // (eq_count, line_index)
-    let mut tie = false;
-
-    let lines: Vec<&str> = body.lines().collect();
-
-    for (i, line) in lines.iter().enumerate() {
-        if !line.is_empty() && line.chars().all(|c| c == '=') {
-            let count = line.len();
-            match longest {
-                Some((bc, _)) if count > bc => {
-                    longest = Some((count, i));
-                    tie = false;
-                }
-                Some((bc, _)) if count == bc => {
-                    tie = true;
-                }
-                None => {
-                    longest = Some((count, i));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    let (_, divider_idx) = longest.ok_or_else(|| {
-        "No divider found. Separate <search> and <replace> with a line of \
-         '=' characters (e.g. =======)."
-            .to_string()
-    })?;
-    if tie {
-        return Err("Ambiguous divider: multiple lines share the longest run \
-                    of '='. Make the intended divider strictly longer."
-            .to_string());
-    }
-
-    let search = lines[..divider_idx].join("\n");
-    let replace = lines[divider_idx + 1..].join("\n");
-
-    if search.is_empty() {
-        return Err("Search string is empty (nothing before the divider).".to_string());
-    }
-
-    Ok((search, replace))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cmd_registry::Registry;
     use crate::tool;
 
     #[test]
@@ -4061,9 +2031,9 @@ mod tests {
         // treated as an AI prompt and never as a command. This eases issues
         // with pasting code that looks like a command.
         let input = " /load xyz";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
+            Ok(Cmd::Prompt(PromptCmd { prompt, .. })) => {
                 assert_eq!(prompt, input);
             }
             _ => panic!("Failed to parse no args"),
@@ -4074,9 +2044,9 @@ mod tests {
     fn test_arguments() {
         // Test no arguments
         let input = "/ask-human agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4090,9 +2060,9 @@ mod tests {
 
         // Test one argument
         let input = "/ask-human(secret=true) agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4106,9 +2076,9 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human(secret=true,cache=true) agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4122,9 +2092,9 @@ mod tests {
 
         // Test two arguments separated by space
         let input = "/ask-human(secret=true, cache=true) agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4141,9 +2111,9 @@ mod tests {
     fn test_arguments_new() {
         // Test one argument
         let input = "/ask-human.secret=true agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4157,9 +2127,9 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human.secret=true.cache=true agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4173,9 +2143,9 @@ mod tests {
 
         // Test two arguments shorthand
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::AskHuman(AskHumanCmd {
+            Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
                 secret,
                 cache,
@@ -4189,9 +2159,9 @@ mod tests {
 
         // Test string argument
         let input = "/task.key=\"test\".trust user/task";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Task(TaskCmd {
+            Ok(Cmd::Task(TaskCmd {
                 task_ref,
                 key,
                 trust,
@@ -4207,9 +2177,9 @@ mod tests {
     #[test]
     fn test_clip_tool_command() {
         let input = "!clip Copy this to clipboard";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::CopyToClipboard,
                 prompt,
                 user_confirmation,
@@ -4225,9 +2195,9 @@ mod tests {
     #[test]
     fn test_py_tool_command() {
         let input = "!py print('Hello, World!')";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4243,9 +2213,9 @@ mod tests {
     #[test]
     fn test_sh_tool_command() {
         let input = "!sh ls -lah";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
                 prompt,
                 user_confirmation,
@@ -4260,41 +2230,18 @@ mod tests {
     }
 
     #[test]
-    fn test_shscript_tool_command() {
-        let input = "!shscript echo 'Hello'";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
-        match cmd {
-            Some(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellScriptExec,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "echo 'Hello'");
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to parse !shscript command properly"),
-        }
-    }
-
-    #[test]
     fn test_invalid_tool_command() {
         let input = "!invalid_tool Something";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
-        match cmd {
-            Some(Cmd::Prompt(PromptCmd { prompt, .. })) => {
-                assert_eq!(prompt, input);
-            }
-            _ => panic!("Failed to parse no args"),
-        }
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        matches!(cmd, Err(ParseError::UnknownCmd { sigil: Sigil::Bang, name, .. }) if name == "invalid_tool");
     }
 
     #[test]
     fn test_optional_tool_command() {
         let input = "!?py print('Hello, World!')";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4310,9 +2257,9 @@ mod tests {
     #[test]
     fn test_custom_tool_command() {
         let input = "!?'psql' describe the user table";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4327,9 +2274,9 @@ mod tests {
 
         // custom tool with space
         let input = "!?'psql -hlocalhost' describe the user table";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4344,9 +2291,9 @@ mod tests {
 
         // custom tool with double-quotes
         let input = "!?'psql -h \"localhost\"' describe the user table";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4361,9 +2308,9 @@ mod tests {
 
         // custom tool with escaped single-quote
         let input = "!?'psql -h loc\\'alhost' describe the user table";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4378,9 +2325,9 @@ mod tests {
 
         // custom tool with file+ext placeholder
         let input = "!?'uv run {file.py}' distance sf to nyc";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
                 prompt,
                 user_confirmation,
@@ -4396,9 +2343,9 @@ mod tests {
 
         // custom tool with file sans ext placeholder
         let input = "!?'uv run {file}' distance sf to nyc";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
                 prompt,
                 user_confirmation,
@@ -4418,16 +2365,16 @@ mod tests {
         let last_tool_cmd = ToolCmd {
             tool: tool::Tool::ExecPythonScript,
             prompt: "!py 1 + 2".to_string(),
-            user_confirmation: true,
+            user_confirmation: false,
             force_tool: true,
             cache: false,
         };
 
         // Test tool re-use
         let input = "! 3 + 4";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4441,9 +2388,9 @@ mod tests {
 
         // Test tool re-use with !?
         let input = "!? 3 + 4";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4457,9 +2404,9 @@ mod tests {
 
         // Test tool & prompt re-use
         let input = "!";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4473,9 +2420,9 @@ mod tests {
 
         // Test tool & prompt re-use with extraneous space and !?
         let input = "!? ";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4496,16 +2443,16 @@ mod tests {
         let last_tool_cmd = ToolCmd {
             tool: tool::Tool::ShellExecWithStdin("psql -hlocalhost".to_string()),
             prompt: "!'psql -hlocalhost' dump user table".to_string(),
-            user_confirmation: true,
+            user_confirmation: false,
             force_tool: true,
             cache: false,
         };
 
         // Test tool re-use
         let input = "! dump task table";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4520,9 +2467,9 @@ mod tests {
 
         // Test tool & prompt re-use
         let input = "!";
-        let cmd = parse_user_input(&Out::stdio(), input, Some(last_tool_cmd.clone()), None);
+        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
                 prompt,
                 user_confirmation,
@@ -4550,9 +2497,9 @@ mod tests {
         // Test entering tool mode
         //
 
-        let cmd = parse_user_input(&Out::stdio(), "!py", None, None);
+        let cmd = parse_user_input(&Registry::new(), "!py", None, None);
         match cmd {
-            Some(Cmd::ToolMode(ToolModeCmd {
+            Ok(Cmd::ToolMode(ToolModeCmd {
                 tool: tool::Tool::ExecPythonScript,
                 user_confirmation,
                 ..
@@ -4572,15 +2519,15 @@ mod tests {
             force_tool: true,
         };
         let input = "3 + 4";
-        let cmd = parse_user_input(&Out::stdio(), input, None, Some(tool_mode.clone()));
+        let cmd = parse_user_input(&Registry::new(), input, None, Some(tool_mode.clone()));
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
                 ..
             })) => {
-                assert_eq!(prompt, "3 + 4");
+                assert_eq!(prompt, "!?py 3 + 4");
                 assert!(user_confirmation);
             }
             _ => panic!("Failed to use tool mode"),
@@ -4591,20 +2538,20 @@ mod tests {
         //
 
         let cmd = parse_user_input(
-            &Out::stdio(),
+            &Registry::new(),
             "! get system time",
             Some(last_tool_cmd),
             Some(tool_mode.clone()),
         );
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
                 prompt,
                 user_confirmation,
                 ..
             })) => {
                 assert_eq!(prompt, "get system time");
-                assert!(!user_confirmation);
+                assert!(user_confirmation);
             }
             _ => panic!("Failed to re-use tool"),
         }
@@ -4613,9 +2560,9 @@ mod tests {
     #[test]
     fn test_tool_command_with_option() {
         let input = "!fn-py(cache=true) double a number";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool:
                     tool::Tool::Fn(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
@@ -4635,9 +2582,9 @@ mod tests {
         }
 
         let input = "!fn-py.cache=true double a number";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool:
                     tool::Tool::Fn(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
@@ -4657,9 +2604,9 @@ mod tests {
         }
 
         let input = "!fn-py.cache double a number";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool:
                     tool::Tool::Fn(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
@@ -4682,9 +2629,9 @@ mod tests {
     #[test]
     fn test_tool_require() {
         let input = "!py area of circle w/ radius 3";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4699,9 +2646,9 @@ mod tests {
         }
 
         let input = "!py? area of circle w/ radius 3";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Tool(ToolCmd {
+            Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
@@ -4728,10 +2675,10 @@ mod tests {
     #[test]
     fn test_string_option() {
         // Test simple
-        let input = "/task(key=\"A\", trust) hai/test";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let input = "/task.key=\"A\".trust hai/test";
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Task(TaskCmd {
+            Ok(Cmd::Task(TaskCmd {
                 task_ref,
                 key,
                 trust,
@@ -4745,10 +2692,10 @@ mod tests {
         }
 
         // Test comma in string
-        let input = "/task(key=\"A,B\", trust) hai/test";
-        let cmd = parse_user_input(&Out::stdio(), input, None, None);
+        let input = "/task.key=\"A,B\".trust hai/test";
+        let cmd = parse_user_input(&Registry::new(), input, None, None);
         match cmd {
-            Some(Cmd::Task(TaskCmd {
+            Ok(Cmd::Task(TaskCmd {
                 task_ref,
                 key,
                 trust,
@@ -4760,30 +2707,5 @@ mod tests {
             }
             _ => panic!("Failed to parse /task command properly"),
         }
-    }
-
-    #[test]
-    fn test_split_search_replace() {
-        let (s, r) = split_search_replace("foo\n=======\nbar").unwrap();
-        assert_eq!(s, "foo");
-        assert_eq!(r, "bar");
-
-        let (s, r) = split_search_replace("foo\n=\nbar").unwrap();
-        assert_eq!(s, "foo");
-        assert_eq!(r, "bar");
-
-        // Test longest wins when content has equals
-        let body = "a\n===\nb\n=======\nc\n===\nd";
-        let (s, r) = split_search_replace(body).unwrap();
-        assert_eq!(s, "a\n===\nb");
-        assert_eq!(r, "c\n===\nd");
-
-        // Test multi-line is preserved
-        let (s, r) = split_search_replace("l1\nl2\n=======\nr1\nr2").unwrap();
-        assert_eq!(s, "l1\nl2");
-        assert_eq!(r, "r1\nr2");
-
-        // Try no divider
-        assert!(split_search_replace("just text").is_err());
     }
 }
