@@ -867,6 +867,7 @@ pub async fn process_cmd(
                 db::LogEntryRetentionPolicy::None
             };
             ProcessCmdResult::loop_next()
+                .discard_cmd_and_output()
                 .with_retention_policy(retention_policy)
                 .with_history_entries(vec![HistoryEntry::AssistantText(message, None)])
         }
