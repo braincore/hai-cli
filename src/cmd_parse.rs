@@ -466,7 +466,14 @@ pub fn parse_with_spec(spec: CmdSpec, tail: &str) -> Result<ResolvedCmdSpec, Par
         None => (after_opts, None),
     };
 
-    let toks = tokenize(line)?;
+    // A leading Rest/RestOpt means the payload is free text, so a lone quote
+    // not a syntax error. Anything with structured positionals in front keeps
+    // strict quote handling.
+    let strict_quotes = !matches!(
+        spec.args.first().map(|a| a.arity),
+        Some(Arity::Rest | Arity::RestOpt)
+    );
+    let toks = tokenize(line, strict_quotes)?;
     let (args, sub) = fill_args(&spec, after_opts, line, &toks)?;
 
     let has_rest = matches!(
@@ -758,7 +765,12 @@ struct Tok {
 
 /// Quote- and escape-aware split with byte spans, so `Arity::Rest` can recover
 /// the raw, unmangled remainder (`/exec ls | grep "a b"`).
-fn tokenize(s: &str) -> Result<Vec<Tok>, ParseError> {
+///
+/// # Arguments
+/// - `strict_quotes`: Controls whether an unterminated quote is an error. For
+///   commands whose payload is free text (a `Rest`/`RestOpt` arg), an
+///   unterminated quote is okay.
+fn tokenize(s: &str, strict_quotes: bool) -> Result<Vec<Tok>, ParseError> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut start = 0usize;
@@ -804,7 +816,7 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, ParseError> {
             }
         }
     }
-    if quote.is_some() {
+    if quote.is_some() && strict_quotes {
         return Err(ParseError::UnterminatedQuote);
     }
     if started {
