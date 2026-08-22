@@ -5394,6 +5394,7 @@ pub async fn process_cmd(
 
             // Execute AI-defined tool/function
             match tool::execute_ai_defined_tool(
+                &io.out,
                 &ai_defined_fn.fn_tool,
                 &ai_defined_fn.fn_def,
                 &arg_with_default,
@@ -5401,8 +5402,9 @@ pub async fn process_cmd(
             )
             .await
             {
-                Ok(output) => {
-                    outln!(io, "{}", output);
+                Ok(_output) => {
+                    // Output is ignored since it prints via io.out already
+                    // which goes into the recorded transcript.
                 }
                 Err(e) => {
                     errorln!(io, "failed to execute tool: {}", e);

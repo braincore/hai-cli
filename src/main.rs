@@ -1555,6 +1555,7 @@ async fn repl(
                             }
                         } else {
                             match tool::execute_shell_based_tool(
+                                &io.out,
                                 &tp.tool,
                                 arg,
                                 &session.shell,

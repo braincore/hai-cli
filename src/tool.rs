@@ -9,7 +9,9 @@ use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::io::Out;
 use crate::{clipboard, session};
+use crate::{errln, outln};
 
 #[derive(Clone, Debug)]
 pub enum Tool {
@@ -144,6 +146,7 @@ struct ToolShellBasedArg {
 }
 
 pub async fn execute_shell_based_tool(
+    out: &Out,
     tool: &Tool,
     arg: &str,
     shell: &str,
@@ -153,15 +156,15 @@ pub async fn execute_shell_based_tool(
     Ok((
         match tool {
             Tool::CopyToClipboard => copy_to_clipboard(&input)?,
-            Tool::ExecPythonScript => exec_python_script(&input, env_vars).await?,
-            Tool::ExecPythonUvScript => exec_python_uv_script(&input, env_vars).await?,
+            Tool::ExecPythonScript => exec_python_script(out, &input, env_vars).await?,
+            Tool::ExecPythonUvScript => exec_python_uv_script(out, &input, env_vars).await?,
             Tool::ShellExecWithStdin(cmd) => {
-                shell_exec_with_stdin(shell, cmd, &input, env_vars).await?
+                shell_exec_with_stdin(out, shell, cmd, &input, env_vars).await?
             }
             Tool::ShellExecWithFile(cmd, ext) => {
-                shell_exec_with_file(shell, cmd, &input, ext.as_deref(), env_vars).await?
+                shell_exec_with_file(out, shell, cmd, &input, ext.as_deref(), env_vars).await?
             }
-            Tool::ShellScriptExec => shell_script_exec(shell, &input, env_vars).await?,
+            Tool::ShellScriptExec => shell_script_exec(out, shell, &input, env_vars).await?,
             _ => "fatal: not a shell-based tool".to_string(),
         },
         _continue,
@@ -169,6 +172,7 @@ pub async fn execute_shell_based_tool(
 }
 
 pub async fn execute_ai_defined_tool(
+    out: &Out,
     fn_tool: &FnTool,
     fn_def: &str,
     arg: &str,
@@ -185,7 +189,7 @@ if __name__ == "__main__":
 "#,
                 fn_def, arg
             );
-            exec_python_script(&script, env_vars).await
+            exec_python_script(out, &script, env_vars).await
         }
         FnToolType::FnPyUv => {
             let script = format!(
@@ -197,7 +201,7 @@ if __name__ == "__main__":
 "#,
                 fn_def, arg
             );
-            exec_python_uv_script(&script, env_vars).await
+            exec_python_uv_script(out, &script, env_vars).await
         }
         FnToolType::FnSh => {
             let script = format!(
@@ -206,7 +210,7 @@ if __name__ == "__main__":
 "#,
                 arg, fn_def
             );
-            shell_script_exec("sh", &script, env_vars).await
+            shell_script_exec(out, "sh", &script, env_vars).await
         }
     }
 }
@@ -267,6 +271,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<String, Box<dyn std::error::Error
 
 /// Executes python3 with a script provided by the -c flag.
 pub async fn exec_python_script(
+    out: &Out,
     script: &str,
     env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -274,6 +279,10 @@ pub async fn exec_python_script(
     let python_exec = find_python_in_venv();
     let mut command = Command::new(python_exec);
     command
+        // Unbuffered output
+        // When stdout/err is non-tty, Python buffers by blocks (default 4KB)
+        // rather than line.
+        .arg("-u")
         .arg("-c")
         .arg(script)
         // Allow the script to read from the terminal's stdin
@@ -284,7 +293,7 @@ pub async fn exec_python_script(
         command.envs(env_vars);
     }
     let mut child = command.spawn()?;
-    collect_and_print_command_output(&mut child).await
+    collect_and_print_command_output(out, &mut child).await
 }
 
 /// Executes python3 via `uv run`.
@@ -292,6 +301,7 @@ pub async fn exec_python_script(
 /// The advantage over `exec_python_script` is that it allows the script to
 /// automatically install "script dependencies".
 pub async fn exec_python_uv_script(
+    out: &Out,
     script: &str,
     env_vars: Option<&HashMap<String, String>>,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -300,6 +310,10 @@ pub async fn exec_python_uv_script(
     temp_file.flush()?;
     let mut command = Command::new("uv");
     command
+        // Unbuffered output
+        // When stdout/err is non-tty, Python buffers by blocks (default 4KB)
+        // rather than line.
+        .env("PYTHONUNBUFFERED", "1")
         .arg("--quiet") // Suppress uv's output (especially installation msgs)
         .arg("run")
         .arg(temp_file.path())
@@ -311,7 +325,7 @@ pub async fn exec_python_uv_script(
         command.envs(env_vars);
     }
     let mut child = command.spawn()?;
-    collect_and_print_command_output(&mut child).await
+    collect_and_print_command_output(out, &mut child).await
 }
 
 /// Searches for .venv/bin/python in the current and ancestor directories. It
@@ -338,6 +352,7 @@ fn find_python_in_venv() -> String {
 ///
 /// Capable of reading from stdin.
 pub async fn shell_script_exec(
+    out: &Out,
     shell: &str,
     script: &str,
     env_vars: Option<&HashMap<String, String>>,
@@ -354,13 +369,14 @@ pub async fn shell_script_exec(
         command.envs(env_vars);
     }
     let mut child = command.spawn()?;
-    collect_and_print_command_output(&mut child).await
+    collect_and_print_command_output(out, &mut child).await
 }
 
 /// `shell_exec_with_file` executes a specified program on the "command line"
 /// and replaces `{file}` in the command with a temporary file containing
 /// the provided file contents.
 pub async fn shell_exec_with_file(
+    out: &Out,
     shell: &str,
     cmd: &str,
     file_contents: &str,
@@ -389,12 +405,13 @@ pub async fn shell_exec_with_file(
         command.envs(env_vars);
     }
     let mut child = command.spawn()?;
-    collect_and_print_command_output(&mut child).await
+    collect_and_print_command_output(out, &mut child).await
 }
 
 /// `shell_exec_with_stdin` executes a specified program on the "command line"
 /// and feeds a script via stdin.
 pub async fn shell_exec_with_stdin(
+    out: &Out,
     shell: &str,
     cmd: &str,
     stdin: &str,
@@ -416,7 +433,7 @@ pub async fn shell_exec_with_stdin(
     } else {
         return Err("Failed to open stdin".into());
     }
-    collect_and_print_command_output(&mut child).await
+    collect_and_print_command_output(out, &mut child).await
 }
 
 /// Given a child process, collects stdout and stderr, prints them to the
@@ -424,6 +441,7 @@ pub async fn shell_exec_with_stdin(
 ///
 /// This function waits for the child process to exit before returning.
 pub async fn collect_and_print_command_output(
+    out: &Out,
     child: &mut tokio::process::Child,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -443,7 +461,7 @@ pub async fn collect_and_print_command_output(
             stdout_line = stdout_reader.next_line(), if !stdout_done => {
                 match stdout_line {
                     Ok(Some(line)) => {
-                        println!("{}", line);
+                        outln!(out, "{}", line);
                         output_text.push_str(&(line + "\n"));
                     }
                     Ok(None) => stdout_done = true,
@@ -453,7 +471,7 @@ pub async fn collect_and_print_command_output(
             stderr_line = stderr_reader.next_line(), if !stderr_done => {
                 match stderr_line {
                     Ok(Some(line)) => {
-                        eprintln!("{}", line);
+                        errln!(out, "{}", line);
                         output_text.push_str(&(line + "\n"));
                     }
                     Ok(None) => stderr_done = true,
@@ -489,9 +507,6 @@ pub async fn collect_and_print_command_output(
 
 // --
 
-use crate::io::Out;
-use crate::{errln, outln};
-
 /// Given a child process, collects stdout and stderr, prints them to the
 /// terminal, and returns the combined output as a string.
 ///
@@ -518,6 +533,7 @@ pub async fn collect_and_output_command(
                 match stdout_line {
                     Ok(Some(line)) => {
                         outln!(out, "{}", line);
+                        out.flush();
                         output_text.push_str(&(line + "\n"));
                     }
                     Ok(None) => stdout_done = true,
@@ -528,6 +544,7 @@ pub async fn collect_and_output_command(
                 match stderr_line {
                     Ok(Some(line)) => {
                         errln!(out, "{}", line);
+                        out.flush();
                         output_text.push_str(&(line + "\n"));
                     }
                     Ok(None) => stderr_done = true,
