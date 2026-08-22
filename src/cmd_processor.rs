@@ -1037,156 +1037,161 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next().discard_cmd_and_output()
         }
         cmd::Cmd::FileRead(cmd::FileReadCmd {
-            path,
+            paths,
             show_line_numbers,
             image_hq,
         })
         | cmd::Cmd::FileCat(cmd::FileCatCmd {
-            path,
+            paths,
             show_line_numbers,
             image_hq,
         }) => {
-            //
-            // The purpose of loading is for the user to be able to easily
-            // inject files into the system context.
-            //
-            let raw_load_target = path;
-            let load_target_deref =
-                haivar::replace_haivars(&io.out, &raw_load_target, &cfg.haivars);
-            let load_target = match shellexpand::full(&load_target_deref) {
-                Ok(s) => s.into_owned(),
-                Err(e) => {
-                    errorln!(io, "undefined path variable: {}", e.var_name);
-                    return ProcessCmdResult::loop_next();
-                }
-            };
-            // Iterate through paths and collect matching files
-            let paths_res = glob(&load_target);
-            if paths_res.is_err() {
-                errorln!(io, "bad glob: {:?}", paths_res.unwrap_err());
-                return ProcessCmdResult::loop_next();
-            }
-            let paths = paths_res.unwrap();
-            let files: Result<Vec<_>, _> = paths.collect();
             let mut history_entries = vec![];
-            match files {
-                Ok(files) if files.is_empty() => {
-                    errorln!(io, "no files matched: {}", load_target);
-                    return ProcessCmdResult::loop_next();
+            let mut newly_loaded_tokens = 0;
+            for path in &paths {
+                let raw_load_target = path;
+                let load_target_deref =
+                    haivar::replace_haivars(&io.out, &raw_load_target, &cfg.haivars);
+                let load_target = match shellexpand::full(&load_target_deref) {
+                    Ok(s) => s.into_owned(),
+                    Err(e) => {
+                        errorln!(io, "undefined path variable: {}", e.var_name);
+                        continue;
+                    }
+                };
+                // Iterate through paths and collect matching files
+                let glob_res = glob(&load_target);
+                if glob_res.is_err() {
+                    errorln!(io, "bad glob: {:?}", glob_res.unwrap_err());
+                    continue;
                 }
-                Ok(files) => {
-                    let mut newly_loaded_tokens = 0;
-                    for file_path in files {
-                        let file_res = fs::File::open(&file_path);
-                        if file_res.is_err() {
-                            errorln!(
-                                io,
-                                "could not open file: {:?}: {:?}",
-                                file_path,
-                                file_res.unwrap_err()
-                            );
-                            continue;
-                        }
-                        let mut file = file_res.unwrap();
-                        // Read the file contents into a buffer
-                        let mut buffer = Vec::new();
-                        if let Err(e) = file.read_to_end(&mut buffer) {
-                            errorln!(io, "could not read file: {:?}: {:?}", file_path, e)
-                        }
-                        if let Ok(file_contents) = std::str::from_utf8(&buffer) {
-                            let file_contents_with_delimeters = add_content_delimiters(
-                                "FILE",
-                                file_contents,
-                                &file_path.to_string_lossy(),
-                                None,
-                                show_line_numbers,
-                            );
-                            let token_count = bpe_tokenizer
-                                .encode_with_special_tokens(&file_contents_with_delimeters)
-                                .len() as u32;
-
-                            let was_recording = io.record_off();
-                            if matches!(cmd, cmd::Cmd::FileCat(_)) {
-                                outln!(io, "{}", file_contents);
-                            } else {
-                                outln!(
+                let glob_paths = glob_res.unwrap();
+                let files: Result<Vec<_>, _> = glob_paths.collect();
+                match files {
+                    Ok(files) if files.is_empty() => {
+                        errorln!(io, "no files matched: {}", load_target);
+                        continue;
+                    }
+                    Ok(files) => {
+                        for file_path in files {
+                            let file_res = fs::File::open(&file_path);
+                            if file_res.is_err() {
+                                errorln!(
                                     io,
-                                    "Loaded: {} ({} tokens)",
-                                    &file_path.to_string_lossy(),
-                                    token_count.to_formatted_string(&Locale::en)
+                                    "could not open file: {:?}: {:?}",
+                                    file_path,
+                                    file_res.unwrap_err()
                                 );
+                                continue;
                             }
-                            io.record_set(was_recording);
-                            history_entries
-                                .push(HistoryEntry::UserText(file_contents_with_delimeters));
-                            newly_loaded_tokens += token_count;
-                        } else {
-                            let image_capability =
-                                config::get_ai_model_capability(&session.ai).image;
-                            let use_thumbnail = image_capability
-                                .as_ref()
-                                .map(|cap| !image_hq && !cap.auto_resize)
-                                .unwrap_or(false);
+                            let mut file = file_res.unwrap();
+                            // Read the file contents into a buffer
+                            let mut buffer = Vec::new();
+                            if let Err(e) = file.read_to_end(&mut buffer) {
+                                errorln!(io, "could not read file: {:?}: {:?}", file_path, e)
+                            }
+                            if let Ok(file_contents) = std::str::from_utf8(&buffer) {
+                                let file_contents_with_delimeters = add_content_delimiters(
+                                    "FILE",
+                                    file_contents,
+                                    &file_path.to_string_lossy(),
+                                    None,
+                                    show_line_numbers,
+                                );
+                                let token_count = bpe_tokenizer
+                                    .encode_with_special_tokens(&file_contents_with_delimeters)
+                                    .len() as u32;
 
-                            // Not a text file, try opening as image
-                            match loader::resolve_image_b64(
-                                &file_path.to_string_lossy().into_owned(),
-                                use_thumbnail,
-                            )
-                            .await
-                            {
-                                Ok((img_png_b64, img_dim)) => {
-                                    if image_capability.is_none() {
-                                        errorln!(io, "model does not support images");
-                                        return ProcessCmdResult::loop_next();
-                                    }
-                                    let token_count =
-                                        session::calc_image_tokens(&session.ai, image_hq, img_dim);
-                                    newly_loaded_tokens += token_count;
-                                    history_entries.push(HistoryEntry::UserImage(
-                                        img_png_b64.clone(),
-                                        image_hq,
-                                        img_dim,
-                                    ));
-                                    let was_recording = io.record_off();
-                                    if matches!(cmd, cmd::Cmd::FileCat(_)) {
-                                        io.display("image/png", &img_png_b64);
-                                    } else {
-                                        outln!(
-                                            io,
-                                            "Loaded: {} ({} tokens)",
-                                            &file_path.to_string_lossy(),
-                                            token_count.to_formatted_string(&Locale::en)
-                                        );
-                                    }
-                                    io.record_set(was_recording);
-                                }
-                                Err(e) => {
-                                    errorln!(
+                                let was_recording = io.record_off();
+                                if matches!(cmd, cmd::Cmd::FileCat(_)) {
+                                    outln!(io, "{}", file_contents);
+                                } else {
+                                    outln!(
                                         io,
-                                        "failed to load as text or image: {:?}: {:?}",
-                                        file_path,
-                                        e
+                                        "Loaded: {} ({} tokens)",
+                                        &file_path.to_string_lossy(),
+                                        token_count.to_formatted_string(&Locale::en)
                                     );
                                 }
+                                io.record_set(was_recording);
+                                history_entries
+                                    .push(HistoryEntry::UserText(file_contents_with_delimeters));
+                                newly_loaded_tokens += token_count;
+                            } else {
+                                let image_capability =
+                                    config::get_ai_model_capability(&session.ai).image;
+                                let use_thumbnail = image_capability
+                                    .as_ref()
+                                    .map(|cap| !image_hq && !cap.auto_resize)
+                                    .unwrap_or(false);
+
+                                // Not a text file, try opening as image
+                                match loader::resolve_image_b64(
+                                    &file_path.to_string_lossy().into_owned(),
+                                    use_thumbnail,
+                                )
+                                .await
+                                {
+                                    Ok((img_png_b64, img_dim)) => {
+                                        if image_capability.is_none() {
+                                            errorln!(io, "model does not support images");
+                                            return ProcessCmdResult::loop_next();
+                                        }
+                                        let token_count = session::calc_image_tokens(
+                                            &session.ai,
+                                            image_hq,
+                                            img_dim,
+                                        );
+                                        newly_loaded_tokens += token_count;
+                                        history_entries.push(HistoryEntry::UserImage(
+                                            img_png_b64.clone(),
+                                            image_hq,
+                                            img_dim,
+                                        ));
+                                        let was_recording = io.record_off();
+                                        if matches!(cmd, cmd::Cmd::FileCat(_)) {
+                                            io.display("image/png", &img_png_b64);
+                                        } else {
+                                            outln!(
+                                                io,
+                                                "Loaded: {} ({} tokens)",
+                                                &file_path.to_string_lossy(),
+                                                token_count.to_formatted_string(&Locale::en)
+                                            );
+                                        }
+                                        io.record_set(was_recording);
+                                    }
+                                    Err(e) => {
+                                        errorln!(
+                                            io,
+                                            "failed to load as text or image: {:?}: {:?}",
+                                            file_path,
+                                            e
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
-                    if !matches!(cmd, cmd::Cmd::FileCat(_)) {
-                        let was_recording = io.record_off();
-                        outln!(
-                            io,
-                            "Total tokens loaded: {}",
-                            newly_loaded_tokens.to_formatted_string(&Locale::en)
-                        );
-                        io.record_set(was_recording);
-                    }
+                    Err(e) => errorln!(io, "{:?}", e),
                 }
-                Err(e) => errorln!(io, "{:?}", e),
             }
-            ProcessCmdResult::loop_next()
-                .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
-                .with_history_entries(history_entries)
+            if !matches!(cmd, cmd::Cmd::FileCat(_)) {
+                let was_recording = io.record_off();
+                outln!(
+                    io,
+                    "Total tokens loaded: {}",
+                    newly_loaded_tokens.to_formatted_string(&Locale::en)
+                );
+                io.record_set(was_recording);
+            }
+            if history_entries.is_empty() {
+                ProcessCmdResult::loop_next()
+            } else {
+                ProcessCmdResult::loop_next()
+                    .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
+                    .with_history_entries(history_entries)
+            }
         }
         cmd::Cmd::FileWrite(cmd::FileWriteCmd { path, contents }) => {
             let write_target_deref = haivar::replace_haivars(&io.out, &path, &cfg.haivars);

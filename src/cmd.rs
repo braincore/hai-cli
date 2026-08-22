@@ -333,7 +333,7 @@ pub struct SetVarCmd {
 #[derive(Clone, Debug)]
 pub struct FileReadCmd {
     /// Path or glob pattern to load files from
-    pub path: String,
+    pub paths: Vec<String>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
     /// If it's an image, whether to load the high-resolution version
@@ -343,7 +343,7 @@ pub struct FileReadCmd {
 #[derive(Clone, Debug)]
 pub struct FileCatCmd {
     /// Path or glob pattern to load files from
-    pub path: String,
+    pub paths: Vec<String>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
     /// If it's an image, whether to load the high-resolution version
@@ -1453,12 +1453,12 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         // Files
         //
         "file-read" => Cmd::FileRead(FileReadCmd {
-            path: r.take_rest(0).join(" "),
+            paths: r.take_rest(0),
             show_line_numbers: r.opts.bool("n"),
             image_hq: r.opts.bool("hq"),
         }),
         "file-cat" => Cmd::FileCat(FileCatCmd {
-            path: r.take_rest(0).join(" "),
+            paths: r.take_rest(0),
             show_line_numbers: r.opts.bool("n"),
             image_hq: r.opts.bool("hq"),
         }),
