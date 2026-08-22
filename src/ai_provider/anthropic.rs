@@ -523,9 +523,6 @@ pub async fn send_to_anthropic(
                                         // print the "begin" message.
                                     }
                                     ContentBlockType::ToolUse { id, name } => {
-                                        // Bit of a HACK, but an extra space tends to be necessary
-                                        // before tool-use instructions.
-                                        outln!(out);
                                         tool_calls.insert(
                                             index,
                                             JsonObjectAccumulator::new(
