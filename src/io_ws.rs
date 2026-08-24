@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+use crate::cmd_registry;
 use crate::io::{Input, Output, TerminalCapability};
 
 // --
@@ -199,6 +200,49 @@ pub enum ServerMsg {
         incognito: bool,
         agentic: bool,
     },
+
+    //
+    // Request/response messages. These carry a `mid` (message id) that
+    // correlates a response back to the client request that triggered it.
+    //
+    /// Response to a `ClientMsg::CmdRegistryList` request.
+    CmdRegistryList {
+        mid: u64,
+        cmds: Vec<String>,
+    },
+    /// Response to a `ClientMsg::CmdRegistryComplete` request.
+    CmdRegistryComplete {
+        mid: u64,
+        suggestions: Vec<Suggestion>,
+    },
+}
+
+#[derive(Clone, Serialize)]
+pub struct Suggestion {
+    pub value: String,
+    pub display_override: Option<String>,
+    pub span: Span,
+    pub append_whitespace: bool,
+}
+
+impl Suggestion {
+    fn from_reedline_suggestion(s: &reedline::Suggestion) -> Self {
+        Self {
+            value: s.value.clone(),
+            display_override: s.display_override.clone(),
+            span: Span {
+                start: s.span.start as u32,
+                end: s.span.end as u32,
+            },
+            append_whitespace: s.append_whitespace,
+        }
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(Clone, Serialize)]
@@ -217,8 +261,17 @@ pub enum HaiRouterState {
 pub enum ClientMsg {
     /// Answer to a `Query`
     Answer { query_id: u64, text: Option<String> },
+
     /// Equivalent of client submitting a REPL read line.
     Eval { input: String },
+
+    /// Request the list of registered commands.
+    /// Server will echo back `mid` in response.
+    CmdRegistryList { mid: u64 },
+
+    /// Request tab/auto-complete results.
+    /// Server will echo back `mid` in response.
+    CmdRegistryComplete { mid: u64, line: String },
 }
 
 // --
@@ -308,10 +361,24 @@ pub struct WsActor {
     /// Whether any client has EVER connected. Distinguishes "never used,
     /// abandoned spawn" from "used, then disconnected".
     ever_connected: bool,
+
+    /// Registry of commands available in REPL.
+    cmd_registry: cmd_registry::Registry,
+
+    api_client: crate::api::client::HaiClient,
+
+    account: Option<crate::db::Account>,
 }
 
 impl WsActor {
-    pub fn new(listener: TcpListener, token: String, cmd_rx: UnboundedReceiver<WsCmd>) -> Self {
+    pub fn new(
+        listener: TcpListener,
+        token: String,
+        cmd_rx: UnboundedReceiver<WsCmd>,
+        cmd_registry: cmd_registry::Registry,
+        api_client: crate::api::client::HaiClient,
+        account: Option<crate::db::Account>,
+    ) -> Self {
         Self {
             listener,
             token,
@@ -325,6 +392,9 @@ impl WsActor {
             eval_queue: VecDeque::new(),
             idle_since: None,
             ever_connected: false,
+            cmd_registry,
+            api_client,
+            account,
         }
     }
 
@@ -554,7 +624,40 @@ impl WsActor {
                     self.eval_queue.push_back(input);
                 }
             }
+            ClientMsg::CmdRegistryList { mid } => {
+                tracing::debug!("kernel: client msg: cmd_registry_list: mid={mid}");
+                self.on_cmd_registry_list(mid);
+            }
+
+            ClientMsg::CmdRegistryComplete { mid, line } => {
+                tracing::debug!("kernel: client msg: cmd_registry_complete: mid={mid} line={line}");
+                self.on_cmd_registry_complete(mid, line);
+            }
         }
+    }
+
+    fn on_cmd_registry_list(&mut self, mid: u64) {
+        let cmds = self
+            .cmd_registry
+            .cmds()
+            .iter()
+            .map(|cmd_spec| cmd_spec.canonical())
+            .collect();
+        self.emit_or_drop(ServerMsg::CmdRegistryList { mid, cmds });
+    }
+
+    fn on_cmd_registry_complete(&mut self, mid: u64, line: String) {
+        let suggestions = crate::feature::cmd_completer::complete(
+            &self.cmd_registry,
+            &self.api_client,
+            &self.account,
+            &line,
+            line.len(),
+        )
+        .iter()
+        .map(Suggestion::from_reedline_suggestion)
+        .collect();
+        self.emit_or_drop(ServerMsg::CmdRegistryComplete { mid, suggestions });
     }
 }
 

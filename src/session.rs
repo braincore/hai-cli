@@ -719,6 +719,14 @@ pub fn mk_api_client(session: Option<&SessionState>) -> HaiClient {
     client
 }
 
+pub fn mk_api_client_from_account(account: Option<&db::Account>) -> HaiClient {
+    let mut client = HaiClient::new(&get_api_base_url());
+    if let Some(ref account) = account {
+        client.set_token(&account.token);
+    }
+    client
+}
+
 pub fn get_api_base_url() -> String {
     match env::var("HAI_BASE_URL") {
         Ok(value) => value,

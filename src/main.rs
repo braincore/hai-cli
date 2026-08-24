@@ -403,17 +403,66 @@ async fn main() -> process::ExitCode {
         } else {
             (ReplMode::Normal, vec![], false, false, false)
         };
+        let db_conn = match db::open_db() {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return process::ExitCode::from(1);
+            }
+        };
+        let db = Arc::new(Mutex::new(db_conn));
+
         // Prioritize command-line specified username/model over env var. Env
         // var will always be specified when `hai` shells out to `hai`.
         let force_username = args
             .username
             .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
-        let force_model = args
+        let account = if let Some(force_username) = force_username {
+            if force_username == "_" {
+                None
+            } else {
+                match db::get_account_by_username(&*db.lock().await, &force_username) {
+                    Ok(Some(account)) => Some(account),
+                    Ok(None) => {
+                        eprintln!(
+                            "error: `{}` is unavailable (try /account-login)",
+                            force_username
+                        );
+                        return process::ExitCode::from(1);
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return process::ExitCode::from(1);
+                    }
+                }
+            }
+        } else {
+            match db::get_active_account(&*db.lock().await) {
+                Ok(Some(account)) => Some(account),
+                Ok(None) => None,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return process::ExitCode::from(1);
+                }
+            }
+        };
+
+        let force_model_str = args
             .model
             .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
+        let force_ai_model = if let Some(force_model_str) = force_model_str {
+            if let Some(ai_model) = config::ai_model_from_string(&force_model_str) {
+                Some(ai_model)
+            } else {
+                eprintln!("error: unknown model {}", force_model_str);
+                return process::ExitCode::from(1);
+            }
+        } else {
+            None
+        };
 
         let (io, actor_handle) = if args.kernel {
-            crate::feature::kernel::run_kernel()
+            crate::feature::kernel::run_kernel(account.clone())
                 .await
                 .map(|(io, actor_handle)| (io, Some(actor_handle)))
                 .expect("Failed to start kernel")
@@ -422,12 +471,13 @@ async fn main() -> process::ExitCode {
         };
 
         let repl_res = repl(
+            db,
             &io,
             &config_path_override,
             args.debug,
             args.incognito,
-            force_username,
-            force_model,
+            account,
+            force_ai_model,
             &mut ctrlc_handler,
             repl_mode,
             init_cmds,
@@ -460,12 +510,13 @@ async fn main() -> process::ExitCode {
 /// Process exit code.
 #[allow(clippy::too_many_arguments)]
 async fn repl(
+    db: Arc<Mutex<db::Connection>>,
     io: &Io,
     config_path_override: &Option<String>,
     debug: bool,
     incognito: bool,
-    force_account: Option<String>,
-    force_ai_model: Option<String>,
+    account: Option<db::Account>,
+    force_ai_model: Option<config::AiModel>,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     repl_mode: ReplMode,
     init_cmds: Vec<session::CmdInput>,
@@ -481,7 +532,6 @@ async fn repl(
             return Ok(1);
         }
     };
-    let db = Arc::new(Mutex::new(db::open_db()?));
 
     let (asset_blob_path, disable_asset_cache) = match config::mk_asset_blob_cache() {
         Ok(path) => (path, cfg.asset_blob_cache_size == 0),
@@ -524,37 +574,6 @@ async fn repl(
         let mut tokenizer_locked = tokenizer_for_async_task.lock().await;
         *tokenizer_locked = Some(loaded_tokenizer);
     });
-
-    let force_ai_model = if let Some(force_ai_model) = force_ai_model {
-        if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
-            Some(ai_model)
-        } else {
-            errln!(io, "error: unknown model {}", force_ai_model);
-            return Ok(1);
-        }
-    } else {
-        None
-    };
-
-    let account = if let Some(force_account) = force_account {
-        if force_account == "_" {
-            None
-        } else {
-            match db::get_account_by_username(&*db.lock().await, &force_account)? {
-                Some(account) => Some(account),
-                None => {
-                    errln!(
-                        io,
-                        "error: `{}` is unavailable (try /account-login)",
-                        force_account
-                    );
-                    return Ok(1);
-                }
-            }
-        }
-    } else {
-        db::get_active_account(&*db.lock().await)?
-    };
 
     let multiple_accounts = db::list_accounts(&*db.lock().await)?.len() > 1;
 

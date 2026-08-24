@@ -1,3 +1,4 @@
+pub use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
