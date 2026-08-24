@@ -291,6 +291,7 @@ pub struct KernelHandle {
     pub token: String,
     #[allow(dead_code)]
     pub created_at: std::time::Instant,
+    pub tags: Vec<String>,
 }
 
 pub type KernelMap = Arc<Mutex<HashMap<KernelId, KernelHandle>>>;
@@ -2005,6 +2006,7 @@ pub enum ClientMessageAuthResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReplKernelSpawnArg {
+    tags: Option<Vec<String>>,
     model: Option<String>,
 }
 
@@ -2032,6 +2034,19 @@ struct ReplKernelTeardownArg {
 struct ReplKernelTeardownResult {
     /// True if a kernel with that ID existed and was killed. Otherwise, false.
     ok: bool,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplKernelListResult {
+    kernels: Vec<KernelInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KernelInfo {
+    kernel_id: String,
+    tags: Vec<String>,
 }
 
 // --
@@ -2424,6 +2439,7 @@ async fn handle_client_message(
                             port: ready.port,
                             token: ready.token.clone(),
                             created_at: std::time::Instant::now(),
+                            tags: spawn_arg.tags.unwrap_or_default(),
                         },
                     );
                     let result = ReplKernelSpawnResult {
@@ -2494,6 +2510,30 @@ async fn handle_client_message(
                     .await;
                 }
             }
+        }
+        "repl/kernel/list" => {
+            if let Err(PermCheckError::Unauthorized) =
+                check_access_async(&perms, &AccessRequest::Everything).await
+            {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            }
+            let kernels = kernel_map
+                .lock()
+                .await
+                .iter()
+                .map(|(kernel_id, handle)| KernelInfo {
+                    kernel_id: kernel_id.clone(),
+                    tags: handle.tags.clone(),
+                })
+                .collect();
+            send_response::<ReplKernelListResult, ()>(
+                ws_sink,
+                mid,
+                Ok(ReplKernelListResult { kernels }),
+                false,
+            )
+            .await;
         }
         "repl/prompt" => {
             if let Err(PermCheckError::Unauthorized) =
