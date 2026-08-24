@@ -221,6 +221,7 @@ pub enum ServerMsg {
 pub struct Suggestion {
     pub value: String,
     pub display_override: Option<String>,
+    pub description: Option<String>,
     pub span: Span,
     pub append_whitespace: bool,
 }
@@ -230,6 +231,7 @@ impl Suggestion {
         Self {
             value: s.value.clone(),
             display_override: s.display_override.clone(),
+            description: s.description.clone(),
             span: Span {
                 start: s.span.start as u32,
                 end: s.span.end as u32,

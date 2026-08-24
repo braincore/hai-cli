@@ -455,13 +455,14 @@ fn asset_completer(
                 } else {
                     entry_name.clone()
                 };
+                let entry_title = entry.metadata.as_ref().and_then(|m| m.title.clone());
                 completions.push(Suggestion {
                     value,
                     display_override: compute_display_override_for_path(
                         &resolved_asset_prefix,
                         &entry_name,
                     ),
-                    description: None,
+                    description: entry_title,
                     style: None,
                     extra: None,
                     // Replace entirety of existing contents
