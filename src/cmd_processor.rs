@@ -1583,11 +1583,15 @@ pub async fn process_cmd(
                 let was_recording = io.record_off();
                 // Using println! instead of outln! here so that colored output
                 // isn't sent to the backend.
-                println!(
-                    "{} {}",
-                    " TASK MODE ENABLED ".black().on_white(),
-                    haitask.name
-                );
+                if io.is_terminal() {
+                    println!(
+                        "{} {}",
+                        " TASK MODE ENABLED ".black().on_white(),
+                        haitask.name
+                    );
+                } else {
+                    outln!(io, "TASK MODE ENABLED: {}", haitask.name);
+                }
                 outln!(io, "  - /new -- restarts the task");
                 outln!(
                     io,
