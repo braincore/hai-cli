@@ -208,13 +208,20 @@ pub enum ServerMsg {
     /// Response to a `ClientMsg::CmdRegistryList` request.
     CmdRegistryList {
         mid: u64,
-        cmds: Vec<String>,
+        cmds: Vec<CmdEntry>,
     },
     /// Response to a `ClientMsg::CmdRegistryComplete` request.
     CmdRegistryComplete {
         mid: u64,
         suggestions: Vec<Suggestion>,
     },
+}
+
+#[derive(Clone, Serialize)]
+pub struct CmdEntry {
+    pub canonical: String,
+    pub aliases: Vec<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -643,7 +650,11 @@ impl WsActor {
             .cmd_registry
             .cmds()
             .iter()
-            .map(|cmd_spec| cmd_spec.canonical())
+            .map(|cmd_spec| CmdEntry {
+                canonical: cmd_spec.canonical(),
+                aliases: cmd_spec.aliases_with_sigil(),
+                description: Some(cmd_spec.doc.summary.to_string()),
+            })
             .collect();
         self.emit_or_drop(ServerMsg::CmdRegistryList { mid, cmds });
     }

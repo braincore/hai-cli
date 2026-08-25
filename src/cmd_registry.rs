@@ -505,6 +505,15 @@ impl CmdSpec {
         format!("{}{}", self.sigil.ch(), self.name)
     }
 
+    pub fn aliases_with_sigil(&self) -> Vec<String> {
+        let c = self.sigil.ch();
+        self.aliases
+            .iter()
+            .copied()
+            .map(|n| format!("{c}{n}"))
+            .collect()
+    }
+
     pub fn matches_name(&self, bare: &str) -> bool {
         self.name == bare || self.aliases.iter().any(|a| *a == bare)
     }
