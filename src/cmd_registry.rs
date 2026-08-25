@@ -2392,6 +2392,17 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
+            Cow::Borrowed("reprint-history"),
+            Cow::Borrowed("utils"),
+            Cow::Borrowed(&[]),
+            Doc::new("Reprint the conversation"),
+        )
+        .for_audience(Audience::Neither)
+        .with_traits(Traits::NONE.account()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
             Cow::Borrowed("about"),
             Cow::Borrowed("utils"),
             Cow::Borrowed(&[]),

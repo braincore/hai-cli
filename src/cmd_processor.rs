@@ -556,6 +556,10 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
+        cmd::Cmd::ReprintHistory => {
+            chat_store::reprint_conversation(io, &session.history).await;
+            ProcessCmdResult::loop_next().discard_cmd_and_output()
+        }
         cmd::Cmd::Dump => {
             // Undocumented (for manual testing)
             let was_recording = io.record_off();

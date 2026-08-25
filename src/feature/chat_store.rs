@@ -343,6 +343,8 @@ struct ChatLog {
 /// If chat name isn't specified, the most recent chat stored in the local db
 /// is used.
 ///
+/// NOTE: Keep generally synced with `print_history()`.
+///
 /// # Arguments
 /// - `fork`: If set, does not save chat_log_asset_name so that a new asset is
 ///   created when re-saving.
@@ -455,7 +457,6 @@ pub async fn resume_chat_from_db_or_asset(
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             session.input_loaded_tokens += log_entry.tokens;
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                // FIXME
                 outln!(
                     io,
                     "{}[{}]: {}",
@@ -554,7 +555,7 @@ pub async fn resume_chat_from_db_or_asset(
                         print!("{} ", left_prompt.bright_green());
                         io.record_out(&format!("{} ", left_prompt));
                     } else {
-                        out!(io, "{}", left_prompt);
+                        out!(io, "{} ", left_prompt);
                     }
                     crate::term_color::print_multi_lang_syntax_highlighting(
                         &io.out,
@@ -565,11 +566,134 @@ pub async fn resume_chat_from_db_or_asset(
                 }
             } else {
                 if io.is_terminal() {
-                    print!("{}", left_prompt.bright_green());
-                    io.record_out(&left_prompt);
+                    print!("{} ", left_prompt.bright_green());
+                    io.record_out(&format!("{} ", left_prompt));
                 } else {
-                    out!(io, "{}", left_prompt);
+                    out!(io, "{} ", left_prompt);
                 }
+                crate::term_color::print_multi_lang_syntax_highlighting(
+                    &io.out,
+                    &entry_body,
+                    &None,
+                );
+                outln!(io);
+            }
+        }
+    }
+}
+
+/// Prints conversation history to i/o.
+///
+/// Created so that when connecting to a kernel, the existing conversation can
+/// be re-printed so that the context is available to the user.
+///
+/// NOTE: Keep generally synced with `resume_chat_from_db_or_asset()`.
+/// It differs in some important ways. First, it doesn't mutate the session.
+/// Second, it expects all image URLs to be in b64 format, so it doesn't
+/// attempt to fetch any attachments
+pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
+    for (i, log_entry) in history.iter().enumerate() {
+        let role_name = match log_entry.message.role {
+            chat::MessageRole::Assistant => "assistant",
+            chat::MessageRole::User => "user",
+            chat::MessageRole::Tool => "tool",
+            chat::MessageRole::System => "system",
+        };
+
+        if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
+            if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
+                outln!(
+                    io,
+                    "{}[{}]: {}",
+                    role_name,
+                    i,
+                    text.split_once("\n").unwrap_or((text, "")).0
+                );
+                outln!(io);
+            } else if let chat::MessageContent::ImageUrl { id, image_url } =
+                &log_entry.message.content[0]
+            {
+                outln!(io, "{}[{}]:", role_name, i);
+                let url = if let Some(_image_id) = id
+                    && image_url.url.starts_with(':')
+                {
+                    // Skip unexpected attachment image URLs
+                    errorln!(io, "unexpected attachment image url: {}", image_url.url);
+                    continue;
+                } else {
+                    image_url.url.clone()
+                };
+                match crate::loader::resolve_image_b64(&url, false).await {
+                    Ok((img_png_b64, _dim)) => {
+                        io.display("image/png", &img_png_b64);
+                        outln!(io);
+                    }
+                    Err(e) => {
+                        errorln!(io, "failed to load image: {}", e);
+                    }
+                }
+            }
+        } else {
+            let mut entry_body = String::new();
+            for part in &log_entry.message.content {
+                match part {
+                    chat::MessageContent::Text { text } => {
+                        entry_body.push_str(text);
+                    }
+                    chat::MessageContent::ImageUrl { .. } => entry_body.push_str("[image]"),
+                }
+                entry_body.push('\n');
+            }
+
+            let left_prompt = format!("{}[{}]:", role_name, i);
+            if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
+                if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
+                    if io.is_terminal() {
+                        println!("{}", left_prompt.bright_green());
+                        io.record_out(&left_prompt);
+                    } else {
+                        outln!(io, "{}", left_prompt);
+                    }
+                    for tool_call in tool_calls {
+                        let tool_name = tool_call.function.name.clone();
+                        let mut json_obj_acc = crate::ai_provider::util::JsonObjectAccumulator::new(
+                            tool_call.id.clone(),
+                            tool_name.clone(),
+                            crate::ai_provider::tool_schema::get_syntax_highlighter_token_from_tool_name(&tool_name),
+                            vec![],
+                        );
+                        json_obj_acc.acc(&tool_call.function.arguments, &io.out);
+                        json_obj_acc.end(&io.out);
+                        outln!(io);
+                        outln!(io);
+                    }
+                } else {
+                    if io.is_terminal() {
+                        print!("{} ", left_prompt.bright_green());
+                        io.record_out(&format!("{} ", left_prompt));
+                    } else {
+                        out!(io, "{} ", left_prompt);
+                    }
+                    crate::term_color::print_multi_lang_syntax_highlighting(
+                        &io.out,
+                        &entry_body,
+                        &None,
+                    );
+                    outln!(io);
+                }
+            } else {
+                if io.is_terminal() {
+                    print!("{} ", left_prompt.bright_green());
+                    io.record_out(&format!("{} ", left_prompt));
+                } else {
+                    out!(io, "{} ", left_prompt);
+                }
+                crate::term_color::print_multi_lang_syntax_highlighting(
+                    &io.out,
+                    &entry_body,
+                    &None,
+                );
+                outln!(io);
             }
         }
     }

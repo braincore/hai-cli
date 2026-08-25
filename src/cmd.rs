@@ -237,12 +237,14 @@ pub enum Cmd {
     WebSearch(WebSearchCmd),
     /// Pop a message from the listen queue
     QueuePop(QueuePopCmd),
+    /// Reprint conversation history (undocumented)
+    ReprintHistory,
+    /// Program info
+    About,
     /// Dumps raw chat history (undocumented)
     Dump,
     /// Dumps session info (undocumented)
     DumpSession,
-    /// Program info
-    About,
 }
 
 //
@@ -1853,6 +1855,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             queue_name: r.opt_take(0),
         }),
         "assistant" => Cmd::Assistant(AssistantCmd { message: r.take(0) }),
+        "reprint-history" => Cmd::ReprintHistory,
         "about" => Cmd::About,
 
         //
