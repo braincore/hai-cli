@@ -54,10 +54,10 @@ pub enum Cmd {
     Pin(PinCmd),
     /// Add a message without triggering an AI response
     Prep(PrepCmd),
-    /// Add a message mocked as from the AI to the conversation
-    Assistant(AssistantCmd),
     /// Get/set system prompt
     SystemPrompt(SystemPromptCmd),
+    /// Add a message mocked as from the AI to the conversation
+    Assistant(AssistantCmd),
     /// Forgot messages in the conversation
     Forget(ForgetCmd),
     /// Keep messages in the conversation and forget the rest
@@ -237,6 +237,8 @@ pub enum Cmd {
     WebSearch(WebSearchCmd),
     /// Pop a message from the listen queue
     QueuePop(QueuePopCmd),
+    /// Load an image from a base64 data-uri into the conversation
+    ImageUri(ImageUriCmd),
     /// Reprint conversation history (undocumented)
     ReprintHistory,
     /// Program info
@@ -1002,6 +1004,14 @@ pub struct QueuePopCmd {
     pub queue_name: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ImageUriCmd {
+    /// Base64 data-uri of the image to load into the conversation
+    pub data_uri: String,
+    /// Whether to load the high-resolution version
+    pub image_hq: bool,
+}
+
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
     static CMDS_WITH_MARKDOWN_BODY_RE: OnceLock<Regex> = OnceLock::new();
     CMDS_WITH_MARKDOWN_BODY_RE.get_or_init(|| {
@@ -1514,6 +1524,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "system-prompt" => Cmd::SystemPrompt(SystemPromptCmd {
             prompt: r.opt_take(0),
         }),
+        "assistant" => Cmd::Assistant(AssistantCmd { message: r.take(0) }),
         "clip" => Cmd::Clip,
         "forget" => Cmd::Forget(ForgetCmd {
             n: r.num(0)?.unwrap_or(1),
@@ -1854,7 +1865,10 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "queue-pop" => Cmd::QueuePop(QueuePopCmd {
             queue_name: r.opt_take(0),
         }),
-        "assistant" => Cmd::Assistant(AssistantCmd { message: r.take(0) }),
+        "image-uri" => Cmd::ImageUri(ImageUriCmd {
+            data_uri: r.take(0),
+            image_hq: r.opts.bool("hq"),
+        }),
         "reprint-history" => Cmd::ReprintHistory,
         "about" => Cmd::About,
 

@@ -864,17 +864,6 @@ pub async fn process_cmd(
             // contains the full message.
             ProcessCmdResult::loop_next().with_retention_policy(retention_policy)
         }
-        cmd::Cmd::Assistant(cmd::AssistantCmd { message }) => {
-            let retention_policy = if matches!(cmd, cmd::Cmd::Pin(_)) {
-                db::LogEntryRetentionPolicy::ConversationPin
-            } else {
-                db::LogEntryRetentionPolicy::None
-            };
-            ProcessCmdResult::loop_next()
-                .discard_cmd_and_output()
-                .with_retention_policy(retention_policy)
-                .with_history_entries(vec![HistoryEntry::AssistantText(message, None)])
-        }
         cmd::Cmd::SystemPrompt(cmd::SystemPromptCmd { prompt }) => {
             // NOTE: While it might be nice to have a cindexonfig option to set a
             // system-prompt, it would have a different behavior than currently
@@ -944,6 +933,55 @@ pub async fn process_cmd(
                 },
             );
             ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::Assistant(cmd::AssistantCmd { message }) => {
+            let retention_policy = if matches!(cmd, cmd::Cmd::Pin(_)) {
+                db::LogEntryRetentionPolicy::ConversationPin
+            } else {
+                db::LogEntryRetentionPolicy::None
+            };
+            ProcessCmdResult::loop_next()
+                .discard_cmd_and_output()
+                .with_retention_policy(retention_policy)
+                .with_history_entries(vec![HistoryEntry::AssistantText(message, None)])
+        }
+        cmd::Cmd::ImageUri(cmd::ImageUriCmd { data_uri, image_hq }) => {
+            let mut history_entries = vec![];
+            let image_capability = config::get_ai_model_capability(&session.ai).image;
+            let use_thumbnail = image_capability
+                .as_ref()
+                .map(|cap| !image_hq && !cap.auto_resize)
+                .unwrap_or(false);
+
+            match loader::encode_data_uri_to_png_base64(&data_uri, use_thumbnail) {
+                Ok((img_png_b64, img_dim)) => {
+                    if image_capability.is_none() {
+                        errorln!(io, "model does not support images");
+                        return ProcessCmdResult::loop_next();
+                    }
+                    history_entries.push(HistoryEntry::UserImage(
+                        img_png_b64.clone(),
+                        image_hq,
+                        img_dim,
+                    ));
+                    let was_recording = io.record_off();
+                    io.display("image/png", &img_png_b64);
+                    io.record_set(was_recording);
+                }
+                Err(e) => {
+                    errorln!(
+                        io,
+                        "failed to load data-uri: {:?}...: {:?}",
+                        &data_uri[..50],
+                        e
+                    );
+                }
+            }
+            // Oh okay, great... discard cmd... Maybe show the command but with ellipses?
+            ProcessCmdResult::loop_next()
+                .discard_cmd_and_output()
+                .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
+                .with_history_entries(history_entries)
         }
         cmd::Cmd::Forget(cmd::ForgetCmd { mut n }) => {
             fn prepare_preview(preview: String, max_length: usize) -> String {

@@ -46,6 +46,24 @@ pub async fn resolve_image_b64(
     }
 }
 
+pub fn encode_data_uri_to_png_base64(
+    data_uri: &str,
+    thumbnail_512px: bool,
+) -> Result<(String, (u32, u32)), Box<dyn std::error::Error>> {
+    if data_uri.starts_with("data:image/") {
+        let b64_data = data_uri
+            .split_once(',')
+            .map(|(_, b64)| b64)
+            .ok_or("No base64 data found.")?;
+
+        // Decode the embedded base64, resize, then re-encode.
+        let raw = general_purpose::STANDARD.decode(b64_data)?;
+        encode_image_bytes_to_png_base64(Bytes::from(raw), thumbnail_512px)
+    } else {
+        Err(Box::new(std::io::Error::other("Not a valid data URI.")))
+    }
+}
+
 /// Decode arbitrary image bytes and re-encode as PNG base64.
 ///
 /// If `thumbnail_512px` is true, downscale to fit within 512x512 first.

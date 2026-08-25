@@ -1141,14 +1141,19 @@ pub static REGISTRY: &[Entry] = &[
         .for_audience(Audience::UserOnly)
         .with_traits(Traits::NONE.repl()),
     ),
-    Entry::Cmd(cmd(
-        Slash,
-        Cow::Borrowed("clip"),
-        Cow::Borrowed("convo"),
-        Cow::Borrowed(&[]),
-        Doc::new("Copy the last message to your clipboard")
-            .more("Unlike the !clip tool, the AI is not prompted"),
-    )),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("assistant"),
+            Cow::Borrowed("convo"),
+            Cow::Borrowed(&[
+            arg("msg", Prompt, Rest),
+            ]),
+            Doc::new("Mock a message as the LLM assistant"),
+        )
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.account()),
+    ),
     Entry::Cmd(
         cmd(
             Slash,
@@ -1175,6 +1180,14 @@ pub static REGISTRY: &[Entry] = &[
         .for_audience(Audience::UserOnly)
         .with_traits(Traits::NONE.repl()),
     ),
+    Entry::Cmd(cmd(
+        Slash,
+        Cow::Borrowed("clip"),
+        Cow::Borrowed("convo"),
+        Cow::Borrowed(&[]),
+        Doc::new("Copy the last message to your clipboard")
+            .more("Unlike the !clip tool, the AI is not prompted"),
+    )),
     //
     // Tools
     //
@@ -2388,15 +2401,16 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
-            Cow::Borrowed("assistant"),
+            Cow::Borrowed("image-uri"),
             Cow::Borrowed("utils"),
-            Cow::Borrowed(&[
-            arg("msg", Prompt, Rest),
-            ]),
-            Doc::new("Mock a message as the LLM assistant"),
+            Cow::Borrowed(&[arg("data-uri", Text, Required)]),
+            Doc::new("Load an image from a base64 data-uri into the conversation"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_opts(&[
+            OPT_HQ,
+        ])
+        .for_audience(Audience::Neither)
+        .with_traits(Traits::NONE.net()),
     ),
     Entry::Cmd(
         cmd(
