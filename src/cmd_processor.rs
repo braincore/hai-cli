@@ -635,6 +635,11 @@ pub async fn process_cmd(
             cache,
             interactive,
         }) => {
+            if interactive {
+                if !check_interactive_output(io) {
+                    return ProcessCmdResult::loop_next();
+                }
+            }
             let username = session
                 .account
                 .as_ref()
@@ -2045,6 +2050,9 @@ pub async fn process_cmd(
             editor,
             no_create,
         }) => {
+            if !check_interactive_output(io) {
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -5032,6 +5040,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetOpen(cmd::AssetOpenCmd { asset_name }) => {
+            if !check_interactive_output(io) {
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = session.account.as_ref() {
                 Some(account.username.clone())
             } else {
@@ -7333,4 +7344,28 @@ fn format_asset_acl(asset: &crate::api::types::asset::AssetInfo, prefix: Option<
         output_lines.push(line);
     });
     output_lines.join("\n")
+}
+
+/// Use this to gate commands that require an interactive terminal.
+///
+/// - Checks whether terminal supports cursoring
+/// - Checks whether i/o is muted, if so, then interactive is considered off.
+///
+/// If muted, unmutes temporarily to print error message.
+fn check_interactive_output(io: &Io) -> bool {
+    if !io.can_cursor() || io.muted() {
+        let was_muted = if io.muted() {
+            io.mute_set(false);
+            true
+        } else {
+            false
+        };
+        errorln!(io, "{}", "Interactive terminal unavailable");
+        if was_muted {
+            io.mute_set(true);
+        }
+        false
+    } else {
+        true
+    }
 }
