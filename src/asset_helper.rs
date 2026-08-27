@@ -328,6 +328,64 @@ pub async fn list_all_asset_entries(
 
 // --
 
+use crate::api::{
+    client::RequestError,
+    types::asset::{AssetGetArg, AssetGetError},
+};
+
+/// If `asset_name` is an attachment, this recursively queries the parent of
+/// the attachment, which might be another attachment, until it arrives at the
+/// anchor asset.
+///
+/// Use this to check access to an asset name since permissons are applied to
+/// attachment anchors rather than the attachments themselves.
+///
+/// Attachment name format: `:<attachment_parent_entry_id>:<attachment_name>`
+///
+/// # Returns
+///
+/// The attachment anchor. If the input `asset_name` wasn't an attachment, then
+/// the `asset_name` is returned verbatim.
+pub async fn resolve_attachment_anchor_asset_name(
+    api_client: &HaiClient,
+    asset_name: &str,
+) -> Result<String, (String, RequestError<AssetGetError>)> {
+    let mut current_name = asset_name.to_string();
+
+    loop {
+        tracing::debug!(?current_name, "resolved_attachment_anchor_asset_name");
+        let Some(entry_id) = parse_attachment_parent_entry_id(&current_name) else {
+            // Not an attachment, found anchor.
+            return Ok(current_name);
+        };
+
+        current_name = match api_client
+            .asset_get(AssetGetArg {
+                name: entry_id.clone(),
+            })
+            .await
+        {
+            Ok(get_res) => get_res.entry.name,
+            Err(e) => return Err((entry_id, e)),
+        };
+    }
+}
+
+/// Attachment name format: `:<attachment_parent_entry_id>:<attachment_name>`
+///
+/// # Returns
+///
+/// If `name` is an attachment, returns the `attachment_parent_entry_id`.
+/// Otherwise, returns None.
+fn parse_attachment_parent_entry_id(name: &str) -> Option<String> {
+    let rest = name.strip_prefix(':')?;
+    let idx = rest.find(':')?;
+    let entry_id = &rest[..idx];
+    Some(format!(":{entry_id}"))
+}
+
+// --
+
 #[cfg(test)]
 mod tests {
     #[test]

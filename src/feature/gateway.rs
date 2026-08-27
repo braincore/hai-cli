@@ -24,7 +24,7 @@ use crate::feature::kernel;
 use crate::io::Io;
 use crate::session::{self, CmdInputReply};
 use crate::{
-    asset_async_writer, asset_reader,
+    asset_async_writer, asset_helper, asset_reader,
     feature::asset_crypt::{self, KeyRecipient},
 };
 
@@ -1575,8 +1575,22 @@ async fn handle_get(
     }
 
     // Check permission at the start
-    if let Err(PermCheckError::Unauthorized) =
-        check_access_async(&perms, &AccessRequest::ReadByName { name: asset_name }).await
+    // Additional complexity because an attachment's permission is determined
+    // by access to its anchor.
+    let anchor_asset_name =
+        match asset_helper::resolve_attachment_anchor_asset_name(api_client, asset_name).await {
+            Ok(asset_name) => asset_name,
+            Err((_, e)) => {
+                return asset_get_request_error_to_http_response(e);
+            }
+        };
+    if let Err(PermCheckError::Unauthorized) = check_access_async(
+        &perms,
+        &AccessRequest::ReadByName {
+            name: &anchor_asset_name,
+        },
+    )
+    .await
     {
         return HttpResponse::forbidden();
     }
@@ -1746,6 +1760,28 @@ async fn handle_get(
     HttpResponse::ok(decrypted_contents, &content_type)
 }
 
+/// Proxies an internal `asset/get` response back to the app request that
+/// made the overarching request.
+fn asset_get_request_error_to_http_response(
+    req_err: RequestError<asset::AssetGetError>,
+) -> HttpResponse {
+    match req_err {
+        RequestError::Route(get_err) => match get_err {
+            asset::AssetGetError::BadName => HttpResponse::not_found(),
+            asset::AssetGetError::NoPermission => HttpResponse::forbidden(),
+            _ => HttpResponse::internal_error(&format!("{}", get_err)),
+        },
+        // An internal bad-request isn't the fault of the app request so report
+        // it as an internal error.
+        RequestError::BadRequest(bad_req) => HttpResponse::internal_error(&bad_req),
+        RequestError::RateLimit(_body) => HttpResponse::too_many_requests(),
+        RequestError::Http(http_err) => HttpResponse::internal_error(&format!("{}", http_err)),
+        RequestError::Unexpected(err) => HttpResponse::internal_error(&err),
+    }
+}
+
+// --
+
 /// Proxies a GET request to the vite dev server (dev-mode only).
 ///
 /// The full request path (including query string) is forwarded to
@@ -1814,8 +1850,22 @@ async fn handle_put(
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> HttpResponse {
-    if let Err(PermCheckError::Unauthorized) =
-        check_access_async(&perms, &AccessRequest::WriteByName { name: asset_name }).await
+    // Additional complexity because an attachment's permission is determined
+    // by access to its anchor.
+    let anchor_asset_name =
+        match asset_helper::resolve_attachment_anchor_asset_name(&api_client, asset_name).await {
+            Ok(asset_name) => asset_name,
+            Err((_, e)) => {
+                return asset_get_request_error_to_http_response(e);
+            }
+        };
+    if let Err(PermCheckError::Unauthorized) = check_access_async(
+        &perms,
+        &AccessRequest::WriteByName {
+            name: &anchor_asset_name,
+        },
+    )
+    .await
     {
         return HttpResponse::forbidden();
     }
@@ -1940,8 +1990,23 @@ async fn handle_put_metadata(
     perms: Perms,
     _username: Option<&str>,
 ) -> HttpResponse {
-    if let Err(PermCheckError::Unauthorized) =
-        check_access_async(&perms, &AccessRequest::WriteByName { name: asset_name }).await
+    // Check permission
+    // Additional complexity because an attachment's permission is determined
+    // by access to its anchor.
+    let anchor_asset_name =
+        match asset_helper::resolve_attachment_anchor_asset_name(&api_client, asset_name).await {
+            Ok(asset_name) => asset_name,
+            Err((_, e)) => {
+                return asset_get_request_error_to_http_response(e);
+            }
+        };
+    if let Err(PermCheckError::Unauthorized) = check_access_async(
+        &perms,
+        &AccessRequest::WriteByName {
+            name: &anchor_asset_name,
+        },
+    )
+    .await
     {
         return HttpResponse::forbidden();
     }
@@ -3075,6 +3140,8 @@ async fn handle_client_message(
                     return;
                 }
             };
+            // Additional complexity because an attachment's permission is determined
+            // by access to its anchor.
             if let Err(PermCheckError::Unauthorized) = check_access_async(
                 &perms,
                 &AccessRequest::ReadByName {
