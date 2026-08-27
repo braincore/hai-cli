@@ -151,6 +151,8 @@ pub enum Cmd {
     AssetMdSet(AssetMdSetCmd),
     /// Set key in asset metadata
     AssetMdSetKey(AssetMdSetKeyCmd),
+    /// Transform metadata with jq
+    AssetMdJq(AssetMdJqCmd),
     /// Delete key in asset metadata
     AssetMdDelKey(AssetMdDelKeyCmd),
     /// New asset folder
@@ -805,6 +807,15 @@ pub struct AssetMdSetKeyCmd {
 
     /// A JSON-encoded value
     pub value: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetMdJqCmd {
+    /// Name of the asset
+    pub asset_name: String,
+
+    /// Filter defined in jq notation
+    pub filter: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1692,6 +1703,10 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             asset_name: r.take(0),
             key: r.take(1),
             value: r.take(2),
+        }),
+        "asset-md-jq" => Cmd::AssetMdJq(AssetMdJqCmd {
+            asset_name: r.take(0),
+            filter: r.body.take(),
         }),
         "asset-md-del-key" => Cmd::AssetMdDelKey(AssetMdDelKeyCmd {
             asset_name: r.take(0),

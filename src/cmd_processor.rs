@@ -4485,6 +4485,69 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
+        cmd::Cmd::AssetMdJq(cmd::AssetMdJqCmd { asset_name, filter }) => {
+            let Some(filter) = filter else {
+                errorln!(io, "jq filter is required");
+                return ProcessCmdResult::loop_next();
+            };
+            if session.account.is_none() {
+                errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::loop_next();
+            }
+            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            let md_json = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok((None, _)) => {
+                    errorln!(io, "asset has no metadata");
+                    return ProcessCmdResult::loop_next();
+                }
+                Ok((Some(md), _)) => {
+                    let contents = String::from_utf8_lossy(&md);
+                    let md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                        .expect("failed to parse metadata");
+                    md_json
+                }
+                Err(e) => {
+                    errorln!(io, "failed to get metadata: {}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            };
+            use crate::ai_provider::util::run_jaq;
+
+            let metadata = match run_jaq(&filter, &md_json) {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    errorln!(io, "failed to run jq filter: {}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            };
+
+            let new_md_contents =
+                serde_json::to_string(&metadata).expect("failed to serialize metadata");
+
+            use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+            match api_client
+                .asset_metadata_put(AssetMetadataPutArg {
+                    name: asset_name,
+                    data: new_md_contents,
+                    conflict_policy: PutConflictPolicy::Override,
+                })
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    errorln!(io, "metadata put failed: {}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            };
+            ProcessCmdResult::loop_next()
+        }
         cmd::Cmd::AssetMdDelKey(cmd::AssetMdDelKeyCmd { asset_name, key }) => {
             if session.account.is_none() {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);

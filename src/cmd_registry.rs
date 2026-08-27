@@ -1757,6 +1757,23 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
+            Cow::Borrowed("asset-md-jq"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+            ]),
+            Doc::new("Transform metadata with jq"),
+        )
+        .with_body(Body::MultiLine {
+            name: "filter",
+            doc: "Filter defined in jq notation",
+        })
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.assets()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
             Cow::Borrowed("asset-md-del-key"),
             Cow::Borrowed("asset"),
             Cow::Borrowed(&[

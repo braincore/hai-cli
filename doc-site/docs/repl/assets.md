@@ -408,12 +408,13 @@ An easy way to see the difference is to:
 
 Each asset can have a JSON object associated with it to store metadata:
 
-| Command                        | Description                                               |
-|---------------------------------|-----------------------------------------------------------|
+| Command                        | Description                                                     |
+|---------------------------------|----------------------------------------------------------------|
 | `/asset-md-get <name>`          | Fetches metadata for an asset and adds it to the conversation. |
-| `/asset-md-set <name> <json>`   | Sets the entire metadata blob.                            |
-| `/asset-md-set-key <name> <key> <value>` | Sets/replaces a metadata key.                   |
-| `/asset-md-del-key <name> <key>`| Deletes a metadata key.                                   |
+| `/asset-md-set <name> <json>`   | Sets the entire metadata blob.                                 |
+| `/asset-md-set-key <name> <key> <value>` | Sets/replaces a metadata key.                         |
+| `/asset-md-jq <name> <multi-line filter>` | Apply `jq` filter to metadata.                       |
+| `/asset-md-del-key <name> <key>`| Deletes a metadata key.                                        |
 
 If the `title` metadata key is set, it's shown in `/asset-list` and
 `/asset-search` in `[]` brackets.
