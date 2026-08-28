@@ -11,7 +11,7 @@ use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
-use crate::{errorln, io::Out, outln};
+use crate::{errorln, io::Out, out, outln};
 
 //
 // Begin Anthropic Response Types
@@ -380,6 +380,10 @@ pub async fn send_to_anthropic(
             if let Some((cancel_token, handler_id, handler)) = cancel_info {
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
+            }
+            if !out.is_terminal() {
+                // If over websockets, emulate the ^C interrupt.
+                out!(out, "^C");
             }
             outln!(out, "AI Interrupted");
             return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);

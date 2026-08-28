@@ -462,7 +462,7 @@ async fn main() -> process::ExitCode {
         };
 
         let (io, actor_handle) = if args.kernel {
-            crate::feature::kernel::run_kernel(account.clone())
+            crate::feature::kernel::run_kernel(ctrlc_handler.clone(), account.clone())
                 .await
                 .map(|(io, actor_handle)| (io, Some(actor_handle)))
                 .expect("Failed to start kernel")
@@ -1595,6 +1595,12 @@ async fn repl(
                         }
                         ctrlc_handler.remove_handler(tool_exec_handler_id);
                         if interrupted.load(Ordering::SeqCst) {
+                            // NOTE: Recordings are not used here, so ^C isn't
+                            // added to records.
+                            if !io.is_terminal() {
+                                // If over websockets, emulate the ^C interrupt.
+                                out!(io, "^C");
+                            }
                             outln!(io, "Tool Interrupted");
                             output_text.push_str("^CTool Interrupted");
                         }

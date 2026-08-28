@@ -38,7 +38,7 @@ use crate::{
     io::Out,
     loader, term, term_color, tool,
 };
-use crate::{errorln, infoln, outln, outln_as, record_outln, successln, warnln};
+use crate::{errorln, infoln, out, outln, outln_as, record_outln, successln, warnln};
 
 pub struct ProcessCmdResult {
     pub next: ProcessCmdNext,
@@ -725,9 +725,14 @@ pub async fn process_cmd(
                 };
             ctrlc_handler.remove_handler(shell_exec_handler_id);
             if interrupted.load(Ordering::SeqCst) {
-                // ^C shows up in the terminal automatically, so just record
-                // it.
-                io.record_out("^C");
+                if io.is_terminal() {
+                    // ^C shows up in the terminal automatically, so just
+                    // record it.
+                    io.record_out("^C");
+                } else {
+                    // If over websockets, emulate the ^C interrupt.
+                    out!(io, "^C");
+                }
                 outln!(io, "Shell Exec Interrupted");
             }
             let shell_exec_output = match shell_exec_output {

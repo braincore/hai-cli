@@ -44,10 +44,34 @@ impl CtrlcHandler {
         let mut handlers = self.handlers.lock().expect("Failed to lock mutex");
         handlers.remove(&id);
     }
+
+    /// For manually triggering the Ctrl-C handlers when mimicking Ctrl-C
+    /// behavior (websocket i/o).
+    pub fn trigger(&self) {
+        raise_ctrl_c();
+    }
 }
 
 impl Default for CtrlcHandler {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Mimics Ctrl-C behavior by sending a SIGINT to self.
+#[cfg(unix)]
+fn raise_ctrl_c() {
+    unsafe {
+        libc::kill(0, libc::SIGINT); // pid 0 = whole process group
+    }
+}
+
+/// Mimics Ctrl-C behavior by sending a SIGINT to self.
+#[cfg(windows)]
+fn raise_ctrl_c() {
+    use windows_sys::Win32::System::Console::{CTRL_C_EVENT, GenerateConsoleCtrlEvent};
+    unsafe {
+        // 0 = all processes sharing this console (this proc + children)
+        GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
     }
 }

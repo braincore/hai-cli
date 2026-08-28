@@ -5,6 +5,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::cmd_registry;
+use crate::ctrlc_handler::CtrlcHandler;
 use crate::io::{Input, Output, TerminalCapability};
 
 // --
@@ -269,18 +270,30 @@ pub enum HaiRouterState {
 #[serde(tag = ".tag", rename_all = "snake_case")]
 pub enum ClientMsg {
     /// Answer to a `Query`
-    Answer { query_id: u64, text: Option<String> },
+    Answer {
+        query_id: u64,
+        text: Option<String>,
+    },
 
     /// Equivalent of client submitting a REPL read line.
-    Eval { input: String },
+    Eval {
+        input: String,
+    },
 
     /// Request the list of registered commands.
     /// Server will echo back `mid` in response.
-    CmdRegistryList { mid: u64 },
+    CmdRegistryList {
+        mid: u64,
+    },
 
     /// Request tab/auto-complete results.
     /// Server will echo back `mid` in response.
-    CmdRegistryComplete { mid: u64, line: String },
+    CmdRegistryComplete {
+        mid: u64,
+        line: String,
+    },
+
+    Interrupt,
 }
 
 // --
@@ -336,6 +349,8 @@ pub struct PendingClientInput {
 }
 
 pub struct WsActor {
+    ctrlc_handler: CtrlcHandler,
+
     listener: TcpListener,
 
     pub token: String,
@@ -381,6 +396,7 @@ pub struct WsActor {
 
 impl WsActor {
     pub fn new(
+        ctrlc_handler: CtrlcHandler,
         listener: TcpListener,
         token: String,
         cmd_rx: UnboundedReceiver<WsCmd>,
@@ -389,6 +405,7 @@ impl WsActor {
         account: Option<crate::db::Account>,
     ) -> Self {
         Self {
+            ctrlc_handler,
             listener,
             token,
             cmd_rx,
@@ -641,6 +658,11 @@ impl WsActor {
             ClientMsg::CmdRegistryComplete { mid, line } => {
                 tracing::debug!("kernel: client msg: cmd_registry_complete: mid={mid} line={line}");
                 self.on_cmd_registry_complete(mid, line);
+            }
+
+            ClientMsg::Interrupt => {
+                tracing::debug!("kernel: client msg: interrupt");
+                self.ctrlc_handler.trigger();
             }
         }
     }

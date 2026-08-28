@@ -11,7 +11,7 @@ use crate::chat;
 use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::tool;
-use crate::{errorln, io::Out, outln};
+use crate::{errorln, io::Out, out, outln};
 
 //
 // Start OpenAI Response Types
@@ -298,6 +298,10 @@ pub async fn send_to_openai(
             if let Some((cancel_token, handler_id, handler)) = cancel_info {
                 cancel_token.cancelled().await;
                 handler.remove_handler(handler_id);
+            }
+            if !out.is_terminal() {
+                // If over websockets, emulate the ^C interrupt.
+                out!(out, "^C");
             }
             outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
