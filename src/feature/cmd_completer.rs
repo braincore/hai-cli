@@ -157,6 +157,11 @@ pub fn complete(
                     realign_suggestions(&mut completions, pos - prefix.len());
                     completions
                 }
+                cmd_registry::ArgKind::Enum(values) => {
+                    let mut completions = simple_completer(&prefix, values);
+                    realign_suggestions(&mut completions, pos - prefix.len());
+                    completions
+                }
                 _ => vec![],
             }
         }
