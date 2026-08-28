@@ -99,11 +99,11 @@ impl AssetKeyring {
         match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
             Ok(entry) => {
                 if let Err(e) = entry.set_password(password) {
-                    eprintln!("error: failed to store password in keyring: {}", e);
+                    tracing::debug!("error: failed to store password in keyring: {}", e);
                 }
             }
             Err(e) => {
-                eprintln!("error: failed to create keyring entry: {}", e);
+                tracing::debug!("error: failed to create keyring entry: {}", e);
             }
         }
     }
@@ -119,12 +119,12 @@ impl AssetKeyring {
                 Ok(password) => Some(Zeroizing::new(password)),
                 Err(keyring::Error::NoEntry) => None,
                 Err(e) => {
-                    eprintln!("error: failed to retrieve password from keyring: {}", e);
+                    tracing::error!("error: failed to retrieve password from keyring: {}", e);
                     None
                 }
             },
             Err(e) => {
-                eprintln!("error: failed to access keyring entry: {}", e);
+                tracing::error!("error: failed to access keyring entry: {}", e);
                 None
             }
         }
@@ -140,12 +140,12 @@ impl AssetKeyring {
             Ok(entry) => {
                 if let Err(e) = entry.delete_credential() {
                     if !matches!(e, keyring::Error::NoEntry) {
-                        eprintln!("error: failed to delete password from keyring: {}", e);
+                        tracing::debug!("error: failed to delete password from keyring: {}", e);
                     }
                 }
             }
             Err(e) => {
-                eprintln!("error: failed to access keyring entry for deletion: {}", e);
+                tracing::debug!("error: failed to access keyring entry for deletion: {}", e);
             }
         }
     }
@@ -188,7 +188,7 @@ impl AssetKeyring {
                 }
                 Err(_) => {
                     // Stored password is invalid, remove it and prompt for new one
-                    println!(
+                    tracing::debug!(
                         "error: stored password for {} is invalid, prompting for new password",
                         rec_key_id
                     );
@@ -250,7 +250,7 @@ impl AssetKeyring {
                 }
                 Err(_) => {
                     // Stored password is invalid, remove it and prompt for new one
-                    println!(
+                    tracing::debug!(
                         "error: stored password for {} is invalid, prompting for new password",
                         rec_key_id
                     );
@@ -383,7 +383,7 @@ impl AssetKeyring {
                 }
                 Err(_) => {
                     // Stored password is invalid, remove it
-                    println!(
+                    tracing::debug!(
                         "error: stored password for {} is invalid, prompting for new password",
                         rec_key_id
                     );
@@ -442,7 +442,7 @@ impl AssetKeyring {
                 }
                 Err(_) => {
                     // Stored password is invalid, remove it and prompt for new one
-                    println!(
+                    tracing::debug!(
                         "error: stored password for {} is invalid, prompting for new password",
                         rec_key_id
                     );
@@ -641,7 +641,7 @@ mod tests {
     fn test_keyring_creation() {
         let keyring = AssetKeyring::new(true);
         // Just verify it doesn't panic
-        println!("Keyring available: {}", keyring.is_keyring_available());
+        assert!(keyring.is_keyring_available());
     }
 
     #[test]

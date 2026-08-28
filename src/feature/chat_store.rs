@@ -445,6 +445,8 @@ pub async fn resume_chat_from_db_or_asset(
         }
     }
 
+    io.code_reset();
+
     // Print out conversation to help user regain context
     for (i, log_entry) in session.history.iter_mut().enumerate() {
         let role_name = match log_entry.message.role {

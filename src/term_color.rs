@@ -1,7 +1,6 @@
 use nu_ansi_term::Color::{self, Fixed, Rgb};
 use nu_ansi_term::{self, Style};
 use regex::Regex;
-use std::io::Write;
 use std::sync::OnceLock;
 use two_face::re_exports::syntect::highlighting::{self, FontStyle};
 use two_face::re_exports::syntect::parsing::SyntaxSet;
@@ -175,64 +174,21 @@ pub fn get_markdown_code_block_re() -> &'static Regex {
 // --
 
 use crate::io::Io;
-use crate::record_out;
-use two_face::re_exports::syntect::easy::HighlightLines;
 
-/// Prints using regular print!/println! to stdout.
+/// Supports printing with only one language.
 ///
-/// However, adds out-of-band records for the transcript and other backends.
+/// Does not switch languages for markdown embedded code blocks.
 pub fn print_with_syntax_highlighting(io: &Io, text: &str, lang_token: &str) {
-    let color_capability = if let Some(color_capability) = terminal_color_capability() {
-        color_capability
-    } else {
-        print!("{}", text);
-        return;
-    };
-
-    let ts = get_theme_set();
-    let ps = get_syntax_set();
-
     // jsx isn't supported by two_face, but tsx is.
     let lang_token = if lang_token == "jsx" {
         "tsx"
     } else {
         lang_token
     };
-
-    let mut highlighter = if let Some(syntax) = ps.find_syntax_by_token(lang_token) {
-        HighlightLines::new(
-            syntax,
-            ts.get(two_face::theme::EmbeddedThemeName::VisualStudioDarkPlus),
-        )
-    } else {
-        print!("{}", text);
-        return;
-    };
-
-    let lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
-    for (i, line) in lines.iter().enumerate() {
-        let line_with_ending = if i < lines.len() - 1 {
-            format!("{}\n", line)
-        } else {
-            line.clone()
-        };
-        let highlighted_parts: Vec<(highlighting::Style, &str)> =
-            highlighter.highlight_line(&line_with_ending, ps).unwrap();
-
-        for (style, text) in highlighted_parts {
-            let escaped = as_terminal_escaped(style, text, &color_capability, &None);
-            print!("{}", escaped);
-        }
-        std::io::stdout().flush().unwrap();
-    }
-
-    // Record for the transcript and other backends. This is the raw text
-    // without escape codes.
-    record_out!(io, "{}", text);
+    io.code(text, Some(lang_token));
 }
 
-/// Assumes `text` is markdown text. Supports highlighting markdown and
-/// embedded code blocks.
+/// Supports highlighting markdown and embedded code blocks.
 pub fn print_multi_lang_syntax_highlighting(
     out: &Out,
     markdown: &str,

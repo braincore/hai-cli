@@ -282,7 +282,6 @@ impl Io {
                     }
                 }
             }
-            record_outln!(self.out, "{}", s);
         }
         answer
     }
@@ -508,23 +507,6 @@ pub trait Output: Send {
     /// boundaries.
     fn push_code_reset(&mut self) {}
 
-    /// Out-of-band output: text the caller has already output to the terminal
-    /// that should be reported to other backends.
-    ///
-    /// This is only for exceptional cases!
-    fn push_out_of_band(&mut self, s: &str, stream: OutOfBandStream) {
-        if matches!(self.terminal_capability(), TerminalCapability::None) {
-            // Since this is not a terminal, it's out-of-band and should
-            // produce output.
-            match stream {
-                OutOfBandStream::Out => self.push_out(s),
-                OutOfBandStream::Err => self.push_err(s),
-            }
-        } else {
-            // If the backend is the terminal, don't emit anything.
-        }
-    }
-
     /// Ephemeral, terminal-only output.
     ///
     /// Primary use case is for text that will be written via cursor moves.
@@ -549,13 +531,6 @@ pub trait Output: Send {
     fn is_terminal(&self) -> bool {
         self.terminal_capability().can_style()
     }
-}
-
-/// Which conventional stream an out-of-band chunk belongs to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutOfBandStream {
-    Out,
-    Err,
 }
 
 /// A single recorded chunk of output, tagged by stream.
@@ -800,22 +775,13 @@ impl Out {
 
     /// Record output into the transcript.
     ///
-    /// Intended to be used for output the caller has already printed.
-    ///
-    /// Two steps:
-    /// 1. The text is appended to the transcript (if recording flag set).
-    /// 2. The text is sent to the backend via `push_out_of_band`, which emits
-    ///    it only if the backend is a terminal. The stdio backend keeps the
-    ///    default no-op to avoid double printing.
+    /// Intended to be used for output the caller has already printed in
+    /// another way that was obviously unrecorded.
     pub fn record_out(&self, s: &str) {
         self.record(Rec::Out(s.to_string()));
         if self.muted() {
             return;
         }
-        self.backend
-            .lock()
-            .unwrap()
-            .push_out_of_band(s, OutOfBandStream::Out);
     }
 
     /// Like `record_out`, but tags the chunk as stderr.
@@ -824,10 +790,6 @@ impl Out {
         if self.muted() {
             return;
         }
-        self.backend
-            .lock()
-            .unwrap()
-            .push_out_of_band(s, OutOfBandStream::Err);
     }
 
     /// Turn recording on. Returns previous state.
