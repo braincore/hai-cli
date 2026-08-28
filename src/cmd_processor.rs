@@ -5908,6 +5908,10 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::BotSsh => {
+            if !io.can_cursor() {
+                errorln!(io, "{}", "Interactive terminal unavailable");
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = &session.account {
                 account.username.clone()
             } else {
