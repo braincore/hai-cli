@@ -341,7 +341,7 @@ pub async fn send_to_openai(
                                 if !tool_calls.is_empty() {
                                     outln!(out);
                                     outln!(out);
-                                    outln!(out, "∥");
+                                    outln!(out, "‖");
                                     outln!(out);
                                 } else if !text_accumulator.printed_text.is_empty() {
                                     // For cases where a tool-response follows a text-response, add
