@@ -33,6 +33,8 @@ pub struct WorkerAssetUpdate {
     pub asset_entry_ref: Option<(String, String)>, // (entry_id, rev_id)
     pub new_contents: Vec<u8>,
     pub is_push: bool,
+    pub put_conflict_policy: Option<PutConflictPolicy>,
+    pub replace_conflict_policy: Option<ReplaceConflictPolicy>,
     pub api_client: HaiClient,
     pub one_shot: bool,
     pub akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
@@ -74,6 +76,8 @@ pub async fn worker_update_asset(
                 asset_entry_ref,
                 new_contents,
                 is_push,
+                put_conflict_policy,
+                replace_conflict_policy,
                 api_client,
                 one_shot,
                 akm_info,
@@ -183,7 +187,8 @@ pub async fn worker_update_asset(
                                 entry_id,
                                 rev_id: Some(rev_id),
                                 data: new_contents,
-                                conflict_policy: ReplaceConflictPolicy::Fork,
+                                conflict_policy: replace_conflict_policy
+                                    .unwrap_or(ReplaceConflictPolicy::Fork),
                             })
                             .await
                         {
@@ -232,7 +237,8 @@ pub async fn worker_update_asset(
                             .asset_put(AssetPutArg {
                                 name: asset_name.clone(),
                                 data: new_contents,
-                                conflict_policy: PutConflictPolicy::Override,
+                                conflict_policy: put_conflict_policy
+                                    .unwrap_or(PutConflictPolicy::Override),
                             })
                             .await
                         {

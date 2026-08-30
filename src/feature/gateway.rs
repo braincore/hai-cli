@@ -1393,6 +1393,9 @@ async fn handle_http_request(
 
     // Parse optional query params
     let rev_id: Option<String> = request.query_param("rev_id").map(|s| s.to_string());
+    let conflict_policy: Option<String> = request
+        .query_param("conflict_policy")
+        .map(|s| s.to_string());
     let metadata_ref: bool = request
         .query_param("metadata")
         .map(|v| v == "1")
@@ -1499,6 +1502,7 @@ async fn handle_http_request(
                     io,
                     &asset_name,
                     rev_id.as_deref(),
+                    conflict_policy.as_deref(),
                     &request.body,
                     is_push,
                     asset_blob_cache,
@@ -1857,6 +1861,7 @@ async fn handle_put(
     io: &Io,
     asset_name: &str,
     rev_id: Option<&str>,
+    conflict_policy: Option<&str>,
     body: &[u8],
     is_push: bool,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -1877,7 +1882,44 @@ async fn handle_put(
             Some((asset_name.to_string(), rev_id.to_string()))
         }
     } else {
+        if let Some(conflict_policy) = conflict_policy {
+            if conflict_policy != "reject" && conflict_policy != "fork" {
+                return HttpResponse::bad_request(
+                    "If `rev_id` set, `conflict_policy` must be `reject` or `fork`.",
+                );
+            }
+        }
         None
+    };
+    let (put_conflict_policy, replace_conflict_policy) = if let Some(conflict_policy) =
+        conflict_policy
+    {
+        if rev_id.is_some() {
+            match conflict_policy {
+                "reject" => (None, Some(asset::ReplaceConflictPolicy::Reject)),
+                "fork" => (None, Some(asset::ReplaceConflictPolicy::Fork)),
+                _ => {
+                    return HttpResponse::bad_request(
+                        "If `rev_id` set, `conflict_policy` must be `reject` or `fork`.",
+                    );
+                }
+            }
+        } else {
+            match conflict_policy {
+                "override" => (Some(asset::PutConflictPolicy::Override), None),
+                "reject" => (Some(asset::PutConflictPolicy::Reject), None),
+                _ => {
+                    return HttpResponse::bad_request(
+                        "If `rev_id` is not set, `conflict_policy` must be `override` or `reject`.",
+                    );
+                }
+            }
+        }
+    } else {
+        (
+            Some(asset::PutConflictPolicy::Override),
+            Some(asset::ReplaceConflictPolicy::Reject),
+        )
     };
 
     match asset_app_has_gateway_perm_for_asset_access_request(&api_client, asset_name, &perms, true)
@@ -1929,6 +1971,8 @@ async fn handle_put(
                 asset_entry_ref,
                 new_contents: body.to_vec(),
                 is_push,
+                put_conflict_policy,
+                replace_conflict_policy,
                 api_client: api_client.clone(),
                 one_shot: true,
                 akm_info,
@@ -3985,6 +4029,8 @@ async fn handle_client_message(
                         asset_entry_ref: None,
                         new_contents: asset_arg.data.clone(),
                         is_push: false,
+                        put_conflict_policy: Some(asset_arg.conflict_policy),
+                        replace_conflict_policy: None,
                         api_client: api_client.clone(),
                         one_shot: true,
                         akm_info: akm_info.clone(),
@@ -4062,6 +4108,8 @@ async fn handle_client_message(
                         asset_entry_ref: None,
                         new_contents: asset_arg.data.into_bytes(),
                         is_push: false,
+                        put_conflict_policy: Some(asset_arg.conflict_policy),
+                        replace_conflict_policy: None,
                         api_client: api_client.clone(),
                         one_shot: true,
                         akm_info: akm_info.clone(),

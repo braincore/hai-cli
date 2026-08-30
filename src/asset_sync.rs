@@ -1967,6 +1967,8 @@ async fn sync_up_data_file(
             asset_entry_ref,
             new_contents: file_contents,
             is_push: false,
+            put_conflict_policy: None,
+            replace_conflict_policy: None,
             api_client: api_client.clone(),
             one_shot: true,
             akm_info,

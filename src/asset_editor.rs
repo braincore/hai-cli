@@ -6,6 +6,7 @@ use tempfile::NamedTempFile;
 use tokio::sync::mpsc::Sender;
 
 use crate::api::client::HaiClient;
+use crate::api::types::asset::{PutConflictPolicy, ReplaceConflictPolicy};
 use crate::asset_async_writer::{WorkerAssetInit, WorkerAssetMsg, WorkerAssetUpdate};
 
 #[allow(clippy::too_many_arguments)]
@@ -76,6 +77,8 @@ pub async fn edit_with_editor_api(
                             asset_entry_ref,
                             new_contents,
                             is_push,
+                            put_conflict_policy: Some(PutConflictPolicy::Override),
+                            replace_conflict_policy: Some(ReplaceConflictPolicy::Fork),
                             api_client,
                             one_shot: false,
                             akm_info,
@@ -116,6 +119,8 @@ pub async fn edit_with_editor_api(
         asset_entry_ref,
         new_contents: final_contents.clone(),
         is_push,
+        put_conflict_policy: Some(PutConflictPolicy::Override),
+        replace_conflict_policy: Some(ReplaceConflictPolicy::Fork),
         api_client: api_client.clone(),
         one_shot: false,
         akm_info,
