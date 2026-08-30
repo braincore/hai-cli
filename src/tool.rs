@@ -222,6 +222,7 @@ pub struct ToolHaiReplArg {
 }
 
 pub fn execute_hai_repl_tool(
+    out: &Out,
     tool: &Tool,
     arg: &str,
     cmd_queue: &mut VecDeque<session::CmdInput>,
@@ -245,7 +246,7 @@ pub fn execute_hai_repl_tool(
                 });
             }
             let output = format!("Pushed {} command(s) into queue", cmds.len());
-            println!("{}", output);
+            outln!(out, "{}", output);
             output
         }
         _ => "fatal: not a hai-repl tool".to_string(),

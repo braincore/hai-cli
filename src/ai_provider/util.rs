@@ -896,7 +896,10 @@ impl JsonArrayAccumulator {
                     remove_first_n_chars(&mut self.buffer, quote_index);
                     printed_text_chunk.push_str("- ");
                     unmasked_printed_text_chunk.push_str("- ");
-                    out!(out, "- ");
+                    // Use code because it's easier on non-terminal rendering
+                    // to handle the entire block being markdown rather than an
+                    // inline switch from text to code/markdown.
+                    out.code("- ", Some("markdown"));
                 } else {
                     // Keep accumulating
                     break;

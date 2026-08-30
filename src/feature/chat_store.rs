@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::io::Io;
+use crate::io::{Io, SectionKind};
 use crate::{
     api, asset_async_writer, asset_cache::AssetBlobCache, asset_reader, chat, config,
     ctrlc_handler, db, feature::asset_crypt, io::Out, session,
@@ -455,22 +455,60 @@ pub async fn resume_chat_from_db_or_asset(
             chat::MessageRole::Tool => "tool",
             chat::MessageRole::System => break,
         };
+        match log_entry.message.role {
+            chat::MessageRole::Assistant => {
+                outln!(io, "{}", "↓↓↓");
+                outln!(io);
+            }
+            chat::MessageRole::Tool => {
+                outln!(io, "⚙ ⚙ ⚙");
+                outln!(io);
+            }
+            _ => {}
+        };
+        let _section_guard = match log_entry.message.role {
+            chat::MessageRole::User => Some(io.section_begin(SectionKind::UserMsg {
+                index: i as u32,
+                ts: log_entry.ts.clone(),
+                visible: log_entry.visible,
+            })),
+            chat::MessageRole::Assistant => Some(io.section_begin(SectionKind::AssistantMsg {
+                index: i as u32,
+                model: log_entry.model.clone(),
+            })),
+            chat::MessageRole::Tool => Some(
+                io.section_begin(SectionKind::ToolOutput {
+                    index: i as u32,
+                    tool_id: log_entry
+                        .message
+                        .tool_call_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                }),
+            ),
+            _ => None,
+        };
 
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             session.input_loaded_tokens += log_entry.tokens;
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                outln!(
-                    io,
-                    "{}[{}]: {}",
-                    role_name,
-                    i,
+                let text_to_print = if log_entry.visible {
+                    text
+                } else {
                     text.split_once("\n").unwrap_or((text, "")).0
-                );
-                outln!(io);
+                };
+                if io.is_section_aware() {
+                    outln!(io, "{}", text_to_print)
+                } else {
+                    outln!(io, "{}[{}]: {}", role_name, i, text_to_print);
+                    outln!(io);
+                }
             } else if let chat::MessageContent::ImageUrl { id, image_url } =
                 &mut log_entry.message.content[0]
             {
-                outln!(io, "{}[{}]:", role_name, i);
+                if !io.is_section_aware() {
+                    outln!(io, "{}[{}]:", role_name, i);
+                }
 
                 // Three types of image urls need to be handled:
                 // 1. A legit URL (http:// or https://)
@@ -508,8 +546,10 @@ pub async fn resume_chat_from_db_or_asset(
                 };
                 match crate::loader::resolve_image_b64(&url, false).await {
                     Ok((img_png_b64, _dim)) => {
-                        io.display("image/png", &img_png_b64);
-                        outln!(io);
+                        if log_entry.visible {
+                            io.display("image/png", &img_png_b64);
+                            outln!(io);
+                        }
                         image_url.url = format!("data:image/png;base64,{}", img_png_b64);
                     }
                     Err(e) => {
@@ -536,7 +576,7 @@ pub async fn resume_chat_from_db_or_asset(
                     if io.is_terminal() {
                         println!("{}", left_prompt.bright_green());
                         io.record_out(&left_prompt);
-                    } else {
+                    } else if !io.is_section_aware() {
                         outln!(io, "{}", left_prompt);
                     }
                     for tool_call in tool_calls {
@@ -549,14 +589,16 @@ pub async fn resume_chat_from_db_or_asset(
                         );
                         json_obj_acc.acc(&tool_call.function.arguments, &io.out);
                         json_obj_acc.end(&io.out);
-                        outln!(io);
+                        if !json_obj_acc.printed_text.ends_with('\n') {
+                            io.code("\n", json_obj_acc.sh_lang_token.as_deref());
+                        }
                         outln!(io);
                     }
                 } else {
                     if io.is_terminal() {
                         print!("{} ", left_prompt.bright_green());
                         io.record_out(&format!("{} ", left_prompt));
-                    } else {
+                    } else if !io.is_section_aware() {
                         out!(io, "{} ", left_prompt);
                     }
                     crate::term_color::print_multi_lang_syntax_highlighting(
@@ -570,7 +612,7 @@ pub async fn resume_chat_from_db_or_asset(
                 if io.is_terminal() {
                     print!("{} ", left_prompt.bright_green());
                     io.record_out(&format!("{} ", left_prompt));
-                } else {
+                } else if !io.is_section_aware() {
                     out!(io, "{} ", left_prompt);
                 }
                 crate::term_color::print_multi_lang_syntax_highlighting(
@@ -601,21 +643,58 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
             chat::MessageRole::Tool => "tool",
             chat::MessageRole::System => "system",
         };
-
+        match log_entry.message.role {
+            chat::MessageRole::Assistant => {
+                outln!(io, "{}", "↓↓↓");
+                outln!(io);
+            }
+            chat::MessageRole::Tool => {
+                outln!(io, "⚙ ⚙ ⚙");
+                outln!(io);
+            }
+            _ => {}
+        };
+        let _section_guard = match log_entry.message.role {
+            chat::MessageRole::User => Some(io.section_begin(SectionKind::UserMsg {
+                index: i as u32,
+                ts: log_entry.ts.clone(),
+                visible: log_entry.visible,
+            })),
+            chat::MessageRole::Assistant => Some(io.section_begin(SectionKind::AssistantMsg {
+                index: i as u32,
+                model: log_entry.model.clone(),
+            })),
+            chat::MessageRole::Tool => Some(
+                io.section_begin(SectionKind::ToolOutput {
+                    index: i as u32,
+                    tool_id: log_entry
+                        .message
+                        .tool_call_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                }),
+            ),
+            _ => None,
+        };
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
-                outln!(
-                    io,
-                    "{}[{}]: {}",
-                    role_name,
-                    i,
+                let text_to_print = if log_entry.visible {
+                    text
+                } else {
                     text.split_once("\n").unwrap_or((text, "")).0
-                );
-                outln!(io);
+                };
+                if io.is_section_aware() {
+                    outln!(io, "{}", text_to_print)
+                } else {
+                    outln!(io, "{}[{}]: {}", role_name, i, text_to_print);
+                    outln!(io);
+                }
             } else if let chat::MessageContent::ImageUrl { id, image_url } =
                 &log_entry.message.content[0]
             {
-                outln!(io, "{}[{}]:", role_name, i);
+                if !io.is_section_aware() {
+                    outln!(io, "{}[{}]:", role_name, i);
+                }
                 let url = if let Some(_image_id) = id
                     && image_url.url.starts_with(':')
                 {
@@ -627,8 +706,10 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                 };
                 match crate::loader::resolve_image_b64(&url, false).await {
                     Ok((img_png_b64, _dim)) => {
-                        io.display("image/png", &img_png_b64);
-                        outln!(io);
+                        if log_entry.visible {
+                            io.display("image/png", &img_png_b64);
+                            outln!(io);
+                        }
                     }
                     Err(e) => {
                         errorln!(io, "failed to load image: {}", e);
@@ -653,7 +734,7 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                     if io.is_terminal() {
                         println!("{}", left_prompt.bright_green());
                         io.record_out(&left_prompt);
-                    } else {
+                    } else if !io.is_section_aware() {
                         outln!(io, "{}", left_prompt);
                     }
                     for tool_call in tool_calls {
@@ -666,14 +747,16 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                         );
                         json_obj_acc.acc(&tool_call.function.arguments, &io.out);
                         json_obj_acc.end(&io.out);
-                        outln!(io);
+                        if !json_obj_acc.printed_text.ends_with('\n') {
+                            io.code("\n", json_obj_acc.sh_lang_token.as_deref());
+                        }
                         outln!(io);
                     }
                 } else {
                     if io.is_terminal() {
                         print!("{} ", left_prompt.bright_green());
                         io.record_out(&format!("{} ", left_prompt));
-                    } else {
+                    } else if !io.is_section_aware() {
                         out!(io, "{} ", left_prompt);
                     }
                     crate::term_color::print_multi_lang_syntax_highlighting(
@@ -687,7 +770,7 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                 if io.is_terminal() {
                     print!("{} ", left_prompt.bright_green());
                     io.record_out(&format!("{} ", left_prompt));
-                } else {
+                } else if !io.is_section_aware() {
                     out!(io, "{} ", left_prompt);
                 }
                 crate::term_color::print_multi_lang_syntax_highlighting(

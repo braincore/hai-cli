@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::cmd_registry;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::io::{Input, Output, TerminalCapability};
+use crate::io::{Input, Output, SectionId, SectionKind, TerminalCapability};
 
 // --
 
@@ -71,8 +71,20 @@ impl Output for WsOutput {
         });
     }
 
+    fn push_section_begin(&mut self, id: SectionId, kind: SectionKind) {
+        self.send(WsCmd::SectionBegin { id, kind });
+    }
+
+    fn push_section_end(&mut self, id: SectionId) {
+        self.send(WsCmd::SectionEnd { id });
+    }
+
     fn terminal_capability(&self) -> TerminalCapability {
         TerminalCapability::None
+    }
+
+    fn is_section_aware(&self) -> bool {
+        true
     }
 }
 
@@ -183,6 +195,15 @@ pub enum ServerMsg {
         lang: Option<String>,
         bg: Option<(u8, u8, u8)>,
     },
+
+    SectionBegin {
+        id: SectionId,
+        kind: SectionKind,
+    },
+    SectionEnd {
+        id: SectionId,
+    },
+
     /// Query/ask the client for input
     Query {
         query_id: u64,
@@ -319,6 +340,13 @@ pub enum WsCmd {
         lang: Option<String>,
         bg: Option<(u8, u8, u8)>,
     },
+    SectionBegin {
+        id: SectionId,
+        kind: SectionKind,
+    },
+    SectionEnd {
+        id: SectionId,
+    },
 
     // WsInput commands:
     // These are blocking for the actor. Actor waits on `reply` until the
@@ -372,6 +400,11 @@ pub struct WsActor {
     pending_client_queries: HashMap<u64, PendingClientInput>,
     pending_client_repl: Option<PendingClientInput>,
 
+    /// Currently open sections, outermost first.
+    ///
+    /// Used to force-close all sections before the next prompt.
+    section_stack: Vec<(SectionId, SectionKind)>,
+
     /// For generating sequential IDs to assign to pending input requests.
     pub next_id: u64,
 
@@ -414,6 +447,7 @@ impl WsActor {
             conn_tx_buffer: VecDeque::new(),
             pending_client_queries: HashMap::new(),
             pending_client_repl: None,
+            section_stack: Vec::new(),
             next_id: 0,
             eval_queue: VecDeque::new(),
             idle_since: None,
@@ -514,13 +548,13 @@ impl WsActor {
         match cmd {
             WsCmd::Out(text) => self.emit_or_buffer(ServerMsg::Out { text }),
             WsCmd::Err(text) => self.emit_or_buffer(ServerMsg::Err { text }),
-            WsCmd::Alert { level, text } => {
-                self.emit_or_buffer(ServerMsg::Alert { level: level, text })
-            }
+            WsCmd::Alert { level, text } => self.emit_or_buffer(ServerMsg::Alert { level, text }),
             WsCmd::Display { mime, data } => self.emit_or_buffer(ServerMsg::Display { mime, data }),
             WsCmd::Code { text, lang, bg } => {
                 self.emit_or_buffer(ServerMsg::Code { text, lang, bg })
             }
+            WsCmd::SectionBegin { id, kind } => self.on_section_begin(id, kind),
+            WsCmd::SectionEnd { id } => self.on_section_end(id),
             WsCmd::Query { q, reply } => {
                 let query_id = self.alloc_query_id();
                 let server_msg = ServerMsg::Query {
@@ -551,6 +585,11 @@ impl WsActor {
                 incognito,
                 agentic,
             } => {
+                // Should not be necessary, but as a backstop, if there are any
+                // sections open, close them. This takes advantage of the fact
+                // that all sections must be closed before the next prompt.
+                self.close_all_sections();
+
                 // If a client already pushed an eval, return it.
                 if let Some(code) = self.eval_queue.pop_front() {
                     let _ = reply.send(Answer::Text(code));
@@ -590,10 +629,8 @@ impl WsActor {
     /// Emit a message to the client, drop it if no client is connected.
     fn emit_or_drop(&mut self, msg: ServerMsg) {
         let json = serde_json::to_string(&msg).unwrap();
-        match &self.conn_tx {
-            Some(tx) if tx.send(json.clone()).is_ok() => {}
-            // No client, or send failed: drop the message.
-            _ => {}
+        if let Some(tx) = &self.conn_tx {
+            let _ = tx.send(json);
         }
     }
 
@@ -601,6 +638,42 @@ impl WsActor {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+}
+
+// --
+
+//
+// WsActor section bookkeeping.
+//
+// Keeps track of the stack of sections.
+//
+
+impl WsActor {
+    fn on_section_begin(&mut self, id: SectionId, kind: SectionKind) {
+        self.section_stack.push((id, kind.clone()));
+        self.emit_or_buffer(ServerMsg::SectionBegin { id, kind });
+    }
+
+    fn on_section_end(&mut self, id: SectionId) {
+        let Some(pos) = self.section_stack.iter().rposition(|s| s.0 == id) else {
+            tracing::error!("kernel: section_end for unknown/closed section {id}, ignoring");
+            return;
+        };
+        if pos != self.section_stack.len() - 1 {
+            tracing::error!("kernel: section_end for non-innermost section {id}");
+        }
+        while self.section_stack.len() > pos {
+            let (id, _) = self.section_stack.pop().expect("stack len checked");
+            self.emit_or_buffer(ServerMsg::SectionEnd { id });
+        }
+    }
+
+    /// Force-close every open section. Called before next prompt.
+    fn close_all_sections(&mut self) {
+        while let Some((id, _)) = self.section_stack.pop() {
+            self.emit_or_buffer(ServerMsg::SectionEnd { id });
+        }
     }
 }
 

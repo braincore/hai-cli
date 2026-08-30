@@ -454,6 +454,7 @@ pub fn session_history_add_user_text_entry(
     session: &mut SessionState,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
+    visible: bool,
 ) -> u32 {
     let asset_tokens = bpe_tokenizer.encode_with_special_tokens(contents);
     let token_count = asset_tokens.len() as u32;
@@ -479,6 +480,7 @@ pub fn session_history_add_user_text_entry(
         tokens: token_count,
         retention_policy,
         model: None,
+        visible,
     });
     token_count
 }
@@ -491,9 +493,16 @@ pub fn session_history_add_user_cmd_and_reply_entries(
     session: &mut SessionState,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
+    replies_visible: bool,
 ) -> u32 {
-    session_history_add_user_text_entry(cmd, session, bpe_tokenizer, retention_policy)
-        + session_history_add_user_text_entry(contents, session, bpe_tokenizer, retention_policy)
+    session_history_add_user_text_entry(cmd, session, bpe_tokenizer, retention_policy, true)
+        + session_history_add_user_text_entry(
+            contents,
+            session,
+            bpe_tokenizer,
+            retention_policy,
+            replies_visible,
+        )
 }
 
 /// Convenience function to add "user image" into conversation history while
@@ -513,6 +522,7 @@ pub fn session_history_add_user_image_entry(
     retention_policy: (bool, LogEntryRetentionPolicy),
     hq: bool,
     dim: (u32, u32),
+    visible: bool,
 ) -> u32 {
     let token_count = calc_image_tokens(&session.ai, hq, dim);
     if matches!(
@@ -542,6 +552,7 @@ pub fn session_history_add_user_image_entry(
         tokens: token_count,
         retention_policy,
         model: None,
+        visible,
     });
     token_count
 }
@@ -639,6 +650,7 @@ pub fn session_history_add_assistant_text_entry(
         tokens: token_count,
         retention_policy,
         model: model.map(|m| config::ai_model_to_string(m)),
+        visible: true,
     });
     token_count
 }

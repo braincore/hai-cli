@@ -45,6 +45,7 @@ pub struct ProcessCmdResult {
     pub discard_cmd_and_output: bool,
     pub retention_policy: LogEntryRetentionPolicy,
     pub history_entries: Vec<HistoryEntry>,
+    pub history_entries_visibile: bool,
     /// New commands are added to the front of the cmd queue
     pub new_cmds: Vec<session::CmdInput>,
     pub new_temp_files: Vec<tempfile::NamedTempFile>,
@@ -68,6 +69,7 @@ impl ProcessCmdResult {
         discard_cmd_and_output: bool,
         retention_policy: LogEntryRetentionPolicy,
         history_entries: Vec<HistoryEntry>,
+        history_entries_visibile: bool,
         new_cmds: Vec<session::CmdInput>,
         new_temp_files: Vec<tempfile::NamedTempFile>,
         new_masked_strings: Vec<String>,
@@ -79,6 +81,7 @@ impl ProcessCmdResult {
             discard_cmd_and_output,
             retention_policy,
             history_entries,
+            history_entries_visibile,
             new_cmds,
             new_temp_files,
             new_masked_strings,
@@ -93,6 +96,7 @@ impl ProcessCmdResult {
             false,
             LogEntryRetentionPolicy::None,
             vec![],
+            true,
             vec![],
             vec![],
             vec![],
@@ -107,6 +111,7 @@ impl ProcessCmdResult {
             false,
             LogEntryRetentionPolicy::None,
             vec![],
+            true,
             vec![],
             vec![],
             vec![],
@@ -121,6 +126,7 @@ impl ProcessCmdResult {
             false,
             LogEntryRetentionPolicy::None,
             vec![],
+            true,
             vec![],
             vec![],
             vec![],
@@ -148,6 +154,12 @@ impl ProcessCmdResult {
     /// Replace the history entries.
     pub fn with_history_entries(mut self, history_entries: Vec<HistoryEntry>) -> Self {
         self.history_entries = history_entries;
+        self
+    }
+
+    /// Set the visibility of the history entries.
+    pub fn with_history_entries_visibile(mut self, history_entries_visibile: bool) -> Self {
+        self.history_entries_visibile = history_entries_visibile;
         self
     }
 
@@ -940,6 +952,7 @@ pub async fn process_cmd(
                         db::LogEntryRetentionPolicy::ConversationPin,
                     ),
                     model: None,
+                    visible: true,
                 },
             );
             ProcessCmdResult::loop_next()
@@ -1243,6 +1256,7 @@ pub async fn process_cmd(
                 ProcessCmdResult::loop_next()
                     .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
                     .with_history_entries(history_entries)
+                    .with_history_entries_visibile(matches!(cmd, cmd::Cmd::FileCat(_)))
             }
         }
         cmd::Cmd::FileWrite(cmd::FileWriteCmd { path, contents }) => {
@@ -2804,6 +2818,7 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
                 .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
                 .with_history_entries(history_entries)
+                .with_history_entries_visibile(matches!(cmd, cmd::Cmd::AssetCat(_)))
         }
         cmd::Cmd::AssetWrite(cmd::AssetWriteCmd {
             asset_name,

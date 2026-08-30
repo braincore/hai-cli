@@ -48,7 +48,7 @@ mod term_color;
 mod tool;
 
 pub use io::Level;
-use io::{Io, Out};
+use io::{Io, Out, SectionKind};
 use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
@@ -697,32 +697,33 @@ async fn repl(
                 if *step_id > 0 {
                     outln!(io);
                 }
-                let step_badge = format!("{}[{}]:", task_fqn, session.history.len());
 
                 print_step(
                     io,
                     &session.cmd_registry,
-                    &step_badge,
+                    &task_fqn,
+                    *step_id,
                     &cmd_info.input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::ListenQueue(queue_name, index) = &cmd_info.source {
-                let step_badge = if let Some(queue_name) = queue_name {
-                    format!("queue/{}[{}]:", queue_name, index)
+            } else if let session::CmdSource::ListenQueue(queue_name, sub_index) = &cmd_info.source
+            {
+                let step_name = if let Some(queue_name) = queue_name {
+                    &format!("queue/{}", queue_name)
                 } else {
-                    format!("queue[{}]:", index)
+                    "queue"
                 };
                 print_step(
                     io,
                     &session.cmd_registry,
-                    &step_badge,
+                    step_name,
+                    *sub_index as u32,
                     &cmd_info.input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::HaiTool(index) = &cmd_info.source {
+            } else if let session::CmdSource::HaiTool(sub_index) = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
                 // being written by `/asset-write`.
-                let step_badge = format!("!hai-tool[{}]:", index);
                 let display_input =
                     if cmd_info.input.starts_with("/asset") && cmd_info.input.contains('\n') {
                         format!(
@@ -735,16 +736,17 @@ async fn repl(
                 print_step(
                     io,
                     &session.cmd_registry,
-                    &step_badge,
+                    "!hai-tool",
+                    *sub_index as u32,
                     &display_input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::HaiBye(index) = &cmd_info.source {
-                let step_badge = format!("bye[{}]:", index);
+            } else if let session::CmdSource::HaiBye(sub_index) = &cmd_info.source {
                 print_step(
                     io,
                     &session.cmd_registry,
-                    &step_badge,
+                    "bye",
+                    *sub_index as u32,
                     &cmd_info.input,
                     &masked_strings,
                 );
@@ -927,6 +929,7 @@ async fn repl(
                         &mut session,
                         bpe_tokenizer,
                         (false, db::LogEntryRetentionPolicy::None),
+                        true,
                     );
                     errorln!(io, "{}", e);
                     continue;
@@ -982,6 +985,7 @@ async fn repl(
                         &mut session,
                         bpe_tokenizer,
                         (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                        true,
                     );
                 }
             }
@@ -1050,6 +1054,7 @@ async fn repl(
                             &mut session,
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
+                            true,
                         );
                     } else {
                         session::session_history_add_user_cmd_and_reply_entries(
@@ -1058,6 +1063,7 @@ async fn repl(
                             &mut session,
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
+                            true,
                         );
                     }
                 }
@@ -1069,6 +1075,7 @@ async fn repl(
                                 &mut session,
                                 bpe_tokenizer,
                                 (is_task_mode_step, cmd_result.retention_policy),
+                                cmd_result.history_entries_visibile,
                             );
                         }
                         cmd_processor::HistoryEntry::UserImage(b64, hq, dim) => {
@@ -1078,6 +1085,7 @@ async fn repl(
                                 (is_task_mode_step, cmd_result.retention_policy),
                                 hq,
                                 dim,
+                                cmd_result.history_entries_visibile,
                             );
                         }
                         cmd_processor::HistoryEntry::AssistantText(text, ai_model) => {
@@ -1169,6 +1177,7 @@ async fn repl(
             tokens,
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
             model: None,
+            visible: true,
         });
 
         loop {
@@ -1364,6 +1373,7 @@ async fn repl(
                                 db::LogEntryRetentionPolicy::None,
                             ),
                             model: Some(config::ai_model_to_string(&session.ai)),
+                            visible: true,
                         });
                     }
                     chat::ChatCompletionResponse::Tool {
@@ -1393,6 +1403,7 @@ async fn repl(
                                 db::LogEntryRetentionPolicy::None,
                             ),
                             model: Some(config::ai_model_to_string(&session.ai)),
+                            visible: true,
                         });
                     }
                 }
@@ -1488,6 +1499,7 @@ async fn repl(
                                     db::LogEntryRetentionPolicy::None,
                                 ),
                                 model: None,
+                                visible: true,
                             });
                         }
                         answered_yes
@@ -1507,10 +1519,19 @@ async fn repl(
                                 interrupted_clone.store(true, Ordering::SeqCst);
                             }
                         });
+                        let _section_guard = io.section_begin(SectionKind::ToolOutput {
+                            index: session.history.len() as u32,
+                            tool_id: tool_id.clone(),
+                        });
                         let (mut output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl)
                         {
                             let mut cmd_queue = session.cmd_queue.lock().await;
-                            match tool::execute_hai_repl_tool(&tp.tool, arg, &mut cmd_queue) {
+                            match tool::execute_hai_repl_tool(
+                                &io.out,
+                                &tp.tool,
+                                arg,
+                                &mut cmd_queue,
+                            ) {
                                 Ok(output_text) => (output_text, None),
                                 Err(e) => {
                                     let err_text = format!("error executing hai-repl tool: {}", e);
@@ -1624,6 +1645,7 @@ async fn repl(
                                 db::LogEntryRetentionPolicy::None,
                             ),
                             model: None,
+                            visible: true,
                         });
                     }
                 }
@@ -1664,6 +1686,7 @@ async fn repl(
                     tokens,
                     retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                     model: None,
+                    visible: true,
                 });
             } else {
                 break;
@@ -1726,7 +1749,8 @@ async fn wrapup_and_cleanup(
 fn print_step(
     io: &Io,
     cmd_registry: &cmd_registry::Registry,
-    step_badge: &str,
+    name: &str,
+    sub_index: u32,
     input: &str,
     masked_strings: &Vec<String>,
 ) {
@@ -1736,13 +1760,19 @@ fn print_step(
         masked_input = masked_input.replace(masked_string, &mask);
     }
 
+    let step_badge = format!("{}{{{}}}:", name, sub_index);
+
+    let _section_guard = io.section_begin(SectionKind::Step {
+        sub_index,
+        name: name.to_string(),
+    });
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
         if io.is_terminal() {
             // Using print! instead of out! here so that colored output isn't
             // sent to the backend.
             print!("{} ", step_badge.black().on_white());
             io.record_out(&format!("{} ", step_badge));
-        } else {
+        } else if !io.is_section_aware() {
             out!(io, "{} ", step_badge);
         }
 
@@ -1766,6 +1796,8 @@ fn print_step(
         if io.is_terminal() {
             println!("{} {}", step_badge.black().on_white(), &masked_input);
             io.record_out(&format!("{} {}", step_badge, &masked_input));
+        } else if io.is_section_aware() {
+            outln!(io, "{}", &masked_input);
         } else {
             outln!(io, "{} {}", step_badge, &masked_input);
         }
@@ -1832,6 +1864,11 @@ pub async fn prompt_ai(
 ) -> Vec<ChatCompletionResponse> {
     let api_base_url = get_api_base_url();
     let mut used_hai_router = false;
+
+    let _section_guard = out.section_begin(SectionKind::AssistantMsg {
+        index: session.history.len() as u32,
+        model: Some(config::ai_model_to_string(&session.ai)),
+    });
     let ai_provider_response = match session.ai {
         config::AiModel::OpenAi(_)
         | config::AiModel::Google(_)

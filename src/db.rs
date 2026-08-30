@@ -19,6 +19,12 @@ pub struct LogEntry {
     /// If bool true, log_entry from task-mode step.
     pub retention_policy: (bool, LogEntryRetentionPolicy),
     pub model: Option<String>,
+    #[serde(default = "default_true")]
+    pub visible: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl LogEntry {

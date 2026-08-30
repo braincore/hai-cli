@@ -218,6 +218,10 @@ impl Io {
         self.out.terminal_capability().can_cursor()
     }
 
+    pub fn is_section_aware(&self) -> bool {
+        self.out.backend.lock().unwrap().is_section_aware()
+    }
+
     //
     // Input
     //
@@ -320,6 +324,14 @@ impl Io {
 
     pub fn code_reset(&self) {
         self.out.code_reset()
+    }
+
+    pub fn section_begin(&self, kind: SectionKind) -> SectionGuard<'_> {
+        self.out.section_begin(kind)
+    }
+
+    pub fn section_end(&self, id: SectionId) {
+        self.out.section_end(id)
     }
 
     pub fn out_as(&self, shown: &str, recorded: &str) {
@@ -507,6 +519,14 @@ pub trait Output: Send {
     /// boundaries.
     fn push_code_reset(&mut self) {}
 
+    /// Beginning of a section.
+    ///
+    /// Can be ignored by unsophisticated backends.
+    fn push_section_begin(&mut self, _id: SectionId, _kind: SectionKind) {}
+
+    /// Ending of a section.
+    fn push_section_end(&mut self, _id: SectionId) {}
+
     /// Ephemeral, terminal-only output.
     ///
     /// Primary use case is for text that will be written via cursor moves.
@@ -531,7 +551,78 @@ pub trait Output: Send {
     fn is_terminal(&self) -> bool {
         self.terminal_capability().can_style()
     }
+
+    /// Whether the backend can utilize sections.
+    fn is_section_aware(&self) -> bool {
+        false
+    }
 }
+
+// --
+
+//
+// Sections: Annotations & grouping of other output.
+//
+// Sections are expressed with begin/end markers. Use the `SectionGuard` to
+// ensure both markers are always sent. An additional failsafe is that sections
+// cannot live beyond a REPL turn so there's always a reset on repl prompt (via
+// `WsActor::close_all_sections`).
+//
+// The initial use case is for the websocket i/o backend to be able to group
+// previous output into sections such as "this was the user msg", "this was
+// "the assistant response", and "this was the tool output".
+//
+// Sections are not a part of the transcript and are currently unused for
+// rendering in the terminal. There's some work to be done to minimize
+// dependence on checking `is_section_aware` to avoid confusing logic.
+//
+
+pub type SectionId = u64;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum SectionKind {
+    UserMsg {
+        index: u32,
+        ts: chrono::DateTime<chrono::Local>,
+        visible: bool,
+    },
+    AssistantMsg {
+        index: u32,
+        model: Option<String>,
+    },
+    /// Does not include the call itself
+    ToolOutput {
+        index: u32,
+        tool_id: String,
+    },
+    /// Task-step, bye-step, !hai-tool step
+    Step {
+        sub_index: u32,
+        name: String,
+    },
+}
+
+static NEXT_SECTION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Process-wide monotonic section IDs for correlating begin/end markers.
+pub fn next_section_id() -> SectionId {
+    NEXT_SECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Emits the end marker on drop, including during unwind.
+pub struct SectionGuard<'a> {
+    out: &'a Out,
+    id: SectionId,
+}
+
+impl Drop for SectionGuard<'_> {
+    fn drop(&mut self) {
+        self.out.section_end(self.id);
+    }
+}
+
+// --
 
 /// A single recorded chunk of output, tagged by stream.
 #[derive(Clone, Debug)]
@@ -628,6 +719,11 @@ impl Out {
         self.terminal_capability().can_cursor()
     }
 
+    /// Whether the backend can utilize sections.
+    pub fn is_section_aware(&self) -> bool {
+        self.backend.lock().unwrap().is_section_aware()
+    }
+
     //
     // Emit
     //
@@ -722,6 +818,20 @@ impl Out {
             return;
         }
         self.backend.lock().unwrap().push_code_reset();
+    }
+
+    //
+    // Sections
+    //
+
+    pub fn section_begin(&self, kind: SectionKind) -> SectionGuard<'_> {
+        let id = next_section_id();
+        self.backend.lock().unwrap().push_section_begin(id, kind);
+        SectionGuard { out: self, id }
+    }
+
+    pub fn section_end(&self, id: SectionId) {
+        self.backend.lock().unwrap().push_section_end(id);
     }
 
     //
