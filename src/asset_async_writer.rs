@@ -126,7 +126,7 @@ pub async fn worker_update_asset(
                     .write_cache(&new_hash_str, &new_contents)
                     .await;
 
-                let new_entry = if is_push {
+                let new_entry = if is_push && asset_entry_ref.is_none() {
                     match api_client
                         .asset_push(AssetPushArg {
                             name: asset_name.clone(),

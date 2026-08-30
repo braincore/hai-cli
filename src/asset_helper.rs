@@ -335,7 +335,7 @@ use crate::api::{
 
 /// If `asset_name` is an attachment, this recursively queries the parent of
 /// the attachment, which might be another attachment, until it arrives at the
-/// anchor asset.
+/// attachment's anchor asset.
 ///
 /// Use this to check access to an asset name since permissons are applied to
 /// attachment anchors rather than the attachments themselves.
@@ -344,28 +344,36 @@ use crate::api::{
 ///
 /// # Returns
 ///
-/// The attachment anchor. If the input `asset_name` wasn't an attachment, then
-/// the `asset_name` is returned verbatim.
-pub async fn resolve_attachment_anchor_asset_name(
+/// The attachment anchor entry. If the input `asset_name` wasn't an
+/// attachment, then the entry for `asset_name` is returned.
+pub async fn resolve_perm_granting_asset_entry(
     api_client: &HaiClient,
     asset_name: &str,
-) -> Result<String, (String, RequestError<AssetGetError>)> {
-    let mut current_name = asset_name.to_string();
+) -> Result<AssetEntry, (String, RequestError<AssetGetError>)> {
+    let mut last_entry = match api_client
+        .asset_get(AssetGetArg {
+            name: asset_name.to_string(),
+        })
+        .await
+    {
+        Ok(get_res) => get_res.entry,
+        Err(e) => return Err((asset_name.to_string(), e)),
+    };
 
     loop {
-        tracing::debug!(?current_name, "resolved_attachment_anchor_asset_name");
-        let Some(entry_id) = parse_attachment_parent_entry_id(&current_name) else {
+        tracing::debug!(?last_entry.name, "resolved_attachment_anchor_asset_entry");
+        let Some(entry_id) = parse_attachment_parent_entry_id(&last_entry.name) else {
             // Not an attachment, found anchor.
-            return Ok(current_name);
+            return Ok(last_entry);
         };
 
-        current_name = match api_client
+        last_entry = match api_client
             .asset_get(AssetGetArg {
                 name: entry_id.clone(),
             })
             .await
         {
-            Ok(get_res) => get_res.entry.name,
+            Ok(get_res) => get_res.entry,
             Err(e) => return Err((entry_id, e)),
         };
     }
@@ -377,11 +385,27 @@ pub async fn resolve_attachment_anchor_asset_name(
 ///
 /// If `name` is an attachment, returns the `attachment_parent_entry_id`.
 /// Otherwise, returns None.
-fn parse_attachment_parent_entry_id(name: &str) -> Option<String> {
+pub fn parse_attachment_parent_entry_id(name: &str) -> Option<String> {
     let rest = name.strip_prefix(':')?;
     let idx = rest.find(':')?;
     let entry_id = &rest[..idx];
     Some(format!(":{entry_id}"))
+}
+
+// --
+
+/// Checks if the asset name is an entry ID.
+///
+/// It's a bit complex because an entry ID starts with a leading `:` and does
+/// not contain any more `:` characters. The existence of an additional `:`
+/// indicates that the asset name is an attachment.
+pub fn is_entry_id(asset_name: &str) -> bool {
+    asset_name.starts_with(':') && !asset_name[1..].contains(':')
+}
+
+/// Checks if the asset name is an attachment.
+pub fn is_attachment(asset_name: &str) -> bool {
+    asset_name.starts_with(':') && asset_name[1..].contains(':')
 }
 
 // --

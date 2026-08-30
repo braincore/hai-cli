@@ -1287,6 +1287,23 @@ async fn handle_websocket_connection(
     Ok(())
 }
 
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientMessageAuthRequest {
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum ClientMessageAuthResponse {
+    Ok { version: String },
+    BadToken,
+    BadRequest,
+}
+
+// --
+
 async fn handle_http_connection(
     io: &Io,
     mut stream: tokio::net::TcpStream,
@@ -1481,6 +1498,7 @@ async fn handle_http_request(
                 handle_put(
                     io,
                     &asset_name,
+                    rev_id.as_deref(),
                     &request.body,
                     is_push,
                     asset_blob_cache,
@@ -1574,28 +1592,25 @@ async fn handle_get(
         }
     }
 
-    // Check permission at the start
-    // Additional complexity because an attachment's permission is determined
-    // by access to its anchor.
-    let anchor_asset_name =
-        match asset_helper::resolve_attachment_anchor_asset_name(api_client, asset_name).await {
-            Ok(asset_name) => asset_name,
-            Err((_, e)) => {
-                return asset_get_request_error_to_http_response(e);
-            }
-        };
-    if let Err(PermCheckError::Unauthorized) = check_access_async(
+    match asset_app_has_gateway_perm_for_asset_access_request(
+        &api_client,
+        asset_name,
         &perms,
-        &AccessRequest::ReadByName {
-            name: &anchor_asset_name,
-        },
+        false,
     )
     .await
     {
-        return HttpResponse::forbidden();
+        Ok(has_perm) => {
+            if !has_perm {
+                return HttpResponse::forbidden();
+            }
+        }
+        Err((_asset_name, e)) => {
+            return asset_get_request_error_to_http_response(e);
+        }
     }
 
-    let is_attachment = asset_name.starts_with(':');
+    let is_attachment = crate::asset_helper::is_attachment(asset_name);
     let default_filenames = &["index", "index.html", "README", "README.md"];
 
     let (data_contents, md_contents, asset_revision, resolved_name) = {
@@ -1841,6 +1856,7 @@ async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) ->
 async fn handle_put(
     io: &Io,
     asset_name: &str,
+    rev_id: Option<&str>,
     body: &[u8],
     is_push: bool,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -1850,25 +1866,33 @@ async fn handle_put(
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> HttpResponse {
-    // Additional complexity because an attachment's permission is determined
-    // by access to its anchor.
-    let anchor_asset_name =
-        match asset_helper::resolve_attachment_anchor_asset_name(&api_client, asset_name).await {
-            Ok(asset_name) => asset_name,
-            Err((_, e)) => {
-                return asset_get_request_error_to_http_response(e);
-            }
-        };
-    if let Err(PermCheckError::Unauthorized) = check_access_async(
-        &perms,
-        &AccessRequest::WriteByName {
-            name: &anchor_asset_name,
-        },
-    )
-    .await
+    let asset_entry_ref = if let Some(rev_id) = rev_id {
+        if !asset_helper::is_entry_id(asset_name) {
+            // If replacing asset only if rev_id matches, require reference by
+            // entry_id. The multi-colon check is to ensure it's not an attachment.
+            return HttpResponse::bad_request(
+                "If `rev_id` set, `asset_name` must be an `entry_id`.",
+            );
+        } else {
+            Some((asset_name.to_string(), rev_id.to_string()))
+        }
+    } else {
+        None
+    };
+
+    match asset_app_has_gateway_perm_for_asset_access_request(&api_client, asset_name, &perms, true)
+        .await
     {
-        return HttpResponse::forbidden();
+        Ok(has_perm) => {
+            if !has_perm {
+                return HttpResponse::forbidden();
+            }
+        }
+        Err((_asset_name, e)) => {
+            return asset_get_request_error_to_http_response(e);
+        }
     }
+
     // Choose encryption key material for this asset
     let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
         io,
@@ -1902,7 +1926,7 @@ async fn handle_put(
         .send(asset_async_writer::WorkerAssetMsg::Update(
             asset_async_writer::WorkerAssetUpdate {
                 asset_name: asset_name.to_string(),
-                asset_entry_ref: None,
+                asset_entry_ref,
                 new_contents: body.to_vec(),
                 is_push,
                 api_client: api_client.clone(),
@@ -1990,25 +2014,17 @@ async fn handle_put_metadata(
     perms: Perms,
     _username: Option<&str>,
 ) -> HttpResponse {
-    // Check permission
-    // Additional complexity because an attachment's permission is determined
-    // by access to its anchor.
-    let anchor_asset_name =
-        match asset_helper::resolve_attachment_anchor_asset_name(&api_client, asset_name).await {
-            Ok(asset_name) => asset_name,
-            Err((_, e)) => {
-                return asset_get_request_error_to_http_response(e);
-            }
-        };
-    if let Err(PermCheckError::Unauthorized) = check_access_async(
-        &perms,
-        &AccessRequest::WriteByName {
-            name: &anchor_asset_name,
-        },
-    )
-    .await
+    match asset_app_has_gateway_perm_for_asset_access_request(&api_client, asset_name, &perms, true)
+        .await
     {
-        return HttpResponse::forbidden();
+        Ok(has_perm) => {
+            if !has_perm {
+                return HttpResponse::forbidden();
+            }
+        }
+        Err((_asset_name, e)) => {
+            return asset_get_request_error_to_http_response(e);
+        }
     }
     match api_client
         .asset_metadata_put(asset::AssetMetadataPutArg {
@@ -2054,17 +2070,83 @@ async fn handle_put_metadata(
 
 // --
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientMessageAuthRequest {
-    pub token: Option<String>,
-}
+/// Checks permission to access an asset across multiple dimensions.
+///
+/// 1. entry_id
+/// 2. asset_name
+/// 3. resolving attachment to asset_name / entry_id
+///
+/// # Returns
+///
+/// True if user has the necessary permission.
+pub async fn asset_app_has_gateway_perm_for_asset_access_request(
+    api_client: &HaiClient,
+    asset_name: &str,
+    perms: &Perms,
+    write: bool,
+) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
+    // Quick exit: Try to check access by the `asset_name` given to see if we
+    // can avoid any extra queries.
+    if asset_helper::is_entry_id(asset_name) {
+        let access_req = if write {
+            AccessRequest::WriteByEntryId {
+                entry_id: asset_name,
+            }
+        } else {
+            AccessRequest::ReadByEntryId {
+                entry_id: asset_name,
+            }
+        };
+        if check_access_async(&perms, &access_req).await.is_ok() {
+            return Ok(true);
+        }
+    } else {
+        let access_req = if write {
+            AccessRequest::WriteByName { name: asset_name }
+        } else {
+            AccessRequest::ReadByName { name: asset_name }
+        };
+        if check_access_async(&perms, &access_req).await.is_ok() {
+            return Ok(true);
+        }
+    }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = ".tag", rename_all = "snake_case")]
-pub enum ClientMessageAuthResponse {
-    Ok { version: String },
-    BadToken,
-    BadRequest,
+    // If the quick exit didn't work, we need to resolve the full perm-granting
+    // entry (attachment anchor, if applicable) and try both the name and
+    // entry_id. NOTE: Could be optimized to use fewer queries on average.
+    let perm_granting_asset_entry =
+        asset_helper::resolve_perm_granting_asset_entry(api_client, asset_name).await?;
+    let access_req_by_name = if write {
+        AccessRequest::WriteByName {
+            name: &perm_granting_asset_entry.name,
+        }
+    } else {
+        AccessRequest::ReadByName {
+            name: &perm_granting_asset_entry.name,
+        }
+    };
+    if check_access_async(&perms, &access_req_by_name)
+        .await
+        .is_ok()
+    {
+        return Ok(true);
+    }
+    let access_req_by_entry_id = if write {
+        AccessRequest::WriteByEntryId {
+            entry_id: &perm_granting_asset_entry.entry_id,
+        }
+    } else {
+        AccessRequest::ReadByEntryId {
+            entry_id: &perm_granting_asset_entry.entry_id,
+        }
+    };
+    if check_access_async(&perms, &access_req_by_entry_id)
+        .await
+        .is_ok()
+    {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 // --
