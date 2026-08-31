@@ -60,9 +60,11 @@ pub async fn get_asset(
     asset_name: &str,
     bad_name_ok: bool,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
-    let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
-    if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
-        && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
+    let asset_entry = get_asset_entry(api_client, asset_name, bad_name_ok)
+        .await?
+        .entry;
+    if let Some(data_url) = asset_entry.asset.url.as_ref()
+        && let Some(hash) = asset_entry.asset.hash.as_ref()
     {
         let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
             Ok(contents) => contents,
@@ -75,7 +77,45 @@ pub async fn get_asset(
                 }
             },
         };
-        Ok((data_contents, asset_get_res.entry))
+        Ok((data_contents, asset_entry))
+    } else {
+        Err(GetAssetError::BadName)
+    }
+}
+
+pub async fn get_asset_using_cache(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
+    let asset_entry = match asset_blob_cache.get_entry_cache(asset_name).await {
+        Some(entry) => entry.clone(),
+        None => {
+            let asset_entry = get_asset_entry(api_client, asset_name, bad_name_ok)
+                .await?
+                .entry;
+            asset_blob_cache
+                .insert_entry_cache(asset_entry.clone())
+                .await;
+            asset_entry
+        }
+    };
+    if let Some(data_url) = asset_entry.asset.url.as_ref()
+        && let Some(hash) = asset_entry.asset.hash.as_ref()
+    {
+        let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
+            Ok(contents) => contents,
+            Err(err) => match err {
+                DownloadAssetError::DataFetchFailed(failure) => {
+                    return Err(GetAssetError::DataFetchFailed(failure));
+                }
+                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+                }
+            },
+        };
+        Ok((data_contents, asset_entry))
     } else {
         Err(GetAssetError::BadName)
     }

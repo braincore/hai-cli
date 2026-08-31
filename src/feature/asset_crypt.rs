@@ -2046,7 +2046,7 @@ pub async fn sign_message_using_ed25519_key(
 ) -> Result<(String, [u8; 64]), SignMessageError> {
     // Fetch signing public key
     let verifying_key_asset_name = format!("/{username}/keys/sign.pub");
-    let verifying_key_pub_data = match asset_reader::get_asset(
+    let verifying_key_pub_data = match asset_reader::get_asset_using_cache(
         asset_blob_cache.clone(),
         &api_client,
         &verifying_key_asset_name,
@@ -2116,7 +2116,7 @@ pub async fn verify_signature_using_ed25519_key(
     let (username, signing_key_id) =
         parse_signer_key_id(signer_key_id).map_err(|_e| VerifySignatureError::InvalidKey)?;
     let verifying_key_asset_name = format!("/{username}/keys/sign_{signing_key_id}.pub");
-    let verifying_key_pub_data = match asset_reader::get_asset(
+    let verifying_key_pub_data = match asset_reader::get_asset_using_cache(
         asset_blob_cache.clone(),
         &api_client,
         &verifying_key_asset_name,

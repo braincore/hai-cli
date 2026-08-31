@@ -17,6 +17,10 @@ pub struct AssetBlobCache {
     evict_lock: Arc<Mutex<()>>,
     disable_cache: bool,
     max_cache_size_bytes: Option<u64>, // None = unlimited
+    /// HACK: Memory-leak cache (no eviction) for a few rare cases (signature
+    /// verification key). Will refactor in the future likely to a separate
+    /// cache.
+    entry_cache: Arc<Mutex<HashMap<String, crate::api::types::asset::AssetEntry>>>,
 }
 
 impl AssetBlobCache {
@@ -31,6 +35,7 @@ impl AssetBlobCache {
             evict_lock: Arc::new(Mutex::new(())),
             disable_cache: false,
             max_cache_size_bytes: None,
+            entry_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -397,6 +402,20 @@ impl AssetBlobCache {
             Ok(())
         })
         .await?
+    }
+
+    pub async fn insert_entry_cache(&self, entry: crate::api::types::asset::AssetEntry) {
+        self.entry_cache
+            .lock()
+            .await
+            .insert(entry.name.clone(), entry);
+    }
+
+    pub async fn get_entry_cache(
+        &self,
+        name: &str,
+    ) -> Option<crate::api::types::asset::AssetEntry> {
+        self.entry_cache.lock().await.get(name).cloned()
     }
 }
 
