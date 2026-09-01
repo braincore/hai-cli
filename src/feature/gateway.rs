@@ -1995,17 +1995,6 @@ async fn handle_put(
         Ok(Err(e)) => {
             eprintln!("error: failed to update asset: {:?}", e);
             match e {
-                asset_async_writer::AssetSaveError::Put(RequestError::Route(
-                    asset::AssetPutError::NoPermission,
-                ))
-                | asset_async_writer::AssetSaveError::Replace(RequestError::Route(
-                    asset::AssetReplaceError::NoPermission,
-                ))
-                | asset_async_writer::AssetSaveError::Push(RequestError::Route(
-                    asset::AssetPushError::NoPermission,
-                )) => {
-                    return HttpResponse::forbidden();
-                }
                 asset_async_writer::AssetSaveError::Put(RequestError::BadRequest(msg))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::BadRequest(msg))
                 | asset_async_writer::AssetSaveError::Push(RequestError::BadRequest(msg)) => {
