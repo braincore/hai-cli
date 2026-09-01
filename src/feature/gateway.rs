@@ -1879,7 +1879,8 @@ async fn handle_put(
                 "If `rev_id` set, `asset_name` must be an `entry_id`.",
             );
         } else {
-            Some((asset_name.to_string(), rev_id.to_string()))
+            // API doesn't use `:` notation for `entry_id` fields
+            Some((asset_name[1..].to_string(), rev_id.to_string()))
         }
     } else {
         if let Some(conflict_policy) = conflict_policy {
@@ -2003,7 +2004,7 @@ async fn handle_put(
                 | asset_async_writer::AssetSaveError::Push(RequestError::Route(
                     asset::AssetPushError::NoPermission,
                 )) => {
-                    return HttpResponse::unauthorized();
+                    return HttpResponse::forbidden();
                 }
                 asset_async_writer::AssetSaveError::Put(RequestError::BadRequest(msg))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::BadRequest(msg))
