@@ -1883,13 +1883,6 @@ async fn handle_put(
             Some((asset_name[1..].to_string(), rev_id.to_string()))
         }
     } else {
-        if let Some(conflict_policy) = conflict_policy {
-            if conflict_policy != "reject" && conflict_policy != "fork" {
-                return HttpResponse::bad_request(
-                    "If `rev_id` set, `conflict_policy` must be `reject` or `fork`.",
-                );
-            }
-        }
         None
     };
     let (put_conflict_policy, replace_conflict_policy) = if let Some(conflict_policy) =

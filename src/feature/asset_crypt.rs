@@ -1763,7 +1763,11 @@ enum AssetRef {
 impl AssetRef {
     fn parse(asset_name: &str) -> AssetRef {
         if asset_name.starts_with(':') {
-            if let Some((entry_id, subpath)) = asset_name[1..].split_once('/') {
+            // EntryIdWithAttachment must be checked before EntryIdWithSubpath
+            // because an attachment can contain path segments (slashes).
+            if let Some((entry_id, attachment)) = asset_name[1..].split_once(':') {
+                AssetRef::EntryIdWithAttachment(entry_id.to_string(), attachment.to_string())
+            } else if let Some((entry_id, subpath)) = asset_name[1..].split_once('/') {
                 AssetRef::EntryIdWithSubpath(entry_id.to_string(), subpath.to_string())
             } else if let Some((entry_id, attachment)) = asset_name[1..].split_once(':') {
                 AssetRef::EntryIdWithAttachment(entry_id.to_string(), attachment.to_string())

@@ -350,24 +350,43 @@ pub async fn resolve_perm_granting_asset_entry(
     api_client: &HaiClient,
     asset_name: &str,
 ) -> Result<AssetEntry, (String, RequestError<AssetGetError>)> {
-    let mut last_entry = match api_client
-        .asset_get(AssetGetArg {
-            name: asset_name.to_string(),
-        })
-        .await
-    {
-        Ok(get_res) => get_res.entry,
-        Err(e) => return Err((asset_name.to_string(), e)),
+    let mut entry = if let Some(entry_id) = parse_attachment_parent_entry_id(asset_name) {
+        // `asset_name` is an attachment so skip ahead to parent entry
+        // NOTE: This also desirably skips attachments have yet to be created,
+        // which is necessary when evaluating write permissions for a new attachment.
+        match api_client
+            .asset_get(AssetGetArg {
+                name: entry_id.clone(),
+            })
+            .await
+        {
+            Ok(get_res) => get_res.entry,
+            Err(e) => return Err((entry_id, e)),
+        }
+    } else {
+        // Handles cases:
+        // 1. entry_id to non-attachment
+        // 2. entry_id to attachment
+        // 3. regular name (non-entry_id) to non-attachment
+        match api_client
+            .asset_get(AssetGetArg {
+                name: asset_name.to_string(),
+            })
+            .await
+        {
+            Ok(get_res) => get_res.entry,
+            Err(e) => return Err((asset_name.to_string(), e)),
+        }
     };
 
     loop {
-        tracing::debug!(?last_entry.name, "resolved_attachment_anchor_asset_entry");
-        let Some(entry_id) = parse_attachment_parent_entry_id(&last_entry.name) else {
+        tracing::debug!(?entry.name, "resolved_attachment_anchor_asset_entry");
+        let Some(entry_id) = parse_attachment_parent_entry_id(&entry.name) else {
             // Not an attachment, found anchor.
-            return Ok(last_entry);
+            return Ok(entry);
         };
 
-        last_entry = match api_client
+        entry = match api_client
             .asset_get(AssetGetArg {
                 name: entry_id.clone(),
             })
