@@ -83,6 +83,11 @@ pub async fn worker_update_asset(
                 akm_info,
                 reply_channel,
             }) => {
+                // IMPORTANT: In cases where a new asset is created and
+                // metadata is set (for encryption), the asset_entry for the
+                // asset post-metadata is returned so that the rev_id can point
+                // to a decryptable version of the asset.
+
                 // Treat asset as markdown if it has .md extension or does not
                 // have an extension
                 let is_markdown = {
@@ -151,20 +156,26 @@ pub async fn worker_update_asset(
                                 // If this is the first time putting the
                                 // asset and it's encrypted, store the
                                 // encryption metadata.
-                                if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                                match asset_crypt::put_asset_encryption_metadata(
                                     &api_client,
                                     &asset_name,
                                     &akm_info,
                                 )
                                 .await
                                 {
-                                    eprintln!(
-                                        "error: failed to put asset encryption metadata: {}",
-                                        e
-                                    );
+                                    Ok(asset_entry) => Ok(asset_entry),
+                                    Err(e) => {
+                                        eprintln!(
+                                            "error: failed to put asset encryption metadata: {}",
+                                            e
+                                        );
+                                        // Fallback to non-metadata push result
+                                        Ok(res.entry)
+                                    }
                                 }
+                            } else {
+                                Ok(res.entry)
                             }
-                            Ok(res.entry)
                         }
                         Err(e) => {
                             let error_msg = format!("error: failed to push asset: {}", e);
@@ -255,20 +266,26 @@ pub async fn worker_update_asset(
                                     // If this is the first time putting the
                                     // asset and it's encrypted, store the
                                     // encryption metadata.
-                                    if let Err(e) = asset_crypt::put_asset_encryption_metadata(
+                                    match asset_crypt::put_asset_encryption_metadata(
                                         &api_client,
                                         &asset_name,
                                         &akm_info,
                                     )
                                     .await
                                     {
-                                        eprintln!(
-                                            "error: failed to put asset encryption metadata: {}",
-                                            e
-                                        );
+                                        Ok(asset_entry) => Ok(asset_entry),
+                                        Err(e) => {
+                                            eprintln!(
+                                                "error: failed to put asset encryption metadata: {}",
+                                                e
+                                            );
+                                            // Fallback to non-metadata push result
+                                            Ok(res.entry)
+                                        }
                                     }
+                                } else {
+                                    Ok(res.entry)
                                 }
-                                Ok(res.entry)
                             }
                             Err(e) => {
                                 let error_msg = format!("error: failed to put asset: {}", e);

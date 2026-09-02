@@ -1170,7 +1170,7 @@ pub async fn put_asset_encryption_metadata(
     api_client: &HaiClient,
     asset_name: &str,
     akm_info: &AssetKeyMaterial,
-) -> Result<(), String> {
+) -> Result<AssetEntry, String> {
     let md_contents = serde_json::json!({
         "encrypted": akm_info.to_encrypted_metadata_json()
     })
@@ -1184,7 +1184,7 @@ pub async fn put_asset_encryption_metadata(
         })
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(put_res) => Ok(put_res.entry),
         Err(e) => Err(format!("Server abort: {}", e)),
     }
 }
