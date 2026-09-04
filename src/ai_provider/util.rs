@@ -821,6 +821,7 @@ pub struct JsonArrayAccumulator {
     pub unmasked_printed_text: String,
     masked_strings: Vec<String>,
     cur_printer: Option<MaskedJsonStringPrinter>,
+    items: usize,
 }
 
 impl JsonArrayAccumulator {
@@ -831,6 +832,7 @@ impl JsonArrayAccumulator {
             unmasked_printed_text: String::new(),
             masked_strings,
             cur_printer: None,
+            items: 0,
         }
     }
 
@@ -894,12 +896,15 @@ impl JsonArrayAccumulator {
                         self.masked_strings.clone(),
                     ));
                     remove_first_n_chars(&mut self.buffer, quote_index);
-                    printed_text_chunk.push_str("- ");
-                    unmasked_printed_text_chunk.push_str("- ");
+
+                    let bullet = format!("{{{}}} ", self.items);
+                    printed_text_chunk.push_str(&bullet);
+                    unmasked_printed_text_chunk.push_str(&bullet);
                     // Use code because it's easier on non-terminal rendering
                     // to handle the entire block being markdown rather than an
                     // inline switch from text to code/markdown.
-                    out.code("- ", Some("markdown"));
+                    out.code(&bullet, Some("markdown"));
+                    self.items += 1;
                 } else {
                     // Keep accumulating
                     break;
