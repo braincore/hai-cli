@@ -891,20 +891,28 @@ impl JsonArrayAccumulator {
                     }
                 }
                 if let Some(quote_index) = quote_index {
-                    self.cur_printer = Some(MaskedJsonStringPrinter::new(
-                        false,
-                        self.masked_strings.clone(),
-                    ));
+                    let mut item_printer =
+                        MaskedJsonStringPrinter::new(false, self.masked_strings.clone());
+
+                    // Unfortunately, for hai repl commands, it's too hard to
+                    // know which lang is being used. Can be markdown or code.
+                    // FUTURE: Try best effort detection of file extensions in
+                    // the first line?
+                    item_printer.set_lang_token("unknown");
+
                     remove_first_n_chars(&mut self.buffer, quote_index);
 
+                    // Use {index} format because it matches !hai sub-index
+                    // format AND it doesn't get rendered as a markdown bullet
+                    // point.
                     let bullet = format!("{{{}}} ", self.items);
-                    printed_text_chunk.push_str(&bullet);
-                    unmasked_printed_text_chunk.push_str(&bullet);
-                    // Use code because it's easier on non-terminal rendering
-                    // to handle the entire block being markdown rather than an
-                    // inline switch from text to code/markdown.
-                    out.code(&bullet, Some("markdown"));
+
+                    // Inject bullet after the opening quote.
+                    // After making some mistakes, this is the least intrusive
+                    // way of injecting it.
+                    self.buffer.insert_str(1, &bullet);
                     self.items += 1;
+                    self.cur_printer = Some(item_printer);
                 } else {
                     // Keep accumulating
                     break;

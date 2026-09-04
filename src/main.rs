@@ -737,16 +737,18 @@ async fn repl(
                 );
             } else if let session::CmdSource::HaiTool(sub_index) = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
-                // being written by `/asset-write`.
-                let display_input =
-                    if cmd_info.input.starts_with("/asset") && cmd_info.input.contains('\n') {
-                        format!(
-                            "{}\n<truncated>",
-                            cmd_info.input.lines().next().unwrap_or(&cmd_info.input)
-                        )
-                    } else {
-                        cmd_info.input.clone()
-                    };
+                // being written by `/asset-write` or `/file-write`.
+                let display_input = if (cmd_info.input.starts_with("/asset")
+                    || cmd_info.input.starts_with("/file"))
+                    && cmd_info.input.contains('\n')
+                {
+                    format!(
+                        "{}\n<truncated>",
+                        cmd_info.input.lines().next().unwrap_or(&cmd_info.input)
+                    )
+                } else {
+                    cmd_info.input.clone()
+                };
                 print_step(
                     io,
                     &session.cmd_registry,
