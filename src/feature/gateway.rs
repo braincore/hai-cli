@@ -732,6 +732,7 @@ pub const GATEWAY_BASE_PORT: u16 = 1339;
 ///   Vite websocket requests are also proxied.
 pub async fn launch_gateway(
     io: &Io,
+    config_path_override: Option<&str>,
     repl_remote: crate::repl_remote::ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -830,6 +831,7 @@ pub async fn launch_gateway(
     let kernel_map_clone = kernel_map.clone();
 
     let io_clone = io.clone();
+    let config_path_override_clone = config_path_override.map(|s| s.to_string());
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
@@ -865,6 +867,7 @@ pub async fn launch_gateway(
                     let _ = stream.set_nodelay(true);
 
                     let io_clone_inner = io_clone.clone();
+                    let config_path_override_inner = config_path_override_clone.clone();
                     let token_clone_inner = token_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -883,6 +886,7 @@ pub async fn launch_gateway(
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
                             &io_clone_inner,
+                            config_path_override_inner.as_deref(),
                             stream,
                             peer_addr,
                             perm_addr,
@@ -975,6 +979,7 @@ pub async fn launch_gateway(
 // handler based on the initial request.
 async fn handle_connection(
     io: &Io,
+    config_path_override: Option<&str>,
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     perm_addr: SocketAddr,
@@ -1021,6 +1026,7 @@ async fn handle_connection(
         // Handle as WebSocket - tokio-tungstenite will read the upgrade request
         handle_websocket_connection(
             io,
+            config_path_override,
             stream,
             &perm_addr,
             token,
@@ -1107,6 +1113,7 @@ async fn handle_vite_websocket_proxy(
 
 async fn handle_websocket_connection(
     io: &Io,
+    config_path_override: Option<&str>,
     stream: tokio::net::TcpStream,
     perm_addr: &SocketAddr,
     token: &str,
@@ -1232,6 +1239,7 @@ async fn handle_websocket_connection(
                     Some(Ok(Message::Text(msg))) => {
                         handle_client_message(
                             io,
+                            config_path_override,
                             perm_addr,
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
@@ -2226,6 +2234,19 @@ struct KernelInfo {
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReplStarredResult {
+    starred: Vec<StarredItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum StarredItem {
+    Task { task: String, shortcut: String },
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: MessageContent,
@@ -2525,6 +2546,7 @@ async fn send_bad_gateway_error(
 
 async fn handle_client_message(
     io: &Io,
+    config_path_override: Option<&str>,
     perm_addr: &SocketAddr,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -2705,6 +2727,29 @@ async fn handle_client_message(
                 ws_sink,
                 mid,
                 Ok(ReplKernelListResult { kernels }),
+                false,
+            )
+            .await;
+        }
+        "repl/starred" => {
+            let starred = match crate::config::get_config(config_path_override) {
+                Ok(cfg) => cfg
+                    .starred_task
+                    .iter()
+                    .map(|starred_task| StarredItem::Task {
+                        task: starred_task.task.clone(),
+                        shortcut: starred_task.shortcut.clone(),
+                    })
+                    .collect(),
+                Err(e) => {
+                    eprintln!("error: failed to read config: {}", e);
+                    vec![]
+                }
+            };
+            send_response::<ReplStarredResult, ()>(
+                ws_sink,
+                mid,
+                Ok(ReplStarredResult { starred }),
                 false,
             )
             .await;

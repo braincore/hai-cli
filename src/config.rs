@@ -36,6 +36,8 @@ pub struct Config {
     pub xai: Option<XaiConfig>,
     #[serde(default)]
     pub haivars: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub starred_task: Vec<StarredTask>,
 }
 
 const fn default_true() -> bool {
@@ -82,6 +84,14 @@ pub struct DeepSeekConfig {
 pub struct XaiConfig {
     pub api_key: Option<String>,
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct StarredTask {
+    pub task: String,
+    pub shortcut: String,
+}
+
+// --
 
 pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     // Parse out a string by splitting 0 or more commas after the ai_model
@@ -878,10 +888,9 @@ fn verbosity_to_string(verbosity: &OpenAiVerbosity) -> &'static str {
 impl Config {
     pub fn reload(
         &mut self,
-        config_path_override: &Option<String>,
+        config_path_override: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let new_config: Config =
-            toml::from_str(&read_config_as_string(config_path_override).unwrap())?;
+        let new_config: Config = toml::from_str(&read_config_as_string(config_path_override)?)?;
         *self = new_config;
         self.haivars = read_dot_haivars()?;
         Ok(())
@@ -895,7 +904,7 @@ pub fn get_default_config_path() -> PathBuf {
 }
 
 pub fn read_config_as_string(
-    config_path_override: &Option<String>,
+    config_path_override: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let config_path = if let Some(config_path) = config_path_override {
         config_path.to_string()
@@ -971,7 +980,7 @@ pub fn read_config_as_string(
 }
 
 pub fn get_config(
-    config_path_override: &Option<String>,
+    config_path_override: Option<&str>,
 ) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config: Config = toml::from_str(&read_config_as_string(config_path_override)?)?;
     config.haivars = read_dot_haivars()?;
@@ -1001,8 +1010,16 @@ pub fn write_config(path: &str, cfg: &str) {
     }
 }
 
+fn write_config_doc(config_path_override: Option<&str>, doc: &DocumentMut) {
+    let config_path = config_path_override
+        .map(|s| s.to_string())
+        .unwrap_or(get_default_config_path().to_str().unwrap().to_string());
+
+    write_config(&config_path, doc.to_string().as_str());
+}
+
 pub fn insert_config_kv(
-    config_path_override: &Option<String>,
+    config_path_override: Option<&str>,
     section: Option<&str>,
     key: &str,
     val: &str,
@@ -1014,10 +1031,150 @@ pub fn insert_config_kv(
     } else {
         doc[key] = toml_edit::value(val);
     }
-    let config_path = config_path_override
-        .clone()
-        .unwrap_or(get_default_config_path().to_str().unwrap().to_string());
-    write_config(&config_path, doc.to_string().as_str());
+    write_config_doc(config_path_override, &doc);
+}
+
+// --
+
+//
+// Starred items
+//
+
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+
+pub fn insert_config_starred_task(
+    config_path_override: Option<&str>,
+    task_fqn: &str,
+    shortcut: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = read_config_as_string(config_path_override).unwrap();
+    let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
+
+    let root = doc.as_table_mut();
+    let aot = ensure_array_of_tables(root, "starred_task");
+
+    // Check if task or shortcut already present
+    for table in aot.iter_mut() {
+        let cur_task_fqn = table.get("task").and_then(|item| item.as_str());
+        let task_has_shortcut_already = cur_task_fqn == Some(task_fqn);
+        if task_has_shortcut_already {
+            let shortcut = table
+                .get("shortcut")
+                .and_then(|item| item.as_str())
+                .unwrap_or("");
+            return Err(format!(
+                "Task '{}' already has a shortcut '{}'. Remove with: `/star-remove {}`",
+                task_fqn, shortcut, shortcut
+            )
+            .into());
+        }
+        let shortcut_in_use =
+            table.get("shortcut").and_then(|item| item.as_str()) == Some(shortcut);
+        if shortcut_in_use {
+            return Err(format!(
+                "Shortcut '{}' is already assigned to task '{}'. Remove with: `/star-remove {}`",
+                shortcut,
+                cur_task_fqn.unwrap_or(""),
+                shortcut
+            )
+            .into());
+        }
+    }
+
+    let mut task = Table::new();
+    task["task"] = value(task_fqn);
+    task["shortcut"] = value(shortcut);
+    aot.push(task);
+
+    write_config_doc(config_path_override, &doc);
+
+    Ok(())
+}
+
+pub fn remove_config_starred_shortcut(config_path_override: Option<&str>, shortcut: &str) {
+    let cfg = read_config_as_string(config_path_override).unwrap();
+    let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
+
+    let root = doc.as_table_mut();
+
+    let Some(item) = root.get_mut("starred_task") else {
+        return;
+    };
+
+    let Some(aot) = item.as_array_of_tables_mut() else {
+        // If not an array of tables, delete the section to try to salvage the
+        // config.
+        root.remove("starred_task");
+        return;
+    };
+
+    let indexes_to_remove: Vec<usize> = aot
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, table)| {
+            let matches = table.get("shortcut").and_then(|item| item.as_str()) == Some(shortcut);
+
+            if matches { Some(idx) } else { None }
+        })
+        .collect();
+
+    for idx in indexes_to_remove.into_iter().rev() {
+        aot.remove(idx);
+    }
+
+    if aot.is_empty() {
+        root.remove("starred_task");
+    }
+
+    write_config_doc(config_path_override, &doc);
+}
+
+fn ensure_array_of_tables<'a>(table: &'a mut Table, key: &str) -> &'a mut ArrayOfTables {
+    let should_create = match table.get(key) {
+        None => true,
+
+        Some(item) if item.is_none() => true,
+
+        Some(item) if item.as_array_of_tables().is_some() => false,
+
+        // Replace `xyz = []` with `[[xyz]]`.
+        Some(item) if item.as_array().map(|arr| arr.is_empty()).unwrap_or(false) => true,
+
+        Some(_) => {
+            // If the key exists but is not an array of tables, remove it and
+            // create a new array of tables.
+            table.remove(key);
+            true
+        }
+    };
+
+    if should_create {
+        table.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
+    }
+
+    table
+        .get_mut(key)
+        .unwrap()
+        .as_array_of_tables_mut()
+        .unwrap()
+}
+
+impl Config {
+    pub fn get_starred_shortcuts(&self) -> Vec<String> {
+        self.starred_task
+            .iter()
+            .map(|s| s.shortcut.clone())
+            .collect()
+    }
+
+    pub fn is_shortcut_match(&self, input: &str) -> Option<String> {
+        for s in &self.starred_task {
+            if s.shortcut == input.trim_end() {
+                return Some(format!("/task {}", s.task.clone()));
+            }
+        }
+        None
+    }
 }
 
 // ---
@@ -1804,6 +1961,10 @@ pub fn get_task_cache_path(task_fqn: &str) -> PathBuf {
     path
 }
 
+/// # Returns
+///
+/// `Some((username, name, name_without_version, version))` if the task FQN is
+/// valid, otherwise `None`.
 pub fn is_valid_task_fqn(task_fqn: &str) -> Option<(String, String, String, Option<String>)> {
     if let Some((username, name_with_version)) = task_fqn.split_once("/") {
         let (name, version) = if let Some((name, version)) = name_with_version.split_once("@") {

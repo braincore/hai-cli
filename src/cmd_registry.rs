@@ -238,6 +238,8 @@ pub enum ArgKind {
     Number,
     /// A JSON value or object.
     Json,
+    /// From list of user-defined shortcuts
+    Shortcut,
     /// A fixed set of literal values.
     Enum(&'static [&'static str]),
     /// A nested command table, e.g. `/std now`.
@@ -2159,6 +2161,41 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Include a task's commands in the conversation without entering task mode"),
         )
         .with_traits(Traits::NONE.net().repl()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("star-task"),
+            Cow::Borrowed("star"),
+            Cow::Borrowed(&[
+                arg("name", TaskFqn, Required),
+                arg("shortcut", Text, Optional),
+                ]),
+            Doc::new("Star a task for quick access"),
+        )
+        .with_traits(Traits::NONE.net()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("star-remove"),
+            Cow::Borrowed("star"),
+            Cow::Borrowed(&[
+                arg("shortcut", Shortcut, Required),
+                ]),
+            Doc::new("Remove a starred item by shortcut"),
+        )
+        .with_traits(Traits::NONE.net()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("starred"),
+            Cow::Borrowed("star"),
+            Cow::Borrowed(&[]),
+            Doc::new("List all starred items"),
+        )
+        .with_traits(Traits::NONE.net()),
     ),
     // Prompting
     section(None, None, &[Anchor::Family("prompt")]),

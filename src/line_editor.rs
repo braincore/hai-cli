@@ -121,6 +121,8 @@ impl LineEditor {
         cmd_registry: cmd_registry::Registry,
         api_client: HaiClient,
         account: Option<Account>,
+        starred_shortcuts: Vec<String>,
+        is_first_user_input: bool,
     ) {
         use std::mem;
         let temp = Reedline::create();
@@ -129,6 +131,8 @@ impl LineEditor {
                 cmd_registry,
                 api_client,
                 account,
+                starred_shortcuts,
+                is_first_user_input,
             }));
     }
 }
@@ -367,6 +371,8 @@ struct CmdAndFileCompleter {
     cmd_registry: cmd_registry::Registry,
     api_client: HaiClient,
     account: Option<Account>,
+    starred_shortcuts: Vec<String>,
+    is_first_user_input: bool,
 }
 
 impl Completer for CmdAndFileCompleter {
@@ -376,6 +382,8 @@ impl Completer for CmdAndFileCompleter {
             &self.cmd_registry,
             &self.api_client,
             &self.account,
+            &self.starred_shortcuts,
+            self.is_first_user_input,
             line,
             pos,
         )

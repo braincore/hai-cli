@@ -207,7 +207,7 @@ const BOT_ACCOUNT_REQ_MSG: &str = "You must be logged-in to use bots. Try /accou
 #[allow(clippy::too_many_arguments)]
 pub async fn process_cmd(
     io: &Io,
-    config_path_override: &Option<String>,
+    config_path_override: Option<&str>,
     session: &mut SessionState,
     cfg: &mut config::Config,
     db: Arc<Mutex<rusqlite::Connection>>,
@@ -1709,6 +1709,72 @@ pub async fn process_cmd(
                 ProcessCmdResult::loop_next()
             }
         }
+        cmd::Cmd::StarTask(cmd::StarTaskCmd { task_fqn, shortcut }) => {
+            use api::types::task::TaskGetArg;
+            match api_client
+                .task_get(TaskGetArg {
+                    task_fqn: task_fqn.to_owned(),
+                })
+                .await
+            {
+                Ok(res) => match config::parse_haitask_config(&res.config) {
+                    Ok(haitask) => {
+                        let shortcut = if let Some(shortcut) = shortcut {
+                            shortcut
+                        } else {
+                            haitask
+                                .name
+                                .split_once('/')
+                                .map(|(_, name)| name)
+                                .unwrap_or(&haitask.name)
+                                .to_string()
+                        };
+                        let has_whitespace = shortcut.chars().any(|c| c.is_whitespace());
+                        if has_whitespace {
+                            errorln!(io, "Shortcut must not contain whitespace");
+                            return ProcessCmdResult::loop_next();
+                        }
+                        match config::insert_config_starred_task(
+                            config_path_override,
+                            &task_fqn,
+                            &shortcut,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                errorln!(io, "{}", e);
+                                return ProcessCmdResult::loop_next();
+                            }
+                        }
+                        cfg.reload(config_path_override)
+                            .expect("Could not read config");
+                        outln!(io, "Task starred: {} [shortcut: {}]", task_fqn, shortcut);
+                    }
+                    Err(e) => {
+                        errorln!(io, "failed to parse haitask config: {}", e);
+                        return ProcessCmdResult::loop_next();
+                    }
+                },
+                Err(e) => {
+                    errorln!(io, "error: {}", e);
+                }
+            }
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::StarRemove(cmd::StarRemoveCmd { shortcut }) => {
+            config::remove_config_starred_shortcut(config_path_override, &shortcut);
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::Starred => {
+            for starred_task in cfg.starred_task.iter() {
+                outln!(
+                    io,
+                    "Task: {} [shortcut: {}]",
+                    starred_task.task,
+                    starred_task.shortcut
+                );
+            }
+            ProcessCmdResult::loop_next()
+        }
         cmd::Cmd::TaskFetch(cmd::TaskFetchCmd { task_fqn }) => {
             if config::is_valid_task_fqn(&task_fqn).is_none() {
                 errorln!(
@@ -2084,6 +2150,7 @@ pub async fn process_cmd(
             {
                 crate::feature::asset_app::start_app_and_launch_browser(
                     &io,
+                    config_path_override,
                     session,
                     db.clone(),
                     asset_blob_cache.clone(),
@@ -5079,6 +5146,7 @@ pub async fn process_cmd(
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
             let start_app_res = crate::feature::asset_app::start_app_and_launch_browser(
                 &io,
+                config_path_override,
                 session,
                 db.clone(),
                 asset_blob_cache.clone(),
@@ -5183,6 +5251,7 @@ pub async fn process_cmd(
             if let Some(default_asset_app) = default_asset_app {
                 crate::feature::asset_app::start_app_and_launch_browser(
                     &io,
+                    config_path_override,
                     session,
                     db.clone(),
                     asset_blob_cache.clone(),
@@ -5235,6 +5304,7 @@ pub async fn process_cmd(
         cmd::Cmd::Gateway(cmd::GatewayCmd { auth_token }) => {
             let _ = crate::feature::gateway::launch_gateway(
                 io,
+                config_path_override,
                 crate::repl_remote::ReplRemote::from_session(session),
                 db.clone(),
                 asset_blob_cache.clone(),

@@ -168,6 +168,27 @@ impl Input for WsInput {
     fn drives_repl(&self) -> bool {
         true
     }
+
+    fn update_config(
+        &self,
+        cmd_registry: &cmd_registry::Registry,
+        account: &Option<crate::db::Account>,
+        starred_shortcuts: &Vec<String>,
+        is_first_user_input: bool,
+    ) {
+        if self
+            .cmd_tx
+            .send(WsCmd::UpdateConfig {
+                cmd_registry: cmd_registry.clone(),
+                account: account.clone(),
+                starred_shortcuts: starred_shortcuts.clone(),
+                is_first_user_input,
+            })
+            .is_err()
+        {
+            tracing::debug!("kernel: failed to send UpdateConfig to actor");
+        }
+    }
 }
 
 // --
@@ -366,6 +387,14 @@ pub enum WsCmd {
         incognito: bool,
         agentic: bool,
     },
+
+    /// Update the state of the actor.
+    UpdateConfig {
+        cmd_registry: cmd_registry::Registry,
+        account: Option<crate::db::Account>,
+        starred_shortcuts: Vec<String>,
+        is_first_user_input: bool,
+    },
 }
 
 // --
@@ -422,9 +451,12 @@ pub struct WsActor {
     /// Registry of commands available in REPL.
     cmd_registry: cmd_registry::Registry,
 
-    api_client: crate::api::client::HaiClient,
-
     account: Option<crate::db::Account>,
+
+    starred_shortcuts: Vec<String>,
+
+    /// Whether the user has sent a message yet.
+    is_first_user_input: bool,
 }
 
 impl WsActor {
@@ -434,8 +466,6 @@ impl WsActor {
         token: String,
         cmd_rx: UnboundedReceiver<WsCmd>,
         cmd_registry: cmd_registry::Registry,
-        api_client: crate::api::client::HaiClient,
-        account: Option<crate::db::Account>,
     ) -> Self {
         Self {
             ctrlc_handler,
@@ -453,8 +483,9 @@ impl WsActor {
             idle_since: None,
             ever_connected: false,
             cmd_registry,
-            api_client,
-            account,
+            account: None,
+            starred_shortcuts: vec![],
+            is_first_user_input: false,
         }
     }
 
@@ -613,6 +644,17 @@ impl WsActor {
                 // client disconnects (rather than the buffer).
                 self.emit_or_drop(server_msg);
             }
+            WsCmd::UpdateConfig {
+                cmd_registry,
+                account,
+                starred_shortcuts,
+                is_first_user_input,
+            } => {
+                self.cmd_registry = cmd_registry;
+                self.account = account;
+                self.starred_shortcuts = starred_shortcuts;
+                self.is_first_user_input = is_first_user_input;
+            }
         }
     }
 
@@ -755,10 +797,13 @@ impl WsActor {
     }
 
     fn on_cmd_registry_complete(&mut self, mid: u64, line: String) {
+        let api_client = crate::session::mk_api_client_from_account(self.account.as_ref());
         let suggestions = crate::feature::cmd_completer::complete(
             &self.cmd_registry,
-            &self.api_client,
+            &api_client,
             &self.account,
+            &self.starred_shortcuts,
+            self.is_first_user_input,
             &line,
             line.len(),
         )

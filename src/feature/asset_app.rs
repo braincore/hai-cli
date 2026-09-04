@@ -14,6 +14,7 @@ use crate::{errorln, outln};
 
 pub async fn start_app_and_launch_browser(
     io: &Io,
+    config_path_override: Option<&str>,
     session: &mut SessionState,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -61,6 +62,7 @@ pub async fn start_app_and_launch_browser(
 
     if let Some((final_url, addr, perm_addr, clients, cancel_token, auth_token)) = start_app(
         io,
+        config_path_override,
         ReplRemote::from_session(session),
         db,
         asset_blob_cache,
@@ -106,6 +108,7 @@ pub async fn start_app_and_launch_browser(
 ///   are proxied to the vite dev server.
 pub async fn start_app(
     io: &Io,
+    config_path_override: Option<&str>,
     repl_remote: ReplRemote,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -142,6 +145,7 @@ pub async fn start_app(
     if let Ok((addr, perm_addr, clients, cancel_token, auth_token)) =
         crate::feature::gateway::launch_gateway(
             io,
+            config_path_override,
             repl_remote,
             db.clone(),
             asset_blob_cache.clone(),

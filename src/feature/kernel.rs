@@ -4,7 +4,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::db;
 use crate::feature::gateway::{GATEWAY_BASE_PORT, generate_token};
 use crate::io::Io;
 
@@ -35,7 +34,6 @@ pub struct KernelReady {
 ///   clean up.
 pub async fn run_kernel(
     ctrlc_handler: CtrlcHandler,
-    account: Option<db::Account>,
 ) -> std::io::Result<(Io, tokio::task::JoinHandle<()>)> {
     // Find an open port
     let mut port = KERNEL_BASE_PORT;
@@ -78,19 +76,9 @@ pub async fn run_kernel(
     // FUTURE: Obtain this from caller.
     let cmd_registry = cmd_registry::Registry::new();
 
-    let api_client = crate::session::mk_api_client_from_account(account.as_ref());
-
     // Create actor for the io handler
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-    let actor = WsActor::new(
-        ctrlc_handler,
-        listener,
-        token,
-        cmd_rx,
-        cmd_registry,
-        api_client,
-        account,
-    );
+    let actor = WsActor::new(ctrlc_handler, listener, token, cmd_rx, cmd_registry);
     let actor_handle = tokio::spawn(actor.run());
 
     let io = Io::new(WsOutput::new(cmd_tx.clone()), WsInput::new(cmd_tx));

@@ -198,7 +198,7 @@ async fn main() -> process::ExitCode {
         match provider.as_str() {
             "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
                 config::insert_config_kv(
-                    &config_path_override,
+                    config_path_override.as_deref(),
                     Some(&provider),
                     &"api_key".to_string(),
                     &key,
@@ -272,7 +272,7 @@ async fn main() -> process::ExitCode {
                 .model
                 .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
 
-            let cfg = match config::get_config(&config_path_override) {
+            let cfg = match config::get_config(config_path_override.as_deref()) {
                 Ok(cfg) => cfg,
                 Err(e) => {
                     eprintln!("error: failed to read config: {}", e);
@@ -462,7 +462,7 @@ async fn main() -> process::ExitCode {
         };
 
         let (io, actor_handle) = if args.kernel {
-            crate::feature::kernel::run_kernel(ctrlc_handler.clone(), account.clone())
+            crate::feature::kernel::run_kernel(ctrlc_handler.clone())
                 .await
                 .map(|(io, actor_handle)| (io, Some(actor_handle)))
                 .expect("Failed to start kernel")
@@ -473,7 +473,7 @@ async fn main() -> process::ExitCode {
         let repl_res = repl(
             db,
             &io,
-            &config_path_override,
+            config_path_override.as_deref(),
             args.debug,
             args.incognito,
             account,
@@ -512,7 +512,7 @@ async fn main() -> process::ExitCode {
 async fn repl(
     db: Arc<Mutex<db::Connection>>,
     io: &Io,
-    config_path_override: &Option<String>,
+    config_path_override: Option<&str>,
     debug: bool,
     incognito: bool,
     account: Option<db::Account>,
@@ -674,6 +674,17 @@ async fn repl(
             io,
             "/help for more commands | `/task hai/feedback` for ideas & suggestions"
         );
+        if cfg.starred_task.len() > 0 {
+            outln!(
+                io,
+                "Your shortcuts: {}",
+                cfg.starred_task
+                    .iter()
+                    .map(|task| task.shortcut.clone())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            );
+        }
     };
 
     //
@@ -685,6 +696,9 @@ async fn repl(
         } else {
             Vec::new()
         };
+        let is_first_user_input = session.history.len() == 0
+            || (session.history.len() == 1
+                && matches!(session.history[0].message.role, chat::MessageRole::System));
 
         //
         // REPL Read
@@ -773,6 +787,12 @@ async fn repl(
                 )
             });
 
+            io.update_config(
+                &session.cmd_registry,
+                &account,
+                &cfg.get_starred_shortcuts(),
+                is_first_user_input,
+            );
             match io.next_repl(
                 index,
                 llm_model_name,
@@ -841,6 +861,8 @@ async fn repl(
                 session.cmd_registry.clone(),
                 mk_api_client(Some(&session)),
                 session.account.clone(),
+                cfg.get_starred_shortcuts(),
+                is_first_user_input,
             );
             cur_line_editor.pre_readline();
             let sig = cur_line_editor.reedline.read_line(&editor_prompt);
@@ -875,6 +897,19 @@ async fn repl(
                 }
             }
         };
+
+        // Shortcut handling
+        if let Some(shortcut_line_rewrite) = cfg.is_shortcut_match(&cmd_input.input) {
+            if is_first_user_input {
+                infoln!(io, "Shortcut matched: {}", shortcut_line_rewrite);
+                cmd_input.input = shortcut_line_rewrite;
+            } else {
+                infoln!(
+                    io,
+                    "Shortcut matched but ignored because of ongoing conversation"
+                );
+            }
+        }
 
         let task_step_signature = cmd_input.source.get_task_step_signature();
         // Task steps only have a non-standard retention policy when they are

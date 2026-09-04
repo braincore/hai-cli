@@ -256,6 +256,21 @@ impl Io {
         self.input.lock().unwrap().drives_repl()
     }
 
+    pub fn update_config(
+        &self,
+        cmd_registry: &crate::cmd_registry::Registry,
+        account: &Option<crate::db::Account>,
+        starred_shortcuts: &Vec<String>,
+        is_first_user_input: bool,
+    ) {
+        self.input.lock().unwrap().update_config(
+            cmd_registry,
+            account,
+            starred_shortcuts,
+            is_first_user_input,
+        );
+    }
+
     /// Query the user for the answer to a question
     pub fn query(&self, q: &Query) -> Answer {
         let answer = self.input.lock().unwrap().ask(q);
@@ -413,6 +428,14 @@ pub trait Input: Send {
     fn drives_repl(&self) -> bool {
         false
     }
+
+    fn update_config(
+        &self,
+        cmd_registry: &crate::cmd_registry::Registry,
+        account: &Option<crate::db::Account>,
+        starred_shortcuts: &Vec<String>,
+        is_first_user_input: bool,
+    );
 }
 
 /// A request for input. Backends decide how to present it.
@@ -1584,5 +1607,15 @@ impl Input for StdinInput {
             // Same handling for confirm and line queries
             self.ask_line(q)
         }
+    }
+
+    fn update_config(
+        &self,
+        _cmd_registry: &crate::cmd_registry::Registry,
+        _account: &Option<crate::db::Account>,
+        _starred_shortcuts: &Vec<String>,
+        _is_first_user_input: bool,
+    ) {
+        // No-op since terminal maintains its own session
     }
 }

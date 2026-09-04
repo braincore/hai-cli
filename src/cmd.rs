@@ -94,6 +94,12 @@ pub enum Cmd {
     TaskCat(TaskCatCmd),
     /// List all versions of a task
     TaskVersions(TaskVersionsCmd),
+    /// Star a task for quick access
+    StarTask(StarTaskCmd),
+    /// Unstar an item
+    StarRemove(StarRemoveCmd),
+    /// List all starred items
+    Starred,
     /// Create or edit an asset
     Asset(AssetCmd),
     /// Push into an asset
@@ -531,6 +537,19 @@ pub struct TaskIncludeCmd {
     pub task_ref: String,
     /// Caching for a task is on a per-key basis.
     pub key: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StarTaskCmd {
+    /// Task fqn to star for quick access
+    pub task_fqn: String,
+    /// Optional shortcut for the starred task
+    pub shortcut: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct StarRemoveCmd {
+    /// Shortcut to unstar
+    pub shortcut: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1802,6 +1821,16 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             task_ref: r.take(0),
             key: None,
         }),
+
+        // Stars
+        "star-task" => Cmd::StarTask(StarTaskCmd {
+            task_fqn: r.take(0),
+            shortcut: r.opt_take(1),
+        }),
+        "star-remove" => Cmd::StarRemove(StarRemoveCmd {
+            shortcut: r.take(0),
+        }),
+        "starred" => Cmd::Starred,
 
         // Prompting
         "prompt" => Cmd::Prompt(PromptCmd {

@@ -11,6 +11,8 @@ pub fn complete(
     cmd_registry: &cmd_registry::Registry,
     api_client: &HaiClient,
     account: &Option<Account>,
+    starred_shortcuts: &[String],
+    is_first_user_input: bool,
     line: &str,
     pos: usize,
 ) -> Vec<Suggestion> {
@@ -162,6 +164,17 @@ pub fn complete(
                     realign_suggestions(&mut completions, pos - prefix.len());
                     completions
                 }
+                cmd_registry::ArgKind::Shortcut => {
+                    let mut completions = simple_completer(
+                        &prefix,
+                        &starred_shortcuts
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>(),
+                    );
+                    realign_suggestions(&mut completions, pos - prefix.len());
+                    completions
+                }
                 _ => vec![],
             }
         }
@@ -191,9 +204,23 @@ pub fn complete(
                 }
             }
         }
-        _ => {
-            tracing::debug!(?comp_res, "registry completion");
-            vec![]
+        cmd_registry::Completion::None => {
+            tracing::debug!(?comp_res, "registry completion: none");
+            if is_first_user_input {
+                let prefix = &line[..pos];
+                // If the user is typing a shortcut, we can try to complete it.
+                let mut completions = simple_completer(
+                    prefix,
+                    &starred_shortcuts
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>(),
+                );
+                realign_suggestions(&mut completions, pos - prefix.len());
+                completions
+            } else {
+                vec![]
+            }
         }
     }
 }
