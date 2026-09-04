@@ -646,6 +646,17 @@ impl HttpResponse {
         }
     }
 
+    fn payload_too_large(msg: &str) -> Self {
+        Self {
+            status: 413,
+            status_text: "Payload Too Large",
+            content_type: "text/plain".into(),
+            body: msg.as_bytes().to_vec(),
+            set_cookie: None,
+            additional_headers: Vec::new(),
+        }
+    }
+
     fn with_cookie(mut self, cookie: String) -> Self {
         self.set_cookie = Some(cookie);
         self
@@ -2009,7 +2020,11 @@ async fn handle_put(
                 asset_async_writer::AssetSaveError::Put(RequestError::Http(http_err))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::Http(http_err))
                 | asset_async_writer::AssetSaveError::Push(RequestError::Http(http_err)) => {
-                    return HttpResponse::internal_error(&format!("HTTP error: {}", http_err));
+                    if http_err.status() == Some(reqwest::StatusCode::PAYLOAD_TOO_LARGE) {
+                        return HttpResponse::payload_too_large(&http_err.to_string());
+                    } else {
+                        return HttpResponse::internal_error(&format!("HTTP error: {}", http_err));
+                    }
                 }
                 asset_async_writer::AssetSaveError::Put(RequestError::Unexpected(msg))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::Unexpected(msg))
