@@ -16,7 +16,15 @@ pub mod queue_listen;
 /// - Re-invokes using `cargo run` if it was running under cargo.
 /// - Re-invokes with the debug flag if it was present in the current
 ///   invocation.
-fn self_invocation() -> (String, Vec<String>) {
+///
+/// # Returns
+///
+/// (command, args, using cargo?)
+///
+/// The `using cargo?` boolean is useful for adjusting usage in development
+/// mode, e.g. longer timeout when waiting for invocation due to compilation
+/// time.
+fn self_invocation() -> (String, Vec<String>, bool) {
     // For dev: check if running under `cargo`, which sets the `CARGO` env var.
     if let Ok(cargo) = std::env::var("CARGO") {
         // Silence build output
@@ -36,7 +44,7 @@ fn self_invocation() -> (String, Vec<String>) {
             args.push(flag);
         }
 
-        (cargo, args)
+        (cargo, args, true)
     } else {
         // Production/non-dev: use the current executable
         let exe = std::env::current_exe()
@@ -44,7 +52,7 @@ fn self_invocation() -> (String, Vec<String>) {
             .to_string_lossy()
             .to_string();
 
-        (exe, debug_flag().into_iter().collect())
+        (exe, debug_flag().into_iter().collect(), false)
     }
 }
 

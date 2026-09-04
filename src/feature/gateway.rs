@@ -2589,7 +2589,7 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args) = crate::feature::self_invocation();
+            let (exe, mut args, using_cargo) = crate::feature::self_invocation();
             if let Some(model) = spawn_arg.model {
                 args.push("-m".into());
                 args.push(model);
@@ -2620,12 +2620,18 @@ async fn handle_client_message(
                 }
             };
 
+            // Give more leeway for cargo since the binary might need to be
+            // re-built.
+            let timeout = if using_cargo {
+                std::time::Duration::from_secs(30)
+            } else {
+                std::time::Duration::from_secs(10)
+            };
+
             // Waiting for kernel is necessary to ensure it's ready to accept a
             // connection, and also to get the port it's bound to and token for
             // authentication.
-            match kernel::wait_for_kernel_ready(&mut child, std::time::Duration::from_secs(10))
-                .await
-            {
+            match kernel::wait_for_kernel_ready(&mut child, timeout).await {
                 Ok(ready) => {
                     let kernel_id = generate_kernel_id();
                     kernel_map.lock().await.insert(
@@ -2773,7 +2779,7 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args) = crate::feature::self_invocation();
+            let (exe, mut args, _using_cargo) = crate::feature::self_invocation();
             if let Some(model) = repl_arg.model {
                 args.push("-m".to_string());
                 args.push(model);

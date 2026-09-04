@@ -2016,7 +2016,7 @@ async fn execute_job(
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
-    let (program, mut args) = crate::feature::self_invocation();
+    let (program, mut args, _using_cargo) = crate::feature::self_invocation();
 
     args.push("bye".to_string());
 
