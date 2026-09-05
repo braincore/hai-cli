@@ -453,13 +453,30 @@ pub async fn resume_chat_from_db_or_asset(
 
     io.code_reset();
 
+    let full_cmd_registry = crate::cmd_registry::Registry::new();
+    let mut cur_task_name = None;
+    let mut cur_task_subindex = 0;
+
     // Print out conversation to help user regain context
     for (i, log_entry) in session.history.iter_mut().enumerate() {
+        if matches!(log_entry.message.role, chat::MessageRole::User) {
+            for content in &log_entry.message.content {
+                if let chat::MessageContent::Text { text } = content {
+                    if let Ok(parse_res) = crate::cmd_parse::parse(&full_cmd_registry, &text) {
+                        if parse_res.spec.name == "task" {
+                            cur_task_name = Some(parse_res.arg(0).to_string());
+                            cur_task_subindex = 0;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         let role_name = match log_entry.message.role {
             chat::MessageRole::Assistant => "assistant",
             chat::MessageRole::User => "user",
             chat::MessageRole::Tool => "tool",
-            chat::MessageRole::System => break,
+            chat::MessageRole::System => "system",
         };
         match log_entry.message.role {
             chat::MessageRole::Assistant => {
@@ -493,6 +510,15 @@ pub async fn resume_chat_from_db_or_asset(
                 }),
             ),
             _ => None,
+        };
+        let _section_guard_step = if log_entry.retention_policy.0 {
+            cur_task_subindex += 1;
+            Some(io.section_begin(SectionKind::Step {
+                sub_index: cur_task_subindex - 1,
+                name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
+            }))
+        } else {
+            None
         };
 
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
@@ -642,7 +668,23 @@ pub async fn resume_chat_from_db_or_asset(
 /// Second, it expects all image URLs to be in b64 format, so it doesn't
 /// attempt to fetch any attachments
 pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
+    let full_cmd_registry = crate::cmd_registry::Registry::new();
+    let mut cur_task_name = None;
+    let mut cur_task_subindex = 0;
     for (i, log_entry) in history.iter().enumerate() {
+        if matches!(log_entry.message.role, chat::MessageRole::User) {
+            for content in &log_entry.message.content {
+                if let chat::MessageContent::Text { text } = content {
+                    if let Ok(parse_res) = crate::cmd_parse::parse(&full_cmd_registry, &text) {
+                        if parse_res.spec.name == "task" {
+                            cur_task_name = Some(parse_res.arg(0).to_string());
+                            cur_task_subindex = 0;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         let role_name = match log_entry.message.role {
             chat::MessageRole::Assistant => "assistant",
             chat::MessageRole::User => "user",
@@ -681,6 +723,15 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                 }),
             ),
             _ => None,
+        };
+        let _section_guard_step = if log_entry.retention_policy.0 {
+            cur_task_subindex += 1;
+            Some(io.section_begin(SectionKind::Step {
+                sub_index: cur_task_subindex - 1,
+                name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
+            }))
+        } else {
+            None
         };
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
