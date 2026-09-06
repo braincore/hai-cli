@@ -953,6 +953,7 @@ pub async fn process_cmd(
                     ),
                     model: None,
                     visible: true,
+                    result_of: None,
                 },
             );
             ProcessCmdResult::loop_next()
@@ -1008,10 +1009,12 @@ pub async fn process_cmd(
         }
         cmd::Cmd::Forget(cmd::ForgetCmd { mut n }) => {
             fn prepare_preview(preview: String, max_length: usize) -> String {
-                let s = preview.replace("\n", " ");
+                let s = preview.replace('\n', " ");
+                let s = s.trim();
                 if s.chars().count() > max_length {
-                    let truncated: String = s.trim().chars().take(max_length - 3).collect();
-                    format!("{}...", truncated)
+                    let take = max_length.saturating_sub(3);
+                    let truncated: String = s.chars().take(take).collect();
+                    format!("{truncated}...")
                 } else {
                     s.to_string()
                 }
@@ -1031,7 +1034,12 @@ pub async fn process_cmd(
                     "Forgot {role_name} message: {}",
                     prepare_preview(preview, 80)
                 );
-                if matches!(log_entry.message.role, chat::MessageRole::User) {
+                // To make it more intuitive, count "groups" of messages that
+                // are results of a previous entry as one logical unit to
+                // forget.
+                if matches!(log_entry.message.role, chat::MessageRole::User)
+                    && log_entry.result_of.is_none()
+                {
                     n -= 1;
                 }
             }

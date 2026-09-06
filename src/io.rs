@@ -610,6 +610,11 @@ pub enum SectionKind {
         ts: chrono::DateTime<chrono::Local>,
         visible: bool,
     },
+    /// Output from the repl triggered by a command in an earlier user message.
+    UserOutput {
+        index: u32,
+        visible: bool,
+    },
     AssistantMsg {
         index: u32,
         model: Option<String>,

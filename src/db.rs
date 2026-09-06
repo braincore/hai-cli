@@ -21,6 +21,13 @@ pub struct LogEntry {
     pub model: Option<String>,
     #[serde(default = "default_true")]
     pub visible: bool,
+    /// The `uuid` of an earlier entry that produced this entry as a result.
+    /// For example, an entry is a asset/file/url that was loaded as a result
+    /// of a previous command.
+    /// Invariant: `result_of` must be preceeded by the entry with that `uuid`
+    /// or by an entry that shares the same `result_of` value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_of: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -31,19 +38,23 @@ impl LogEntry {
     pub fn mk_preview_string(&self) -> String {
         let mut preview = String::new();
         if self.retention_policy.1 == LogEntryRetentionPolicy::ConversationLoad {
-            if let chat::MessageContent::Text { text } = &self.message.content[0] {
-                preview.push_str(text.split_once("\n").unwrap().0);
-            } else if let chat::MessageContent::ImageUrl { image_url, .. } =
-                &self.message.content[0]
-            {
-                preview.push_str(&image_url.url[..10]);
+            match self.message.content.first() {
+                Some(chat::MessageContent::Text { text }) => {
+                    let first_line = text
+                        .split_once('\n')
+                        .map_or(text.as_str(), |(first, _)| first);
+                    preview.push_str(first_line);
+                }
+                Some(chat::MessageContent::ImageUrl { image_url, .. }) => {
+                    let snippet: String = image_url.url.chars().take(10).collect();
+                    preview.push_str(&snippet);
+                }
+                None => {}
             }
         } else {
             for part in &self.message.content {
                 match part {
-                    chat::MessageContent::Text { text } => {
-                        preview.push_str(text);
-                    }
+                    chat::MessageContent::Text { text } => preview.push_str(text),
                     chat::MessageContent::ImageUrl { .. } => preview.push_str("[image]"),
                 }
                 preview.push('\n');

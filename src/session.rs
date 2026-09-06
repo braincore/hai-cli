@@ -448,14 +448,15 @@ impl SessionState {
 ///
 /// # Returns
 ///
-/// The number of tokens in `contents`.
+/// (entry UUID, number of tokens in `contents`).
 pub fn session_history_add_user_text_entry(
     contents: &str,
     session: &mut SessionState,
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
     visible: bool,
-) -> u32 {
+    result_of: Option<String>,
+) -> (String, u32) {
     let asset_tokens = bpe_tokenizer.encode_with_special_tokens(contents);
     let token_count = asset_tokens.len() as u32;
     if matches!(
@@ -466,8 +467,9 @@ pub fn session_history_add_user_text_entry(
     } else {
         session.input_tokens += token_count;
     }
+    let uuid = Uuid::now_v7().to_string();
     session.history.push(db::LogEntry {
-        uuid: Uuid::now_v7().to_string(),
+        uuid: uuid.clone(),
         ts: chrono::Local::now(),
         message: chat::Message {
             role: chat::MessageRole::User,
@@ -481,8 +483,9 @@ pub fn session_history_add_user_text_entry(
         retention_policy,
         model: None,
         visible,
+        result_of,
     });
-    token_count
+    (uuid, token_count)
 }
 
 /// Similar to `session_history_add_user_text_entry` but also adds an entry for
@@ -494,28 +497,35 @@ pub fn session_history_add_user_cmd_and_reply_entries(
     bpe_tokenizer: &tiktoken_rs::CoreBPE,
     retention_policy: (bool, LogEntryRetentionPolicy),
     replies_visible: bool,
-) -> u32 {
-    session_history_add_user_text_entry(cmd, session, bpe_tokenizer, retention_policy, true)
-        + session_history_add_user_text_entry(
-            contents,
-            session,
-            bpe_tokenizer,
-            retention_policy,
-            replies_visible,
-        )
+) -> (String, u32) {
+    let (cmd_uuid, cmd_token_count) = session_history_add_user_text_entry(
+        cmd,
+        session,
+        bpe_tokenizer,
+        retention_policy,
+        true,
+        None,
+    );
+    let result_of = Some(cmd_uuid.clone());
+    let (_contents_uuid, contents_token_count) = session_history_add_user_text_entry(
+        contents,
+        session,
+        bpe_tokenizer,
+        retention_policy,
+        replies_visible,
+        result_of,
+    );
+    (cmd_uuid, cmd_token_count + contents_token_count)
 }
 
 /// Convenience function to add "user image" into conversation history while
 /// making the appropriate modifications to the session and token count.
 ///
-/// FIXME: Token count assumes provider is OpenAI (not necssarily) which will
-/// downscale in low-detail mode to 85 tokens. No other provider does this and
-/// this count will be inaccurate for them. Either fix token counting or apply
-/// resize client-side.
+/// # Returns
 ///
 /// # Returns
 ///
-/// The number of tokens added.
+/// (entry UUID, number of tokens in image).
 pub fn session_history_add_user_image_entry(
     img_png_b64: &str,
     session: &mut SessionState,
@@ -523,7 +533,8 @@ pub fn session_history_add_user_image_entry(
     hq: bool,
     dim: (u32, u32),
     visible: bool,
-) -> u32 {
+    result_of: Option<String>,
+) -> (String, u32) {
     let token_count = calc_image_tokens(&session.ai, hq, dim);
     if matches!(
         retention_policy.1,
@@ -533,8 +544,9 @@ pub fn session_history_add_user_image_entry(
     } else {
         session.input_tokens += token_count;
     }
+    let uuid = Uuid::now_v7().to_string();
     session.history.push(db::LogEntry {
-        uuid: Uuid::now_v7().to_string(),
+        uuid: uuid.clone(),
         ts: chrono::Local::now(),
         message: chat::Message {
             role: chat::MessageRole::User,
@@ -553,8 +565,9 @@ pub fn session_history_add_user_image_entry(
         retention_policy,
         model: None,
         visible,
+        result_of,
     });
-    token_count
+    (uuid, token_count)
 }
 
 /// Based on the AI provider, calculates the image token cost.
@@ -651,6 +664,7 @@ pub fn session_history_add_assistant_text_entry(
         retention_policy,
         model: model.map(|m| config::ai_model_to_string(m)),
         visible: true,
+        result_of: None,
     });
     token_count
 }

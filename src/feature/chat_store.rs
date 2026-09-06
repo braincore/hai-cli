@@ -490,11 +490,20 @@ pub async fn resume_chat_from_db_or_asset(
             _ => {}
         };
         let _section_guard = match log_entry.message.role {
-            chat::MessageRole::User => Some(io.section_begin(SectionKind::UserMsg {
-                index: i as u32,
-                ts: log_entry.ts.clone(),
-                visible: log_entry.visible,
-            })),
+            chat::MessageRole::User => {
+                if log_entry.result_of.is_none() {
+                    Some(io.section_begin(SectionKind::UserMsg {
+                        index: i as u32,
+                        ts: log_entry.ts.clone(),
+                        visible: log_entry.visible,
+                    }))
+                } else {
+                    Some(io.section_begin(SectionKind::UserOutput {
+                        index: i as u32,
+                        visible: log_entry.visible,
+                    }))
+                }
+            }
             chat::MessageRole::Assistant => Some(io.section_begin(SectionKind::AssistantMsg {
                 index: i as u32,
                 model: log_entry.model.clone(),
@@ -511,7 +520,7 @@ pub async fn resume_chat_from_db_or_asset(
             ),
             _ => None,
         };
-        let _section_guard_step = if log_entry.retention_policy.0 {
+        let _section_guard_step = if log_entry.retention_policy.0 && log_entry.result_of.is_none() {
             cur_task_subindex += 1;
             Some(io.section_begin(SectionKind::Step {
                 sub_index: cur_task_subindex - 1,
@@ -703,11 +712,20 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
             _ => {}
         };
         let _section_guard = match log_entry.message.role {
-            chat::MessageRole::User => Some(io.section_begin(SectionKind::UserMsg {
-                index: i as u32,
-                ts: log_entry.ts.clone(),
-                visible: log_entry.visible,
-            })),
+            chat::MessageRole::User => {
+                if log_entry.result_of.is_none() {
+                    Some(io.section_begin(SectionKind::UserMsg {
+                        index: i as u32,
+                        ts: log_entry.ts.clone(),
+                        visible: log_entry.visible,
+                    }))
+                } else {
+                    Some(io.section_begin(SectionKind::UserOutput {
+                        index: i as u32,
+                        visible: log_entry.visible,
+                    }))
+                }
+            }
             chat::MessageRole::Assistant => Some(io.section_begin(SectionKind::AssistantMsg {
                 index: i as u32,
                 model: log_entry.model.clone(),
@@ -724,7 +742,7 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
             ),
             _ => None,
         };
-        let _section_guard_step = if log_entry.retention_policy.0 {
+        let _section_guard_step = if log_entry.retention_policy.0 && log_entry.result_of.is_none() {
             cur_task_subindex += 1;
             Some(io.section_begin(SectionKind::Step {
                 sub_index: cur_task_subindex - 1,

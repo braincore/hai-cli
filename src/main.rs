@@ -1023,6 +1023,7 @@ async fn repl(
                         bpe_tokenizer,
                         (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                         true,
+                        None,
                     );
                 }
             }
@@ -1084,15 +1085,17 @@ async fn repl(
 
         match cmd_result.next {
             cmd_processor::ProcessCmdNext::Break | cmd_processor::ProcessCmdNext::Loop => {
+                let mut parent_entry_uuid = None;
                 if !cmd_input.input.is_empty() && !cmd_result.discard_cmd_and_output {
-                    if transcript.is_empty() {
+                    let (entry_uuid, _token_count) = if transcript.is_empty() {
                         session::session_history_add_user_text_entry(
                             &cmd_input.input,
                             &mut session,
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
                             true,
-                        );
+                            None,
+                        )
                     } else {
                         session::session_history_add_user_cmd_and_reply_entries(
                             &cmd_input.input,
@@ -1101,8 +1104,9 @@ async fn repl(
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
                             true,
-                        );
-                    }
+                        )
+                    };
+                    parent_entry_uuid = Some(entry_uuid);
                 }
                 for history_entry in cmd_result.history_entries {
                     match history_entry {
@@ -1113,6 +1117,7 @@ async fn repl(
                                 bpe_tokenizer,
                                 (is_task_mode_step, cmd_result.retention_policy),
                                 cmd_result.history_entries_visibile,
+                                parent_entry_uuid.clone(),
                             );
                         }
                         cmd_processor::HistoryEntry::UserImage(b64, hq, dim) => {
@@ -1123,6 +1128,7 @@ async fn repl(
                                 hq,
                                 dim,
                                 cmd_result.history_entries_visibile,
+                                parent_entry_uuid.clone(),
                             );
                         }
                         cmd_processor::HistoryEntry::AssistantText(text, ai_model) => {
@@ -1215,6 +1221,7 @@ async fn repl(
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
             model: None,
             visible: true,
+            result_of: None,
         });
 
         loop {
@@ -1376,6 +1383,7 @@ async fn repl(
                 )
             }
 
+            let mut tool_id_to_entry_uuid_map: HashMap<String, String> = HashMap::new();
             for ai_response in &ai_responses {
                 //
                 // Bookkeeping
@@ -1411,6 +1419,7 @@ async fn repl(
                             ),
                             model: Some(config::ai_model_to_string(&session.ai)),
                             visible: true,
+                            result_of: None,
                         });
                     }
                     chat::ChatCompletionResponse::Tool {
@@ -1418,8 +1427,10 @@ async fn repl(
                         tool_name,
                         arg,
                     } => {
+                        let uuid = Uuid::now_v7().to_string();
+                        tool_id_to_entry_uuid_map.insert(tool_id.clone(), uuid.clone());
                         session.history.push(db::LogEntry {
-                            uuid: Uuid::now_v7().to_string(),
+                            uuid,
                             ts: chrono::Local::now(),
                             message: chat::Message {
                                 role: chat::MessageRole::Assistant,
@@ -1441,6 +1452,7 @@ async fn repl(
                             ),
                             model: Some(config::ai_model_to_string(&session.ai)),
                             visible: true,
+                            result_of: None,
                         });
                     }
                 }
@@ -1537,6 +1549,7 @@ async fn repl(
                                 ),
                                 model: None,
                                 visible: true,
+                                result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
                             });
                         }
                         answered_yes
@@ -1683,6 +1696,7 @@ async fn repl(
                             ),
                             model: None,
                             visible: true,
+                            result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
                         });
                     }
                 }
@@ -1724,6 +1738,7 @@ async fn repl(
                     retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                     model: None,
                     visible: true,
+                    result_of: None,
                 });
             } else {
                 break;
