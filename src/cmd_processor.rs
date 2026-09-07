@@ -1163,6 +1163,7 @@ pub async fn process_cmd(
                             if let Err(e) = file.read_to_end(&mut buffer) {
                                 errorln!(io, "could not read file: {:?}: {:?}", file_path, e)
                             }
+                            let mut loaded = false;
                             if let Ok(file_contents) = std::str::from_utf8(&buffer) {
                                 let file_contents_with_delimeters = add_content_delimiters(
                                     "FILE",
@@ -1190,7 +1191,9 @@ pub async fn process_cmd(
                                 history_entries
                                     .push(HistoryEntry::UserText(file_contents_with_delimeters));
                                 newly_loaded_tokens += token_count;
-                            } else {
+                                loaded = true;
+                            }
+                            if !loaded {
                                 let image_capability =
                                     config::get_ai_model_capability(&session.ai).image;
                                 let use_thumbnail = image_capability
@@ -1233,16 +1236,54 @@ pub async fn process_cmd(
                                             );
                                         }
                                         io.record_set(was_recording);
+                                        loaded = true;
                                     }
-                                    Err(e) => {
-                                        errorln!(
-                                            io,
-                                            "failed to load as text or image: {:?}: {:?}",
-                                            file_path,
-                                            e
+                                    Err(_e) => {}
+                                }
+                            }
+                            if !loaded {
+                                use pdf_inspector::process_pdf;
+                                if let Ok(result) = process_pdf(&file_path) {
+                                    if let Some(markdown) = &result.markdown {
+                                        let pdf_contents_with_delimeters = add_content_delimiters(
+                                            "FILE-PDF-TEXT-EXTRACTED",
+                                            markdown,
+                                            &file_path.to_string_lossy(),
+                                            None,
+                                            false,
                                         );
+                                        let token_count = bpe_tokenizer
+                                            .encode_with_special_tokens(
+                                                &pdf_contents_with_delimeters,
+                                            )
+                                            .len()
+                                            as u32;
+                                        let was_recording = io.record_off();
+                                        if matches!(cmd, cmd::Cmd::FileCat(_)) {
+                                            outln!(io, "{}", pdf_contents_with_delimeters);
+                                        } else {
+                                            outln!(
+                                                io,
+                                                "Loaded: {} ({} tokens)",
+                                                &file_path.to_string_lossy(),
+                                                token_count.to_formatted_string(&Locale::en)
+                                            );
+                                        }
+                                        io.record_set(was_recording);
+                                        history_entries.push(HistoryEntry::UserText(
+                                            pdf_contents_with_delimeters,
+                                        ));
+                                        newly_loaded_tokens += token_count;
+                                        loaded = true;
                                     }
                                 }
+                            }
+                            if !loaded {
+                                errorln!(
+                                    io,
+                                    "failed to load as text, image, or PDF: {:?}",
+                                    file_path
+                                );
                             }
                         }
                     }
@@ -1421,6 +1462,50 @@ pub async fn process_cmd(
                     );
                     io.record_set(was_recording);
                 }
+                Some("application/pdf") => {
+                    let pdf_bytes = if let Ok(pdf_bytes) = http_response.bytes().await {
+                        pdf_bytes
+                    } else {
+                        errorln!(io, "failed to get PDF from url");
+                        return ProcessCmdResult::loop_next();
+                    };
+                    use pdf_inspector::process_pdf_mem;
+                    if let Ok(result) = process_pdf_mem(&pdf_bytes)
+                        && let Some(pdf_as_markdown) = &result.markdown
+                    {
+                        if pdf_as_markdown.len() == 0 {
+                            errorln!(io, "extracted text from PDF at url has length 0: {}", url);
+                        } else {
+                            println!(
+                                "Result type: {:?}, Markdown length: {}",
+                                result.pdf_type,
+                                pdf_as_markdown.len()
+                            );
+                            let pdf_contents_with_delimeters = add_content_delimiters(
+                                "URL-PDF-TEXT-EXTRACTED",
+                                pdf_as_markdown,
+                                &url,
+                                None,
+                                false,
+                            );
+                            let token_count = bpe_tokenizer
+                                .encode_with_special_tokens(&pdf_contents_with_delimeters)
+                                .len() as u32;
+                            let was_recording = io.record_off();
+                            outln!(
+                                io,
+                                "Loaded: {} ({} tokens)",
+                                &url,
+                                token_count.to_formatted_string(&Locale::en)
+                            );
+                            io.record_set(was_recording);
+                            history_entries
+                                .push(HistoryEntry::UserText(pdf_contents_with_delimeters));
+                        }
+                    } else {
+                        errorln!(io, "failed to extract text from PDF at url: {}", url);
+                    }
+                }
                 _ => {
                     let url_body = match http_response.text().await {
                         Ok(body) => body,
@@ -1471,22 +1556,8 @@ pub async fn process_cmd(
                         (url_body, content_type.unwrap_or("raw".to_string()), None)
                     };
 
-                    let url_contents_with_delimiters = format!(
-                        "{}\n<<<<<< BEGIN_URL: {}{} >>>>>>\n{}\n<<<<<< END_URL: {} >>>>>>",
-                        raw_user_input,
-                        url,
-                        if show_line_numbers {
-                            " (with line numbers)"
-                        } else {
-                            ""
-                        },
-                        if show_line_numbers {
-                            add_line_numbers(&contents)
-                        } else {
-                            contents
-                        },
-                        url,
-                    );
+                    let url_contents_with_delimiters =
+                        add_content_delimiters("URL", &contents, &url, None, show_line_numbers);
 
                     let token_count = bpe_tokenizer
                         .encode_with_special_tokens(&url_contents_with_delimiters)
@@ -2834,6 +2905,8 @@ pub async fn process_cmd(
                                 ));
                             }
                             Err(_e) => {
+                                let mut loaded = false;
+
                                 // Not text, try opening as image
                                 let image_capability =
                                     config::get_ai_model_capability(&session.ai).image;
@@ -2843,7 +2916,7 @@ pub async fn process_cmd(
                                     .unwrap_or(false);
 
                                 match loader::encode_image_bytes_to_png_base64(
-                                    decrypted_asset_contents.into(),
+                                    decrypted_asset_contents.clone().into(),
                                     use_thumbnail,
                                 ) {
                                     Ok((img_png_b64, img_dim)) => {
@@ -2873,15 +2946,56 @@ pub async fn process_cmd(
                                             );
                                         }
                                         io.record_set(was_recording);
+                                        loaded = true;
                                     }
-                                    Err(e) => {
-                                        errorln!(
-                                            io,
-                                            "failed to load as text or image: {:?}: {:?}",
-                                            asset_name,
-                                            e
-                                        );
+                                    Err(_e) => {}
+                                }
+                                if !loaded {
+                                    use pdf_inspector::process_pdf_mem;
+                                    if let Ok(result) = process_pdf_mem(&decrypted_asset_contents) {
+                                        if let Some(pdf_as_markdown) = &result.markdown {
+                                            let pdf_contents_with_delimeters =
+                                                add_content_delimiters(
+                                                    "ASSET-PDF-TEXT-EXTRACTED",
+                                                    pdf_as_markdown,
+                                                    &asset_name,
+                                                    Some(&format!(
+                                                        "rev_id={}",
+                                                        asset_entry.asset.rev_id
+                                                    )),
+                                                    false,
+                                                );
+                                            let token_count = bpe_tokenizer
+                                                .encode_with_special_tokens(
+                                                    &pdf_contents_with_delimeters,
+                                                )
+                                                .len()
+                                                as u32;
+                                            let was_recording = io.record_off();
+                                            if matches!(cmd, cmd::Cmd::AssetCat(_)) {
+                                                outln!(io, "{}", pdf_as_markdown);
+                                            } else {
+                                                outln!(
+                                                    io,
+                                                    "Loaded: {} ({} tokens)",
+                                                    &asset_name,
+                                                    token_count.to_formatted_string(&Locale::en)
+                                                );
+                                            }
+                                            io.record_set(was_recording);
+                                            history_entries.push(HistoryEntry::UserText(
+                                                pdf_contents_with_delimeters,
+                                            ));
+                                            loaded = true;
+                                        }
                                     }
+                                }
+                                if !loaded {
+                                    errorln!(
+                                        io,
+                                        "failed to load as text, image, or PDF: {}",
+                                        asset_name,
+                                    );
                                 }
                             }
                         }

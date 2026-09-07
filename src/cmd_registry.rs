@@ -1013,7 +1013,7 @@ pub static REGISTRY: &[Entry] = &[
                 Repeated { at_least: 1 },
             )]),
             Doc::new("Load files into the conversation (e.g. `/file-read src/**/*.py`)")
-                .more("Supports text files or PNG/JPG images"),
+                .more("Supports text files, PNG/JPG images, and PDFs"),
         )
         .with_opts(&[OPT_N, OPT_HQ]),
     ),
@@ -1052,7 +1052,7 @@ pub static REGISTRY: &[Entry] = &[
                 FilePath { accepts: FilePathAccepts::File, glob_ok: true },
                 Repeated { at_least: 1 },
             )]),
-            Doc::new("Load files into the conversation and print them"),
+            Doc::new("Load files into the conversation and print them").more("Supports text files, PNG/JPG images, and PDFs"),
         )
         .with_opts(&[OPT_N, OPT_HQ]),
     ),
@@ -1073,7 +1073,8 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed("http-get"),
             Cow::Borrowed("http"),
             Cow::Borrowed(&[arg("url", Url, Required)]),
-            Doc::new("Load a URL into the conversation"),
+            Doc::new("Load a URL into the conversation")
+                .more("Supports text, html, PNG/JPG images, and PDFs"),
         )
         .with_opts(&[
             OPT_N,
@@ -1425,7 +1426,7 @@ pub static REGISTRY: &[Entry] = &[
                 AssetName { glob_ok: false },
                 Repeated { at_least: 1 },
             )]),
-            Doc::new("Load assets into the conversation"),
+            Doc::new("Load assets into the conversation").more("Supports text files, PNG/JPG images, and PDFs"),
         )
         .alias(&["read"])
         .with_opts(&[OPT_N, OPT_HQ])
@@ -1459,7 +1460,7 @@ pub static REGISTRY: &[Entry] = &[
                 AssetName { glob_ok: false },
                 Repeated { at_least: 1 },
             )]),
-            Doc::new("Load assets into the conversation and print them"),
+            Doc::new("Load assets into the conversation and print them").more("Supports text files, PNG/JPG images, and PDFs"),
         )
         .alias(&["cat"])
         .with_opts(&[OPT_N, OPT_HQ])

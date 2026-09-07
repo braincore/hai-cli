@@ -80,6 +80,8 @@ resolution, use:
 /file-read.hq <path>
 ```
 
+If possible, PDFs are converted to markdown.
+
 ## Load a URL
 
 To load a URL into the chat conversation, use:
@@ -90,6 +92,8 @@ To load a URL into the chat conversation, use:
 
 PNG and JPG responses will be rendered in the terminal and can be used with
 image-capable LLM models.
+
+If possible, PDFs are converted to markdown.
 
 HTML responses are automatically converted to markdown for significantly
 improved token efficiency. If this is undesirable, use:
