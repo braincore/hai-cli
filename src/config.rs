@@ -183,9 +183,21 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "gpt54nano" | "g54nano" | "g54n" | "54n" => Some(AiModel::OpenAi(OpenAiModel::Gpt54Nano(
             parse_gpt5_opts(opts, false),
         ))),
-        "gpt" | "gpt55" | "g55" => Some(AiModel::OpenAi(OpenAiModel::Gpt55(parse_gpt5_opts(
+        "gpt55" | "g55" => Some(AiModel::OpenAi(OpenAiModel::Gpt55(parse_gpt5_opts(
             opts, false,
         )))),
+        "gpt56luna" | "g56luna" | "luna" => Some(AiModel::OpenAi(OpenAiModel::Gpt56Luna(
+            parse_gpt5_opts(opts, false),
+        ))),
+        "gpt" | "gpt56" | "g56" | "gpt56terra" | "g56terra" | "terra" => Some(AiModel::OpenAi(
+            OpenAiModel::Gpt56Terra(parse_gpt5_opts(opts, false)),
+        )),
+        "gpt56sol" | "g56sol" | "sol" => Some(AiModel::OpenAi(OpenAiModel::Gpt56Sol(
+            parse_gpt5_opts(opts, false),
+        ))),
+        "gpt6" | "g6" | "gpt6astra" | "g6astra" | "astra" => Some(AiModel::OpenAi(
+            OpenAiModel::Gpt6Astra(parse_gpt5_opts(opts, false)),
+        )),
         "gpt4o" | "4o" => Some(AiModel::OpenAi(OpenAiModel::Gpt4o)),
         "gpt4omini" | "4omini" | "4om" => Some(AiModel::OpenAi(OpenAiModel::Gpt4oMini)),
         "gptoss" | "oss" => Some(AiModel::Ollama(OllamaModel::GptOss20b)),
@@ -347,6 +359,14 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "gpt-54-mini",
     "gpt-54-nano",
     "gpt-55",
+    "gpt-56-sol",
+    "sol",
+    "gpt-56-terra",
+    "terra",
+    "gpt-56-luna",
+    "luna",
+    "gpt-6-astra",
+    "astra",
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-oss",
@@ -830,6 +850,22 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
                 let base = "gpt-5.5".to_string();
                 append_gpt5_opts(base, opts)
             }
+            OpenAiModel::Gpt56Sol(opts) => {
+                let base = "gpt-5.6-sol".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt56Terra(opts) => {
+                let base = "gpt-5.6-terra".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt56Luna(opts) => {
+                let base = "gpt-5.6-luna".to_string();
+                append_gpt5_opts(base, opts)
+            }
+            OpenAiModel::Gpt6Astra(opts) => {
+                let base = "gpt-6-astra".to_string();
+                append_gpt5_opts(base, opts)
+            }
             OpenAiModel::Gpt4o => "gpt-4o".to_string(),
             OpenAiModel::Gpt4oMini => "gpt-4o-mini".to_string(),
             OpenAiModel::O1 => "o1".to_string(),
@@ -963,7 +999,7 @@ pub fn read_config_as_string(
         if !path.exists() {
             let default_config = r#"
 # The default AI model to use.
-#default_ai_model = "gpt-5.4"
+#default_ai_model = "gpt-5.6-terra"
 
 # The default AI model in incognito mode.
 #default_incognito_ai_model = "gpt-oss:20b"
@@ -1372,6 +1408,10 @@ pub enum OpenAiModel {
     Gpt54Mini(Gpt5Options),
     Gpt54Nano(Gpt5Options),
     Gpt55(Gpt5Options),
+    Gpt56Sol(Gpt5Options),
+    Gpt56Terra(Gpt5Options),
+    Gpt56Luna(Gpt5Options),
+    Gpt6Astra(Gpt5Options),
     Gpt4o,
     Gpt4oMini,
     O1,
@@ -1470,6 +1510,10 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             OpenAiModel::Gpt54Mini(_) => "gpt-5.4-mini-2026-03-17",
             OpenAiModel::Gpt54Nano(_) => "gpt-5.4-nano-2026-03-17",
             OpenAiModel::Gpt55(_) => "gpt-5.5-2026-04-23",
+            OpenAiModel::Gpt56Sol(_) => "gpt-5.6-sol",
+            OpenAiModel::Gpt56Terra(_) => "gpt-5.6-terra",
+            OpenAiModel::Gpt56Luna(_) => "gpt-5.6-luna",
+            OpenAiModel::Gpt6Astra(_) => "gpt-6-astra",
             OpenAiModel::Gpt4o => "gpt-4o-2024-11-20",
             OpenAiModel::Gpt4oMini => "gpt-4o-mini-2024-07-18",
             OpenAiModel::O1 => "o1-2024-12-17",
@@ -1606,6 +1650,12 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             OpenAiModel::Gpt54Mini(opts) => format!("gpt-5.4-mini{}", get_gpt5_opts_display(opts)),
             OpenAiModel::Gpt54Nano(opts) => format!("gpt-5.4-nano{}", get_gpt5_opts_display(opts)),
             OpenAiModel::Gpt55(opts) => format!("gpt-5.5{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt56Sol(opts) => format!("gpt-5.6-sol{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt56Terra(opts) => {
+                format!("gpt-5.6-terra{}", get_gpt5_opts_display(opts))
+            }
+            OpenAiModel::Gpt56Luna(opts) => format!("gpt-5.6-luna{}", get_gpt5_opts_display(opts)),
+            OpenAiModel::Gpt6Astra(opts) => format!("gpt-6-astra{}", get_gpt5_opts_display(opts)),
             OpenAiModel::Gpt4o => "gpt-4o".to_string(),
             OpenAiModel::Gpt4oMini => "gpt-4o-mini".to_string(),
             OpenAiModel::O1 => "o1".to_string(),
@@ -1872,6 +1922,10 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | OpenAiModel::Gpt54Mini(_)
                 | OpenAiModel::Gpt54Nano(_)
                 | OpenAiModel::Gpt55(_)
+                | OpenAiModel::Gpt56Sol(_)
+                | OpenAiModel::Gpt56Terra(_)
+                | OpenAiModel::Gpt56Luna(_)
+                | OpenAiModel::Gpt6Astra(_)
                 | OpenAiModel::Gpt4o
                 | OpenAiModel::Gpt4oMini
                 | OpenAiModel::O1
@@ -1958,6 +2012,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             OpenAiModel::Gpt54Mini(_) => Some((750, 4500)),
             OpenAiModel::Gpt54Nano(_) => Some((200, 1250)),
             OpenAiModel::Gpt55(_) => Some((5000, 30000)),
+            OpenAiModel::Gpt56Sol(_) => Some((4000, 20000)),
+            OpenAiModel::Gpt56Terra(_) => Some((2000, 12000)),
+            OpenAiModel::Gpt56Luna(_) => Some((200, 1200)),
+            OpenAiModel::Gpt6Astra(_) => Some((10000, 50000)),
             OpenAiModel::Gpt4o => Some((2500, 10000)),
             OpenAiModel::Gpt4oMini => Some((150, 600)),
             OpenAiModel::O1 => Some((15000, 60000)),
@@ -2253,7 +2311,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     if let Some(ai_model) = default_ai_model {
         ai_model
     } else if get_openai_api_key(cfg).is_some() {
-        AiModel::OpenAi(OpenAiModel::Gpt54(Gpt5Options {
+        AiModel::OpenAi(OpenAiModel::Gpt56Terra(Gpt5Options {
             reasoning_effort: None,
             verbosity: None,
         }))
