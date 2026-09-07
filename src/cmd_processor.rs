@@ -6659,8 +6659,20 @@ pub async fn process_cmd(
                             thinking_level: None,
                         },
                     )),
-                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet45(false)),
-                    config::AiModel::Anthropic(config::AnthropicModel::Opus45(false)),
+                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet5(
+                        config::Anthropic46Options {
+                            effort: None,
+                            thinking: None,
+                            thinking_display: None,
+                        },
+                    )),
+                    config::AiModel::Anthropic(config::AnthropicModel::Opus5(
+                        config::Anthropic46Options {
+                            effort: None,
+                            thinking: None,
+                            thinking_display: None,
+                        },
+                    )),
                     config::AiModel::Anthropic(config::AnthropicModel::Haiku35),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat),
                     config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekReasoner),
