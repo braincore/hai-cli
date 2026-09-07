@@ -205,7 +205,8 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "grok3fast" | "grok3f" => Some(AiModel::Xai(XaiModel::Grok3Fast)),
         "grok3mini" | "grok3m" => Some(AiModel::Xai(XaiModel::Grok3Mini)),
         "grok3minifast" | "grok3mf" => Some(AiModel::Xai(XaiModel::Grok3MiniFast)),
-        "grok4" | "grok" => Some(AiModel::Xai(XaiModel::Grok4)),
+        "grok4" => Some(AiModel::Xai(XaiModel::Grok4)),
+        "grok" | "grok46" => Some(AiModel::Xai(XaiModel::Grok46)),
         "o1" => Some(AiModel::OpenAi(OpenAiModel::O1)),
         "o1mini" | "o1m" => Some(AiModel::OpenAi(OpenAiModel::O1Mini)),
         "o3" => Some(AiModel::OpenAi(OpenAiModel::O3)),
@@ -423,6 +424,7 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "grok-3-mini",
     "grok-3-mini-fast",
     "grok-4",
+    "grok-46",
     "openai/",
     "anthropic/",
     "google/",
@@ -878,11 +880,12 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
 
         // xAI models
         AiModel::Xai(model) => match model {
-            XaiModel::Grok4 => "grok-4".to_string(),
             XaiModel::Grok3 => "grok-3".to_string(),
             XaiModel::Grok3Fast => "grok-3-fast".to_string(),
             XaiModel::Grok3Mini => "grok-3-mini".to_string(),
             XaiModel::Grok3MiniFast => "grok-3-mini-fast".to_string(),
+            XaiModel::Grok4 => "grok-4".to_string(),
+            XaiModel::Grok46 => "grok-4.6".to_string(),
             XaiModel::Other(name) => format!("xai/{}", name),
         },
 
@@ -1424,11 +1427,12 @@ pub enum OpenAiModel {
 
 #[derive(Debug)]
 pub enum XaiModel {
-    Grok4,
     Grok3,
     Grok3Fast,
     Grok3Mini,
     Grok3MiniFast,
+    Grok4,
+    Grok46,
     Other(String),
 }
 
@@ -1527,11 +1531,12 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             VoidModel::Other(name) => name,
         },
         AiModel::Xai(model) => match model {
-            XaiModel::Grok4 => "grok-4-0709",
             XaiModel::Grok3 => "grok-3",
             XaiModel::Grok3Fast => "grok-3-fast",
             XaiModel::Grok3Mini => "grok-3-mini",
             XaiModel::Grok3MiniFast => "grok-3-mini-fast",
+            XaiModel::Grok4 => "grok-4-0709",
+            XaiModel::Grok46 => "grok-4.6",
             XaiModel::Other(name) => name,
         },
     }
@@ -1669,11 +1674,12 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             VoidModel::Other(name) => name.clone(),
         },
         AiModel::Xai(model) => match model {
-            XaiModel::Grok4 => "grok-4".to_string(),
             XaiModel::Grok3 => "grok-3".to_string(),
             XaiModel::Grok3Fast => "grok-3-fast".to_string(),
             XaiModel::Grok3Mini => "grok-3-mini".to_string(),
             XaiModel::Grok3MiniFast => "grok-3-mini-fast".to_string(),
+            XaiModel::Grok4 => "grok-4".to_string(),
+            XaiModel::Grok46 => "grok-4.6".to_string(),
             XaiModel::Other(name) => name.clone(),
         },
     }
@@ -1942,6 +1948,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | XaiModel::Grok3Mini
                 | XaiModel::Grok3MiniFast
                 | XaiModel::Grok4
+                | XaiModel::Grok46
         ),
     }
 }
@@ -2027,11 +2034,12 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
         },
         AiModel::Void(_) => None,
         AiModel::Xai(model) => match model {
-            XaiModel::Grok4 => Some((3000, 15000)),
             XaiModel::Grok3 => Some((3000, 15000)),
             XaiModel::Grok3Fast => Some((5000, 25000)),
             XaiModel::Grok3Mini => Some((300, 500)),
             XaiModel::Grok3MiniFast => Some((600, 4000)),
+            XaiModel::Grok4 => Some((3000, 15000)),
+            XaiModel::Grok46 => Some((2000, 6000)),
             XaiModel::Other(_) => None,
         },
     }
@@ -2330,7 +2338,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             thinking_level: None,
         }))
     } else if get_xai_api_key(cfg).is_some() {
-        AiModel::Xai(XaiModel::Grok4)
+        AiModel::Xai(XaiModel::Grok46)
     } else {
         // Do not default to a llama.cpp or ollama model since there are too
         // many options and it is not clear which one to use.
