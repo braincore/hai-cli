@@ -19,7 +19,7 @@ This writes to your `hai.toml` [config](../config.md#default-ai-model) which
 can also be changed manually:
 
 ```toml
-default_ai_model = "gpt-5.1-chat"
+default_ai_model = "gpt-5.6-terra"
 ```
 
 If a default model isn't set, it's automatically chosen based on API key
@@ -40,12 +40,11 @@ supports all the capabilities (images, tools) utilized in the conversation.
 
 | Provider   | Notable Models (Not Comprehensive)      |
 |------------|-----------------------------------------|
-| OpenAI     | gpt-5.5 (`g55`), gpt-5.2-chat (`g52c`), gpt-5-mini (`g5m`), gpt-5-nano (`g5n`) |
-|            | o4-mini (`o4m`), o3, o3-mini (`o3m`), o1, o1-mini (`o1m`) |
-| Anthropic  | opus-5 (`opus`), opus-4.8 (`opus-4.8`), sonnet-4.6 (`sonnet`), haiku-3.5 (`haiku`) |
-| Google     | gemini-3.1-pro (`geminipro`), gemini-3.5-flash (`flash`) |
-| DeepSeek   | v4-pro (`ds4p`), v4-flash (`ds4f`) |
-| xAI        | grok-4                                         |
+| OpenAI     | gpt-6-astra (`astra`), gpt-5.6-sol (`sol`), gpt-5.6-terra (`terra`), gpt-5.6-luna (`luna`) |
+| Anthropic  | opus-5 (`opus`), sonnet-5 (`sonnet`).   |
+| Google     | gemini-3.1-pro (`geminipro`), gemini-3.8-flash (`flash`) |
+| DeepSeek   | v4-pro (`ds4p`), v4-flash (`ds4f`)      |
+| xAI        | grok-4.6 (`grok`)                       |
 | Ollama     | gemma3:27b, gpt-oss:20b, llama3.2, llama3.2-vision |
 
 If a model doesn’t have a built-in shortcut, or if you want to use a specific
@@ -72,6 +71,8 @@ delimited keys or key-values following the model name:
 
 | Model      | Option key        | Accepted Values                                             |
 |------------|-------------------|-------------------------------------------------------------|
+| GPT-6      | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
+| GPT-6      | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
 | GPT-5      | `reasoning` (`r`) | `minimal` (`min`), `low` (`l`), `medium` (`m`), `high` (`h`)|
 | GPT-5      | `verbosity` (`v`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
 | GPT-5.2    | `reasoning` (`r`) | GPT-5 reasoning options, `none` (`n`), `xhigh` (`xh`)       |
@@ -79,6 +80,8 @@ delimited keys or key-values following the model name:
 | Sonnet-3.7 | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Sonnet-4.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Sonnet-4.x | `summarize` (`s`) | none, setting key alone is sufficient                       |
+| Sonnet-5.x | `thinking` (`t`)  | none, setting key alone is sufficient                       |
+| Sonnet-5.x | `summarize` (`s`) | none, setting key alone is sufficient                       |
 | Opus-4.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Opus-4.x   | `summarize` (`s`) | none, setting key alone is sufficient                       |
 | Opus-5.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
