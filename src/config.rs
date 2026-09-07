@@ -202,6 +202,9 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "haiku" | "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
         "llama" | "llama32" => Some(AiModel::Ollama(OllamaModel::Llama32)),
         "llamavision" | "llama32vision" => Some(AiModel::Ollama(OllamaModel::Llama32Vision)),
+        "fable" | "fable51" => Some(AiModel::Anthropic(AnthropicModel::Fable51(
+            parse_anthropic46_opts(opts),
+        ))),
         "opus4" => Some(AiModel::Anthropic(AnthropicModel::Opus4(
             parse_anthropic_opts(opts),
         ))),
@@ -324,6 +327,8 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "4o",
     "4om",
     "chatgpt-4o",
+    "fable",
+    "fable51",
     "gemma3",
     "gpt",
     "gpt-41",
@@ -627,6 +632,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
     match ai_model {
         // Anthropic models
         AiModel::Anthropic(model) => match model {
+            AnthropicModel::Fable51(opts) => {
+                let base = "fable-5.1".to_string();
+                append_anthropic46_opts(base, opts)
+            }
             AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
             AnthropicModel::Opus4(thinking) => {
                 if *thinking {
@@ -1235,6 +1244,7 @@ pub enum AiModel {
 
 #[derive(Debug)]
 pub enum AnthropicModel {
+    Fable51(Anthropic46Options),
     Haiku35,
     Opus4(bool),  // If true, enables thinking
     Opus41(bool), // If true, enables thinking
@@ -1390,6 +1400,7 @@ pub enum VoidModel {
 pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
     match ai_model {
         AiModel::Anthropic(model) => match model {
+            AnthropicModel::Fable51(_) => "claude-fable-5-1",
             AnthropicModel::Haiku35 => "claude-3-5-haiku-20241022",
             AnthropicModel::Opus4(_) => "claude-opus-4-20250514",
             AnthropicModel::Opus41(_) => "claude-opus-4-1-20250805",
@@ -1485,6 +1496,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
 pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
     match ai_model {
         AiModel::Anthropic(model) => match model {
+            AnthropicModel::Fable51(_) => "fable-5.1".to_string(),
             AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
             AnthropicModel::Opus4(false) => "opus-4".to_string(),
             AnthropicModel::Opus4(true) => "opus-4(t)".to_string(),
@@ -1798,7 +1810,8 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         AiModel::Anthropic(model) => {
             matches!(
                 model,
-                AnthropicModel::Haiku35
+                AnthropicModel::Fable51(_)
+                    | AnthropicModel::Haiku35
                     | AnthropicModel::Opus4(_)
                     | AnthropicModel::Opus41(_)
                     | AnthropicModel::Opus45(_)
@@ -1884,6 +1897,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
 pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
     match ai_model {
         AiModel::Anthropic(model) => match model {
+            AnthropicModel::Fable51(_) => Some((10000, 50000)),
             AnthropicModel::Haiku35 => Some((800, 4000)),
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
