@@ -6647,18 +6647,14 @@ pub async fn process_cmd(
                         reasoning_effort: None,
                         verbosity: None,
                     })),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt41),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt41Mini),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt4o),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt4oMini),
                     config::AiModel::OpenAi(config::OpenAiModel::O3),
                     config::AiModel::OpenAi(config::OpenAiModel::O4Mini),
-                    config::AiModel::Google(config::GoogleModel::Gemini3Flash(
+                    config::AiModel::Google(config::GoogleModel::Gemini38Flash(
                         config::GeminiOptions {
                             thinking_level: None,
                         },
                     )),
-                    config::AiModel::Google(config::GoogleModel::Gemini3Pro(
+                    config::AiModel::Google(config::GoogleModel::Gemini31Pro(
                         config::GeminiOptions {
                             thinking_level: None,
                         },

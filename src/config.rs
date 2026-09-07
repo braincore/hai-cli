@@ -117,11 +117,23 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "flash3" | "gemini3flash" => Some(AiModel::Google(GoogleModel::Gemini3Flash(
             parse_gemini_opts(opts),
         ))),
-        "flashlite" | "flashlite31" | "geminiflashlite" | "gemini31flashlite" => Some(
-            AiModel::Google(GoogleModel::Gemini31FlashLite(parse_gemini_opts(opts))),
+        "flashlite31" | "gemini31flashlite" => Some(AiModel::Google(
+            GoogleModel::Gemini31FlashLite(parse_gemini_opts(opts)),
+        )),
+        "flashlite" | "flashlite35" | "geminiflashlite" | "gemini35flashlite" => Some(
+            AiModel::Google(GoogleModel::Gemini35FlashLite(parse_gemini_opts(opts))),
         ),
-        "flash" | "flash35" | "geminiflash" | "gemini35flash" => Some(AiModel::Google(
-            GoogleModel::Gemini35Flash(parse_gemini_opts(opts)),
+        "flash35" | "gemini35flash" => Some(AiModel::Google(GoogleModel::Gemini35Flash(
+            parse_gemini_opts(opts),
+        ))),
+        "flash36" | "gemini36flash" => Some(AiModel::Google(GoogleModel::Gemini36Flash(
+            parse_gemini_opts(opts),
+        ))),
+        "flash37" | "gemini37flash" => Some(AiModel::Google(GoogleModel::Gemini37Flash(
+            parse_gemini_opts(opts),
+        ))),
+        "flash" | "flash38" | "geminiflash" | "gemini38flash" => Some(AiModel::Google(
+            GoogleModel::Gemini38Flash(parse_gemini_opts(opts)),
         )),
         "gemini15pro" => Some(AiModel::Google(GoogleModel::Gemini15Pro)),
         "gemini25pro" => Some(AiModel::Google(GoogleModel::Gemini25Pro)),
@@ -361,7 +373,12 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "flash25",
     "flash3",
     "flash35",
+    "flash36",
+    "flash37",
+    "flash38",
+    "flashlite",
     "flashlite31",
+    "flashlite35",
     "gemini15pro",
     "gemini25pro",
     "gemini3pro",
@@ -714,6 +731,22 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
             }
             GoogleModel::Gemini35Flash(opts) => {
                 let base = "gemini-3.5-flash".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini35FlashLite(opts) => {
+                let base = "gemini-3.5-flash-lite".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini36Flash(opts) => {
+                let base = "gemini-3.6-flash".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini37Flash(opts) => {
+                let base = "gemini-3.7-flash".to_string();
+                append_gemini_opts(base, opts)
+            }
+            GoogleModel::Gemini38Flash(opts) => {
+                let base = "gemini-3.8-flash".to_string();
                 append_gemini_opts(base, opts)
             }
             GoogleModel::Other(name) => format!("google/{}", name),
@@ -1257,6 +1290,10 @@ pub enum GoogleModel {
     Gemini31FlashLite(GeminiOptions),
     Gemini31Pro(GeminiOptions),
     Gemini35Flash(GeminiOptions),
+    Gemini35FlashLite(GeminiOptions),
+    Gemini36Flash(GeminiOptions),
+    Gemini37Flash(GeminiOptions),
+    Gemini38Flash(GeminiOptions),
     Other(String),
 }
 
@@ -1378,6 +1415,10 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             GoogleModel::Gemini31FlashLite(_) => "gemini-3.1-flash-lite",
             GoogleModel::Gemini31Pro(_) => "gemini-3.1-pro-preview",
             GoogleModel::Gemini35Flash(_) => "gemini-3.5-flash",
+            GoogleModel::Gemini35FlashLite(_) => "gemini-3.5-flash-lite",
+            GoogleModel::Gemini36Flash(_) => "gemini-3.6-flash",
+            GoogleModel::Gemini37Flash(_) => "gemini-3.7-flash",
+            GoogleModel::Gemini38Flash(_) => "gemini-3.8-flash",
             GoogleModel::Other(name) => name,
         },
         AiModel::LlamaCpp(model) => match model {
@@ -1497,6 +1538,18 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             }
             GoogleModel::Gemini35Flash(opts) => {
                 format!("gemini-3.5-flash{}", get_gemini_opts_display(opts))
+            }
+            GoogleModel::Gemini35FlashLite(opts) => {
+                format!("gemini-3.5-flash-lite{}", get_gemini_opts_display(opts))
+            }
+            GoogleModel::Gemini36Flash(opts) => {
+                format!("gemini-3.6-flash{}", get_gemini_opts_display(opts))
+            }
+            GoogleModel::Gemini37Flash(opts) => {
+                format!("gemini-3.7-flash{}", get_gemini_opts_display(opts))
+            }
+            GoogleModel::Gemini38Flash(opts) => {
+                format!("gemini-3.8-flash{}", get_gemini_opts_display(opts))
             }
             GoogleModel::Other(name) => name.clone(),
         },
@@ -1767,6 +1820,10 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | GoogleModel::Gemini31FlashLite(_)
                 | GoogleModel::Gemini31Pro(_)
                 | GoogleModel::Gemini35Flash(_)
+                | GoogleModel::Gemini35FlashLite(_)
+                | GoogleModel::Gemini36Flash(_)
+                | GoogleModel::Gemini37Flash(_)
+                | GoogleModel::Gemini38Flash(_)
         ),
         AiModel::LlamaCpp(_) => false,
         AiModel::Ollama(_) => false,
@@ -1847,6 +1904,10 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             GoogleModel::Gemini31FlashLite(_) => Some((250, 1500)),
             GoogleModel::Gemini31Pro(_) => Some((2000, 12000)),
             GoogleModel::Gemini35Flash(_) => Some((1500, 9000)),
+            GoogleModel::Gemini35FlashLite(_) => Some((300, 2500)),
+            GoogleModel::Gemini36Flash(_) => Some((750, 3750)),
+            GoogleModel::Gemini37Flash(_) => Some((750, 3750)),
+            GoogleModel::Gemini38Flash(_) => Some((750, 3750)),
             GoogleModel::Other(_) => None,
         },
         AiModel::LlamaCpp(_) => None,
@@ -2178,7 +2239,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             reasoning_effort: None,
         }))
     } else if get_google_api_key(cfg).is_some() {
-        AiModel::Google(GoogleModel::Gemini35Flash(GeminiOptions {
+        AiModel::Google(GoogleModel::Gemini38Flash(GeminiOptions {
             thinking_level: None,
         }))
     } else if get_xai_api_key(cfg).is_some() {
