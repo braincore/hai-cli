@@ -781,14 +781,8 @@ async fn repl(
             } else {
                 None
             };
-            let tool_mode = session.tool_mode.clone().map(|tool_mode_cmd| {
-                tool::tool_to_cmd(
-                    &tool_mode_cmd.tool,
-                    tool_mode_cmd.user_confirmation,
-                    tool_mode_cmd.force_tool,
-                )
-            });
-
+            let (tool_mode_str, tool_mode_tokens) =
+                get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
             io.update_config(
                 &session.cmd_registry,
                 &account,
@@ -799,9 +793,9 @@ async fn repl(
                 index,
                 llm_model_name,
                 session.use_hai_router.clone(),
-                session.input_tokens + session.input_loaded_tokens,
+                session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
                 task_mode,
-                tool_mode,
+                tool_mode_str,
                 incognito,
                 session.agentic,
             ) {
@@ -830,19 +824,17 @@ async fn repl(
             editor_prompt
                 .set_ai_model_name(config::get_ai_model_display_name(&session.ai).to_string());
             editor_prompt.set_hai_router(session.use_hai_router.clone());
-            editor_prompt.set_input_tokens(session.input_tokens + session.input_loaded_tokens);
             if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
                 editor_prompt.set_task_mode(Some(task_fqn.to_owned()));
             } else {
                 editor_prompt.set_task_mode(None);
             }
-            editor_prompt.set_tool_mode(session.tool_mode.clone().map(|tool_mode_cmd| {
-                tool::tool_to_cmd(
-                    &tool_mode_cmd.tool,
-                    tool_mode_cmd.user_confirmation,
-                    tool_mode_cmd.force_tool,
-                )
-            }));
+            let (tool_mode_str, tool_mode_tokens) =
+                get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+            editor_prompt.set_tool_mode(tool_mode_str);
+            editor_prompt.set_input_tokens(
+                session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
+            );
 
             editor_prompt.set_incognito(incognito);
             editor_prompt.set_agentic(session.agentic);
@@ -1853,6 +1845,58 @@ fn print_step(
         } else {
             outln!(io, "{} {}", step_badge, &masked_input);
         }
+    }
+}
+
+// --
+
+async fn get_tool_mode_and_tool_schema_input_tokens(
+    session: &SessionState,
+    tokenizer: Arc<Mutex<Option<tiktoken_rs::CoreBPE>>>,
+) -> (Option<String>, u32) {
+    if let Some(tool_mode_cmd) = session.tool_mode.clone() {
+        // If in tool mode, we need the tokenizer to be available to calculate
+        // the number of tokens the tool schema will consume. Since the
+        // tokenizer is loaded lazily, we block further progress until the
+        // tokenizer has been loaded.
+        {
+            let tokenizer_locked = tokenizer.lock().await;
+            if tokenizer_locked.is_none() {
+                drop(tokenizer_locked);
+                while tokenizer.lock().await.is_none() {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+                }
+            }
+        }
+        let tokenizer_locked = tokenizer.lock().await;
+        let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
+        let schema_key_name = if matches!(session.ai, config::AiModel::Anthropic(_)) {
+            "input_schema"
+        } else {
+            "parameters"
+        };
+        let tool_schema = tool_schema::get_tool_schema(
+            &session.cmd_registry,
+            &tool_mode_cmd.tool,
+            schema_key_name,
+            &session.shell,
+            session.agentic,
+        );
+        let tool_schema_str =
+            serde_json::to_string(&tool_schema).expect("Failed to serialize tool schema");
+        let tool_schema_input_tokens = bpe_tokenizer
+            .encode_with_special_tokens(&tool_schema_str)
+            .len() as u32;
+        (
+            Some(tool::tool_to_cmd(
+                &tool_mode_cmd.tool,
+                tool_mode_cmd.user_confirmation,
+                tool_mode_cmd.force_tool,
+            )),
+            tool_schema_input_tokens,
+        )
+    } else {
+        (None, 0)
     }
 }
 
