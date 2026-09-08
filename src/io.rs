@@ -306,6 +306,33 @@ impl Io {
     }
 
     //
+    // Output for REPL UI interface
+    //
+
+    pub fn repl_status(
+        &self,
+        index: u32,
+        model: String,
+        use_hai_router: session::HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    ) {
+        self.out.repl_status(
+            index,
+            model,
+            use_hai_router,
+            input_tokens,
+            task_mode,
+            tool_mode,
+            incognito,
+            agentic,
+        )
+    }
+
+    //
     // Output: Convenience methods that forward to output backend.
     //
 
@@ -579,6 +606,19 @@ pub trait Output: Send {
     fn is_section_aware(&self) -> bool {
         false
     }
+
+    /// Update REPL UI status line
+    fn repl_status(
+        &self,
+        index: u32,
+        model: String,
+        use_hai_router: session::HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    );
 }
 
 // --
@@ -750,6 +790,29 @@ impl Out {
     /// Whether the backend can utilize sections.
     pub fn is_section_aware(&self) -> bool {
         self.backend.lock().unwrap().is_section_aware()
+    }
+
+    fn repl_status(
+        &self,
+        index: u32,
+        model: String,
+        use_hai_router: session::HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    ) {
+        self.backend.lock().unwrap().repl_status(
+            index,
+            model,
+            use_hai_router,
+            input_tokens,
+            task_mode,
+            tool_mode,
+            incognito,
+            agentic,
+        );
     }
 
     //
@@ -1387,6 +1450,21 @@ impl Output for StdioOutput {
 
     fn terminal_capability(&self) -> TerminalCapability {
         self.terminal_capability.clone()
+    }
+
+    fn repl_status(
+        &self,
+        _index: u32,
+        _model: String,
+        _use_hai_router: session::HaiRouterState,
+        _input_tokens: u32,
+        _task_mode: Option<String>,
+        _tool_mode: Option<String>,
+        _incognito: bool,
+        _agentic: bool,
+    ) {
+        // No-op since terminal does not support inter-repl-prompt status line
+        // rendering.
     }
 }
 

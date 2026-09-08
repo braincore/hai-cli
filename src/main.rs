@@ -707,6 +707,31 @@ async fn repl(
         // - Can read from WebSocket (kernel mode)
         //
         let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.pop_front() {
+            if io.drives_repl() {
+                // Update REPL status line: This is especially important in
+                // agentic mode with the !hai tool where control isn't returned
+                // to the user via repl-prompt for a long time as the LLM
+                // issues its own commands without interruption.
+                let index = session.history.len().try_into().unwrap();
+                let llm_model_name = config::get_ai_model_display_name(&session.ai).to_string();
+                let task_mode = if let ReplMode::Task(task_fqn, _, _) = &session.repl_mode {
+                    Some(task_fqn.to_owned())
+                } else {
+                    None
+                };
+                let (tool_mode_str, tool_mode_tokens) =
+                    get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+                io.repl_status(
+                    index,
+                    llm_model_name,
+                    session.use_hai_router.clone(),
+                    session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
+                    task_mode,
+                    tool_mode_str,
+                    incognito,
+                    session.agentic,
+                );
+            }
             if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
                 if *step_id > 0 {
                     outln!(io);

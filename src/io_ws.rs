@@ -86,6 +86,40 @@ impl Output for WsOutput {
     fn is_section_aware(&self) -> bool {
         true
     }
+
+    fn repl_status(
+        &self,
+        index: u32,
+        model: String,
+        use_hai_router: crate::session::HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    ) {
+        let use_hai_router = match use_hai_router {
+            crate::session::HaiRouterState::On => HaiRouterState::On,
+            crate::session::HaiRouterState::OffForModel => HaiRouterState::OffForModel,
+            crate::session::HaiRouterState::Off => HaiRouterState::Off,
+        };
+        if self
+            .cmd_tx
+            .send(WsCmd::ReplStatus {
+                index,
+                model,
+                use_hai_router,
+                input_tokens,
+                task_mode,
+                tool_mode,
+                incognito,
+                agentic,
+            })
+            .is_err()
+        {
+            tracing::debug!("kernel: failed to send UpdateStatusLine to actor");
+        }
+    }
 }
 
 pub struct WsInput {
@@ -244,6 +278,19 @@ pub enum ServerMsg {
         agentic: bool,
     },
 
+    /// In-between REPL inputs, kernel is sending an update for the REPL status
+    /// line.
+    ReplStatus {
+        index: u32,
+        model: String,
+        use_hai_router: HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    },
+
     //
     // Request/response messages. These carry a `mid` (message id) that
     // correlates a response back to the client request that triggered it.
@@ -378,6 +425,18 @@ pub enum WsCmd {
     },
     ReplLine {
         reply: std::sync::mpsc::Sender<Answer>,
+        index: u32,
+        model: String,
+        use_hai_router: HaiRouterState,
+        input_tokens: u32,
+        task_mode: Option<String>,
+        tool_mode: Option<String>,
+        incognito: bool,
+        agentic: bool,
+    },
+
+    /// Update REPL status line in-between REPL prompts (ReplLine)
+    ReplStatus {
         index: u32,
         model: String,
         use_hai_router: HaiRouterState,
@@ -642,6 +701,28 @@ impl WsActor {
                 });
                 // We rely on `pending_client_repl` to resend the query if the
                 // client disconnects (rather than the buffer).
+                self.emit_or_drop(server_msg);
+            }
+            WsCmd::ReplStatus {
+                index,
+                model,
+                use_hai_router,
+                input_tokens,
+                task_mode,
+                tool_mode,
+                incognito,
+                agentic,
+            } => {
+                let server_msg = ServerMsg::ReplStatus {
+                    index,
+                    model,
+                    use_hai_router,
+                    input_tokens,
+                    task_mode,
+                    tool_mode,
+                    incognito,
+                    agentic,
+                };
                 self.emit_or_drop(server_msg);
             }
             WsCmd::UpdateConfig {
