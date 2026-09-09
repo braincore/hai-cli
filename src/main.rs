@@ -2116,46 +2116,12 @@ pub async fn prompt_ai(
                 } else {
                     (None, config::get_anthropic_api_key(cfg).unwrap(), None)
                 };
-            let use_thinking = match anthropic_model {
-                config::AnthropicModel::Opus4(use_thinking)
-                | config::AnthropicModel::Opus41(use_thinking)
-                | config::AnthropicModel::Opus45(use_thinking)
-                | config::AnthropicModel::Sonnet37(use_thinking)
-                | config::AnthropicModel::Sonnet4(use_thinking)
-                | config::AnthropicModel::Sonnet45(use_thinking) => *use_thinking,
-                _ => false,
-            };
-            let use_thinking46 = match anthropic_model {
-                config::AnthropicModel::Opus46(opts)
-                | config::AnthropicModel::Sonnet46(opts)
-                | config::AnthropicModel::Opus47(opts)
-                | config::AnthropicModel::Opus48(opts)
-                | config::AnthropicModel::Opus5(opts) => opts.thinking,
-                _ => None,
-            };
-            let thinking_display_summarized = match anthropic_model {
-                config::AnthropicModel::Opus46(opts)
-                | config::AnthropicModel::Opus47(opts)
-                | config::AnthropicModel::Opus48(opts)
-                | config::AnthropicModel::Opus5(opts)
-                | config::AnthropicModel::Sonnet46(opts) => opts.thinking_display,
-                _ => None,
-            };
+            let use_thinking = config::anthropic_model_use_deprecated_thinking(&anthropic_model);
+            let (use_thinking46, thinking_display_summarized, use_effort) =
+                config::anthropic_model_modern_opts(&anthropic_model);
             // Opus 4.7+ deprecated temperature
-            let temperature_deprecated = matches!(
-                anthropic_model,
-                config::AnthropicModel::Opus47(_)
-                    | config::AnthropicModel::Opus48(_)
-                    | config::AnthropicModel::Opus5(_)
-            );
-            let use_effort = match anthropic_model {
-                config::AnthropicModel::Opus46(opts)
-                | config::AnthropicModel::Opus47(opts)
-                | config::AnthropicModel::Opus48(opts)
-                | config::AnthropicModel::Opus5(opts)
-                | config::AnthropicModel::Sonnet46(opts) => opts.effort.as_ref(),
-                _ => None,
-            };
+            let temperature_deprecated =
+                config::anthropic_model_temperature_deprecated(&anthropic_model);
             anthropic::send_to_anthropic(
                 out,
                 api_url.as_deref(),

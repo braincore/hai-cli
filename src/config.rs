@@ -1953,6 +1953,53 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
     }
 }
 
+// --
+
+/// # Returns
+/// (Option<thinking>, Option<thinking_display>, Option<effort>)
+pub fn anthropic_model_modern_opts(
+    anthropic_model: &AnthropicModel,
+) -> (Option<bool>, Option<bool>, Option<&AnthropicEffort>) {
+    match anthropic_model {
+        AnthropicModel::Opus46(opts)
+        | AnthropicModel::Sonnet46(opts)
+        | AnthropicModel::Opus47(opts)
+        | AnthropicModel::Opus48(opts)
+        | AnthropicModel::Opus5(opts)
+        | AnthropicModel::Sonnet5(opts)
+        | AnthropicModel::Fable51(opts) => {
+            (opts.thinking, opts.thinking_display, opts.effort.as_ref())
+        }
+        _ => (None, None, None),
+    }
+}
+
+pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) -> bool {
+    matches!(
+        anthropic_model,
+        AnthropicModel::Opus47(_)
+            | AnthropicModel::Opus48(_)
+            | AnthropicModel::Opus5(_)
+            | AnthropicModel::Sonnet5(_)
+            | AnthropicModel::Fable51(_)
+    )
+}
+
+/// This is the old thinking flag which is now deprecated.
+pub fn anthropic_model_use_deprecated_thinking(anthropic_model: &AnthropicModel) -> bool {
+    match anthropic_model {
+        AnthropicModel::Opus4(use_thinking)
+        | AnthropicModel::Opus41(use_thinking)
+        | AnthropicModel::Opus45(use_thinking)
+        | AnthropicModel::Sonnet37(use_thinking)
+        | AnthropicModel::Sonnet4(use_thinking)
+        | AnthropicModel::Sonnet45(use_thinking) => *use_thinking,
+        _ => false,
+    }
+}
+
+// --
+
 /// Returns: (mill / 1M input tokens, mill / 1M output tokens)
 /// mill = one-thousandth of a US dollar
 pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
