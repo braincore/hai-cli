@@ -939,8 +939,10 @@ pub struct ChatResumeCmd {
 
 #[derive(Clone, Debug)]
 pub struct ChatSaveCmd {
-    /// Name of the asset to save the chat log to
-    pub chat_log_name: Option<String>,
+    /// Title of the chat log to save
+    pub title: Option<String>,
+    /// Asset prefix to save the chat log to
+    pub chat_log_prefix: Option<String>,
     /// If from a resumed chat, creates a new asset when re-saving
     pub fork: bool,
 }
@@ -1776,8 +1778,9 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         //
         "chats" => Cmd::Chats,
         "chat-save" => Cmd::ChatSave(ChatSaveCmd {
+            title: r.opt_take(0),
             fork: r.opts.bool("fork"),
-            chat_log_name: r.opt_take(0),
+            chat_log_prefix: r.opts.string("prefix"),
         }),
         "chat-resume" => Cmd::ChatResume(ChatResumeCmd {
             fork: r.opts.bool("fork"),

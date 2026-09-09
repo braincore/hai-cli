@@ -38,6 +38,11 @@ pub struct WorkerAssetUpdate {
     pub api_client: HaiClient,
     pub one_shot: bool,
     pub akm_info: Option<crate::feature::asset_crypt::AssetKeyMaterial>,
+    /// Set if caller wants to receive the result of the asset update. Note
+    /// that the returned asset-entry is not necessarily written revision. If
+    /// encryption metadata was added afterwards, that asset-entry will be
+    /// returned instead. Furthermore, if a metadata update was performed after
+    /// that (e.g. title), the post-update asset-entry will be returned.
     pub reply_channel: Option<tokio::sync::oneshot::Sender<Result<AssetEntry, AssetSaveError>>>,
 }
 
@@ -87,27 +92,6 @@ pub async fn worker_update_asset(
                 // metadata is set (for encryption), the asset_entry for the
                 // asset post-metadata is returned so that the rev_id can point
                 // to a decryptable version of the asset.
-
-                // Treat asset as markdown if it has .md extension or does not
-                // have an extension
-                let is_markdown = {
-                    let path = std::path::Path::new(&asset_name);
-                    match path.extension() {
-                        None => true,
-                        Some(ext) => ext.to_string_lossy().to_lowercase() == "md", // .md extension
-                    }
-                };
-                let mut md_title = None;
-                if is_markdown
-                    && let Ok(content_str) = std::str::from_utf8(&new_contents)
-                    && let Some(first_line) = content_str.lines().next()
-                    && let Some(title_candidate) = first_line.strip_prefix("# ")
-                {
-                    let title = title_candidate.trim().to_string();
-                    if !title.is_empty() {
-                        md_title = Some(serde_json::Value::String(title));
-                    }
-                }
 
                 let (new_hash_str, new_hash) =
                     crate::asset_cache::compute_sha256_in_memory(&new_contents);
@@ -188,6 +172,14 @@ pub async fn worker_update_asset(
                         }
                     }
                 } else {
+                    let first_text_line = if let Ok(content_str) =
+                        std::str::from_utf8(&new_contents)
+                        && let Some(first_line) = content_str.lines().next()
+                    {
+                        Some(first_line.to_string())
+                    } else {
+                        None
+                    };
                     let bottom = asset_bottom_map
                         .get(&asset_name)
                         .cloned()
@@ -298,26 +290,77 @@ pub async fn worker_update_asset(
                             }
                         }
                     };
-                    if is_markdown
-                        && let Ok(asset_entry) =
-                            asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
-                                .await
-                        && !one_shot
-                        && let Some((_, _, existing_hash)) = asset_bottom_map.get(&asset_name)
-                    {
-                        // Metadata updates change the revision
-                        // ID which we need to update to avoid
-                        // forking.
-                        asset_bottom_map.insert(
-                            asset_name.clone(),
-                            (
-                                asset_entry.entry_id,
-                                asset_entry.asset.rev_id,
-                                existing_hash.clone(),
-                            ),
-                        );
+
+                    // Treat asset as markdown if content-type set or has .md
+                    // extension or no extension at all.
+                    let mut is_likely_markdown = false;
+                    // Do not automatically clear title unless content-type is
+                    // set or asset has .md extension.
+                    let mut clear_title_ok = false;
+
+                    if let Ok(new_entry) = &new_entry {
+                        let path = std::path::Path::new(&asset_name);
+                        let md_path = path
+                            .extension()
+                            .map(|ext| ext.to_string_lossy().to_lowercase() == "md")
+                            .unwrap_or(false);
+                        let no_ext = path.extension().is_none();
+                        if let Some(md) = &new_entry.metadata {
+                            if let Some(content_type) = &md.content_type {
+                                // If content-type is set, do not use path hint.
+                                if content_type == "text/markdown" {
+                                    is_likely_markdown = true;
+                                    clear_title_ok = true;
+                                }
+                            } else {
+                                is_likely_markdown = md_path || no_ext;
+                                clear_title_ok = md_path;
+                            }
+                        } else {
+                            is_likely_markdown = md_path || no_ext;
+                            clear_title_ok = md_path;
+                        }
                     }
-                    new_entry
+
+                    if is_likely_markdown
+                        && let Some(first_text_line) = first_text_line
+                        && let Some(title_candidate) = first_text_line.strip_prefix("# ")
+                    {
+                        let title = title_candidate.trim().to_string();
+                        if (title.is_empty() && clear_title_ok) || !title.is_empty() {
+                            let md_title = if title.is_empty() {
+                                None
+                            } else {
+                                Some(serde_json::Value::String(title))
+                            };
+                            if let Ok(asset_entry) =
+                                asset_metadata_set_key(&api_client, &asset_name, "title", md_title)
+                                    .await
+                                && !one_shot
+                                && let Some((_, _, existing_hash)) =
+                                    asset_bottom_map.get(&asset_name)
+                            {
+                                // Metadata updates change the revision
+                                // ID which we need to update to avoid
+                                // forking.
+                                asset_bottom_map.insert(
+                                    asset_name.clone(),
+                                    (
+                                        asset_entry.entry_id.clone(),
+                                        asset_entry.asset.rev_id.clone(),
+                                        existing_hash.clone(),
+                                    ),
+                                );
+                                Ok(asset_entry)
+                            } else {
+                                new_entry
+                            }
+                        } else {
+                            new_entry
+                        }
+                    } else {
+                        new_entry
+                    }
                 };
                 if let Some(reply_channel) = reply_channel {
                     let _ = reply_channel.send(new_entry);

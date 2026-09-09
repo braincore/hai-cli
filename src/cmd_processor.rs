@@ -5578,7 +5578,8 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next().discard_cmd_and_output()
         }
         cmd::Cmd::ChatSave(cmd::ChatSaveCmd {
-            chat_log_name,
+            title,
+            chat_log_prefix,
             fork,
         }) => {
             let username = if let Some(account) = session.account.as_ref() {
@@ -5587,13 +5588,18 @@ pub async fn process_cmd(
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next();
             };
-            let resolved_chat_log_name = if let Some(chat_log_name) = chat_log_name {
-                Some(chat_log_name)
-            } else if !fork && let Some(chat_log_name) = session.chat_log_asset_name.as_ref() {
-                Some(chat_log_name.clone())
+            let resolved_chat_log_name =
+                if !fork && let Some(chat_log_name) = session.chat_log_asset_name.as_ref() {
+                    Some(chat_log_name.clone())
+                } else {
+                    None
+                };
+            let chat_log_prefix = if let Some(chat_log_prefix) = chat_log_prefix {
+                Some(resolve_asset_name(&io.out, &chat_log_prefix, session).await)
             } else {
                 None
-            };
+            }
+            .unwrap_or("chat/".to_string());
             chat_store::save_chat_as_asset(
                 &io,
                 session,
@@ -5605,6 +5611,8 @@ pub async fn process_cmd(
                 &api_client,
                 &username,
                 resolved_chat_log_name.as_deref(),
+                &chat_log_prefix,
+                title.as_deref(),
                 debug,
             )
             .await;

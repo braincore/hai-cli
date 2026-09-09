@@ -53,13 +53,25 @@ pub async fn save_chat_as_asset(
     api_client: &api::client::HaiClient,
     username: &str,
     chat_log_name: Option<&str>,
+    chat_log_prefix: &str,
+    title: Option<&str>,
     debug: bool,
 ) {
     let chat_log_asset_name = if let Some(chat_log_name) = chat_log_name {
         chat_log_name.to_owned()
     } else {
         let now = chrono::Local::now();
-        format!("chat/{}", now.format("%Y-%m-%d-%H%M%S"))
+        let sep = if chat_log_prefix.ends_with('/') || chat_log_prefix.ends_with(':') {
+            ""
+        } else {
+            "/"
+        };
+        format!(
+            "{}{}{}",
+            chat_log_prefix,
+            sep,
+            now.format("%Y-%m-%d-%H%M%S")
+        )
     };
 
     let mut needs_attachment = false;
@@ -76,9 +88,12 @@ pub async fn save_chat_as_asset(
 
     // Check if chatlog asset already exists. If it doesn't, we may need to
     // create it first to attach images.
-    let mut existing_entry_id =
+    let mut existing_entry_ref =
         match asset_reader::get_asset_entry(api_client, &chat_log_asset_name, true).await {
-            Ok(get_res) => Some(get_res.entry.entry_id.clone()),
+            Ok(get_res) => Some((
+                get_res.entry.entry_id.clone(),
+                get_res.entry.asset.rev_id.clone(),
+            )),
             Err(asset_reader::GetAssetError::BadName) => None,
             Err(asset_reader::GetAssetError::DataFetchFailed(failure)) => {
                 errorln!(
@@ -113,7 +128,7 @@ pub async fn save_chat_as_asset(
         }
     };
 
-    if existing_entry_id.is_none() && needs_attachment {
+    if existing_entry_ref.is_none() && needs_attachment {
         // Create a blank asset first to attach images to.
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let _ = update_asset_tx
@@ -133,42 +148,9 @@ pub async fn save_chat_as_asset(
             ))
             .await;
         if let Ok(Ok(new_entry)) = reply_rx.await {
-            existing_entry_id = Some(new_entry.entry_id.clone());
+            existing_entry_ref = Some((new_entry.entry_id.clone(), new_entry.asset.rev_id.clone()));
         }
     }
-
-    let abridged_history = session::get_abridged_history(&session.history);
-    let abridged_history_tokens = bpe_tokenizer.encode_with_special_tokens(&abridged_history);
-    let chat_title = if abridged_history.len() > 100 {
-        outln!(
-            io,
-            "Generating title ({} tokens)...",
-            abridged_history_tokens
-                .len()
-                .to_formatted_string(&Locale::en)
-        );
-        flush!(io);
-        prompt_ai_simple(
-            &io.out,
-            &format!(
-                r#"Generate a short title for the included chat log.
-Do not quote it.
-Do not include anything besides the title.
-Since the chat is already known as a conversation, do
-not include words that imply its a conversation or
-lesson (e.g. "understanding").\n\n{}"#,
-                abridged_history
-            ),
-            session,
-            cfg,
-            ctrlc_handler,
-            debug,
-        )
-        .await
-    } else {
-        None
-    };
-    outln!(io, "Saving to asset: {}", chat_log_asset_name);
 
     let mut new_ids = std::collections::HashSet::new();
 
@@ -209,7 +191,7 @@ lesson (e.g. "understanding").\n\n{}"#,
     //
 
     let mut history_to_save = session.history.clone();
-    if let Some(entry_id) = existing_entry_id {
+    if let Some((entry_id, _rev_id)) = existing_entry_ref.as_ref() {
         for log_entry in history_to_save.iter_mut() {
             if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
                 if let chat::MessageContent::ImageUrl { id, image_url } =
@@ -293,11 +275,12 @@ lesson (e.g. "understanding").\n\n{}"#,
     };
     session.chat_log_asset_name = Some(chat_log_asset_name.clone());
 
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
     let _ = update_asset_tx
         .send(asset_async_writer::WorkerAssetMsg::Update(
             asset_async_writer::WorkerAssetUpdate {
                 asset_name: chat_log_asset_name.clone(),
-                asset_entry_ref: None,
+                asset_entry_ref: existing_entry_ref,
                 new_contents: serialized_log,
                 is_push: false,
                 put_conflict_policy: None,
@@ -305,10 +288,66 @@ lesson (e.g. "understanding").\n\n{}"#,
                 api_client: api_client.clone(),
                 one_shot: true,
                 akm_info: akm_info.clone(),
-                reply_channel: None,
+                reply_channel: Some(reply_tx),
             },
         ))
         .await;
+
+    // Wait until write is complete before setting metadata
+    let update_res = reply_rx.await;
+
+    let needs_title = if title.is_some() {
+        // Support overriding title
+        true
+    } else if let Ok(Ok(asset_entry)) = update_res {
+        asset_entry
+            .metadata
+            .as_ref()
+            .map(|m| m.title.is_none())
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    let chat_title = if needs_title {
+        let abridged_history = session::get_abridged_history(&session.history);
+        let abridged_history_tokens = bpe_tokenizer.encode_with_special_tokens(&abridged_history);
+        if let Some(title) = title {
+            Some(title.to_string())
+        } else if abridged_history.len() > 100 {
+            outln!(
+                io,
+                "Generating title ({} tokens)...",
+                abridged_history_tokens
+                    .len()
+                    .to_formatted_string(&Locale::en)
+            );
+            flush!(io);
+            prompt_ai_simple(
+                &io.out,
+                &format!(
+                    r#"Generate a short title for the included chat log.
+    Do not quote it.
+    Do not include anything besides the title.
+    Since the chat is already known as a conversation, do
+    not include words that imply its a conversation or
+    lesson (e.g. "understanding").\n\n{}"#,
+                    abridged_history
+                ),
+                session,
+                cfg,
+                ctrlc_handler,
+                debug,
+            )
+            .await
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    outln!(io, "Saved to asset: {}", chat_log_asset_name);
 
     // Wait for write to complete before setting metadata
     asset_async_writer::flush_asset_updates(&update_asset_tx).await;
@@ -325,7 +364,7 @@ lesson (e.g. "understanding").\n\n{}"#,
         ])),
     )];
 
-    if let Some(chat_title) = chat_title.as_ref() {
+    if needs_title && let Some(chat_title) = chat_title.as_ref() {
         metadata_keys.push(("title", Some(serde_json::Value::String(chat_title.clone()))));
     }
 

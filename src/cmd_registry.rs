@@ -1998,13 +1998,16 @@ pub static REGISTRY: &[Entry] = &[
             Slash,
             Cow::Borrowed("chat-save"),
             Cow::Borrowed("chat"),
-            Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Optional)]),
+            Cow::Borrowed(&[arg("title", Text, RestOpt)]),
             Doc::new("Save the conversation as an asset")
-                .more("If the name is omitted, one is generated automatically"),
+            .more("Once a conversation is bound to an asset further \
+            /chat-save calls update that same asset unless .fork is set"),
         )
-        .with_opts(&[flag(
+        .with_opts(&[
+            opt("prefix", OptType::Str, None, "Prefix to prepend to generated asset name"),
+            flag(
             "fork",
-            "If resumed from a saved chat, create a new asset when re-saving",
+            "Save to a new asset instead of updating the existing one",
         )])
         .with_traits(Traits::NONE.assets()),
     ),
