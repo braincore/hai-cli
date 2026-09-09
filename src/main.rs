@@ -547,6 +547,7 @@ async fn repl(
     let (update_asset_tx, update_asset_rx) =
         tokio::sync::mpsc::channel::<asset_async_writer::WorkerAssetMsg>(100);
     tokio::spawn(asset_async_writer::worker_update_asset(
+        io.out.clone(),
         asset_blob_cache.clone(),
         update_asset_rx,
         db.clone(),

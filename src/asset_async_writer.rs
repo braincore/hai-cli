@@ -11,6 +11,7 @@ use crate::api::types::asset::{
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader;
 use crate::feature::asset_crypt;
+use crate::{errln, errorln, io::Out};
 
 #[derive(Debug)]
 pub enum WorkerAssetMsg {
@@ -54,6 +55,7 @@ pub enum AssetSaveError {
 }
 
 pub async fn worker_update_asset(
+    out: Out,
     asset_blob_cache: Arc<AssetBlobCache>,
     mut rx: tokio::sync::mpsc::Receiver<WorkerAssetMsg>,
     _db: Arc<Mutex<rusqlite::Connection>>,
@@ -149,8 +151,9 @@ pub async fn worker_update_asset(
                                 {
                                     Ok(asset_entry) => Ok(asset_entry),
                                     Err(e) => {
-                                        eprintln!(
-                                            "error: failed to put asset encryption metadata: {}",
+                                        errorln!(
+                                            out,
+                                            "failed to put asset encryption metadata: {}",
                                             e
                                         );
                                         // Fallback to non-metadata push result
@@ -162,8 +165,8 @@ pub async fn worker_update_asset(
                             }
                         }
                         Err(e) => {
-                            let error_msg = format!("error: failed to push asset: {}", e);
-                            eprintln!("{}", error_msg);
+                            let error_msg = format!("failed to push asset: {}", e);
+                            errorln!(out, "{}", error_msg);
                             asset_errors
                                 .entry(asset_name.clone())
                                 .or_default()
@@ -226,8 +229,8 @@ pub async fn worker_update_asset(
                                 Ok(res.entry)
                             }
                             Err(e) => {
-                                let error_msg = format!("error: failed to replace asset: {}", e);
-                                eprintln!("{}", error_msg);
+                                let error_msg = format!("failed to replace asset: {}", e);
+                                errorln!(out, "{}", error_msg);
                                 asset_errors
                                     .entry(asset_name.clone())
                                     .or_default()
@@ -267,8 +270,9 @@ pub async fn worker_update_asset(
                                     {
                                         Ok(asset_entry) => Ok(asset_entry),
                                         Err(e) => {
-                                            eprintln!(
-                                                "error: failed to put asset encryption metadata: {}",
+                                            errorln!(
+                                                out,
+                                                "failed to put asset encryption metadata: {}",
                                                 e
                                             );
                                             // Fallback to non-metadata push result
@@ -280,8 +284,8 @@ pub async fn worker_update_asset(
                                 }
                             }
                             Err(e) => {
-                                let error_msg = format!("error: failed to put asset: {}", e);
-                                eprintln!("{}", error_msg);
+                                let error_msg = format!("failed to put asset: {}", e);
+                                errorln!(out, "{}", error_msg);
                                 asset_errors
                                     .entry(asset_name.clone())
                                     .or_default()
@@ -373,9 +377,9 @@ pub async fn worker_update_asset(
                 if let Some(errors) = errors
                     && !errors.is_empty()
                 {
-                    eprintln!("errors while in editor:");
+                    errorln!(out, "errors while in editor:");
                     for error_msg in errors {
-                        eprintln!("{}", error_msg);
+                        errln!(out, "{}", error_msg);
                     }
                 }
             }
@@ -408,7 +412,7 @@ pub async fn asset_metadata_set_keys(
     api_client: &HaiClient,
     asset_name: &str,
     keys: &[(&str, Option<serde_json::Value>)],
-) -> Result<AssetEntry, ()> {
+) -> Result<AssetEntry, Box<dyn std::error::Error>> {
     use crate::api::types::asset::AssetGetArg;
     match api_client
         .asset_get(AssetGetArg {
@@ -428,7 +432,7 @@ pub async fn asset_metadata_set_keys(
                     serde_json::from_str::<serde_json::Value>(&contents)
                         .expect("failed to parse metadata")
                 } else {
-                    return Err(());
+                    return Err("Failed to download metadata".into());
                 }
             } else {
                 serde_json::json!({})
@@ -460,8 +464,8 @@ pub async fn asset_metadata_set_keys(
                     }
                 }
             } else {
-                eprintln!("unexpected: metadata is not a map");
-                return Err(());
+                tracing::error!("unexpected: metadata is not a map");
+                return Err("Metadata is not a map".into());
             }
 
             let md_contents =
@@ -480,14 +484,14 @@ pub async fn asset_metadata_set_keys(
             {
                 Ok(res) => Ok(res.entry),
                 Err(e) => {
-                    eprintln!("error: {}", e);
-                    Err(())
+                    tracing::error!("{}", e);
+                    Err(e.into())
                 }
             }
         }
         Err(e) => {
-            eprintln!("error: {}", e);
-            Err(())
+            tracing::error!("{}", e);
+            Err(e.into())
         }
     }
 }
@@ -503,7 +507,7 @@ pub async fn asset_metadata_set_key(
     asset_name: &str,
     key: &str,
     value: Option<serde_json::Value>,
-) -> Result<AssetEntry, ()> {
+) -> Result<AssetEntry, Box<dyn std::error::Error>> {
     asset_metadata_set_keys(api_client, asset_name, &[(key, value)]).await
 }
 
