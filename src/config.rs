@@ -102,9 +102,11 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     opts.remove(0);
     match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
-        "deepseek" | "deepseek4" | "deepseek4flash" | "ds4" | "ds4f" | "ds" => Some(
-            AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Flash(parse_deepseek_v4_opts(opts))),
-        ),
+        "ds" | "deepseek" | "deepseek4" | "deepseek4flash" | "ds4" | "ds4f" => {
+            Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(
+                parse_deepseek_v4_opts(opts),
+            )))
+        }
         "deepseek4pro" | "ds4p" | "dsp" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Pro(
             parse_deepseek_v4_opts(opts),
         ))),
@@ -741,6 +743,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
                 let base = "deepseek-v4-pro".to_string();
                 append_deepseek_v4_opts(base, opts)
             }
+            DeepSeekModel::DeepSeekV41Flash(opts) => {
+                let base = "deepseek-v4.1-flash".to_string();
+                append_deepseek_v4_opts(base, opts)
+            }
             DeepSeekModel::Other(name) => format!("deepseek/{}", name),
         },
 
@@ -1327,6 +1333,7 @@ pub enum DeepSeekModel {
     DeepSeekReasoner,
     DeepSeekV4Flash(DeepSeekV4Options),
     DeepSeekV4Pro(DeepSeekV4Options),
+    DeepSeekV41Flash(DeepSeekV4Options),
     Other(String),
 }
 
@@ -1466,6 +1473,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner",
             DeepSeekModel::DeepSeekV4Flash(_) => "deepseek-v4-flash",
             DeepSeekModel::DeepSeekV4Pro(_) => "deepseek-v4-pro",
+            DeepSeekModel::DeepSeekV41Flash(_) => "deepseek-flash",
             DeepSeekModel::Other(name) => name,
         },
         AiModel::Google(model) => match model {
@@ -1588,6 +1596,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             }
             DeepSeekModel::DeepSeekV4Pro(opts) => {
                 format!("deepseek-v4-pro{}", get_deepseek_v4_opts_display(opts))
+            }
+            DeepSeekModel::DeepSeekV41Flash(opts) => {
+                format!("deepseek-v4.1-flash{}", get_deepseek_v4_opts_display(opts))
             }
             DeepSeekModel::Other(name) => name.clone(),
         },
@@ -1799,9 +1810,15 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
             image: Some(AiModelImageCapability { auto_resize: false }),
             tool: true,
         },
-        AiModel::DeepSeek(_) => AiModelCapability {
-            image: None,
-            tool: true,
+        AiModel::DeepSeek(model) => match model {
+            DeepSeekModel::DeepSeekV41Flash(_) => AiModelCapability {
+                image: Some(AiModelImageCapability { auto_resize: false }),
+                tool: true,
+            },
+            _ => AiModelCapability {
+                image: None,
+                tool: true,
+            },
         },
         AiModel::Google(_) => AiModelCapability {
             image: Some(AiModelImageCapability { auto_resize: false }),
@@ -1955,6 +1972,60 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
 
 // --
 
+pub fn openai_compat_reasoning_effort(model: &AiModel) -> &Option<OpenAiReasoningEffort> {
+    match model {
+        AiModel::OpenAi(
+            OpenAiModel::Gpt5(opts)
+            | OpenAiModel::Gpt5Mini(opts)
+            | OpenAiModel::Gpt5Nano(opts)
+            | OpenAiModel::Gpt52(opts)
+            | OpenAiModel::Gpt54(opts)
+            | OpenAiModel::Gpt55(opts)
+            | OpenAiModel::Gpt56Sol(opts)
+            | OpenAiModel::Gpt56Terra(opts)
+            | OpenAiModel::Gpt56Luna(opts)
+            | OpenAiModel::Gpt6Astra(opts),
+        ) => &opts.reasoning_effort,
+        AiModel::Google(
+            GoogleModel::Gemini3Flash(opts)
+            | GoogleModel::Gemini3Pro(opts)
+            | GoogleModel::Gemini31FlashLite(opts)
+            | GoogleModel::Gemini31Pro(opts)
+            | GoogleModel::Gemini35Flash(opts)
+            | GoogleModel::Gemini35FlashLite(opts)
+            | GoogleModel::Gemini36Flash(opts)
+            | GoogleModel::Gemini37Flash(opts)
+            | GoogleModel::Gemini38Flash(opts),
+        ) => &opts.thinking_level,
+        AiModel::DeepSeek(
+            DeepSeekModel::DeepSeekV4Flash(opts)
+            | DeepSeekModel::DeepSeekV4Pro(opts)
+            | DeepSeekModel::DeepSeekV41Flash(opts),
+        ) => &opts.reasoning_effort,
+        _ => &None,
+    }
+}
+
+pub fn openai_compat_verbosity(model: &AiModel) -> &Option<OpenAiVerbosity> {
+    match model {
+        AiModel::OpenAi(
+            OpenAiModel::Gpt5(opts)
+            | OpenAiModel::Gpt5Mini(opts)
+            | OpenAiModel::Gpt5Nano(opts)
+            | OpenAiModel::Gpt52(opts)
+            | OpenAiModel::Gpt54(opts)
+            | OpenAiModel::Gpt55(opts)
+            | OpenAiModel::Gpt56Sol(opts)
+            | OpenAiModel::Gpt56Terra(opts)
+            | OpenAiModel::Gpt56Luna(opts)
+            | OpenAiModel::Gpt6Astra(opts),
+        ) => &opts.verbosity,
+        _ => &None,
+    }
+}
+
+// --
+
 /// # Returns
 /// (Option<thinking>, Option<thinking_display>, Option<effort>)
 pub fn anthropic_model_modern_opts(
@@ -2027,6 +2098,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             DeepSeekModel::DeepSeekReasoner => Some((140, 280)),
             DeepSeekModel::DeepSeekV4Flash(_) => Some((140, 280)),
             DeepSeekModel::DeepSeekV4Pro(_) => Some((435, 870)),
+            DeepSeekModel::DeepSeekV41Flash(_) => Some((300, 1200)),
             DeepSeekModel::Other(_) => None,
         },
         AiModel::Google(model) => match model {
@@ -2377,7 +2449,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             thinking_display: None,
         }))
     } else if get_deepseek_api_key(cfg).is_some() {
-        AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Flash(DeepSeekV4Options {
+        AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(DeepSeekV4Options {
             reasoning_effort: None,
         }))
     } else if get_google_api_key(cfg).is_some() {

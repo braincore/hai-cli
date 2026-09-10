@@ -1001,7 +1001,6 @@ pub async fn process_cmd(
                     );
                 }
             }
-            // Oh okay, great... discard cmd... Maybe show the command but with ellipses?
             ProcessCmdResult::loop_next()
                 .discard_cmd_and_output()
                 .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)

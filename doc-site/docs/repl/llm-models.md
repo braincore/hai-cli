@@ -41,9 +41,9 @@ supports all the capabilities (images, tools) utilized in the conversation.
 | Provider   | Notable Models (Not Comprehensive)      |
 |------------|-----------------------------------------|
 | OpenAI     | gpt-6-astra (`astra`), gpt-5.6-sol (`sol`), gpt-5.6-terra (`terra`), gpt-5.6-luna (`luna`) |
-| Anthropic  | opus-5 (`opus`), sonnet-5 (`sonnet`).   |
+| Anthropic  | opus-5 (`opus`), sonnet-5 (`sonnet`)    |
 | Google     | gemini-3.1-pro (`geminipro`), gemini-3.8-flash (`flash`) |
-| DeepSeek   | v4-pro (`ds4p`), v4-flash (`ds4f`)      |
+| DeepSeek   | v4.1-flash (`ds`)      |
 | xAI        | grok-4.6 (`grok`)                       |
 | Ollama     | gemma4:26b, gpt-oss:20b                 |
 
@@ -86,13 +86,14 @@ delimited keys or key-values following the model name:
 | Opus-4.x   | `summarize` (`s`) | none, setting key alone is sufficient                       |
 | Opus-5.x   | `thinking` (`t`)  | none, setting key alone is sufficient                       |
 | Opus-5.x   | `summarize` (`s`) | none, setting key alone is sufficient                       |
+| DeepSeek   | `reasoning` (`r`) | `low` (`l`), `medium` (`m`), `high` (`h`)                   |
 
 Examples:
 
 ```
-/ai gpt-5,reasoning=low,verbosity=medium
-/ai gpt-5,r=l,v=m
-/ai gpt-5,r=h
+/ai terra,reasoning=low,verbosity=medium
+/ai terra,r=l,v=m
+/ai terra,r=h
 /ai flash3,r=h
 /ai sonnet,thinking
 /ai sonnet,t

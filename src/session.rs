@@ -597,6 +597,8 @@ pub fn calc_image_tokens(ai_model: &config::AiModel, hq: bool, dim: (u32, u32)) 
             tiles * 258
         }
         config::AiModel::OpenAi(_)
+        // deepseek-flash has its own calculation but it's opaque. Fo now, just
+        // fallback to the openai calculation.
         | config::AiModel::DeepSeek(_)
         | config::AiModel::LlamaCpp(_)
         | config::AiModel::Ollama(_)

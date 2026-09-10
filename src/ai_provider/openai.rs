@@ -140,7 +140,7 @@ pub async fn send_to_openai(
                 OpenAiReasoningEffort::Xhigh => "xhigh",
             };
             request_obj.insert("reasoning_effort".to_string(), json!(reasoning_effort_str));
-            if model.starts_with("deepseek-v4-") {
+            if model.starts_with("deepseek-v4-") || model == "deepseek-flash" {
                 if matches!(reasoning_effort, OpenAiReasoningEffort::None) {
                     request_obj.remove("reasoning_effort");
                     request_obj.insert("thinking".to_string(), json!({"type": "disabled"}));

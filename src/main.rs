@@ -1997,29 +1997,8 @@ pub async fn prompt_ai(
         | config::AiModel::DeepSeek(_)
         | config::AiModel::Xai(_)
         | config::AiModel::LlamaCpp(_) => {
-            let openai_reasoning_effort = match &session.ai {
-                config::AiModel::OpenAi(
-                    config::OpenAiModel::Gpt5(opts)
-                    | config::OpenAiModel::Gpt5Mini(opts)
-                    | config::OpenAiModel::Gpt5Nano(opts),
-                ) => &opts.reasoning_effort,
-                config::AiModel::Google(
-                    config::GoogleModel::Gemini3Flash(opts) | config::GoogleModel::Gemini3Pro(opts),
-                ) => &opts.thinking_level,
-                config::AiModel::DeepSeek(
-                    config::DeepSeekModel::DeepSeekV4Flash(opts)
-                    | config::DeepSeekModel::DeepSeekV4Pro(opts),
-                ) => &opts.reasoning_effort,
-                _ => &None,
-            };
-            let openai_verbosity = match &session.ai {
-                config::AiModel::OpenAi(
-                    config::OpenAiModel::Gpt5(opts)
-                    | config::OpenAiModel::Gpt5Mini(opts)
-                    | config::OpenAiModel::Gpt5Nano(opts),
-                ) => &opts.verbosity,
-                _ => &None,
-            };
+            let openai_reasoning_effort = config::openai_compat_reasoning_effort(&session.ai);
+            let openai_verbosity = config::openai_compat_verbosity(&session.ai);
             let deepseek_flatten_nonuser_content =
                 matches!(session.ai, config::AiModel::DeepSeek(_));
             let (base_url, api_key, provider_header) =
