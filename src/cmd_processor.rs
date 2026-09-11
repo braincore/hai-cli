@@ -6282,6 +6282,8 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AccountNew => {
+            let logged_out_api_client = mk_api_client(None);
+
             let mut username;
             loop {
                 username = match io.query(&crate::io::Query::line("Username?")).into_option() {
@@ -6293,7 +6295,39 @@ pub async fn process_cmd(
                     // pressing Enter without entering a username.
                     return ProcessCmdResult::loop_next();
                 } else if username.len() >= 3 {
-                    break;
+                    use api::types::account::AccountSearchArg;
+                    match logged_out_api_client
+                        .account_search(AccountSearchArg {
+                            q: username.clone(),
+                        })
+                        .await
+                    {
+                        Ok(res) => {
+                            let mut found = false;
+                            for user in res.users {
+                                if user.username == username {
+                                    errorln!(io, "Username '{}' is already taken", username);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if found {
+                                continue;
+                            } else {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // If there's a problem, don't fail the
+                            // process.
+                            warnln!(
+                                io,
+                                "failed to check username availability: {} (proceeding anyway)",
+                                e
+                            );
+                            break;
+                        }
+                    }
                 } else {
                     outln!(io, "Username must be at least 3 characters")
                 }
@@ -6347,7 +6381,6 @@ pub async fn process_cmd(
             }
 
             use api::types::account::AccountRegisterArg;
-            let logged_out_api_client = mk_api_client(None);
             match logged_out_api_client
                 .account_register(AccountRegisterArg {
                     username,
