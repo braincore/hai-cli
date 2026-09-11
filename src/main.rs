@@ -351,7 +351,7 @@ async fn main() -> process::ExitCode {
                 vec![session::CmdInput {
                     input: account_login_cmd,
                     // Use Internal to avoid printing command
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 }],
                 true,
@@ -603,9 +603,10 @@ async fn repl(
     }
 
     let mut cmd_queue = session.cmd_queue.lock().await;
-    for init_cmd in init_cmds.into_iter() {
-        cmd_queue.push_back(init_cmd);
-    }
+    cmd_queue.push_group(session::CmdGroup {
+        cmds: std::collections::VecDeque::from(init_cmds),
+        cascade_error: true,
+    });
     drop(cmd_queue);
 
     if mute_all_but_final_ai_response {
@@ -707,7 +708,7 @@ async fn repl(
         // - Can read from CLI stdin (reedline)
         // - Can read from WebSocket (kernel mode)
         //
-        let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.pop_front() {
+        let mut cmd_input = if let Some(cmd_info) = session.cmd_queue.lock().await.next_cmd() {
             if io.drives_repl() {
                 // Update REPL status line: This is especially important in
                 // agentic mode with the !hai tool where control isn't returned
@@ -792,6 +793,15 @@ async fn repl(
                     &cmd_info.input,
                     &masked_strings,
                 );
+            } else if let session::CmdSource::Internal(print_cmd) = &cmd_info.source {
+                if *print_cmd {
+                    print_internal_cmd_input(
+                        io,
+                        &session.cmd_registry,
+                        &cmd_info.input,
+                        &masked_strings,
+                    );
+                }
             }
             cmd_info
         } else if io.drives_repl() {
@@ -834,7 +844,10 @@ async fn repl(
                 Answer::Cancelled => continue,
                 // Client sent EOF (closed / CtrlD): same semantics as reedline EOF.
                 Answer::Eof => match on_eof(&session, io) {
-                    Some(cmd_input) => cmd_input,
+                    Some(cmd_input) => {
+                        session.cmd_queue.lock().await.push_cmd(cmd_input);
+                        continue;
+                    }
                     None => break,
                 },
             }
@@ -908,7 +921,10 @@ async fn repl(
                 // CtrlD now routes through the shared helper so kernel EOF and
                 // terminal EOF behave identically.
                 Ok(Signal::CtrlD) => match on_eof(&session, io) {
-                    Some(cmd_input) => cmd_input,
+                    Some(cmd_input) => {
+                        session.cmd_queue.lock().await.push_cmd(cmd_input);
+                        continue;
+                    }
                     None => break,
                 },
                 unk => {
@@ -1075,10 +1091,11 @@ async fn repl(
         io.record_off();
 
         if cmd_result.new_cmds.len() > 0 {
-            let mut cmd_queue = session.cmd_queue.lock().await;
-            for new_cmd in cmd_result.new_cmds.into_iter().rev() {
-                cmd_queue.push_front(new_cmd);
-            }
+            session
+                .cmd_queue
+                .lock()
+                .await
+                .push_cmds(cmd_result.new_cmds, cmd_result.new_cmds_cascade_error);
         }
         if cmd_result.new_temp_files.len() > 0 {
             for new_temp_file in cmd_result.new_temp_files.into_iter() {
@@ -1091,8 +1108,7 @@ async fn repl(
             }
         }
         if cmd_result.purge_cmd_queue {
-            let mut cmd_queue = session.cmd_queue.lock().await;
-            cmd_queue.clear();
+            session.cmd_queue.lock().await.clear();
         }
         if let Some(tool_mode_cmd) = cmd_result.tool_mode_cmd {
             if tool_mode_cmd.is_none() && session.tool_mode.is_none() {
@@ -1594,13 +1610,11 @@ async fn repl(
                         let (mut output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl)
                         {
                             let mut cmd_queue = session.cmd_queue.lock().await;
-                            match tool::execute_hai_repl_tool(
-                                &io.out,
-                                &tp.tool,
-                                arg,
-                                &mut cmd_queue,
-                            ) {
-                                Ok(output_text) => (output_text, None),
+                            match tool::execute_hai_repl_tool(&io.out, &tp.tool, arg) {
+                                Ok((output_text, new_cmds)) => {
+                                    cmd_queue.push_cmds(new_cmds, false);
+                                    (output_text, None)
+                                }
                                 Err(e) => {
                                     let err_text = format!("error executing hai-repl tool: {}", e);
                                     outln!(io, "{}", err_text);
@@ -1782,13 +1796,13 @@ fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
     if session.tool_mode.is_some() {
         Some(session::CmdInput {
             input: "!exit".to_string(),
-            source: session::CmdSource::Internal,
+            source: session::CmdSource::Internal(true),
             reply_channel: None,
         })
     } else if matches!(session.repl_mode, ReplMode::Task(..)) {
         Some(session::CmdInput {
             input: "/task-end".to_string(),
-            source: session::CmdSource::Internal,
+            source: session::CmdSource::Internal(true),
             reply_channel: None,
         })
     } else {
@@ -1870,6 +1884,48 @@ fn print_step(
             outln!(io, "{}", &masked_input);
         } else {
             outln!(io, "{} {}", step_badge, &masked_input);
+        }
+    }
+}
+
+fn print_internal_cmd_input(
+    io: &Io,
+    cmd_registry: &cmd_registry::Registry,
+    input: &str,
+    masked_strings: &Vec<String>,
+) {
+    let mut masked_input = input.to_string();
+    for masked_string in masked_strings {
+        let mask = "*".repeat(masked_string.len());
+        masked_input = masked_input.replace(masked_string, &mask);
+    }
+    if cmd::get_cmds_with_markdown_body_re().is_match(input) {
+        // For prep & pin, we print the message w/o the command prefix.
+        let (message, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, message }))
+        | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, message })) =
+            cmd::parse_user_input(cmd_registry, &masked_input, None, None)
+        {
+            (
+                message,
+                match accent {
+                    Some(cmd::Accent::Danger) => Some((128, 0, 0)),
+                    Some(cmd::Accent::Warn) => Some((153, 102, 0)),
+                    Some(cmd::Accent::Info) => Some((0, 51, 102)),
+                    Some(cmd::Accent::Success) => Some((0, 102, 51)),
+                    _ => None,
+                },
+            )
+        } else {
+            (masked_input, None)
+        };
+        term_color::print_multi_lang_syntax_highlighting(&io.out, &message, &color);
+        outln!(io);
+    } else {
+        if io.is_terminal() {
+            println!("{}", &masked_input);
+            io.record_out(&format!("{}", &masked_input));
+        } else {
+            outln!(io, "{}", &masked_input);
         }
     }
 }
