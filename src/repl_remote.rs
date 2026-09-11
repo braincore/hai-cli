@@ -1,17 +1,18 @@
-use std::collections::VecDeque;
 use std::sync::{Arc, atomic::AtomicBool};
 use tokio::sync::Mutex;
 
-use crate::session::{CmdInput, SessionState};
+use crate::session::{CmdInput, CmdQueue, SessionState};
 
+/// A remote interface to the REPL, allowing commands to be pushed and break
+/// signals to be sent.
 #[derive(Clone)]
 pub struct ReplRemote {
-    cmd_queue: Arc<Mutex<VecDeque<CmdInput>>>,
+    cmd_queue: Arc<Mutex<CmdQueue>>,
     break_signal: Arc<AtomicBool>,
 }
 
 impl ReplRemote {
-    pub fn new(cmd_queue: Arc<Mutex<VecDeque<CmdInput>>>, break_signal: Arc<AtomicBool>) -> Self {
+    pub fn new(cmd_queue: Arc<Mutex<CmdQueue>>, break_signal: Arc<AtomicBool>) -> Self {
         Self {
             cmd_queue,
             break_signal,
@@ -19,8 +20,7 @@ impl ReplRemote {
     }
 
     pub async fn push_cmd(&self, cmd_input: CmdInput) {
-        let mut queue = self.cmd_queue.lock().await;
-        queue.push_back(cmd_input);
+        self.cmd_queue.lock().await.push_cmd(cmd_input);
     }
 
     pub fn signal_break(&self) {

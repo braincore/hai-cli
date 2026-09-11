@@ -48,10 +48,12 @@ pub struct ProcessCmdResult {
     pub history_entries_visibile: bool,
     /// New commands are added to the front of the cmd queue
     pub new_cmds: Vec<session::CmdInput>,
+    pub new_cmds_cascade_error: bool,
     pub new_temp_files: Vec<tempfile::NamedTempFile>,
     pub new_masked_strings: Vec<String>,
     pub purge_cmd_queue: bool,
     pub tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>,
+    pub error: bool,
 }
 
 pub enum HistoryEntry {
@@ -71,10 +73,12 @@ impl ProcessCmdResult {
         history_entries: Vec<HistoryEntry>,
         history_entries_visibile: bool,
         new_cmds: Vec<session::CmdInput>,
+        new_cmds_cascade_error: bool,
         new_temp_files: Vec<tempfile::NamedTempFile>,
         new_masked_strings: Vec<String>,
         purge_cmd_queue: bool,
         tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>,
+        error: bool,
     ) -> Self {
         Self {
             next,
@@ -83,10 +87,12 @@ impl ProcessCmdResult {
             history_entries,
             history_entries_visibile,
             new_cmds,
+            new_cmds_cascade_error,
             new_temp_files,
             new_masked_strings,
             purge_cmd_queue,
             tool_mode_cmd,
+            error,
         }
     }
 
@@ -98,10 +104,12 @@ impl ProcessCmdResult {
             vec![],
             true,
             vec![],
+            false,
             vec![],
             vec![],
             false,
             None,
+            false,
         )
     }
 
@@ -113,10 +121,12 @@ impl ProcessCmdResult {
             vec![],
             true,
             vec![],
+            false,
             vec![],
             vec![],
             false,
             None,
+            false,
         )
     }
 
@@ -128,10 +138,12 @@ impl ProcessCmdResult {
             vec![],
             true,
             vec![],
+            false,
             vec![],
             vec![],
             false,
             None,
+            false,
         )
     }
 
@@ -169,6 +181,11 @@ impl ProcessCmdResult {
         self
     }
 
+    pub fn with_new_cmds_cascade_error(mut self, cascade_error: bool) -> Self {
+        self.new_cmds_cascade_error = cascade_error;
+        self
+    }
+
     /// Replace the new temp files.
     pub fn with_new_temp_files(mut self, new_temp_files: Vec<tempfile::NamedTempFile>) -> Self {
         self.new_temp_files = new_temp_files;
@@ -188,6 +205,14 @@ impl ProcessCmdResult {
 
     pub fn with_tool_mode_cmd(mut self, tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>) -> Self {
         self.tool_mode_cmd = tool_mode_cmd;
+        self
+    }
+
+    // TODO: Proof-of-concept. Have not integrated with_error() throughout
+    // codebase so error cascading is also theoretical at this point.
+    #[allow(dead_code)]
+    pub fn with_error(mut self, error: bool) -> Self {
+        self.error = error;
         self
     }
 }
@@ -1595,12 +1620,12 @@ pub async fn process_cmd(
                 new_cmds.extend(vec![
                     session::CmdInput {
                         input: "/task-end".to_string(),
-                        source: session::CmdSource::Internal,
+                        source: session::CmdSource::Internal(false),
                         reply_channel: None,
                     },
                     session::CmdInput {
                         input: cmd_input.input.clone(),
-                        source: session::CmdSource::Internal,
+                        source: session::CmdSource::Internal(false),
                         reply_channel: None,
                     },
                 ]);
@@ -1609,7 +1634,7 @@ pub async fn process_cmd(
                 &task_ref,
                 session,
                 "task",
-                matches!(cmd_input.source, session::CmdSource::Internal),
+                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -1766,7 +1791,7 @@ pub async fn process_cmd(
                 &task_ref,
                 session,
                 "task-include",
-                matches!(cmd_input.source, session::CmdSource::Internal),
+                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -2167,7 +2192,7 @@ pub async fn process_cmd(
                 &task_ref,
                 session,
                 "task-cat",
-                matches!(cmd_input.source, session::CmdSource::Internal),
+                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -2467,15 +2492,11 @@ pub async fn process_cmd(
             {
                 let desc_option = if desc { ".desc" } else { "" };
                 let full_option = if full { ".full" } else { "" };
-                session
-                    .cmd_queue
-                    .lock()
-                    .await
-                    .push_front(session::CmdInput {
-                        input: format!("/asset-list{}{} {}/", desc_option, full_option, prefix),
-                        source: session::CmdSource::Internal,
-                        reply_channel: None,
-                    });
+                session.cmd_queue.lock().await.push_cmd(session::CmdInput {
+                    input: format!("/asset-list{}{} {}/", desc_option, full_option, prefix),
+                    source: session::CmdSource::Internal(false),
+                    reply_channel: None,
+                });
                 return ProcessCmdResult::loop_next();
             }
 
@@ -4959,7 +4980,7 @@ pub async fn process_cmd(
                     );
                     outln!(
                         io,
-                        "║                   KEY SETUP COMPLETE                        ║"
+                        "║                   KEY SETUP COMPLETE                         ║"
                     );
                     outln!(
                         io,
@@ -4967,7 +4988,27 @@ pub async fn process_cmd(
                     );
                     outln!(
                         io,
-                        "║                 ⚠  WRITE THESE DOWN NOW  ⚠                   ║"
+                        "║           ⚠  WRITE THIS DOWN BEFORE CONTINUING  ⚠            ║"
+                    );
+                    outln!(
+                        io,
+                        "║               It is shown once and never again.              ║"
+                    );
+                    outln!(
+                        io,
+                        "║                                                              ║"
+                    );
+                    outln!(
+                        io,
+                        "║         BEST   Pen and paper, kept somewhere safe            ║"
+                    );
+                    outln!(
+                        io,
+                        "║         GOOD   Password manager                              ║"
+                    );
+                    outln!(
+                        io,
+                        "║         OK     Photo                                         ║"
                     );
                     outln!(
                         io,
@@ -4984,19 +5025,15 @@ pub async fn process_cmd(
                     );
                     outln!(
                         io,
-                        "║  • Store all three values securely offline                   ║"
+                        "║  • This code is the ONLY way to recover your keys if you     ║"
                     );
                     outln!(
                         io,
-                        "║  • Recovery code is the ONLY way to recover your keys        ║"
+                        "║    forget your password. We cannot reset it for you.         ║"
                     );
                     outln!(
                         io,
-                        "║    if you forget your password                               ║"
-                    );
-                    outln!(
-                        io,
-                        "║  • Anyone with the recovery code can decrypt your data       ║"
+                        "║  • Anyone with the recovery code can decrypt your data.      ║"
                     );
                     outln!(
                         io,
@@ -5389,15 +5426,11 @@ pub async fn process_cmd(
                 )
                 .await;
             } else {
-                session
-                    .cmd_queue
-                    .lock()
-                    .await
-                    .push_front(session::CmdInput {
-                        input: format!("/asset.no_create {}", asset_name),
-                        source: session::CmdSource::Internal,
-                        reply_channel: None,
-                    });
+                session.cmd_queue.lock().await.push_cmd(session::CmdInput {
+                    input: format!("/asset.no_create {}", asset_name),
+                    source: session::CmdSource::Internal(false),
+                    reply_channel: None,
+                });
             }
             ProcessCmdResult::loop_next()
         }
@@ -5521,15 +5554,11 @@ pub async fn process_cmd(
                     match answer.trim().parse::<usize>() {
                         Ok(i) if i < asset_list_res.entries.len() => {
                             let asset_name = &asset_list_res.entries[i].name;
-                            session
-                                .cmd_queue
-                                .lock()
-                                .await
-                                .push_front(session::CmdInput {
-                                    input: format!("/chat-resume {}", asset_name),
-                                    source: session::CmdSource::Internal,
-                                    reply_channel: None,
-                                });
+                            session.cmd_queue.lock().await.push_cmd(session::CmdInput {
+                                input: format!("/chat-resume {}", asset_name),
+                                source: session::CmdSource::Internal(false),
+                                reply_channel: None,
+                            });
                             break;
                         }
                         _ => {
@@ -5928,7 +5957,7 @@ pub async fn process_cmd(
 
             ProcessCmdResult::loop_next().with_new_cmds(vec![session::CmdInput {
                 input: "/bot-probe".to_string(),
-                source: session::CmdSource::Internal,
+                source: session::CmdSource::Internal(false),
                 reply_channel: None,
             }])
         }
@@ -6284,6 +6313,11 @@ pub async fn process_cmd(
         cmd::Cmd::AccountNew => {
             let logged_out_api_client = mk_api_client(None);
 
+            outln!(io);
+            outln!(io, "Choose a username for your account. This cannot be ");
+            outln!(io, "changed later. It must be at least 3 characters long");
+            outln!(io);
+
             let mut username;
             loop {
                 username = match io.query(&crate::io::Query::line("Username?")).into_option() {
@@ -6332,6 +6366,11 @@ pub async fn process_cmd(
                     outln!(io, "Username must be at least 3 characters")
                 }
             }
+
+            outln!(io);
+            outln!(io, "Next, choose a password for your account.");
+            outln!(io);
+
             let mut password;
             loop {
                 password = match io
@@ -6347,6 +6386,9 @@ pub async fn process_cmd(
                     outln!(io, "Password must be at least 8 characters")
                 }
             }
+
+            outln!(io);
+
             let email_answer = match io
                 .query(&crate::io::Query::line(
                     "Email (optional: if you forget your password)?",
@@ -6361,10 +6403,13 @@ pub async fn process_cmd(
             } else {
                 Some(email_answer.trim().to_string())
             };
+
+            outln!(io);
             outln!(
                 io,
                 "Read our terms of service: `/cat /hai/terms-of-service`"
             );
+            outln!(io);
 
             let terms_answer = match io
                 .query(&crate::io::Query::confirm(
@@ -6380,6 +6425,8 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
 
+            let mut new_cmds = vec![];
+
             use api::types::account::AccountRegisterArg;
             match logged_out_api_client
                 .account_register(AccountRegisterArg {
@@ -6390,7 +6437,9 @@ pub async fn process_cmd(
                 .await
             {
                 Ok(res) => {
+                    outln!(io);
                     outln!(io, "ハイ {}!", res.username);
+                    outln!(io);
                     db::login_account(&*db.lock().await, &res.user_id, &res.username, &res.token)
                         .expect("failed to write login info");
                     session.account = Some(db::Account {
@@ -6398,11 +6447,24 @@ pub async fn process_cmd(
                         username: res.username,
                         token: res.token,
                     });
-                    outln!(io, "\nSetting up your inbox...");
-                    let mut cmd_queue = session.cmd_queue.lock().await;
-                    cmd_queue.push_front(session::CmdInput {
+                    new_cmds.push(session::CmdInput {
+                        input: "/prep.info Setting up your **inbox**".to_string(),
+                        source: session::CmdSource::Internal(true),
+                        reply_channel: None,
+                    });
+                    new_cmds.push(session::CmdInput {
                         input: "/inbox-setup".to_string(),
-                        source: session::CmdSource::Internal,
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    });
+                    new_cmds.push(session::CmdInput {
+                        input: "/prep.info Setting up your data **encryption key**\nUnlike your account password, we **CANNOT** help you if you forget this password.".to_string(),
+                        source: session::CmdSource::Internal(true),
+                        reply_channel: None,
+                    });
+                    new_cmds.push(session::CmdInput {
+                        input: "/asset-crypt-setup".to_string(),
+                        source: session::CmdSource::Internal(false),
                         reply_channel: None,
                     });
                 }
@@ -6411,6 +6473,8 @@ pub async fn process_cmd(
                 }
             }
             ProcessCmdResult::loop_next()
+                .with_new_cmds(new_cmds)
+                .with_new_cmds_cascade_error(true)
         }
         cmd::Cmd::AccountLogin(cmd::AccountLoginCmd { username, password }) => {
             let username = if let Some(username) = username {
@@ -6555,23 +6619,23 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next().with_new_cmds(vec![
                 session::CmdInput {
                     input: "/asset-push //inbox\n{}".to_string(),
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 },
                 session::CmdInput {
                     input: "/asset-acl-set //inbox everyone deny:read-data".to_string(),
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 },
                 session::CmdInput {
                     input: "/asset-acl-set //inbox everyone allow:push-data".to_string(),
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 },
                 session::CmdInput {
                     input: "/asset-md-set-key //inbox content_type \"application/json\""
                         .to_string(),
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 },
             ])
@@ -6847,7 +6911,7 @@ pub async fn process_cmd(
             if let Some(cmds) = cmds {
                 let mut new_cmds = vec![session::CmdInput {
                     input: "/new".to_string(),
-                    source: session::CmdSource::Internal,
+                    source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 }];
                 for (index, cmd) in cmds.iter().enumerate() {
@@ -7200,24 +7264,21 @@ async fn get_haitask_from_task_ref(
             errorln!(io, "failed to fetch task");
         } else {
             // Queue up a fetch task and then try again.
-            session
-                .cmd_queue
-                .lock()
-                .await
-                .push_front(session::CmdInput {
-                    input: format!("/{} {}", task_cmd, task_ref),
-                    source: session::CmdSource::Internal,
-                    reply_channel: None,
-                });
-            session
-                .cmd_queue
-                .lock()
-                .await
-                .push_front(session::CmdInput {
-                    input: format!("/task-fetch {}", task_ref),
-                    source: session::CmdSource::Internal,
-                    reply_channel: None,
-                });
+            session.cmd_queue.lock().await.push_cmds(
+                vec![
+                    session::CmdInput {
+                        input: format!("/task-fetch {}", task_ref),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    },
+                    session::CmdInput {
+                        input: format!("/{} {}", task_cmd, task_ref),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    },
+                ],
+                true,
+            );
         }
         None
     } else if task_ref.starts_with(".") || task_ref.starts_with("/") || task_ref.starts_with("~") {

@@ -1,6 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -225,8 +225,7 @@ pub fn execute_hai_repl_tool(
     out: &Out,
     tool: &Tool,
     arg: &str,
-    cmd_queue: &mut VecDeque<session::CmdInput>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<(String, Vec<session::CmdInput>), Box<dyn std::error::Error>> {
     let ToolHaiReplArg {
         mut cmds,
         _continue,
@@ -238,18 +237,23 @@ pub fn execute_hai_repl_tool(
             {
                 cmds.push(format!("!hai {}", _continue));
             }
-            for (index, cmd) in cmds.iter().enumerate().rev() {
-                cmd_queue.push_front(session::CmdInput {
-                    input: cmd.clone(),
-                    source: session::CmdSource::HaiTool(index as u32),
-                    reply_channel: None,
-                });
-            }
+
             let output = format!("Pushed {} command(s) into queue", cmds.len());
             outln!(out, "{}", output);
-            output
+
+            (
+                output,
+                cmds.into_iter()
+                    .enumerate()
+                    .map(|(index, cmd)| session::CmdInput {
+                        input: cmd,
+                        source: session::CmdSource::HaiTool(index as u32),
+                        reply_channel: None,
+                    })
+                    .collect(),
+            )
         }
-        _ => "fatal: not a hai-repl tool".to_string(),
+        _ => ("fatal: not a hai-repl tool".to_string(), Vec::new()),
     })
 }
 
