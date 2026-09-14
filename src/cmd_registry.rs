@@ -338,6 +338,7 @@ pub const fn flag(name: &'static str, doc: &'static str) -> Opt {
 }
 
 // Options that recur across many commands.
+const OPT_LOCAL: Opt = flag("local", "Write to local config only");
 const OPT_N: Opt = flag(
     "n",
     "Show line numbers (handy when asking for patches or referring to specific lines)",
@@ -865,6 +866,7 @@ pub static REGISTRY: &[Entry] = &[
             ]),
             Doc::new("Set API key for LLM provider"),
         )
+        .with_opts(&[OPT_LOCAL])
         .for_audience(Audience::UserOnly)
         .with_traits(Traits::NONE.account()),
     ),
@@ -889,6 +891,7 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed(&[arg("model", ModelName, Optional)]),
             Doc::new("Show or set the default AI model used on start up"),
         )
+        .with_opts(&[OPT_LOCAL])
         .for_audience(Audience::UserOnly),
     ),
     Entry::Cmd(
@@ -1395,7 +1398,8 @@ pub static REGISTRY: &[Entry] = &[
         .alias(&["ls", "asset-ls"])
         .with_opts(&[
             flag("desc", "Sort descending"),
-            flag("full", "Include asset IDs"),
+            flag("full", "Include asset IDs and extra columns"),
+            flag("hidden", "Include hidden (dot-prefixed) folders"),
         ])
         .with_traits(Traits::NONE.net()),
     ),
@@ -2177,6 +2181,7 @@ pub static REGISTRY: &[Entry] = &[
                 ]),
             Doc::new("Star a task for quick access"),
         )
+        .with_opts(&[OPT_LOCAL])
         .with_traits(Traits::NONE.net()),
     ),
     Entry::Cmd(
@@ -2189,6 +2194,7 @@ pub static REGISTRY: &[Entry] = &[
                 ]),
             Doc::new("Remove a starred item by shortcut"),
         )
+        .with_opts(&[OPT_LOCAL])
         .with_traits(Traits::NONE.net()),
     ),
     Entry::Cmd(

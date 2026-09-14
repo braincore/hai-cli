@@ -208,6 +208,25 @@ impl Io {
         Io::new(StdioOutput::new(), StdinInput::new())
     }
 
+    /// Backend that discards all output and refuses all input.
+    ///
+    /// For headless/background work. Recording still works, so transcripts can
+    /// be generated.
+    pub fn noop() -> Self {
+        Io::new(NoopOutput::new(), NoopInput::new())
+    }
+
+    /// True if output is discarded by the backend.
+    pub fn is_output_noop(&self) -> bool {
+        self.out.is_noop()
+    }
+
+    /// True if input is unavailable: every `query`/`next_repl` returns
+    /// `Answer::Eof` immediately.
+    pub fn is_input_noop(&self) -> bool {
+        self.input.lock().unwrap().is_noop()
+    }
+
     pub fn terminal_capability(&self) -> TerminalCapability {
         self.out.terminal_capability()
     }
@@ -456,6 +475,11 @@ pub trait Input: Send {
         false
     }
 
+    /// True if this backend can never supply input (every `ask` is `Eof`).
+    fn is_noop(&self) -> bool {
+        false
+    }
+
     fn update_config(
         &self,
         cmd_registry: &crate::cmd_registry::Registry,
@@ -604,6 +628,11 @@ pub trait Output: Send {
 
     /// Whether the backend can utilize sections.
     fn is_section_aware(&self) -> bool {
+        false
+    }
+
+    /// True if this backend discards everything it's given.
+    fn is_noop(&self) -> bool {
         false
     }
 
@@ -790,6 +819,11 @@ impl Out {
     /// Whether the backend can utilize sections.
     pub fn is_section_aware(&self) -> bool {
         self.backend.lock().unwrap().is_section_aware()
+    }
+
+    /// Whether the backend discards everything it's given.
+    pub fn is_noop(&self) -> bool {
+        self.backend.lock().unwrap().is_noop()
     }
 
     fn repl_status(
@@ -1465,6 +1499,116 @@ impl Output for StdioOutput {
     ) {
         // No-op since terminal does not support inter-repl-prompt status line
         // rendering.
+    }
+}
+
+// --
+
+//
+// Backend: No-op
+//
+// Useful when `Io` is required by function but it isn't practically available
+// because it's being called by a background job.
+//
+// Inputs are always EOF.
+//
+
+/// Drops all output on the floor.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoopOutput;
+
+impl NoopOutput {
+    pub fn new() -> Self {
+        NoopOutput
+    }
+}
+
+impl Output for NoopOutput {
+    fn push_out(&mut self, _s: &str) {}
+    fn push_err(&mut self, _s: &str) {}
+    fn push_flush(&mut self) {}
+    fn push_alert(&mut self, _level: Level, _msg: &str) {}
+    fn push_display(&mut self, _mime: &str, _data: &str) {}
+    fn push_code(&mut self, _text: &str, _lang: Option<&str>) {}
+    fn push_code_bg(&mut self, _text: &str, _lang: Option<&str>, _bg: Option<(u8, u8, u8)>) {}
+    fn push_code_reset(&mut self) {}
+    fn push_section_begin(&mut self, _id: SectionId, _kind: SectionKind) {}
+    fn push_section_end(&mut self, _id: SectionId) {}
+
+    fn push_terminal_transient(&mut self, _s: &str) -> bool {
+        false
+    }
+
+    fn terminal_capability(&self) -> TerminalCapability {
+        TerminalCapability::None
+    }
+
+    fn is_section_aware(&self) -> bool {
+        false
+    }
+
+    fn is_noop(&self) -> bool {
+        true
+    }
+
+    fn repl_status(
+        &self,
+        _index: u32,
+        _model: String,
+        _use_hai_router: session::HaiRouterState,
+        _input_tokens: u32,
+        _task_mode: Option<String>,
+        _tool_mode: Option<String>,
+        _incognito: bool,
+        _agentic: bool,
+    ) {
+    }
+}
+
+/// Never supplies input: every query responds with EOF.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoopInput;
+
+impl NoopInput {
+    pub fn new() -> Self {
+        NoopInput
+    }
+}
+
+impl Input for NoopInput {
+    fn ask(&mut self, _q: &Query) -> Answer {
+        Answer::Eof
+    }
+
+    fn next_repl(
+        &mut self,
+        _index: u32,
+        _model: String,
+        _use_hai_router: session::HaiRouterState,
+        _input_tokens: u32,
+        _task_mode: Option<String>,
+        _tool_mode: Option<String>,
+        _incognito: bool,
+        _agentic: bool,
+    ) -> Answer {
+        Answer::Eof
+    }
+
+    fn drives_repl(&self) -> bool {
+        false
+    }
+
+    fn is_noop(&self) -> bool {
+        true
+    }
+
+    fn update_config(
+        &self,
+        _cmd_registry: &crate::cmd_registry::Registry,
+        _account: &Option<crate::db::Account>,
+        _starred_shortcuts: &Vec<String>,
+        _is_first_user_input: bool,
+    ) {
     }
 }
 

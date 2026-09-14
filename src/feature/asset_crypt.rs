@@ -1281,6 +1281,19 @@ pub async fn get_symmetric_key_ez(
     rec_key_info: &RecipientKeyInfo,
 ) -> Result<SymmetricKeyInfo, AssetKeyMaterialDecryptionError> {
     let mut asset_keyring_locked = asset_keyring.lock().await;
+    // If input i/o isn't supported and key isn't already unlocked, give up
+    // early.
+    if io.is_input_noop()
+        && asset_keyring_locked
+            .can_unlock_decrypt_key(
+                asset_blob_cache.clone(),
+                api_client,
+                &rec_key_info.recipient_key_id_parts(),
+            )
+            .await
+    {
+        return Err(AssetKeyMaterialDecryptionError::PasswordCancelled);
+    }
     let secret = match asset_keyring_locked
         .get_or_unlock_decrypt_key_with_prompt(
             io,
@@ -1566,9 +1579,12 @@ pub async fn asset_crypt_recover(
 
 // --
 
+#[derive(Debug)]
 pub enum AkmSelectionError {
     Abort(String),
 }
+
+impl std::error::Error for AkmSelectionError {}
 
 impl ::std::fmt::Display for AkmSelectionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
