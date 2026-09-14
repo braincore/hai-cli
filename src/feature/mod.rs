@@ -3,6 +3,7 @@ pub mod asset_crypt;
 pub mod asset_keyring;
 pub mod chat_store;
 pub mod cmd_completer;
+pub mod config_sync;
 pub mod gateway;
 pub mod haibot;
 pub mod haivar;

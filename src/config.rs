@@ -1,12 +1,12 @@
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub default_ai_model: Option<String>,
     pub default_incognito_ai_model: Option<String>,
@@ -40,6 +40,12 @@ pub struct Config {
     pub starred_task: Vec<StarredTask>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        toml::from_str("").expect("Config must be constructible from an empty document")
+    }
+}
+
 const fn default_true() -> bool {
     true
 }
@@ -48,39 +54,39 @@ const fn default_cache_size() -> u64 {
     1024 * 1024 * 1024 // 1GB
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct AnthropicConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct GoogleConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct OpenAiConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct LlamaCppConfig {
     /// If unspecified, defaults to "http://127.0.0.1:8080"
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct OllamaConfig {
     /// If unspecified, defaults to "http://localhost:11434"
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct DeepSeekConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct XaiConfig {
     pub api_key: Option<String>,
 }
@@ -987,7 +993,6 @@ impl Config {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let new_config: Config = toml::from_str(&read_config_as_string(config_path_override)?)?;
         *self = new_config;
-        self.haivars = read_dot_haivars()?;
         Ok(())
     }
 }
@@ -1077,9 +1082,9 @@ pub fn read_config_as_string(
 pub fn get_config(
     config_path_override: Option<&str>,
 ) -> Result<Config, Box<dyn std::error::Error>> {
-    let mut config: Config = toml::from_str(&read_config_as_string(config_path_override)?)?;
-    config.haivars = read_dot_haivars()?;
-    Ok(config)
+    Ok(toml::from_str(&read_config_as_string(
+        config_path_override,
+    )?)?)
 }
 
 pub fn create_config_dir_if_missing() -> Result<(), Box<dyn Error>> {
@@ -1095,6 +1100,11 @@ pub fn get_config_folder_path() -> PathBuf {
     path.push(dirs::home_dir().unwrap());
     path.push(".hai");
     path
+}
+
+pub fn read_config_from_bytes(bytes: &[u8]) -> Result<Config, Box<dyn std::error::Error>> {
+    let config_str = str::from_utf8(bytes)?;
+    Ok(toml::from_str(config_str)?)
 }
 
 // ---
@@ -1132,12 +1142,76 @@ pub fn insert_config_kv(
 // --
 
 //
+// HEP 70: Merging configs
+//
+
+/// Local wins if present, else remote.
+fn pick<T: Clone>(local: &Option<T>, remote: &Option<T>) -> Option<T> {
+    local.clone().or_else(|| remote.clone())
+}
+
+/// Remote entries first, local overwrites on key collision.
+fn merge_map(
+    local: &HashMap<String, String>,
+    remote: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut out = remote.clone();
+    out.extend(local.iter().map(|(k, v)| (k.clone(), v.clone())));
+    out
+}
+
+/// Unique by `shortcut`; local entries win and keep their order, then any
+/// remote entries whose shortcut isn't already claimed.
+fn merge_starred(local: &[StarredTask], remote: &[StarredTask]) -> Vec<StarredTask> {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut out: Vec<StarredTask> = Vec::with_capacity(local.len() + remote.len());
+
+    for t in local.iter().chain(remote.iter()) {
+        if seen.insert(t.shortcut.as_str()) {
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
+pub fn merge_configs(local: &Config, remote: &Config) -> Config {
+    Config {
+        default_ai_model: pick(&local.default_ai_model, &remote.default_ai_model),
+        default_incognito_ai_model: pick(
+            &local.default_incognito_ai_model,
+            &remote.default_incognito_ai_model,
+        ),
+        default_ai_temperature_to_absolute_zero: local.default_ai_temperature_to_absolute_zero,
+        default_editor: pick(&local.default_editor, &remote.default_editor),
+        default_shell: pick(&local.default_shell, &remote.default_shell),
+        default_tool: pick(&local.default_tool, &remote.default_tool),
+        tool_confirm: local.tool_confirm,
+        check_for_updates: local.check_for_updates,
+        use_os_keyring: local.use_os_keyring,
+        asset_blob_cache_size: local.asset_blob_cache_size,
+
+        openai: pick(&local.openai, &remote.openai),
+        anthropic: pick(&local.anthropic, &remote.anthropic),
+        llama_cpp: pick(&local.llama_cpp, &remote.llama_cpp),
+        ollama: pick(&local.ollama, &remote.ollama),
+        google: pick(&local.google, &remote.google),
+        deepseek: pick(&local.deepseek, &remote.deepseek),
+        xai: pick(&local.xai, &remote.xai),
+
+        haivars: merge_map(&local.haivars, &remote.haivars),
+        starred_task: merge_starred(&local.starred_task, &remote.starred_task),
+    }
+}
+
+// --
+
+//
 // Starred items
 //
 
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
-pub fn insert_config_starred_task(
+pub fn insert_config_starred_task_and_write(
     config_path_override: Option<&str>,
     task_fqn: &str,
     shortcut: &str,
@@ -1145,6 +1219,18 @@ pub fn insert_config_starred_task(
     let cfg = read_config_as_string(config_path_override).unwrap();
     let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
 
+    insert_config_starred_task(&mut doc, task_fqn, shortcut)?;
+
+    write_config_doc(config_path_override, &doc);
+
+    Ok(())
+}
+
+pub fn insert_config_starred_task(
+    doc: &mut DocumentMut,
+    task_fqn: &str,
+    shortcut: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let root = doc.as_table_mut();
     let aot = ensure_array_of_tables(root, "starred_task");
 
@@ -1181,15 +1267,22 @@ pub fn insert_config_starred_task(
     task["shortcut"] = value(shortcut);
     aot.push(task);
 
-    write_config_doc(config_path_override, &doc);
-
     Ok(())
 }
 
-pub fn remove_config_starred_shortcut(config_path_override: Option<&str>, shortcut: &str) {
+pub fn remove_config_starred_shortcut_and_write(
+    config_path_override: Option<&str>,
+    shortcut: &str,
+) {
     let cfg = read_config_as_string(config_path_override).unwrap();
     let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
 
+    remove_config_starred_shortcut(&mut doc, shortcut);
+
+    write_config_doc(config_path_override, &doc);
+}
+
+pub fn remove_config_starred_shortcut(doc: &mut DocumentMut, shortcut: &str) {
     let root = doc.as_table_mut();
 
     let Some(item) = root.get_mut("starred_task") else {
@@ -1220,8 +1313,6 @@ pub fn remove_config_starred_shortcut(config_path_override: Option<&str>, shortc
     if aot.is_empty() {
         root.remove("starred_task");
     }
-
-    write_config_doc(config_path_override, &doc);
 }
 
 fn ensure_array_of_tables<'a>(table: &'a mut Table, key: &str) -> &'a mut ArrayOfTables {
@@ -2173,28 +2264,6 @@ pub fn mills_to_dollars(price_per_milli: u32) -> String {
     } else {
         format!("${}.{:02}{:1}", dollars, cents, mills)
     }
-}
-
-// ---
-
-pub fn read_dot_haivars() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
-    let config_folder_path = get_config_folder_path();
-    let mut merged_config: HashMap<String, String> = HashMap::new();
-    for entry in fs::read_dir(config_folder_path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("haivars") {
-            let haivars_contents = fs::read_to_string(path)?;
-            let haivars: HashMap<String, String> = toml::from_str(&haivars_contents)?;
-            for (key, value) in haivars {
-                if merged_config.contains_key(&key) {
-                    println!("Key conflict for '{}'. Overwriting with new value.", key);
-                }
-                merged_config.insert(key, value);
-            }
-        }
-    }
-    Ok(merged_config)
 }
 
 // ---

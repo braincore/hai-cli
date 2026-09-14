@@ -422,16 +422,28 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::AiDefault(cmd::AiDefaultCmd { model }) => {
+        cmd::Cmd::AiDefault(cmd::AiDefaultCmd { model, local }) => {
             if let Some(model_name) = model {
-                config::insert_config_kv(
-                    config_path_override,
-                    None,
-                    "default_ai_model",
-                    &model_name,
-                );
-                cfg.reload(config_path_override)
-                    .expect("Could not read config");
+                if let Err(e) =
+                    crate::feature::config_sync::merged_config_insert_config_kv_and_reload(
+                        io,
+                        cfg,
+                        config_path_override,
+                        asset_blob_cache,
+                        session.asset_keyring.clone(),
+                        db,
+                        update_asset_tx,
+                        api_client,
+                        session.account.as_ref().map(|a| a.username.as_str()),
+                        local,
+                        None,
+                        "default_ai_model",
+                        &model_name,
+                    )
+                    .await
+                {
+                    errorln!(io, "{}", e);
+                }
             }
             outln!(
                 io,
@@ -453,17 +465,33 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::SetKey(cmd::SetKeyCmd { provider, key }) => {
+        cmd::Cmd::SetKey(cmd::SetKeyCmd {
+            provider,
+            key,
+            local,
+        }) => {
             match provider.as_str() {
                 "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
-                    config::insert_config_kv(
-                        config_path_override,
-                        Some(&provider),
-                        "api_key",
-                        &key,
-                    );
-                    cfg.reload(config_path_override)
-                        .expect("Could not read config");
+                    if let Err(e) =
+                        crate::feature::config_sync::merged_config_insert_config_kv_and_reload(
+                            io,
+                            cfg,
+                            config_path_override,
+                            asset_blob_cache,
+                            session.asset_keyring.clone(),
+                            db,
+                            update_asset_tx,
+                            api_client,
+                            session.account.as_ref().map(|a| a.username.as_str()),
+                            local,
+                            Some(&provider),
+                            "api_key",
+                            &key,
+                        )
+                        .await
+                    {
+                        errorln!(io, "{}", e);
+                    }
                 }
                 _ => {
                     errorln!(
@@ -1812,7 +1840,11 @@ pub async fn process_cmd(
                 ProcessCmdResult::loop_next()
             }
         }
-        cmd::Cmd::StarTask(cmd::StarTaskCmd { task_fqn, shortcut }) => {
+        cmd::Cmd::StarTask(cmd::StarTaskCmd {
+            task_fqn,
+            shortcut,
+            local,
+        }) => {
             use api::types::task::TaskGetArg;
             match api_client
                 .task_get(TaskGetArg {
@@ -1837,11 +1869,20 @@ pub async fn process_cmd(
                             errorln!(io, "Shortcut must not contain whitespace");
                             return ProcessCmdResult::loop_next();
                         }
-                        match config::insert_config_starred_task(
+                        match crate::feature::config_sync::merged_config_insert_config_starred_task_and_reload(
+                            io,
+                            cfg,
                             config_path_override,
+                            asset_blob_cache,
+                            session.asset_keyring.clone(),
+                            db,
+                            update_asset_tx,
+                            api_client,
+                            session.account.as_ref().map(|a| a.username.as_str()),
+                            local,
                             &task_fqn,
                             &shortcut,
-                        ) {
+                        ).await {
                             Ok(_) => {}
                             Err(e) => {
                                 errorln!(io, "{}", e);
@@ -1863,8 +1904,26 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::StarRemove(cmd::StarRemoveCmd { shortcut }) => {
-            config::remove_config_starred_shortcut(config_path_override, &shortcut);
+        cmd::Cmd::StarRemove(cmd::StarRemoveCmd { shortcut, local }) => {
+            match crate::feature::config_sync::merged_config_remove_config_starred_shortcut_and_reload(
+                io,
+                cfg,
+                config_path_override,
+                asset_blob_cache,
+                session.asset_keyring.clone(),
+                db,
+                update_asset_tx,
+                api_client,
+                session.account.as_ref().map(|a| a.username.as_str()),
+                local,
+                &shortcut,
+            ).await {
+                Ok(_) => {}
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            }
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::Starred => {
@@ -2443,8 +2502,22 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::AssetList(cmd::AssetListCmd { prefix, desc, full }) => {
+        cmd::Cmd::AssetList(cmd::AssetListCmd {
+            prefix,
+            desc,
+            full,
+            hidden,
+        }) => {
             let prefix = resolve_asset_name(&io.out, &prefix, session).await;
+            // A dot in the last segment is treated as an implicit request for
+            // hidden asset folders (`ls .sys/`, `ls .*`)
+            let explicit_dot = prefix
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .map_or(false, |seg| seg.starts_with('.'));
+            let show_hidden = hidden || explicit_dot;
+
             let (prefix, pattern) = if asset_reader::is_glob_pattern(&prefix) {
                 let (prefix, pattern) = asset_reader::parse_glob_pattern(&prefix);
                 (prefix, Some(pattern))
@@ -2492,8 +2565,12 @@ pub async fn process_cmd(
             {
                 let desc_option = if desc { ".desc" } else { "" };
                 let full_option = if full { ".full" } else { "" };
+                let hidden_option = if hidden { ".hidden" } else { "" };
                 session.cmd_queue.lock().await.push_cmd(session::CmdInput {
-                    input: format!("/asset-list{}{} {}/", desc_option, full_option, prefix),
+                    input: format!(
+                        "/asset-list{}{}{} {}/",
+                        desc_option, full_option, hidden_option, prefix
+                    ),
                     source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 });
@@ -2541,9 +2618,21 @@ pub async fn process_cmd(
 
             // First pass: collect the entries that match the pattern so we can
             // compute column widths for the full table.
+            let mut hidden_count = 0;
             let matched: Vec<&AssetEntry> = entries
                 .iter()
                 .filter(|entry| pattern.as_ref().map_or(true, |p| p.matches(&entry.name)))
+                .filter_map(|entry| {
+                    let is_hidden = matches!(entry.asset.kind, AssetKind::Folder)
+                        && is_hidden_folder(&entry.name, &prefix);
+                    if is_hidden {
+                        hidden_count += 1;
+                        if !show_hidden {
+                            return None;
+                        }
+                    }
+                    Some(entry)
+                })
                 .collect();
 
             if full {
@@ -2726,6 +2815,10 @@ pub async fn process_cmd(
                     new_quick_index_vars.push(entry.name.clone());
                     quick_index += 1;
                 }
+            }
+
+            if matched.is_empty() && hidden_count > 0 {
+                outln!(io, "[empty] ({} hidden: use .hidden to show)", hidden_count);
             }
 
             session.quick_index_vars = new_quick_index_vars;
@@ -6467,6 +6560,12 @@ pub async fn process_cmd(
                         source: session::CmdSource::Internal(false),
                         reply_channel: None,
                     });
+                    // Do this silently. If it fails, that's okay.
+                    new_cmds.push(session::CmdInput {
+                        input: "/asset-folder-new .sys".to_string(),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    });
                 }
                 Err(e) => {
                     errorln!(io, "error: {}", e);
@@ -7365,6 +7464,23 @@ fn printable_folder_line(folder: &str, index: Option<(u32, u32)>) -> String {
         .unwrap_or_else(|| "".to_string());
     let line = format!("{}📁", folder);
     format!("{}{}", index_str, line)
+}
+
+/// A folder is hidden if its last path segment starts with `.`.
+///
+/// Only asset folders can be hidden.
+///
+/// # Arguments
+///
+/// - `name` is the asset name
+/// - `prefix` is what the user explicitly typed
+fn is_hidden_folder(name: &str, prefix: &str) -> bool {
+    let rest = name.strip_prefix(prefix).unwrap_or(name);
+    let rest = rest.trim_matches('/');
+
+    rest.rsplit('/')
+        .next()
+        .is_some_and(|seg| seg.starts_with('.'))
 }
 
 fn count_digits(n: u32) -> u32 {

@@ -130,6 +130,26 @@ pub fn open_db() -> rusqlite::Result<rusqlite::Connection> {
         rusqlite::params![],
     )?;
 
+    // Create asset_store table (local mirror of remote assets for syncing)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS asset_store (
+            username TEXT NOT NULL, -- account that synced this asset
+            key TEXT NOT NULL, -- asset name/path
+            entry_id TEXT NOT NULL, -- stable server-side asset id
+            seq_id INTEGER NOT NULL, -- monotonic revision/sequence number
+            hash Text NOT NULL, -- sha256 of contents
+            contents BLOB NOT NULL, -- raw object bytes
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (username, key)
+        )",
+        rusqlite::params![],
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS asset_store_entry_id_idx
+         ON asset_store (username, entry_id)",
+        rusqlite::params![],
+    )?;
+
     Ok(conn)
 }
 
@@ -645,4 +665,178 @@ pub fn clear_gateway_perms(
         rusqlite::params![username, service_name],
     )?;
     Ok(())
+}
+
+//
+// Asset store
+//
+// Use this sparingly as it doesn't have automatic eviction or size management.
+//
+
+#[derive(Clone, Debug)]
+pub struct AssetStoreEntry {
+    #[allow(unused)]
+    pub key: String,
+    #[allow(unused)]
+    pub entry_id: String,
+    pub seq_id: i64,
+    #[allow(unused)]
+    pub hash: String,
+    pub contents: Vec<u8>,
+}
+
+/// Insert or replace the locally-stored copy of an asset.
+pub fn asset_store_put(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key: &str,
+    entry_id: &str,
+    seq_id: i64,
+    hash: &str,
+    contents: &[u8],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO asset_store (username, key, entry_id, seq_id, hash, contents, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(username, key) DO UPDATE SET
+            entry_id = excluded.entry_id,
+            seq_id = excluded.seq_id,
+            hash = excluded.hash,
+            contents = excluded.contents,
+            updated_at = CURRENT_TIMESTAMP",
+        rusqlite::params![username, key, entry_id, seq_id, hash, contents],
+    )?;
+    Ok(())
+}
+
+/// Same as `asset_store_put` but only writes if the incoming `seq_id` is newer
+/// than what's stored. Returns true if the row was written.
+#[allow(dead_code)]
+pub fn asset_store_put_if_newer(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key: &str,
+    entry_id: &str,
+    seq_id: i64,
+    hash: &str,
+    contents: &[u8],
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "INSERT INTO asset_store (username, key, entry_id, seq_id, hash, contents, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(username, key) DO UPDATE SET
+            entry_id = excluded.entry_id,
+            seq_id = excluded.seq_id,
+            hash = excluded.hash,
+            contents = excluded.contents,
+            updated_at = CURRENT_TIMESTAMP
+         WHERE excluded.seq_id > asset_store.seq_id",
+        rusqlite::params![username, key, entry_id, seq_id, hash, contents],
+    )?;
+    Ok(changed > 0)
+}
+
+fn asset_store_row(row: &rusqlite::Row) -> rusqlite::Result<AssetStoreEntry> {
+    Ok(AssetStoreEntry {
+        key: row.get(0)?,
+        entry_id: row.get(1)?,
+        seq_id: row.get(2)?,
+        hash: row.get(3)?,
+        contents: row.get(4)?,
+    })
+}
+
+/// Read the locally-stored asset by key.
+pub fn asset_store_get(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key: &str,
+) -> rusqlite::Result<Option<AssetStoreEntry>> {
+    conn.query_row(
+        "SELECT key, entry_id, seq_id, hash, contents FROM asset_store
+         WHERE username = ?1 AND key = ?2",
+        rusqlite::params![username, key],
+        asset_store_row,
+    )
+    .optional()
+}
+
+/// Read the locally-stored asset by its stable entry id.
+#[allow(dead_code)]
+pub fn asset_store_get_by_entry_id(
+    conn: &rusqlite::Connection,
+    username: &str,
+    entry_id: &str,
+) -> rusqlite::Result<Option<AssetStoreEntry>> {
+    conn.query_row(
+        "SELECT key, entry_id, seq_id, hash, contents FROM asset_store
+         WHERE username = ?1 AND entry_id = ?2",
+        rusqlite::params![username, entry_id],
+        asset_store_row,
+    )
+    .optional()
+}
+
+/// Cheap metadata-only lookup: (entry_id, seq_id, hash) without loading bytes.
+#[allow(dead_code)]
+pub fn asset_store_get_meta(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key: &str,
+) -> rusqlite::Result<Option<(String, i64, Vec<u8>)>> {
+    conn.query_row(
+        "SELECT entry_id, seq_id, hash FROM asset_store WHERE username = ?1 AND key = ?2",
+        rusqlite::params![username, key],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+}
+
+/// List (key, entry_id, seq_id, hash) for all assets under a key prefix.
+#[allow(dead_code)]
+pub fn asset_store_list(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key_prefix: &str,
+) -> rusqlite::Result<Vec<(String, String, i64, Vec<u8>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT key, entry_id, seq_id, hash FROM asset_store
+         WHERE username = ?1 AND key GLOB ?2 ORDER BY key ASC",
+    )?;
+    let rows = stmt.query_map(
+        rusqlite::params![username, format!("{}*", key_prefix)],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Remove a single locally-stored asset.
+#[allow(dead_code)]
+pub fn asset_store_remove(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM asset_store WHERE username = ?1 AND key = ?2",
+        rusqlite::params![username, key],
+    )?;
+    Ok(())
+}
+
+/// Remove all locally-stored assets under a key prefix.
+#[allow(dead_code)]
+pub fn asset_store_remove_prefix(
+    conn: &rusqlite::Connection,
+    username: &str,
+    key_prefix: &str,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM asset_store WHERE username = ?1 AND key GLOB ?2",
+        rusqlite::params![username, format!("{}*", key_prefix)],
+    )
 }

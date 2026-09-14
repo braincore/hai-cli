@@ -292,6 +292,8 @@ pub struct AiCmd {
 pub struct AiDefaultCmd {
     /// AI model to set as default
     pub model: Option<String>,
+    /// Only write to local config
+    pub local: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +303,9 @@ pub struct SetKeyCmd {
 
     /// API Key
     pub key: String,
+
+    /// Only write to local config
+    pub local: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -545,11 +550,15 @@ pub struct StarTaskCmd {
     pub task_fqn: String,
     /// Optional shortcut for the starred task
     pub shortcut: Option<String>,
+    /// Only write to local config
+    pub local: bool,
 }
 #[derive(Clone, Debug)]
 pub struct StarRemoveCmd {
     /// Shortcut to unstar
     pub shortcut: String,
+    /// Only write to local config
+    pub local: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -598,6 +607,8 @@ pub struct AssetListCmd {
     pub desc: bool,
     /// Display complete information in table format
     pub full: bool,
+    /// Show hidden asset folders
+    pub hidden: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1443,12 +1454,14 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "set-key" => Cmd::SetKey(SetKeyCmd {
             provider: r.take(0),
             key: r.take(1),
+            local: r.opts.bool("local"),
         }),
         "ai" => Cmd::Ai(AiCmd {
             model: r.opt_take(0),
         }),
         "ai-default" => Cmd::AiDefault(AiDefaultCmd {
             model: r.opt_take(0),
+            local: r.opts.bool("local"),
         }),
         "agentic" => Cmd::Agentic(AgenticCmd {
             // (agentic-mode, use-prompt-cache)
@@ -1593,9 +1606,10 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             editor: r.opt_take(1),
         }),
         "asset-list" => Cmd::AssetList(AssetListCmd {
+            prefix: r.take(0),
             desc: r.opts.bool("desc"),
             full: r.opts.bool("full"),
-            prefix: r.take(0),
+            hidden: r.opts.bool("hidden"),
         }),
         "asset-search" => Cmd::AssetSearch(AssetSearchCmd {
             path: r.opts.string("path"),
@@ -1829,9 +1843,11 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "star-task" => Cmd::StarTask(StarTaskCmd {
             task_fqn: r.take(0),
             shortcut: r.opt_take(1),
+            local: r.opts.bool("local"),
         }),
         "star-remove" => Cmd::StarRemove(StarRemoveCmd {
             shortcut: r.take(0),
+            local: r.opts.bool("local"),
         }),
         "starred" => Cmd::Starred,
 

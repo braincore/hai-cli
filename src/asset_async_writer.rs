@@ -54,6 +54,18 @@ pub enum AssetSaveError {
     Push(RequestError<AssetPushError>),
 }
 
+impl std::error::Error for AssetSaveError {}
+
+impl ::std::fmt::Display for AssetSaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssetSaveError::Put(e) => write!(f, "put: {}", e),
+            AssetSaveError::Replace(e) => write!(f, "replace: {}", e),
+            AssetSaveError::Push(e) => write!(f, "push: {}", e),
+        }
+    }
+}
+
 pub async fn worker_update_asset(
     out: Out,
     asset_blob_cache: Arc<AssetBlobCache>,

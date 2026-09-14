@@ -272,6 +272,7 @@ async fn main() -> process::ExitCode {
                 .model
                 .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
 
+            // FIXME
             let cfg = match config::get_config(config_path_override.as_deref()) {
                 Ok(cfg) => cfg,
                 Err(e) => {
@@ -525,7 +526,13 @@ async fn repl(
     mute_all_but_final_ai_response: bool,
     kernel_mode: bool,
 ) -> Result<u8, Box<dyn Error>> {
-    let mut cfg = match config::get_config(config_path_override) {
+    let mut cfg = match crate::feature::config_sync::get_merged_config(
+        config_path_override,
+        db.clone(),
+        account.as_ref().map(|a| a.username.as_str()),
+    )
+    .await
+    {
         Ok(cfg) => cfg,
         Err(e) => {
             errln!(io, "error: failed to read config: {}", e);
@@ -601,6 +608,24 @@ async fn repl(
         )
         .await;
     }
+
+    //
+    // Spawn a task to download updated config
+    //
+    let asset_blob_cache_clone = asset_blob_cache.clone();
+    let asset_keyring_clone = session.asset_keyring.clone();
+    let account_clone = account.clone();
+    let db_clone = db.clone();
+    tokio::spawn(async move {
+        let api_client = session::mk_api_client_from_account(account_clone.as_ref());
+        let _ = crate::feature::config_sync::store_remote_config_if_updated(
+            db_clone,
+            asset_blob_cache_clone,
+            asset_keyring_clone,
+            &api_client,
+            account_clone.as_ref().map(|a| a.username.as_str()),
+        );
+    });
 
     let mut cmd_queue = session.cmd_queue.lock().await;
     cmd_queue.push_group(session::CmdGroup {
