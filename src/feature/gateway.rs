@@ -138,7 +138,7 @@ impl Perm {
             (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
                 name.starts_with(prefix)
                     && perm.read
-                    && !name.starts_with("keys/")
+                    && !name.starts_with(".keys/")
                     && !name.starts_with("vault/")
             }
 
@@ -146,7 +146,7 @@ impl Perm {
             (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
                 name.starts_with(prefix)
                     && perm.write
-                    && !name.starts_with("keys/")
+                    && !name.starts_with(".keys/")
                     && !name.starts_with("vault/")
             }
 

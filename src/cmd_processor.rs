@@ -5231,11 +5231,11 @@ pub async fn process_cmd(
             let enc_key_id = match enc_key_id {
                 Some(id) => id.to_string(),
                 None => {
-                    // Try to get key_id from keys/enc.key metadata
+                    // Try to get key_id from `.keys/enc.key` metadata
                     match asset_reader::get_asset_and_metadata(
                         asset_blob_cache.clone(),
                         &api_client,
-                        &format!("/{username}/keys/enc.pub"),
+                        &format!("/{username}/.keys/enc.pub"),
                         true,
                     )
                     .await

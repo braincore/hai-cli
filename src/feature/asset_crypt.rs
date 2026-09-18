@@ -53,7 +53,7 @@ pub async fn asset_crypt_setup(
     //
 
     let mut rotation_accepted = false;
-    let pub_key_path = format!("/{username}/keys/enc.pub");
+    let pub_key_path = format!("/{username}/.keys/enc.pub");
     match get_only_asset_metadata(asset_blob_cache.clone(), &api_client, &pub_key_path, true).await
     {
         Ok((enc_key_md_contents, _enc_key_entry)) => {
@@ -146,14 +146,14 @@ pub async fn asset_crypt_setup(
                     outln!(io, "Existing encryption key ID: {}", old_key_id);
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
-                        &format!("keys/enc_{old_key_id}.key"),
+                        &format!(".keys/enc_{old_key_id}.key"),
                         "rotated_at",
                         Some(serde_json::json!(ts.clone())),
                     )
                     .await;
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
-                        &format!("/{username}/keys/enc_{old_key_id}.pub"),
+                        &format!("/{username}/.keys/enc_{old_key_id}.pub"),
                         "rotated_at",
                         Some(serde_json::json!(ts.clone())),
                     )
@@ -175,9 +175,9 @@ pub async fn asset_crypt_setup(
             }
         }
     };
-    match get_only_asset_metadata(asset_blob_cache, &api_client, "keys/sign.key", true).await {
+    match get_only_asset_metadata(asset_blob_cache, &api_client, ".keys/sign.key", true).await {
         Ok((sign_key_md_contents, _sign_key_entry)) => {
-            outln!(io, "Asset sign key `keys/sign.key` already exists.");
+            outln!(io, "Asset sign key `.keys/sign.key` already exists.");
             if !rotation_accepted {
                 let answer = io
                     .query(&crate::io::Query::confirm("Type 'yes' to rotate keys"))
@@ -199,14 +199,14 @@ pub async fn asset_crypt_setup(
                     outln!(io, "Existing sign key ID: {}", old_key_id);
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
-                        &format!("keys/sign_{old_key_id}.key"),
+                        &format!(".keys/sign_{old_key_id}.key"),
                         "rotated_at",
                         Some(serde_json::json!(ts.clone())),
                     )
                     .await;
                     let _ = crate::asset_async_writer::asset_metadata_set_key(
                         &api_client,
-                        &format!("/{username}/keys/sign_{old_key_id}.pub"),
+                        &format!("/{username}/.keys/sign_{old_key_id}.pub"),
                         "rotated_at",
                         Some(serde_json::json!(ts.clone())),
                     )
@@ -242,7 +242,7 @@ pub async fn asset_crypt_setup(
         let (enc_key_id, sign_key_id) = keys.key_ids_hex();
         match api_client
             .asset_get(AssetGetArg {
-                name: format!("keys/enc_{enc_key_id}.key"),
+                name: format!(".keys/enc_{enc_key_id}.key"),
             })
             .await
         {
@@ -264,7 +264,7 @@ pub async fn asset_crypt_setup(
         };
         match api_client
             .asset_get(AssetGetArg {
-                name: format!("keys/sign_{sign_key_id}.key"),
+                name: format!(".keys/sign_{sign_key_id}.key"),
             })
             .await
         {
@@ -408,14 +408,14 @@ pub async fn asset_crypt_setup(
     put_crypt_asset(
         io,
         &api_client,
-        format!("/{username}/keys/enc_{enc_key_id}.pub"),
+        format!("/{username}/.keys/enc_{enc_key_id}.pub"),
         &public_bundle.encryption_public,
     )
     .await?;
     put_crypt_asset(
         io,
         &api_client,
-        format!("/{username}/keys/sign_{sign_key_id}.pub"),
+        format!("/{username}/.keys/sign_{sign_key_id}.pub"),
         &public_bundle.verifying_key,
     )
     .await?;
@@ -424,14 +424,14 @@ pub async fn asset_crypt_setup(
     put_crypt_asset(
         io,
         &api_client,
-        format!("/{username}/keys/enc.pub"),
+        format!("/{username}/.keys/enc.pub"),
         &public_bundle.encryption_public,
     )
     .await?;
     put_crypt_asset(
         io,
         &api_client,
-        format!("/{username}/keys/sign.pub"),
+        format!("/{username}/.keys/sign.pub"),
         &public_bundle.verifying_key,
     )
     .await?;
@@ -439,14 +439,14 @@ pub async fn asset_crypt_setup(
     put_crypt_asset(
         io,
         &api_client,
-        format!("keys/enc_{enc_key_id}.key"),
+        format!(".keys/enc_{enc_key_id}.key"),
         &encrypted_encryption_bundle.to_bytes(),
     )
     .await?;
     put_crypt_asset(
         io,
         &api_client,
-        format!("keys/sign_{sign_key_id}.key"),
+        format!(".keys/sign_{sign_key_id}.key"),
         &encrypted_signing_bundle.to_bytes(),
     )
     .await?;
@@ -468,7 +468,7 @@ pub async fn asset_crypt_setup(
     put_crypt_asset(
         io,
         &api_client,
-        format!("keys/enc_{enc_key_id}.recovery"),
+        format!(".keys/enc_{enc_key_id}.recovery"),
         recovery_file_contents.as_bytes(),
     )
     .await?;
@@ -509,14 +509,14 @@ pub async fn asset_crypt_setup(
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("/{username}/keys/enc.pub"),
+        format!("/{username}/.keys/enc.pub"),
         enc_pub_md.clone(),
     )
     .await?;
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("/{username}/keys/enc_{enc_key_id}.pub"),
+        format!("/{username}/.keys/enc_{enc_key_id}.pub"),
         enc_pub_md,
     )
     .await?;
@@ -530,14 +530,14 @@ pub async fn asset_crypt_setup(
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("/{username}/keys/sign.pub"),
+        format!("/{username}/.keys/sign.pub"),
         sign_pub_md.clone(),
     )
     .await?;
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("/{username}/keys/sign_{sign_key_id}.pub"),
+        format!("/{username}/.keys/sign_{sign_key_id}.pub"),
         sign_pub_md,
     )
     .await?;
@@ -552,7 +552,7 @@ pub async fn asset_crypt_setup(
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("keys/enc_{enc_key_id}.key"),
+        format!(".keys/enc_{enc_key_id}.key"),
         enc_key_md,
     )
     .await?;
@@ -567,7 +567,7 @@ pub async fn asset_crypt_setup(
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("keys/sign_{sign_key_id}.key"),
+        format!(".keys/sign_{sign_key_id}.key"),
         sign_key_md,
     )
     .await?;
@@ -586,7 +586,7 @@ pub async fn asset_crypt_setup(
     put_crypt_asset_metadata(
         io,
         &api_client,
-        format!("keys/enc_{enc_key_id}.recovery"),
+        format!(".keys/enc_{enc_key_id}.recovery"),
         recovery_md,
     )
     .await?;
@@ -753,9 +753,9 @@ pub async fn get_encryption_key(
     let (key_path, username) = match recipient {
         KeyRecipient::User(username) => {
             if let Some(key_id) = key_id {
-                (format!("/{username}/keys/enc_{key_id}.pub"), username)
+                (format!("/{username}/.keys/enc_{key_id}.pub"), username)
             } else {
-                (format!("/{username}/keys/enc.pub"), username)
+                (format!("/{username}/.keys/enc.pub"), username)
             }
         }
     };
@@ -800,9 +800,9 @@ pub async fn get_verifying_key(
     let (key_path, username) = match recipient {
         KeyRecipient::User(username) => {
             if let Some(key_id) = key_id {
-                (format!("/{username}/keys/sign_{key_id}.pub"), username)
+                (format!("/{username}/.keys/sign_{key_id}.pub"), username)
             } else {
-                (format!("/{username}/keys/sign.pub"), username)
+                (format!("/{username}/.keys/sign.pub"), username)
             }
         }
     };
@@ -1063,7 +1063,7 @@ pub async fn get_encrypted_decryption_key(
     }
     let key_path = match rec_key_id_parts.recipient {
         KeyRecipient::User(_) => {
-            format!("keys/enc_{}.key", rec_key_id_parts.key_id)
+            format!(".keys/enc_{}.key", rec_key_id_parts.key_id)
         }
     };
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
@@ -1097,7 +1097,7 @@ pub async fn get_encrypted_signing_key(
     }
     let key_path = match rec_key_id_parts.recipient {
         KeyRecipient::User(_) => {
-            format!("keys/sign_{}.key", rec_key_id_parts.key_id)
+            format!(".keys/sign_{}.key", rec_key_id_parts.key_id)
         }
     };
     match get_key(asset_blob_cache.clone(), api_client, &key_path).await {
@@ -1396,7 +1396,7 @@ pub async fn asset_crypt_recover(
         .map_err(|e| CryptRecoverError::Other(format!("Invalid recovery code format: {}", e)))?;
 
     // Fetch the recovery file with metadata
-    let recovery_file_name = format!("keys/enc_{enc_key_id}.recovery");
+    let recovery_file_name = format!(".keys/enc_{enc_key_id}.recovery");
     let (recovery_data, sign_key_id) = match asset_reader::get_asset_and_metadata(
         asset_blob_cache.clone(),
         &api_client,
@@ -1441,7 +1441,7 @@ pub async fn asset_crypt_recover(
     };
 
     // Fetch encryption public key
-    let enc_pub_name = format!("/{username}/keys/enc_{enc_key_id}.pub");
+    let enc_pub_name = format!("/{username}/.keys/enc_{enc_key_id}.pub");
     let enc_pub_data =
         match asset_reader::get_asset(asset_blob_cache.clone(), &api_client, &enc_pub_name, true)
             .await
@@ -1473,7 +1473,7 @@ pub async fn asset_crypt_recover(
     let encryption_public = PublicKey::from(enc_pub_bytes);
 
     // Fetch signing public key
-    let sign_pub_name = format!("/{username}/keys/sign_{sign_key_id}.pub");
+    let sign_pub_name = format!("/{username}/.keys/sign_{sign_key_id}.pub");
     let sign_pub_data =
         match asset_reader::get_asset(asset_blob_cache.clone(), &api_client, &sign_pub_name, true)
             .await
@@ -1541,7 +1541,7 @@ pub async fn asset_crypt_recover(
     // Update the password-protected keys
     api_client
         .asset_put(AssetPutArg {
-            name: format!("keys/enc_{enc_key_id}.key"),
+            name: format!(".keys/enc_{enc_key_id}.key"),
             data: encrypted_encryption_bundle.to_bytes(),
             conflict_policy: PutConflictPolicy::Override,
         })
@@ -1550,7 +1550,7 @@ pub async fn asset_crypt_recover(
 
     api_client
         .asset_put(AssetPutArg {
-            name: format!("keys/sign_{sign_key_id}.key"),
+            name: format!(".keys/sign_{sign_key_id}.key"),
             data: encrypted_signing_bundle.to_bytes(),
             conflict_policy: PutConflictPolicy::Override,
         })
@@ -1560,7 +1560,7 @@ pub async fn asset_crypt_recover(
     // Update metadata to note recovery was used
     let _ = crate::asset_async_writer::asset_metadata_set_key(
         &api_client,
-        &format!("keys/enc_{enc_key_id}.key"),
+        &format!(".keys/enc_{enc_key_id}.key"),
         "recovered_at",
         Some(serde_json::json!(ts.clone())),
     )
@@ -1568,7 +1568,7 @@ pub async fn asset_crypt_recover(
 
     let _ = crate::asset_async_writer::asset_metadata_set_key(
         &api_client,
-        &format!("keys/sign_{sign_key_id}.key"),
+        &format!(".keys/sign_{sign_key_id}.key"),
         "recovered_at",
         Some(serde_json::json!(ts)),
     )
@@ -1607,7 +1607,9 @@ pub enum NewAssetAkmPolicy {
 pub fn new_asset_akm_policy_by_asset_name(asset_name: &str) -> NewAssetAkmPolicy {
     if asset_name.starts_with("vault/") || asset_name.starts_with("/s/") {
         NewAssetAkmPolicy::RequireEncrypt
-    } else if asset_name.starts_with("/") {
+    } else if asset_name.starts_with("/") || asset_name.starts_with(".keys/") {
+        // Do not encrypt keys because they are already encrypted and have
+        // their own key management.
         NewAssetAkmPolicy::Unencrypted
     } else {
         NewAssetAkmPolicy::PreferEncrypt
@@ -2065,7 +2067,7 @@ pub async fn sign_message_using_ed25519_key(
     message: &[u8],
 ) -> Result<(String, [u8; 64]), SignMessageError> {
     // Fetch signing public key
-    let verifying_key_asset_name = format!("/{username}/keys/sign.pub");
+    let verifying_key_asset_name = format!("/{username}/.keys/sign.pub");
     let verifying_key_pub_data = match asset_reader::get_asset_using_cache(
         asset_blob_cache.clone(),
         &api_client,
@@ -2135,7 +2137,7 @@ pub async fn verify_signature_using_ed25519_key(
     // Fetch signing public key
     let (username, signing_key_id) =
         parse_signer_key_id(signer_key_id).map_err(|_e| VerifySignatureError::InvalidKey)?;
-    let verifying_key_asset_name = format!("/{username}/keys/sign_{signing_key_id}.pub");
+    let verifying_key_asset_name = format!("/{username}/.keys/sign_{signing_key_id}.pub");
     let verifying_key_pub_data = match asset_reader::get_asset_using_cache(
         asset_blob_cache.clone(),
         &api_client,
@@ -2213,7 +2215,7 @@ pub async fn get_ed25519_for_ssh_key(
 ) -> Result<(String, String, zeroize::Zeroizing<String>), SshKeyGenerationError> {
     use ed25519_dalek::VerifyingKey;
     // Fetch signing public key
-    let verifying_key_asset_name = format!("/{username}/keys/sign.pub");
+    let verifying_key_asset_name = format!("/{username}/.keys/sign.pub");
     let verifying_key_pub_data = match asset_reader::get_asset(
         asset_blob_cache.clone(),
         &api_client,
