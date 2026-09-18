@@ -1,0 +1,16 @@
+<svg width="120" height="120" xmlns="http://www.w3.org/2000/svg">
+  <!-- Yellow circle background -->
+  <circle cx="60" cy="60" r="55" fill="#FFD700" stroke="#FFA500" stroke-width="2" />
+
+  <!-- Left vertical stroke (centered) -->
+  <rect x="40" y="30" width="8" height="60" fill="#2c3e50" rx="4" />
+  <!-- Right vertical stroke (centered) -->
+  <rect x="72" y="50" width="8" height="40" fill="#2c3e50" rx="4" />
+  <!-- Horizontal crossbar (centered) -->
+  <rect x="48" y="58" width="24" height="6" fill="#2c3e50" rx="3" />
+
+  <!-- Subtle shadow effect for depth -->
+  <rect x="41" y="31" width="8" height="60" fill="#34495e" rx="4" opacity="0.2" />
+  <rect x="73" y="51" width="8" height="40" fill="#34495e" rx="4" opacity="0.2" />
+  <rect x="49" y="59" width="24" height="6" fill="#34495e" rx="3" opacity="0.2" />
+</svg>
