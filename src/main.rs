@@ -272,15 +272,6 @@ async fn main() -> process::ExitCode {
                 .model
                 .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
 
-            // FIXME
-            let cfg = match config::get_config(config_path_override.as_deref()) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    eprintln!("error: failed to read config: {}", e);
-                    return process::ExitCode::from(1);
-                }
-            };
-
             let account = if let Some(force_username) = force_username {
                 if force_username == "_" {
                     None
@@ -318,6 +309,19 @@ async fn main() -> process::ExitCode {
                 }
             } else {
                 None
+            };
+            let cfg = match crate::feature::config_sync::get_merged_config(
+                config_path_override.as_deref(),
+                db.clone(),
+                account.as_ref().map(|a| a.username.as_str()),
+            )
+            .await
+            {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("error: failed to read config: {}", e);
+                    return process::ExitCode::from(1);
+                }
             };
             let out = Out::stdio();
             match command {
