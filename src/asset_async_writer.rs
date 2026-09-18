@@ -116,6 +116,13 @@ pub async fn worker_update_asset(
                     tracing::debug!(%asset_name, "worker-update-asset: skipped update hash unchanged");
                     continue;
                 }
+                let first_text_line = if let Ok(content_str) = std::str::from_utf8(&new_contents)
+                    && let Some(first_line) = content_str.lines().next()
+                {
+                    Some(first_line.to_string())
+                } else {
+                    None
+                };
                 let (new_hash_str, new_contents) = if let Some(akm_info) = akm_info.as_ref() {
                     let enc_content = crate::feature::asset_crypt::encrypt_asset_with_aes_key(
                         &akm_info.unlocked_akm.sym_key_info.aes_key,
@@ -187,14 +194,6 @@ pub async fn worker_update_asset(
                         }
                     }
                 } else {
-                    let first_text_line = if let Ok(content_str) =
-                        std::str::from_utf8(&new_contents)
-                        && let Some(first_line) = content_str.lines().next()
-                    {
-                        Some(first_line.to_string())
-                    } else {
-                        None
-                    };
                     let bottom = asset_bottom_map
                         .get(&asset_name)
                         .cloned()
