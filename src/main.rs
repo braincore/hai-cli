@@ -47,7 +47,6 @@ mod term;
 mod term_color;
 mod tool;
 
-pub use io::Level;
 use io::{Io, Out, SectionKind};
 use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
@@ -1891,23 +1890,7 @@ fn print_step(
         } else if !io.is_section_aware() {
             out!(io, "{} ", step_badge);
         }
-
-        let color = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
-        | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
-            cmd::parse_user_input(cmd_registry, input, None, None)
-        {
-            match accent {
-                Some(cmd::Accent::Danger) => Some((128, 0, 0)),
-                Some(cmd::Accent::Warn) => Some((153, 102, 0)),
-                Some(cmd::Accent::Info) => Some((0, 51, 102)),
-                Some(cmd::Accent::Success) => Some((0, 102, 51)),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        term_color::print_multi_lang_syntax_highlighting(&io.out, &masked_input, &color);
-        outln!(io);
+        crate::feature::chat_store::print_user_input(io, cmd_registry, input);
     } else {
         if io.is_terminal() {
             println!("{} {}", step_badge.black().on_white(), &masked_input);

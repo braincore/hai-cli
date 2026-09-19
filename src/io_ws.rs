@@ -49,7 +49,7 @@ impl Output for WsOutput {
         self.send(WsCmd::Err(s.to_string()));
     }
 
-    fn push_alert(&mut self, level: Level, msg: &str) {
+    fn push_alert(&mut self, level: NoticeLevel, msg: &str) {
         self.send(WsCmd::Alert {
             level,
             text: msg.to_string(),
@@ -238,7 +238,7 @@ pub enum ServerMsg {
         text: String,
     },
     Alert {
-        level: crate::io::Level,
+        level: crate::io::NoticeLevel,
         text: String,
     },
     Display {
@@ -387,7 +387,7 @@ pub enum ClientMsg {
 
 // --
 
-use crate::io::{Answer, Level, Query};
+use crate::io::{Answer, NoticeLevel, Query};
 
 /// Commands sent from the kernel to the actor.
 pub enum WsCmd {
@@ -396,7 +396,7 @@ pub enum WsCmd {
     Out(String),
     Err(String),
     Alert {
-        level: Level,
+        level: NoticeLevel,
         text: String,
     },
     Display {

@@ -370,7 +370,7 @@ impl Io {
     pub fn err_flush(&self, s: &str) {
         self.out.err_flush(s)
     }
-    pub fn alert(&self, l: Level, s: &str) {
+    pub fn alert(&self, l: NoticeLevel, s: &str) {
         self.out.alert(l, s)
     }
     pub fn display(&self, mime: &str, data: &str) {
@@ -558,7 +558,7 @@ pub trait Output: Send {
     fn push_flush(&mut self) {}
 
     /// Leveled message. Backend owns label, color, routing, line termination.
-    fn push_alert(&mut self, level: Level, msg: &str) {
+    fn push_alert(&mut self, level: NoticeLevel, msg: &str) {
         // Default: plain "label: msg" to the conventional stream.
         let line = format!("{} {}\n", level.label(), msg);
         if level.is_err_stream() {
@@ -698,6 +698,9 @@ pub enum SectionKind {
         sub_index: u32,
         name: String,
     },
+    Notice {
+        level: NoticeLevel,
+    },
 }
 
 static NEXT_SECTION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -727,7 +730,7 @@ pub enum Rec {
     Out(String),
     Err(String),
     Alert {
-        level: Level,
+        level: NoticeLevel,
         text: String,
     },
     Display {
@@ -964,7 +967,7 @@ impl Out {
     // Exact presentation decided by backend.
     //
 
-    pub fn alert(&self, level: Level, s: &str) {
+    pub fn alert(&self, level: NoticeLevel, s: &str) {
         self.record(Rec::Alert {
             level,
             text: s.to_string(),
@@ -1131,31 +1134,28 @@ impl Out {
 
 /// Semantic intent of a message. Presentation is decided by the backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Level {
-    Error,
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum NoticeLevel {
+    Danger,
     Warn,
     Success,
     Info,
-    Note,
-    Hint,
 }
 
-impl Level {
+impl NoticeLevel {
     /// The conventional label prefix ("warn:", "error:", ...).
     pub fn label(self) -> &'static str {
         match self {
-            Level::Error => "error",
-            Level::Warn => "warn",
-            Level::Success => "ok",
-            Level::Info => "info",
-            Level::Note => "note",
-            Level::Hint => "hint",
+            NoticeLevel::Danger => "error",
+            NoticeLevel::Warn => "warn",
+            NoticeLevel::Success => "ok",
+            NoticeLevel::Info => "info",
         }
     }
 
     /// Whether this level conventionally routes to stderr.
     pub fn is_err_stream(self) -> bool {
-        matches!(self, Level::Error | Level::Warn)
+        matches!(self, NoticeLevel::Danger | NoticeLevel::Warn)
     }
 }
 
@@ -1176,42 +1176,28 @@ macro_rules! alert {
 #[macro_export]
 macro_rules! errorln {
     ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Error, $($arg)*)
+        $crate::alert!($out, $crate::io::NoticeLevel::Danger, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! warnln {
     ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Warn, $($arg)*)
+        $crate::alert!($out, $crate::io::NoticeLevel::Warn, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! successln {
     ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Success, $($arg)*)
+        $crate::alert!($out, $crate::io::NoticeLevel::Success, $($arg)*)
     };
 }
 
 #[macro_export]
 macro_rules! infoln {
     ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Info, $($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! noteln {
-    ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Note, $($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! hintln {
-    ($out:expr, $($arg:tt)*) => {
-        $crate::alert!($out, $crate::Level::Hint, $($arg)*)
+        $crate::alert!($out, $crate::io::NoticeLevel::Info, $($arg)*)
     };
 }
 
@@ -1404,7 +1390,7 @@ impl Output for StdioOutput {
         let _ = std::io::stderr().flush();
     }
 
-    fn push_alert(&mut self, level: Level, msg: &str) {
+    fn push_alert(&mut self, level: NoticeLevel, msg: &str) {
         use colored::Colorize;
 
         let to_err = level.is_err_stream();
@@ -1417,12 +1403,10 @@ impl Output for StdioOutput {
 
         let styled_label = if color {
             match level {
-                Level::Error => label.white().on_red().bold().to_string(),
-                Level::Warn => label.black().on_yellow().to_string(),
-                Level::Success => label.black().on_green().to_string(),
-                Level::Info => label.cyan().to_string(),
-                Level::Note => label.dimmed().to_string(),
-                Level::Hint => label.blue().to_string(),
+                NoticeLevel::Danger => label.white().on_red().bold().to_string(),
+                NoticeLevel::Warn => label.black().on_yellow().to_string(),
+                NoticeLevel::Success => label.black().on_green().to_string(),
+                NoticeLevel::Info => label.cyan().to_string(),
             }
         } else {
             label.to_string()
@@ -1527,7 +1511,7 @@ impl Output for NoopOutput {
     fn push_out(&mut self, _s: &str) {}
     fn push_err(&mut self, _s: &str) {}
     fn push_flush(&mut self) {}
-    fn push_alert(&mut self, _level: Level, _msg: &str) {}
+    fn push_alert(&mut self, _level: NoticeLevel, _msg: &str) {}
     fn push_display(&mut self, _mime: &str, _data: &str) {}
     fn push_code(&mut self, _text: &str, _lang: Option<&str>) {}
     fn push_code_bg(&mut self, _text: &str, _lang: Option<&str>, _bg: Option<(u8, u8, u8)>) {}

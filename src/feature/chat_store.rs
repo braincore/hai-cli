@@ -653,11 +653,13 @@ pub async fn resume_chat_from_db_or_asset(
             let left_prompt = format!("{}[{}]:", role_name, i);
             if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
                 if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
-                    if io.is_terminal() {
-                        println!("{}", left_prompt.bright_green());
-                        io.record_out(&left_prompt);
-                    } else if !io.is_section_aware() {
-                        outln!(io, "{}", left_prompt);
+                    if log_entry.result_of.is_none() {
+                        if io.is_terminal() {
+                            println!("{}", left_prompt.bright_green());
+                            io.record_out(&left_prompt);
+                        } else if !io.is_section_aware() {
+                            outln!(io, "{}", left_prompt);
+                        }
                     }
                     for tool_call in tool_calls {
                         let tool_name = tool_call.function.name.clone();
@@ -675,32 +677,26 @@ pub async fn resume_chat_from_db_or_asset(
                         outln!(io);
                     }
                 } else {
+                    if log_entry.result_of.is_none() {
+                        if io.is_terminal() {
+                            print!("{} ", left_prompt.bright_green());
+                            io.record_out(&format!("{} ", left_prompt));
+                        } else if !io.is_section_aware() {
+                            out!(io, "{} ", left_prompt);
+                        }
+                    }
+                    print_user_input(io, &full_cmd_registry, &entry_body);
+                }
+            } else {
+                if log_entry.result_of.is_none() {
                     if io.is_terminal() {
                         print!("{} ", left_prompt.bright_green());
                         io.record_out(&format!("{} ", left_prompt));
                     } else if !io.is_section_aware() {
                         out!(io, "{} ", left_prompt);
                     }
-                    crate::term_color::print_multi_lang_syntax_highlighting(
-                        &io.out,
-                        &entry_body,
-                        &None,
-                    );
-                    outln!(io);
                 }
-            } else {
-                if io.is_terminal() {
-                    print!("{} ", left_prompt.bright_green());
-                    io.record_out(&format!("{} ", left_prompt));
-                } else if !io.is_section_aware() {
-                    out!(io, "{} ", left_prompt);
-                }
-                crate::term_color::print_multi_lang_syntax_highlighting(
-                    &io.out,
-                    &entry_body,
-                    &None,
-                );
-                outln!(io);
+                print_user_input(io, &full_cmd_registry, &entry_body);
             }
         }
     }
@@ -845,11 +841,13 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
             let left_prompt = format!("{}[{}]:", role_name, i);
             if matches!(log_entry.message.role, chat::MessageRole::Assistant) {
                 if let Some(tool_calls) = log_entry.message.tool_calls.as_ref() {
-                    if io.is_terminal() {
-                        println!("{}", left_prompt.bright_green());
-                        io.record_out(&left_prompt);
-                    } else if !io.is_section_aware() {
-                        outln!(io, "{}", left_prompt);
+                    if log_entry.result_of.is_none() {
+                        if io.is_terminal() {
+                            println!("{}", left_prompt.bright_green());
+                            io.record_out(&left_prompt);
+                        } else if !io.is_section_aware() {
+                            outln!(io, "{}", left_prompt);
+                        }
                     }
                     for tool_call in tool_calls {
                         let tool_name = tool_call.function.name.clone();
@@ -867,35 +865,70 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                         outln!(io);
                     }
                 } else {
+                    if log_entry.result_of.is_none() {
+                        if io.is_terminal() {
+                            print!("{} ", left_prompt.bright_green());
+                            io.record_out(&format!("{} ", left_prompt));
+                        } else if !io.is_section_aware() {
+                            out!(io, "{} ", left_prompt);
+                        }
+                    }
+                    print_user_input(io, &full_cmd_registry, &entry_body);
+                }
+            } else {
+                if log_entry.result_of.is_none() {
                     if io.is_terminal() {
                         print!("{} ", left_prompt.bright_green());
                         io.record_out(&format!("{} ", left_prompt));
                     } else if !io.is_section_aware() {
                         out!(io, "{} ", left_prompt);
                     }
-                    crate::term_color::print_multi_lang_syntax_highlighting(
-                        &io.out,
-                        &entry_body,
-                        &None,
-                    );
-                    outln!(io);
                 }
-            } else {
-                if io.is_terminal() {
-                    print!("{} ", left_prompt.bright_green());
-                    io.record_out(&format!("{} ", left_prompt));
-                } else if !io.is_section_aware() {
-                    out!(io, "{} ", left_prompt);
-                }
-                crate::term_color::print_multi_lang_syntax_highlighting(
-                    &io.out,
-                    &entry_body,
-                    &None,
-                );
-                outln!(io);
+                print_user_input(io, &full_cmd_registry, &entry_body);
             }
         }
     }
+}
+
+// --
+
+use crate::{cmd, cmd_registry, io};
+
+pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &str) {
+    let (notice_section_guard, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
+    | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
+        cmd::parse_user_input(&cmd_registry, input, None, None)
+    {
+        let notice_section_guard = if io.is_section_aware()
+            && let Some(accent) = accent.as_ref()
+        {
+            Some(io.section_begin(SectionKind::Notice {
+                level: match accent {
+                    cmd::Accent::Danger => io::NoticeLevel::Danger,
+                    cmd::Accent::Warn => io::NoticeLevel::Warn,
+                    cmd::Accent::Info => io::NoticeLevel::Info,
+                    cmd::Accent::Success => io::NoticeLevel::Success,
+                },
+            }))
+        } else {
+            None
+        };
+        (
+            notice_section_guard,
+            match accent {
+                Some(cmd::Accent::Danger) => Some((128, 0, 0)),
+                Some(cmd::Accent::Warn) => Some((153, 102, 0)),
+                Some(cmd::Accent::Info) => Some((0, 51, 102)),
+                Some(cmd::Accent::Success) => Some((0, 102, 51)),
+                _ => None,
+            },
+        )
+    } else {
+        (None, None)
+    };
+    crate::term_color::print_multi_lang_syntax_highlighting(&io.out, input.trim_end(), &color);
+    outln!(io);
+    drop(notice_section_guard);
 }
 
 // --
