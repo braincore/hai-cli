@@ -1997,6 +1997,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 | DeepSeekModel::DeepSeekReasoner
                 | DeepSeekModel::DeepSeekV4Flash(_)
                 | DeepSeekModel::DeepSeekV4Pro(_)
+                | DeepSeekModel::DeepSeekV41Flash(_)
         ),
         AiModel::Google(model) => matches!(
             model,
