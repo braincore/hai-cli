@@ -1233,13 +1233,13 @@ async fn repl(
         if let cmd::Cmd::Tool(_) = cmd
             && !config::get_ai_model_capability(&session.ai).tool
         {
-            errln!(io, "error: model does not support tools");
+            errorln!(io, "model does not support tools");
             continue;
         }
 
         // Check api-key for ai provider is set (prints error msg to stderr)
         if !matches!(session.use_hai_router, HaiRouterState::On)
-            && !config::check_api_key(&session.ai, &cfg)
+            && !config::check_api_key(&io.out, &session.ai, &cfg)
         {
             continue;
         }

@@ -6,6 +6,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
+use crate::{errorln, io::Out};
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub default_ai_model: Option<String>,
@@ -2441,12 +2443,13 @@ pub fn get_xai_api_key(cfg: &Config) -> Option<String> {
 }
 
 /// Prints error to terminal if key not set.
-pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
+pub fn check_api_key(out: &Out, ai: &AiModel, cfg: &Config) -> bool {
     match ai {
         AiModel::OpenAi(_) => {
             if get_openai_api_key(cfg).is_none() {
-                eprintln!(
-                    "error: model '{}' requires an OpenAI API Key: `/set-key openai <key>` OR `/hai-router on`",
+                errorln!(
+                    out,
+                    "model '{}' requires an OpenAI API Key: `/set-key openai <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;
@@ -2454,8 +2457,9 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
         }
         AiModel::Anthropic(_) => {
             if get_anthropic_api_key(cfg).is_none() {
-                eprintln!(
-                    "error: model '{}' requires an Anthropic API Key: `/set-key anthropic <key>` OR `/hai-router on`",
+                errorln!(
+                    out,
+                    "model '{}' requires an Anthropic API Key: `/set-key anthropic <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;
@@ -2463,8 +2467,9 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
         }
         AiModel::DeepSeek(_) => {
             if get_deepseek_api_key(cfg).is_none() {
-                eprintln!(
-                    "error: model '{}' requires a DeepSeek API Key: `/set-key deepseek <key>` OR `/hai-router on`",
+                errorln!(
+                    out,
+                    "model '{}' requires a DeepSeek API Key: `/set-key deepseek <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;
@@ -2472,8 +2477,9 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
         }
         AiModel::Google(_) => {
             if get_google_api_key(cfg).is_none() {
-                eprintln!(
-                    "error: model '{}' requires a Google API Key: `/set-key google <key>` OR `/hai-router on`",
+                errorln!(
+                    out,
+                    "model '{}' requires a Google API Key: `/set-key google <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;
@@ -2481,8 +2487,9 @@ pub fn check_api_key(ai: &AiModel, cfg: &Config) -> bool {
         }
         AiModel::Xai(_) => {
             if get_xai_api_key(cfg).is_none() {
-                eprintln!(
-                    "error: model '{}' requires an xAI API Key: `/set-key xai <key>` OR `/hai-router on`",
+                errorln!(
+                    out,
+                    "model '{}' requires an xAI API Key: `/set-key xai <key>` OR `/hai-router on`",
                     get_ai_model_display_name(ai)
                 );
                 return false;

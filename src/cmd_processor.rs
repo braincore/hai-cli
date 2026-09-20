@@ -298,7 +298,7 @@ pub async fn process_cmd(
                     if is_task_mode_step
                         && (matches!(session.use_hai_router, HaiRouterState::Off)
                             || !config::is_ai_model_supported_by_hai_router(&selected_ai_model))
-                        && !config::check_api_key(&selected_ai_model, cfg)
+                        && !config::check_api_key(&io.out, &selected_ai_model, cfg)
                     {
                         warnln!(
                             io,
