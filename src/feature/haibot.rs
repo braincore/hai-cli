@@ -383,9 +383,7 @@ fn get_pid_file() -> PathBuf {
 /// and detached. Otherwise, the bot is started in this process.
 pub async fn start_bot(
     out: &Out,
-    cfg: config::Config,
     account: Option<db::Account>,
-    force_ai_model: Option<config::AiModel>,
     launch_as_daemon: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let is_daemon_child = std::env::var("HAI_BOT_DAEMON").is_ok();
@@ -404,7 +402,7 @@ pub async fn start_bot(
         let pid = spawn_background()?;
         outln!(out, "Bot started (PID: {})", pid);
     } else {
-        match run_bot_loop(out, cfg, account, force_ai_model).await {
+        match run_bot_loop(out, account).await {
             Ok(_) => outln!(out, "Bot exited normally"),
             Err(e) => errorln!(out, "Bot exited with error: {}", e),
         }
@@ -579,29 +577,14 @@ fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
 /// changes to jobs, and launching the scheduler to execute them.
 pub async fn run_bot_loop(
     out: &Out,
-    cfg: config::Config,
     account: Option<db::Account>,
-    force_ai_model: Option<config::AiModel>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     outln!(out, "Bot running...");
 
     let start_msg = format!("Bot starting at {:?}\n", std::time::SystemTime::now());
     std::fs::write(config::get_bot_log_path(), &start_msg).ok();
 
-    let repl_mode = crate::session::ReplMode::Normal;
-    let incognito = false;
-    let cmd_registry = crate::cmd_registry::Registry::new();
-    let session = crate::session::SessionState::new_from_cfg(
-        out,
-        repl_mode,
-        &cfg,
-        account.clone(),
-        incognito,
-        force_ai_model,
-        cmd_registry,
-    );
-
-    let api_client = crate::session::mk_api_client(Some(&session));
+    let api_client = crate::session::mk_api_client_from_account(account.as_ref());
     let prefix = "haibot/jobs/".to_string();
 
     // Initial fetch of job list
@@ -623,7 +606,7 @@ pub async fn run_bot_loop(
     let schedule_notify_clone = Arc::clone(&schedule_notify);
 
     // Spawn the listener task for job config changes
-    let api_client_for_listener = crate::session::mk_api_client(Some(&session));
+    let api_client_for_listener = api_client.clone();
     let prefix_clone = prefix.clone();
     let listen_url = format!(
         "{}/notify/listen",
@@ -645,7 +628,7 @@ pub async fn run_bot_loop(
     });
 
     // Run the scheduler (which will also spawn asset change listeners)
-    let api_client_for_scheduler = crate::session::mk_api_client(Some(&session));
+    let api_client_for_scheduler = api_client.clone();
     run_scheduler(out, job_groups, schedule_notify, api_client_for_scheduler).await
 }
 

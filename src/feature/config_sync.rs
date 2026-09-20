@@ -9,12 +9,16 @@ use crate::feature::{
 use crate::io::Io;
 use crate::{asset_async_writer, asset_cache::AssetBlobCache, asset_reader, config, db};
 
+/// # Arguments
+/// - `io`: Set to Io::noop() to avoid key password prompt.
+///
 /// # Returns
 ///
 /// `Some(Some((seq_id, contents)))`: local asset is outdated.
 /// `Some(None)`: local asset is outdated -> latest version has no contents.
 /// `None`: local asset is up-to-date or unable to determine (fetch error).
 async fn local_asset_needs_update(
+    io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
@@ -31,7 +35,7 @@ async fn local_asset_needs_update(
     if local_seq_id < entry.seq_id {
         // Get contents (likely to require decryption)
         let (contents, entry) = match asset_reader::get_decrypted_asset_and_metadata(
-            &crate::io::Io::noop(),
+            io,
             asset_blob_cache,
             asset_keyring,
             api_client,
@@ -87,7 +91,10 @@ pub async fn get_merged_config(
     }
 }
 
+/// # Arguments
+/// - `io`: Set to Io::noop() to avoid key password prompt.
 pub async fn store_remote_config_if_updated(
+    io: &Io,
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<AssetKeyring>>,
@@ -104,6 +111,7 @@ pub async fn store_remote_config_if_updated(
             0
         };
         match local_asset_needs_update(
+            io,
             asset_blob_cache,
             asset_keyring,
             api_client,

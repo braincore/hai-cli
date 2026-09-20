@@ -267,10 +267,6 @@ async fn main() -> process::ExitCode {
             let force_username = args
                 .username
                 .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
-            let force_ai_model = args
-                .model
-                .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
-
             let account = if let Some(force_username) = force_username {
                 if force_username == "_" {
                     None
@@ -299,40 +295,10 @@ async fn main() -> process::ExitCode {
                     }
                 }
             };
-            let force_ai_model = if let Some(force_ai_model) = force_ai_model {
-                if let Some(ai_model) = config::ai_model_from_string(&force_ai_model) {
-                    Some(ai_model)
-                } else {
-                    eprintln!("error: unknown model {}", force_ai_model);
-                    return process::ExitCode::from(1);
-                }
-            } else {
-                None
-            };
-            let cfg = match crate::feature::config_sync::get_merged_config(
-                config_path_override.as_deref(),
-                db.clone(),
-                account.as_ref().map(|a| a.username.as_str()),
-            )
-            .await
-            {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    eprintln!("error: failed to read config: {}", e);
-                    return process::ExitCode::from(1);
-                }
-            };
             let out = Out::stdio();
             match command {
                 BotSubcommand::Start { daemon } => {
-                    let _ = crate::feature::haibot::start_bot(
-                        &out,
-                        cfg,
-                        account,
-                        force_ai_model,
-                        daemon,
-                    )
-                    .await;
+                    let _ = crate::feature::haibot::start_bot(&out, account, daemon).await;
                     return process::ExitCode::from(0);
                 }
                 BotSubcommand::Stop => {
@@ -626,6 +592,7 @@ async fn repl(
         tokio::spawn(async move {
             let api_client = session::mk_api_client_from_account(account_clone.as_ref());
             let _ = crate::feature::config_sync::store_remote_config_if_updated(
+                &crate::io::Io::noop(),
                 db_clone,
                 asset_blob_cache_clone,
                 asset_keyring_clone,
@@ -638,6 +605,7 @@ async fn repl(
         // Download updated config and use it immediately.
         let api_client = session::mk_api_client_from_account(account.as_ref());
         let _ = crate::feature::config_sync::store_remote_config_if_updated(
+            io,
             db.clone(),
             asset_blob_cache.clone(),
             session.asset_keyring.clone(),
