@@ -529,6 +529,7 @@ async fn repl(
     mute_all_but_final_ai_response: bool,
     kernel_mode: bool,
 ) -> Result<u8, Box<dyn Error>> {
+    let local_config_existed_at_startup = config::config_exists_on_fs(config_path_override);
     let mut cfg = match crate::feature::config_sync::get_merged_config(
         config_path_override,
         db.clone(),
@@ -613,22 +614,49 @@ async fn repl(
     }
 
     //
-    // Spawn a task to download updated config
+    // Download updated config from remote if it exists.
     //
-    let asset_blob_cache_clone = asset_blob_cache.clone();
-    let asset_keyring_clone = session.asset_keyring.clone();
-    let account_clone = account.clone();
-    let db_clone = db.clone();
-    tokio::spawn(async move {
-        let api_client = session::mk_api_client_from_account(account_clone.as_ref());
+    if local_config_existed_at_startup {
+        // Spawn a task to download updated config in the background. If new,
+        // it will be used on next start up.
+        let asset_blob_cache_clone = asset_blob_cache.clone();
+        let asset_keyring_clone = session.asset_keyring.clone();
+        let account_clone = account.clone();
+        let db_clone = db.clone();
+        tokio::spawn(async move {
+            let api_client = session::mk_api_client_from_account(account_clone.as_ref());
+            let _ = crate::feature::config_sync::store_remote_config_if_updated(
+                db_clone,
+                asset_blob_cache_clone,
+                asset_keyring_clone,
+                &api_client,
+                account_clone.as_ref().map(|a| a.username.as_str()),
+            )
+            .await;
+        });
+    } else {
+        // Download updated config and use it immediately.
+        let api_client = session::mk_api_client_from_account(account.as_ref());
         let _ = crate::feature::config_sync::store_remote_config_if_updated(
-            db_clone,
-            asset_blob_cache_clone,
-            asset_keyring_clone,
+            db.clone(),
+            asset_blob_cache.clone(),
+            session.asset_keyring.clone(),
             &api_client,
-            account_clone.as_ref().map(|a| a.username.as_str()),
-        );
-    });
+            account.as_ref().map(|a| a.username.as_str()),
+        )
+        .await;
+        if let Ok(merged_cfg) = crate::feature::config_sync::get_merged_config(
+            config_path_override,
+            db.clone(),
+            account.as_ref().map(|a| a.username.as_str()),
+        )
+        .await
+        {
+            // WARNING: This can be a bit sketchy since certain cfg values have
+            // already been used above and they may now be different.
+            cfg = merged_cfg;
+        }
+    }
 
     let mut cmd_queue = session.cmd_queue.lock().await;
     cmd_queue.push_group(session::CmdGroup {

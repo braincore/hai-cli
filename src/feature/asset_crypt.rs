@@ -1284,7 +1284,7 @@ pub async fn get_symmetric_key_ez(
     // If input i/o isn't supported and key isn't already unlocked, give up
     // early.
     if io.is_input_noop()
-        && asset_keyring_locked
+        && !asset_keyring_locked
             .can_unlock_decrypt_key(
                 asset_blob_cache.clone(),
                 api_client,

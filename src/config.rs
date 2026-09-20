@@ -1013,6 +1013,8 @@ pub fn read_config_as_string(
     } else {
         let path = get_default_config_path();
         if !path.exists() {
+            // Everything is commented out so that it does not override a value
+            // set in a remote config.
             let default_config = r#"
 # The default AI model to use.
 #default_ai_model = "gpt-5.6-terra"
@@ -1046,31 +1048,31 @@ pub fn read_config_as_string(
 # Asset blob cache size in bytes (default: 1GB, 0 = disabled)
 #asset_blob_cache_size = 1073741824
 
-[openai]
+#[openai]
 # Your OpenAI API key (required to use OpenAI models).
 #api_key = ""
 
-[anthropic]
+#[anthropic]
 # Your Anthropic API key (required to use Anthropic models).
 #api_key = ""
 
-[llama_cpp]
+#[llama_cpp]
 # Base URL for the llama.cpp server (default: http://127.0.0.1:8080).
 #base_url = ""
 
-[ollama]
+#[ollama]
 # Base URL for the Ollama API (default: http://localhost:11434).
 #base_url = ""
 
-[google]
+#[google]
 # Your Google API key (required to use Google AI models).
 #api_key = ""
 
-[deepseek]
+#[deepseek]
 # Your DeepSeek API key (required to use DeepSeek models).
 #api_key = ""
 
-[xai]
+#[xai]
 # Your xAI API key (required to use xAI models).
 #api_key = ""
 "#;
@@ -1109,6 +1111,15 @@ pub fn read_config_from_bytes(bytes: &[u8]) -> Result<Config, Box<dyn std::error
     Ok(toml::from_str(config_str)?)
 }
 
+/// Check if config is present on the filesystem.
+pub fn config_exists_on_fs(config_path_override: Option<&str>) -> bool {
+    if let Some(config_path) = config_path_override {
+        std::path::Path::new(config_path).exists()
+    } else {
+        get_default_config_path().exists()
+    }
+}
+
 // ---
 
 pub fn write_config(path: &str, cfg: &str) {
@@ -1134,7 +1145,11 @@ pub fn insert_config_kv(
     let cfg = read_config_as_string(config_path_override).unwrap();
     let mut doc = cfg.parse::<toml_edit::DocumentMut>().expect("invalid doc");
     if let Some(section_name) = section {
-        doc[section_name][key] = toml_edit::value(val);
+        if !doc.contains_key(section_name) {
+            // Use Table so that it uses the prettier [table] syntax
+            doc[section_name] = Item::Table(Table::new());
+        }
+        doc[section_name][key] = value(val);
     } else {
         doc[key] = toml_edit::value(val);
     }

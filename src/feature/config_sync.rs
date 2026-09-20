@@ -65,6 +65,7 @@ pub async fn get_merged_config(
     db: Arc<Mutex<rusqlite::Connection>>,
     username: Option<&str>,
 ) -> Result<config::Config, Box<dyn std::error::Error>> {
+    // Returns a local config even if it doesn't exist by creating it.
     let local_config = config::get_config(config_path_override.as_deref())?;
     let remote_config = if let Some(username) = username {
         if let Some(existing_asset_store_entry) =
@@ -94,45 +95,49 @@ pub async fn store_remote_config_if_updated(
     username: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(username) = username {
-        if let Some(existing_asset_store_entry) =
+        let existing_seq_id = if let Some(existing_asset_store_entry) =
             db::asset_store_get(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?
         {
-            match local_asset_needs_update(
-                asset_blob_cache,
-                asset_keyring,
-                api_client,
-                Some(username),
-                HAI_TOML_ASSET_NAME,
-                existing_asset_store_entry.seq_id,
-            )
-            .await
-            {
-                Some(Some((entry_id, seq_id, hash, contents))) => {
-                    tracing::info!(
-                        HAI_TOML_ASSET_NAME,
-                        entry_id,
-                        seq_id,
-                        hash,
-                        "storing updated remote config"
-                    );
-                    db::asset_store_put(
-                        &*db.lock().await,
-                        username,
-                        HAI_TOML_ASSET_NAME,
-                        &entry_id,
-                        seq_id,
-                        &hash,
-                        &contents,
-                    )?;
-                }
-                Some(None) => {
-                    db::asset_store_remove(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?;
-                }
-                None => {
-                    // May have been a fetch failure, ignore save.
-                }
-            };
-        }
+            existing_asset_store_entry.seq_id
+        } else {
+            // If nothing is stored, guarantee a fetch with a non-positive seq_id
+            0
+        };
+        match local_asset_needs_update(
+            asset_blob_cache,
+            asset_keyring,
+            api_client,
+            Some(username),
+            HAI_TOML_ASSET_NAME,
+            existing_seq_id,
+        )
+        .await
+        {
+            Some(Some((entry_id, seq_id, hash, contents))) => {
+                tracing::info!(
+                    HAI_TOML_ASSET_NAME,
+                    entry_id,
+                    seq_id,
+                    hash,
+                    "storing updated remote config"
+                );
+                db::asset_store_put(
+                    &*db.lock().await,
+                    username,
+                    HAI_TOML_ASSET_NAME,
+                    &entry_id,
+                    seq_id,
+                    &hash,
+                    &contents,
+                )?;
+            }
+            Some(None) => {
+                db::asset_store_remove(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?;
+            }
+            None => {
+                // May have been a fetch failure, ignore save.
+            }
+        };
     }
     Ok(())
 }
@@ -223,6 +228,9 @@ pub async fn merged_config_insert_config_kv(
             .parse::<toml_edit::DocumentMut>()
             .expect("invalid doc");
         if let Some(section_name) = section {
+            if !doc.contains_key(section_name) {
+                doc[section_name] = toml_edit::Item::Table(toml_edit::Table::new());
+            }
             doc[section_name][key] = toml_edit::value(val);
         } else {
             doc[key] = toml_edit::value(val);
