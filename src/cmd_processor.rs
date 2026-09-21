@@ -1659,10 +1659,9 @@ pub async fn process_cmd(
                 ]);
             } else if let Some((_, haitask)) = get_haitask_from_task_ref(
                 io,
+                &api_client,
+                session.account.as_ref().map(|a| a.username.as_ref()),
                 &task_ref,
-                session,
-                "task",
-                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -1816,10 +1815,9 @@ pub async fn process_cmd(
         cmd::Cmd::TaskInclude(cmd::TaskIncludeCmd { task_ref, key }) => {
             if let Some((_, haitask)) = get_haitask_from_task_ref(
                 io,
+                &api_client,
+                session.account.as_ref().map(|a| a.username.as_ref()),
                 &task_ref,
-                session,
-                "task-include",
-                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -1937,7 +1935,7 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::TaskFetch(cmd::TaskFetchCmd { task_fqn }) => {
+        cmd::Cmd::TaskCacheFetch(cmd::TaskCacheFetchCmd { task_fqn }) => {
             if config::is_valid_task_fqn(&task_fqn).is_none() {
                 errorln!(
                     io,
@@ -1958,7 +1956,12 @@ pub async fn process_cmd(
                         errorln!(io, "failed to parse haitask config: {}", e);
                         return ProcessCmdResult::loop_next();
                     }
-                    if let Err(e) = config::write_task_to_cache_path(&res.task_fqn, &res.config) {
+                    if let Err(e) = config::write_task_to_cache_path(
+                        session.account.as_ref().map(|a| a.username.as_str()),
+                        &res.task_fqn,
+                        &res.task_version,
+                        &res.config,
+                    ) {
                         errorln!(io, "failed to write haitask config: {}", e);
                         return ProcessCmdResult::loop_next();
                     }
@@ -2140,6 +2143,12 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::TaskPurge(cmd::TaskPurgeCmd { task_fqn }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.as_ref()
+            } else {
+                errorln!(io, "purge only supported for logged-in accounts");
+                return ProcessCmdResult::loop_next();
+            };
             if config::is_valid_task_fqn(&task_fqn).is_none() {
                 errorln!(
                     io,
@@ -2148,7 +2157,7 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             db::purge_task_step_cache(&*db.lock().await, &task_fqn);
-            match config::purge_cached_task(&task_fqn) {
+            match config::purge_cached_task(username, &task_fqn) {
                 Ok(_) => {
                     successln!(io, "{} purged", task_fqn);
                 }
@@ -2248,10 +2257,9 @@ pub async fn process_cmd(
         cmd::Cmd::TaskCat(cmd::TaskCatCmd { task_ref }) => {
             if let Some((config, haitask)) = get_haitask_from_task_ref(
                 io,
+                &api_client,
+                session.account.as_ref().map(|a| a.username.as_ref()),
                 &task_ref,
-                session,
-                "task-cat",
-                matches!(cmd_input.source, session::CmdSource::Internal(_)),
             )
             .await
             {
@@ -7312,74 +7320,90 @@ pub async fn shell_exec_with_asset_substitution(
 /// If None returned, it will have also printed an error message to stderr.
 async fn get_haitask_from_task_ref(
     io: &Io,
+    api_client: &HaiClient,
+    username: Option<&str>,
     task_ref: &str,
-    session: &mut SessionState,
-    task_cmd: &str,
-    fail_if_not_in_cache: bool,
 ) -> Option<(String, config::HaiTask)> {
-    if let Some((_username, _task_name, task_fqn_versionless, version)) =
+    if let Some((_publisher_username, _task_name, task_fqn_versionless, version)) =
         config::is_valid_task_fqn(task_ref)
     {
-        // NOTE: Version conflicts are handled by ignoring any cached task
-        // that's the wrong version. The cache key is by task-fqn (without
-        // version) so there can only be one cached task per fqn at a given
-        // time.
-        let task_cache_path = config::get_task_cache_path(&task_fqn_versionless);
-        if task_cache_path.exists() {
-            // Task in cache, so use it.
-            let (config, haitask) =
-                config::read_haitask(&task_cache_path.to_string_lossy()).unwrap();
-            if let Some(version) = version {
-                if version == haitask.version {
-                    outln!(
-                        io,
-                        "Using version {} (`/task-update {}` to get any updates)",
-                        haitask.version,
-                        task_ref
-                    );
-                    return Some((config, haitask));
-                } else {
-                    outln!(
-                        io,
-                        "Cached version differs: {} != {} (refetching)",
-                        version,
-                        haitask.version
-                    );
-                }
-            } else {
+        // If a version is specified, check if a cached version is available
+        if let Some(username) = username
+            && let Some(version) = version.as_deref()
+        {
+            if let Some(task_cache_path) = config::get_task_cache_path_candidate(
+                username,
+                &task_fqn_versionless,
+                Some(version),
+            ) {
+                // Task in cache, so use it.
+                let (config, haitask) =
+                    config::read_haitask(&task_cache_path.to_string_lossy()).unwrap();
                 outln!(
                     io,
-                    "Using version {} (`/task-update {}` to get any updates)",
+                    "Using cached version {}@{}",
+                    task_fqn_versionless,
                     haitask.version,
-                    task_ref
                 );
                 return Some((config, haitask));
             }
         }
-        // Task missing from cache or was the wrong version
-        if fail_if_not_in_cache {
-            // To avoid an infinite loop of fetches that keep
-            // retrying, fail if requested.
-            errorln!(io, "failed to fetch task");
-        } else {
-            // Queue up a fetch task and then try again.
-            session.cmd_queue.lock().await.push_cmds(
-                vec![
-                    session::CmdInput {
-                        input: format!("/task-fetch {}", task_ref),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
-                    session::CmdInput {
-                        input: format!("/{} {}", task_cmd, task_ref),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
-                ],
-                true,
-            );
+
+        use api::types::task::TaskGetArg;
+        match api_client
+            .task_get(TaskGetArg {
+                task_fqn: task_ref.to_owned(),
+            })
+            .await
+        {
+            Ok(res) => {
+                outln!(io, "Fetched {}@{}", res.task_fqn, res.task_version);
+                let haitask = match config::parse_haitask_config(&res.config) {
+                    Ok(haitask) => haitask,
+                    Err(e) => {
+                        errorln!(io, "failed to parse haitask config: {}", e);
+                        return None;
+                    }
+                };
+                if let Err(e) = config::write_task_to_cache_path(
+                    username,
+                    &res.task_fqn,
+                    &res.task_version,
+                    &res.config,
+                ) {
+                    warnln!(io, "failed to write haitask config: {}", e);
+                }
+                Some((res.config, haitask))
+            }
+            Err(RequestError::Http(e)) => {
+                warnln!(io, "could not fetch: {}", e);
+                // If failed, check cache
+                if let Some(username) = username
+                    && let Some(task_cache_path) = config::get_task_cache_path_candidate(
+                        username,
+                        &task_fqn_versionless,
+                        version.as_deref(),
+                    )
+                {
+                    // Task in cache, so use it.
+                    let (config, haitask) =
+                        config::read_haitask(&task_cache_path.to_string_lossy()).unwrap();
+                    outln!(
+                        io,
+                        "Using cached version {}@{}",
+                        task_fqn_versionless,
+                        haitask.version,
+                    );
+                    Some((config, haitask))
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                errorln!(io, "failed to fetch: {}", e);
+                None
+            }
         }
-        None
     } else if task_ref.starts_with(".") || task_ref.starts_with("/") || task_ref.starts_with("~") {
         let task_path = match shellexpand::full(&task_ref) {
             Ok(s) => s.into_owned(),

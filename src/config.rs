@@ -2308,24 +2308,56 @@ pub fn read_haitask(task_path: &str) -> Result<(String, HaiTask), Box<dyn std::e
     Ok((haitask_contents, haitask))
 }
 
-/// Given a fully-qualified task name, returns the assigned path for it in the
-/// config cache whether or not the task is actually cached.
+/// Given a fully-qualified task name with version, returns the assigned path
+/// for it in the config cache whether or not the task is actually cached.
 ///
 /// Caller is responsible for validating task_fqn is valid/isn't dangerous.
-pub fn get_task_cache_path(task_fqn: &str) -> PathBuf {
-    if is_valid_task_fqn(task_fqn).is_none() {
-        // Caller should have done validation, so panic if invalid.
-        panic!("error: invalid task name");
-    }
+///
+/// # Arguments
+/// - `username`: The logged-in user. Not necesssarily the task publisher.
+pub fn get_versioned_task_cache_path(username: &str, task_fqn: &str, version: &str) -> PathBuf {
     let mut path = get_config_folder_path();
     path.push("cache/task");
-    path.push(format!("{}.toml", task_fqn));
+    path.push(username);
+    path.push(format!("{}@{}.toml", task_fqn, version));
     path
+}
+
+/// Given a fully-qualified task name, returns a cached path for the task if a
+/// valid candidate exists.
+///
+/// If no version is specified, the latest cached version is the primary
+/// candidate. If a version is specified, the cached version must match.
+///
+/// # Arguments
+/// - `username`: The logged-in user. Not necessarily the task publisher.
+pub fn get_task_cache_path_candidate(
+    username: &str,
+    task_fqn_versionless: &str,
+    version: Option<&str>,
+) -> Option<PathBuf> {
+    let Some((task_publisher, task_name, _, _)) = is_valid_task_fqn(task_fqn_versionless) else {
+        // Caller should have done validation, so panic if invalid.
+        panic!("error: invalid task name");
+    };
+
+    // Version specified: check cache for matching candidate.
+    if let Some(version) = version {
+        let path = get_task_cache_version_path(username, &task_publisher, &task_name, version);
+        return path.is_file().then_some(path);
+    }
+
+    // No version specified: pick the highest semver.
+    list_cached_task_versions(username, &task_publisher, &task_name)
+        .ok()?
+        .into_iter()
+        .max_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(_, path)| path)
 }
 
 /// # Returns
 ///
-/// `Some((username, name, name_without_version, version))` if the task FQN is
+/// `Some((username, name, task_fqn_without_version, version))` if the task FQN is
 /// valid, otherwise `None`.
 pub fn is_valid_task_fqn(task_fqn: &str) -> Option<(String, String, String, Option<String>)> {
     if let Some((username, name_with_version)) = task_fqn.split_once("/") {
@@ -2360,43 +2392,154 @@ pub fn is_valid_task_fqn(task_fqn: &str) -> Option<(String, String, String, Opti
     }
 }
 
-pub fn mk_task_cache_username_path(username: &str) -> Result<(), Box<dyn Error>> {
+pub fn mk_task_cache_publisher_path(
+    username: &str,
+    task_publisher: &str,
+) -> Result<(), Box<dyn Error>> {
     let mut path = get_config_folder_path();
     path.push("cache/task");
     path.push(username);
+    path.push(task_publisher);
     if !path.exists() {
         fs::create_dir_all(path)?;
     }
     Ok(())
 }
 
-pub fn write_task_to_cache_path(task_fqn: &str, config: &str) -> Result<(), Box<dyn Error>> {
+pub fn write_task_to_cache_path(
+    username: Option<&str>,
+    task_fqn_versionless: &str,
+    task_version: &str,
+    config: &str,
+) -> Result<(), Box<dyn Error>> {
+    // Don't cache if there isn't a logged-in user.
+    let Some(username) = username else {
+        return Ok(());
+    };
     // Caller should have done validation, so panic if invalid.
-    let (username, _task_name, _task_fqn_versionless, version) =
-        is_valid_task_fqn(task_fqn).expect("error: invalid task name");
+    let (task_publisher, _task_name, _task_fqn_versionless, version) =
+        is_valid_task_fqn(task_fqn_versionless).expect("error: invalid task name");
     if version.is_some() {
         panic!("error: unexpected version specification");
     }
-    mk_task_cache_username_path(&username)?;
+    mk_task_cache_publisher_path(username, &task_publisher)?;
     let mut file = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(get_task_cache_path(task_fqn))?;
+        .open(get_versioned_task_cache_path(
+            username,
+            task_fqn_versionless,
+            task_version,
+        ))?;
     file.write_all(config.as_bytes())?;
     Ok(())
 }
 
-pub fn purge_cached_task(task_fqn: &str) -> Result<(), Box<dyn Error>> {
-    if is_valid_task_fqn(task_fqn).is_none() {
+/// Removes cached copies of a task.
+///
+/// If no version is specified, every cached version of the task is removed. If
+/// a version is specified, only that exact version is removed.
+///
+/// # Arguments
+/// - `username`: The logged-in user.
+pub fn purge_cached_task(username: &str, task_fqn: &str) -> Result<(), Box<dyn Error>> {
+    let Some((task_publisher, task_name, _task_fqn_versionless, version)) =
+        is_valid_task_fqn(task_fqn)
+    else {
         // Caller should have done validation, so panic if invalid.
         panic!("error: invalid task name");
     };
-    let path = get_task_cache_path(task_fqn);
-    if path.exists() {
-        fs::remove_file(path)?;
+
+    // Version specified: remove just that one, if it exists.
+    if let Some(version) = version {
+        let path = get_task_cache_version_path(username, &task_publisher, &task_name, &version);
+        if path.is_file() {
+            fs::remove_file(path)?;
+        }
+        return Ok(());
     }
+
+    // No version specified: remove every cached version of this task.
+    for (_, path) in list_cached_task_versions(username, &task_publisher, &task_name)? {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            // Raced with someone else removing it
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
     Ok(())
+}
+
+// --
+
+/// Folder caching `task_publisher`'s tasks for `username`.
+fn get_task_cache_folder_path(username: &str, task_publisher: &str) -> PathBuf {
+    let mut dir = get_config_folder_path();
+    dir.push("cache/task");
+    dir.push(username);
+    dir.push(task_publisher);
+    dir
+}
+
+/// Path a specific cached version of a task would live at (may not exist).
+fn get_task_cache_version_path(
+    username: &str,
+    task_publisher: &str,
+    task_name: &str,
+    version: &str,
+) -> PathBuf {
+    get_task_cache_folder_path(username, task_publisher).join(format!("{task_name}@{version}.toml"))
+}
+
+/// Lists every cached version of a task (publisher, name).
+///
+/// Only regular files named `{task_name}@{semver}.toml` are returned; anything
+/// else in the folder is ignored.
+fn list_cached_task_versions(
+    username: &str,
+    task_publisher: &str,
+    task_name: &str,
+) -> Result<Vec<(semver::Version, PathBuf)>, Box<dyn Error>> {
+    let dir = get_task_cache_folder_path(username, task_publisher);
+
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        // Nothing cached for this publisher/user.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let prefix = format!("{task_name}@");
+    let mut found = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(rest) = name.strip_prefix(&prefix) else {
+            // Different task
+            continue;
+        };
+        let Some(ver_str) = rest.strip_suffix(".toml") else {
+            // Not a task
+            continue;
+        };
+        let Ok(ver) = semver::Version::parse(ver_str) else {
+            // Invalid task in cache dir
+            continue;
+        };
+        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+
+        found.push((ver, path));
+    }
+
+    Ok(found)
 }
 
 // ---

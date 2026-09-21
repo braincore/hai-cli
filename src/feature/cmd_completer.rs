@@ -131,7 +131,11 @@ pub fn complete(
                     completions
                 }
                 cmd_registry::ArgKind::TaskRef => {
-                    let mut completions = task_ref_completer(api_client, &prefix);
+                    let mut completions = task_ref_completer(
+                        account.as_ref().map(|a| a.username.as_str()),
+                        api_client,
+                        &prefix,
+                    );
                     realign_suggestions(&mut completions, pos - prefix.len());
                     completions
                 }
@@ -667,7 +671,11 @@ fn asset_folder_completer(
 /// 1. Local file paths (Must start with `/`, `~`, `./`, or `../`)
 /// 2. Fully qualified task names (Must contain a `/` after the username)
 /// 3. Cached tasks (If does not contain a `/` after the username)
-fn task_ref_completer(api_client: &HaiClient, task_prefix: &str) -> Vec<Suggestion> {
+fn task_ref_completer(
+    username: Option<&str>,
+    api_client: &HaiClient,
+    task_prefix: &str,
+) -> Vec<Suggestion> {
     tracing::debug!(?task_prefix, "task_completer");
     if task_prefix.starts_with('/')
         || task_prefix.starts_with('~')
@@ -682,7 +690,7 @@ fn task_ref_completer(api_client: &HaiClient, task_prefix: &str) -> Vec<Suggesti
     } else if let Some((username, _task_name_prefix)) = task_prefix.split_once('/') {
         task_fqn_completer(api_client, task_prefix, username)
     } else {
-        task_cache_completer(task_prefix)
+        task_cache_completer(username, task_prefix)
     }
 }
 
@@ -734,13 +742,17 @@ fn task_fqn_completer(
     }
 }
 
-fn task_cache_completer(task_prefix: &str) -> Vec<Suggestion> {
+fn task_cache_completer(username: Option<&str>, task_prefix: &str) -> Vec<Suggestion> {
     tracing::debug!(?task_prefix, "task_completer");
+    let Some(username) = username else {
+        return vec![];
+    };
     // This autocompletes to tasks that are fetched/cached on disk.
     // We hide the toml extension to make the autocomplete not
     // appear as if it's traversing a file tree.
     let mut task_cache_prefix = config::get_config_folder_path();
     task_cache_prefix.push("cache/task");
+    task_cache_prefix.push(username);
     let task_cache_prefix_offset = task_cache_prefix.to_string_lossy().to_string().len() + 1;
     task_cache_prefix.push(task_prefix);
 

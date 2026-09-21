@@ -2097,17 +2097,6 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
-            Cow::Borrowed("task-update"),
-            Cow::Borrowed("task"),
-            Cow::Borrowed(&[arg("name", TaskFqn, Required)]),
-            Doc::new("Update a task to its latest version"),
-        )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net()),
-    ),
-    Entry::Cmd(
-        cmd(
-            Slash,
             Cow::Borrowed("task-publish"),
             Cow::Borrowed("task"),
             Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::File, glob_ok: false }, Required)]),
@@ -2129,10 +2118,11 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
-            Cow::Borrowed("task-fetch"),
+            Cow::Borrowed("task-cache-fetch"),
             Cow::Borrowed("task"),
             Cow::Borrowed(&[arg("name", TaskFqn, Required)]),
-            Doc::new("Fetch a task from the repository"),
+            Doc::new("Fetch a task from the repository and cache it locally")
+                .more("To use the cached version, try `/task <name>@<version>`"),
         )
         .for_audience(Audience::Neither)
         .with_traits(Traits::NONE.net().account()),

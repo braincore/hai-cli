@@ -158,7 +158,11 @@ Run a specific version:
 /task <task-fully-qualified-name>@<version>
 ```
 
-### Task cache
+Running a specific version skips checking the task repository for the latest
+version if it's already available in the local cache. All executed tasks are
+cached locally once invoked (alternatively, see `/task-cache-fetch`).
+
+### Task step cache
 
 Tasks can cache some of their steps: `/ask-human.cache`, `/exec.cache`,
 and `/prompt.cache`. To purge this cache, try:

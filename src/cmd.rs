@@ -81,7 +81,7 @@ pub enum Cmd {
     /// Purge task from machine
     TaskPurge(TaskPurgeCmd),
     /// Download and cache task
-    TaskFetch(TaskFetchCmd),
+    TaskCacheFetch(TaskCacheFetchCmd),
     /// Publishes a task to the repo
     TaskPublish(TaskPublishCmd),
     /// Download a task to a temp filefor editing
@@ -531,7 +531,7 @@ pub struct TaskEditCmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct TaskFetchCmd {
+pub struct TaskCacheFetchCmd {
     /// Task fqn to download and cache
     pub task_fqn: String,
 }
@@ -1817,8 +1817,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             task_fqn: r.take(0),
         }),
         "task-end" => Cmd::TaskEnd,
-        // `/task-update` is the user-facing name for a fetch of the latest version.
-        "task-update" | "task-fetch" => Cmd::TaskFetch(TaskFetchCmd {
+        "task-cache-fetch" => Cmd::TaskCacheFetch(TaskCacheFetchCmd {
             task_fqn: r.take(0),
         }),
         "task-publish" => Cmd::TaskPublish(TaskPublishCmd {
