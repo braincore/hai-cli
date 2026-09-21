@@ -108,15 +108,6 @@ To see tasks published by a specific user, use:
 /whois <username>
 ```
 
-### Updating a task
-
-When a task is run, it's cached on your machine for folllow up invocations. To
-replace your cached copy with the latest version of a task, use:
-
-```
-/task-update <task-fully-qualified-name>
-```
-
 ### Run a specific version
 
 List all versions of a task:
