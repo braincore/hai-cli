@@ -993,7 +993,9 @@ impl Config {
         &mut self,
         config_path_override: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let new_config: Config = toml::from_str(&read_config_as_string(config_path_override)?)?;
+        let new_config: Config = toml::from_str(&read_config_as_string_create_if_missing(
+            config_path_override,
+        )?)?;
         *self = new_config;
         Ok(())
     }
@@ -1005,7 +1007,7 @@ pub fn get_default_config_path() -> PathBuf {
     path
 }
 
-pub fn read_config_as_string(
+pub fn read_config_as_string_create_if_missing(
     config_path_override: Option<&str>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let config_path = if let Some(config_path) = config_path_override {
@@ -1083,13 +1085,42 @@ pub fn read_config_as_string(
     Ok(fs::read_to_string(&config_path)?)
 }
 
-pub fn get_config(
+pub fn get_config_create_if_missing(
     config_path_override: Option<&str>,
 ) -> Result<Config, Box<dyn std::error::Error>> {
-    Ok(toml::from_str(&read_config_as_string(
+    Ok(toml::from_str(&read_config_as_string_create_if_missing(
         config_path_override,
     )?)?)
 }
+
+// --
+
+pub fn read_config_as_string(
+    config_path_override: Option<&str>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let config_path = if let Some(config_path) = config_path_override {
+        config_path.to_string()
+    } else {
+        let path = get_default_config_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        path.to_str().unwrap().to_string()
+    };
+    Ok(Some(fs::read_to_string(&config_path)?))
+}
+
+pub fn get_config(
+    config_path_override: Option<&str>,
+) -> Result<Option<Config>, Box<dyn std::error::Error>> {
+    if let Some(config) = read_config_as_string(config_path_override)? {
+        Ok(toml::from_str(&config)?)
+    } else {
+        Ok(None)
+    }
+}
+
+// --
 
 pub fn create_config_dir_if_missing() -> Result<(), Box<dyn Error>> {
     let path = get_config_folder_path();
@@ -1109,15 +1140,6 @@ pub fn get_config_folder_path() -> PathBuf {
 pub fn read_config_from_bytes(bytes: &[u8]) -> Result<Config, Box<dyn std::error::Error>> {
     let config_str = str::from_utf8(bytes)?;
     Ok(toml::from_str(config_str)?)
-}
-
-/// Check if config is present on the filesystem.
-pub fn config_exists_on_fs(config_path_override: Option<&str>) -> bool {
-    if let Some(config_path) = config_path_override {
-        std::path::Path::new(config_path).exists()
-    } else {
-        get_default_config_path().exists()
-    }
 }
 
 // ---
@@ -1142,7 +1164,7 @@ pub fn insert_config_kv(
     key: &str,
     val: &str,
 ) {
-    let cfg = read_config_as_string(config_path_override).unwrap();
+    let cfg = read_config_as_string_create_if_missing(config_path_override).unwrap();
     let mut doc = cfg.parse::<toml_edit::DocumentMut>().expect("invalid doc");
     if let Some(section_name) = section {
         if !doc.contains_key(section_name) {
@@ -1233,7 +1255,7 @@ pub fn insert_config_starred_task_and_write(
     task_fqn: &str,
     shortcut: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = read_config_as_string(config_path_override).unwrap();
+    let cfg = read_config_as_string_create_if_missing(config_path_override).unwrap();
     let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
 
     insert_config_starred_task(&mut doc, task_fqn, shortcut)?;
@@ -1291,7 +1313,7 @@ pub fn remove_config_starred_shortcut_and_write(
     config_path_override: Option<&str>,
     shortcut: &str,
 ) {
-    let cfg = read_config_as_string(config_path_override).unwrap();
+    let cfg = read_config_as_string_create_if_missing(config_path_override).unwrap();
     let mut doc = cfg.parse::<DocumentMut>().expect("invalid doc");
 
     remove_config_starred_shortcut(&mut doc, shortcut);

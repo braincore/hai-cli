@@ -2803,7 +2803,7 @@ async fn handle_client_message(
         }
         "repl/starred" => {
             let starred = match crate::config::get_config(config_path_override) {
-                Ok(cfg) => cfg
+                Ok(Some(cfg)) => cfg
                     .starred_task
                     .iter()
                     .map(|starred_task| StarredItem::Task {
@@ -2811,6 +2811,7 @@ async fn handle_client_message(
                         shortcut: starred_task.shortcut.clone(),
                     })
                     .collect(),
+                Ok(None) => vec![],
                 Err(e) => {
                     eprintln!("error: failed to read config: {}", e);
                     vec![]

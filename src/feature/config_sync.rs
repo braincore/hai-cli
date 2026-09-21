@@ -70,7 +70,7 @@ pub async fn get_merged_config(
     username: Option<&str>,
 ) -> Result<config::Config, Box<dyn std::error::Error>> {
     // Returns a local config even if it doesn't exist by creating it.
-    let local_config = config::get_config(config_path_override.as_deref())?;
+    let local_config = config::get_config_create_if_missing(config_path_override.as_deref())?;
     let remote_config = if let Some(username) = username {
         if let Some(existing_asset_store_entry) =
             db::asset_store_get(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?

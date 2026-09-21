@@ -61,15 +61,20 @@ default_tool = "!hai?"
 
 ### Check for updates
 
-To disable automatic anonymous version checks when `hai` is launched, set:
+On start up, `hai` will check for two types of updates:
+
+1. Anonymously check for newer versions of `hai`.
+2. Check for a newer version of a user's asset-back config file.
+
+To disable automatic update checks when `hai` is launched, set:
 
 ```toml
 check_for_updates = false
 ```
 
 !!!tip "Pro Privacy"
-    By default (`check_for_updates = true`), this version check is the **only**
-    outgoing request that `hai` makes automatically. All other requests occur
+    By default (`check_for_updates = true`), these two checks are the **only**
+    outgoing requests that `hai` makes automatically. All other requests occur
     solely as a result of explicit user actions. You can verify this with the
     `hai/code` task.
 
