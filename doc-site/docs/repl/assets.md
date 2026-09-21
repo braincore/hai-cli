@@ -550,6 +550,12 @@ To remove a folder asset along with its contents, use:
 Just like assets, folders can have [metadata](#metadata) attached using the
 same set of commands.
 
+### Hidden folders
+
+Naming a folder with a dot-prefix marks it as hidden. For example, `.sys` is a
+hidden folder created by default in all accounts. Use `/ls.hidden` to include
+hidden folders.
+
 ## Attachments
 
 Attachments are assets that live outside the ordinary asset tree and are

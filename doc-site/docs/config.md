@@ -2,8 +2,15 @@
 
 ## Configuration File
 
-The `hai` configuration file is stored in `~/.hai/hai.toml` where `~` is your
-home directory.
+The `hai` configuration file is stored in two places:
+
+1. As an [asset](./repl/assets.md) at `.sys/hai.toml`.
+2. Locally at `~/.hai/hai.toml` where `~` is your home directory.
+
+The two are merged key-by-key with values in `~/.hai/hai.toml` overriding
+values from `.sys/hai.toml`.
+
+The asset-backed configuration syncs automatically, making your settings available wherever you use `hai`. This requires a `hai` account.
 
 ### Creation
 
