@@ -76,50 +76,23 @@ Here are some interesting tasks:
     Get an API token.
 - [`hai/code`](https://hai.superego.ai/task/hai/code) - Ask the AI about
   hai's source code.
-- [`hai/email-asset-updates`](https://hai.superego.ai/task/hai/email-asset-updates) -
-  Get emails every time an asset is updated.
-  - [`hai/add-email`](https://hai.superego.ai/task/hai/add-email) - Verify your
-    email address.
-- [`hai/keypair-setup`](https://hai.superego.ai/task/hai/keypair-setup) -
-  Setup an RSA public & private key pair in your assets. The public key is made
-  available to other users via your public asset pool
-  (`/<username>/pubkey/public_rsa.pem`) which they can use to encrypt messages
-  to you.
-- [`ken/asset-crypt`](https://hai.superego.ai/task/ken/asset-crypt) -
-  Encrypt and upload files from your machine to your assets. Or, download and
-  decrypt assets you've encrypted with this task. Requires that the user has
-  setup an RSA keypair with the
-  [`hai/keypair-setup`](https://hai.superego.ai/task/hai/keypair-setup) task.
 - [`ken/weather`](https://hai.superego.ai/task/ken/weather) - Get the weekly
   weather forecast.
 - [`ken/absolute-mode`](https://hai.superego.ai/task/ken/absolute-mode) - Chat
   with an AI lacking all bedside manner.
 - [`ken/baby-play`](https://hai.superego.ai/task/ken/baby-play) - Based on your
   baby's age, gives age-appropriate ideas for activities.
-- [`ken/flashcard-add`](https://hai.superego.ai/task/ken/flashcard-add) - Helps
-  you generate and save flashcards based on the current conversation.
-  - Saves your flashcards as an asset: `flaschard/deck`
-  - [`ken/flashcard-review`](https://hai.superego.ai/task/ken/flashcard-review) -
-    Review random flashcards
 - [`ken/music-player`](https://hai.superego.ai/task/ken/music-player) - Plays
   random MP3s from your `music/*.mp3` assets. If lyrics are available in the
   file’s `lrc` metadata, it can display them line-by-line as the song plays.
 - [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript
   of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-- [`ken/pure-md-search`](https://hai.superego.ai/task/ken/pure-md-search) - Add
-  search results in markdown to your conversation. Needs API token (free tier
-  available) from [pure.md](https://pure.md).
-  [[Video](https://www.youtube.com/watch?v=YfSnY-MFrNw)]
 - [`ken/code-review`](https://hai.superego.ai/task/ken/code-review) - Get a
   code review of unstaged/staged/committed changes in your local git repo.
 - [`hai/quick-task`](https://hai.superego.ai/task/hai/quick-task) - Ask AI to
   help you write a task.
 - [`ken/task-safety-checker`](https://hai.superego.ai/task/ken/task-safety-checker) -
   Check that a task in the hai task repo isn't _obviously_ destructive.
-- [`ken/calendar`](https://hai.superego.ai/task/ken/calendar) -
-  Manage your personal calendar using plain text assets.
-- [`ken/cargo-build-fix`](https://hai.superego.ai/task/ken/cargo-build-fix) -
-  Tries to patch rust code to fix `cargo build` errors automatically.
 
 ### Searching for a task
 
