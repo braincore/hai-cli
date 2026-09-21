@@ -228,7 +228,7 @@ pub async fn merged_config_insert_config_kv(
     key: &str,
     val: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if write_local_config_only {
+    if write_local_config_only || username.is_none() {
         config::insert_config_kv(config_path_override, section, key, val);
     } else if let Some(username) = username {
         let config_str =
@@ -314,7 +314,7 @@ pub async fn merged_config_insert_config_starred_task(
     task_fqn: &str,
     shortcut: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if write_local_config_only {
+    if write_local_config_only || username.is_none() {
         config::insert_config_starred_task_and_write(config_path_override, task_fqn, shortcut)?;
     } else if let Some(username) = username {
         let config_str =
@@ -390,7 +390,7 @@ pub async fn merged_config_remove_config_starred_shortcut(
     write_local_config_only: bool,
     shortcut: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if write_local_config_only {
+    if write_local_config_only || username.is_none() {
         config::remove_config_starred_shortcut_and_write(config_path_override, shortcut);
     } else if let Some(username) = username {
         let config_str =
