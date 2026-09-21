@@ -2480,6 +2480,17 @@ pub static REGISTRY: &[Entry] = &[
     Entry::Cmd(
         cmd(
             Slash,
+            Cow::Borrowed("config-sync"),
+            Cow::Borrowed("utils"),
+            Cow::Borrowed(&[]),
+            Doc::new("Update local copy of asset-backed config"),
+        )
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.account()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
             Cow::Borrowed("about"),
             Cow::Borrowed("utils"),
             Cow::Borrowed(&[]),

@@ -100,7 +100,7 @@ pub async fn store_remote_config_if_updated(
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
     username: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     if let Some(username) = username {
         let existing_seq_id = if let Some(existing_asset_store_entry) =
             db::asset_store_get(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?
@@ -138,16 +138,20 @@ pub async fn store_remote_config_if_updated(
                     &hash,
                     &contents,
                 )?;
+                Ok(true)
             }
             Some(None) => {
                 db::asset_store_remove(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?;
+                Ok(true)
             }
             None => {
                 // May have been a fetch failure, ignore save.
+                Ok(false)
             }
-        };
+        }
+    } else {
+        Ok(false)
     }
-    Ok(())
 }
 
 // --

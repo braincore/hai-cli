@@ -249,6 +249,8 @@ pub enum Cmd {
     ImageUri(ImageUriCmd),
     /// Reprint conversation history (undocumented)
     ReprintHistory,
+    /// Update local copy of asset-backed config
+    ConfigSync,
     /// Program info
     About,
     /// Dumps raw chat history (undocumented)
@@ -1932,6 +1934,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             image_hq: r.opts.bool("hq"),
         }),
         "reprint-history" => Cmd::ReprintHistory,
+        "config-sync" => Cmd::ConfigSync,
         "about" => Cmd::About,
 
         //

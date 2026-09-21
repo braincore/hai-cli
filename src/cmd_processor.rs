@@ -625,6 +625,30 @@ pub async fn process_cmd(
             chat_store::reprint_conversation(io, &session.history).await;
             ProcessCmdResult::loop_next().discard_cmd_and_output()
         }
+        cmd::Cmd::ConfigSync => {
+            match crate::feature::config_sync::store_remote_config_if_updated(
+                &io,
+                db,
+                asset_blob_cache,
+                session.asset_keyring.clone(),
+                &api_client,
+                session.account.as_ref().map(|a| a.username.as_str()),
+            )
+            .await
+            {
+                Ok(updated) => {
+                    if updated {
+                        infoln!(io, "config updated");
+                    } else {
+                        infoln!(io, "config already up-to-date");
+                    }
+                }
+                Err(e) => {
+                    errorln!(io, "could not sync config: {}", e);
+                }
+            }
+            ProcessCmdResult::loop_next().discard_cmd_and_output()
+        }
         cmd::Cmd::Dump => {
             // Undocumented (for manual testing)
             let was_recording = io.record_off();
