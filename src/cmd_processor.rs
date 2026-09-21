@@ -669,16 +669,16 @@ pub async fn process_cmd(
  \_| |_/\__,_|\|
 "##
             );
-            outln!(io, "hai (Hacker AI)");
-            outln!(io, "Version: v{}", env!("CARGO_PKG_VERSION"));
+            outln!(io, "hai v{} · Hacker AI", env!("CARGO_PKG_VERSION"));
             outln!(io);
             outln!(io, "Authored by Ken Elkabany @ken");
-            outln!(io, "Send me an email: ken@elkabany.com");
+            outln!(io, "ken@elkabany.com");
             outln!(io);
-            outln!(io, "Written to empower hackers everywhere");
-            outln!(io, "- Wield the AI");
-            outln!(io, "- Share knowledge");
-            outln!(io, "- Emancipate data");
+            outln!(io, "Models come and go. Your data is forever.");
+            outln!(io);
+            outln!(io, "Every model is a projection. You are the basis.");
+            outln!(io);
+            outln!(io, "Your data is all you need.");
             outln!(io);
             ProcessCmdResult::loop_next()
         }
