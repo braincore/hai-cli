@@ -97,6 +97,10 @@ enum CliSubcommand {
 
         /// The API key to save
         key: String,
+
+        /// Write to local config only
+        #[arg(long = "local")]
+        local: bool,
     },
     /// Login to your hai account (optional)
     Login {
@@ -193,23 +197,7 @@ async fn main() -> process::ExitCode {
     // this signal handler intercepts ctrl+c which no-ops for this process. The
     // child tool subprocess receives the SIGINT.
     let mut ctrlc_handler = ctrlc_handler::CtrlcHandler::new();
-    if let Some(CliSubcommand::SetKey { provider, key }) = args.subcommand {
-        match provider.as_str() {
-            "openai" | "anthropic" | "google" | "deepseek" | "xai" => {
-                config::insert_config_kv(
-                    config_path_override.as_deref(),
-                    Some(&provider),
-                    &"api_key".to_string(),
-                    &key,
-                );
-                process::ExitCode::from(0)
-            }
-            _ => {
-                eprintln!("error: unsupported provider: {}", provider);
-                process::ExitCode::from(1)
-            }
-        }
-    } else if let Some(CliSubcommand::Listen {
+    if let Some(CliSubcommand::Listen {
         address,
         whitelisted_origin,
     }) = args.subcommand
@@ -321,6 +309,24 @@ async fn main() -> process::ExitCode {
                 vec![session::CmdInput {
                     input: account_login_cmd,
                     // Use Internal to avoid printing command
+                    source: session::CmdSource::Internal(false),
+                    reply_channel: None,
+                }],
+                true,
+                false,
+                false,
+            )
+        } else if let Some(CliSubcommand::SetKey {
+            provider,
+            key,
+            local,
+        }) = args.subcommand
+        {
+            let set_key_cmd = if local { "/set-key.local" } else { "/set-key" };
+            (
+                ReplMode::Normal,
+                vec![session::CmdInput {
+                    input: format!("{} {} {}", set_key_cmd, provider, key),
                     source: session::CmdSource::Internal(false),
                     reply_channel: None,
                 }],
@@ -1037,7 +1043,12 @@ async fn repl(
                         true,
                     );
                     errorln!(io, "{}", e);
-                    continue;
+                    if exit_when_done && session.cmd_queue.lock().await.is_empty() {
+                        wrapup_and_cleanup(&session, update_asset_tx).await;
+                        return Ok(0);
+                    } else {
+                        continue;
+                    }
                 }
             },
         };

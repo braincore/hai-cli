@@ -217,6 +217,7 @@ impl ProcessCmdResult {
     }
 }
 
+#[derive(Debug)]
 pub enum ProcessCmdNext {
     Loop,
     Break,

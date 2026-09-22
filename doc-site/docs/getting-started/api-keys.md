@@ -20,7 +20,7 @@ Set an API key for each provider (`openai`, `anthropic`, `google`, `deepseek`,
   ```console
   $ <PROVIDER>_API_KEY=<key> hai
   ```
-- **Config file:** Add your keys to `~/.hai/hai.toml`
+- **Local config file:** Add your keys to `~/.hai/hai.toml`
     ```toml
     [openai]
     api_key = "<key>"
@@ -37,6 +37,7 @@ Set an API key for each provider (`openai`, `anthropic`, `google`, `deepseek`,
     [xai]
     api_key = "<key>"
     ```
+- **Asset-backed config file:** Add your keys to `.sys/hai.toml`
 
 ## Use `hai router`
 
