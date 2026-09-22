@@ -248,7 +248,10 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "opus48" => Some(AiModel::Anthropic(AnthropicModel::Opus48(
             parse_anthropic46_opts(opts),
         ))),
-        "opus" | "opus5" => Some(AiModel::Anthropic(AnthropicModel::Opus5(
+        "opus5" => Some(AiModel::Anthropic(AnthropicModel::Opus5(
+            parse_anthropic46_opts(opts),
+        ))),
+        "opus" | "opus55" => Some(AiModel::Anthropic(AnthropicModel::Opus55(
             parse_anthropic46_opts(opts),
         ))),
         "sonnet35" => Some(AiModel::Anthropic(AnthropicModel::Sonnet35)),
@@ -396,6 +399,7 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "opus47",
     "opus48",
     "opus5",
+    "opus55",
     "sonnet",
     "sonnet35",
     "sonnet37",
@@ -704,6 +708,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Opus5(opts) => {
                 let base = "opus-5".to_string();
+                append_anthropic46_opts(base, opts)
+            }
+            AnthropicModel::Opus55(opts) => {
+                let base = "opus-5.5".to_string();
                 append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
@@ -1428,6 +1436,7 @@ pub enum AnthropicModel {
     Opus47(Anthropic46Options),
     Opus48(Anthropic46Options),
     Opus5(Anthropic46Options),
+    Opus55(Anthropic46Options),
     Sonnet35,
     Sonnet37(bool), // If true, enables thinking
     Sonnet4(bool),  // If true, enables thinking
@@ -1590,6 +1599,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Opus47(_) => "claude-opus-4-7",
             AnthropicModel::Opus48(_) => "claude-opus-4-8",
             AnthropicModel::Opus5(_) => "claude-opus-5",
+            AnthropicModel::Opus55(_) => "claude-opus-5-5",
             AnthropicModel::Sonnet35 => "claude-3-5-sonnet-20241022",
             AnthropicModel::Sonnet37(_) => "claude-3-7-sonnet-20250219",
             AnthropicModel::Sonnet4(_) => "claude-sonnet-4-20250514",
@@ -1702,6 +1712,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Opus5(opts) => {
                 format!("opus-5{}", get_anthropic46_opts_display(opts))
+            }
+            AnthropicModel::Opus55(opts) => {
+                format!("opus-5.5{}", get_anthropic46_opts_display(opts))
             }
             AnthropicModel::Sonnet35 => "sonnet-3.5".to_string(),
             AnthropicModel::Sonnet37(false) => "sonnet-3.7".to_string(),
@@ -2022,6 +2035,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Opus47(_)
                     | AnthropicModel::Opus48(_)
                     | AnthropicModel::Opus5(_)
+                    | AnthropicModel::Opus55(_)
                     | AnthropicModel::Sonnet35
                     | AnthropicModel::Sonnet37(_)
                     | AnthropicModel::Sonnet4(_)
@@ -2168,6 +2182,7 @@ pub fn anthropic_model_modern_opts(
         | AnthropicModel::Opus47(opts)
         | AnthropicModel::Opus48(opts)
         | AnthropicModel::Opus5(opts)
+        | AnthropicModel::Opus55(opts)
         | AnthropicModel::Sonnet5(opts)
         | AnthropicModel::Fable51(opts) => {
             (opts.thinking, opts.thinking_display, opts.effort.as_ref())
@@ -2182,6 +2197,7 @@ pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) 
         AnthropicModel::Opus47(_)
             | AnthropicModel::Opus48(_)
             | AnthropicModel::Opus5(_)
+            | AnthropicModel::Opus55(_)
             | AnthropicModel::Sonnet5(_)
             | AnthropicModel::Fable51(_)
     )
@@ -2216,6 +2232,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             | AnthropicModel::Opus47(_)
             | AnthropicModel::Opus48(_)
             | AnthropicModel::Opus5(_) => Some((5000, 25000)),
+            AnthropicModel::Opus55(_) => Some((4000, 20000)),
             AnthropicModel::Sonnet35
             | AnthropicModel::Sonnet37(_)
             | AnthropicModel::Sonnet4(_)
