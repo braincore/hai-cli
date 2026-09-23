@@ -101,11 +101,11 @@ installing Python library dependencies.
 
 ### Using a task
 
-Example uses [`ken/code-review`](https://hai.superego.ai/task/ken/code-review) task.
+Example uses [`ken/code-review`](https://api.hai.dog/task/ken/code-review) task.
 
 ![Using the code review task](doc-site/docs/cast/hai-task-codereview.gif)
 
-Example uses [`ken/weather`](https://hai.superego.ai/task/ken/weather) task.
+Example uses [`ken/weather`](https://api.hai.dog/task/ken/weather) task.
 
 ![Using the weather task](doc-site/docs/cast/hai-task-weather.gif)
 

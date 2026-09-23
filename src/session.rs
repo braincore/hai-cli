@@ -867,7 +867,7 @@ pub fn mk_api_client_from_account(account: Option<&db::Account>) -> HaiClient {
 pub fn get_api_base_url() -> String {
     match env::var("HAI_BASE_URL") {
         Ok(value) => value,
-        _ => "https://hai.superego.ai/1".to_string(),
+        _ => "https://api.hai.dog/1".to_string(),
     }
 }
 

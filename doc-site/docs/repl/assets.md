@@ -492,7 +492,7 @@ asset. You can test this by:
 ```
 
 For an example of sending emails based on asset changes, see the
-[hai/email-asset-updates](https://hai.superego.ai/task/hai/email-asset-updates@1.0.0)
+[hai/email-asset-updates](https://api.hai.dog/task/hai/email-asset-updates@1.0.0)
 task: `/task hai/email-asset-updates`
 
 Note that the API exposes a websockets interface that pushes notifications when

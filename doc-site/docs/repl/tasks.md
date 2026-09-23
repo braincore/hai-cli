@@ -40,7 +40,7 @@ This runs the `absolute-mode` task published by the user `ken`.
 
 It's a simple task that does only one thing: adds a system-prompt that removes
 all bedside manner from the LLM. You can view the task
-[here](https://hai.superego.ai/task/ken/absolute-mode).
+[here](https://api.hai.dog/task/ken/absolute-mode).
 
 Alternatively, you can view the task with:
 
@@ -65,33 +65,33 @@ To exit task mode, use `/task-end` or `Ctrl + D`.
 
 Here are some interesting tasks:
 
-- [`ken/pelican-bicycle`](https://hai.superego.ai/task/ken/pelican-bicycle) -
+- [`ken/pelican-bicycle`](https://api.hai.dog/task/ken/pelican-bicycle) -
   simonw's [pelicans on a bicycle](https://github.com/simonw/pelican-bicycle)
   test
-- [`hai/help`](https://hai.superego.ai/task/hai/help) - Get help using hai. Ask
+- [`hai/help`](https://api.hai.dog/task/hai/help) - Get help using hai. Ask
   what's possible and how to do things.
-- [`hai/api`](https://hai.superego.ai/task/hai/api) - Use or learn about hai's
+- [`hai/api`](https://api.hai.dog/task/hai/api) - Use or learn about hai's
   API.
-  - [`hai/get-api-token`](https://hai.superego.ai/task/hai/get-api-token) -
+  - [`hai/get-api-token`](https://api.hai.dog/task/hai/get-api-token) -
     Get an API token.
-- [`hai/code`](https://hai.superego.ai/task/hai/code) - Ask the AI about
+- [`hai/code`](https://api.hai.dog/task/hai/code) - Ask the AI about
   hai's source code.
-- [`ken/weather`](https://hai.superego.ai/task/ken/weather) - Get the weekly
+- [`ken/weather`](https://api.hai.dog/task/ken/weather) - Get the weekly
   weather forecast.
-- [`ken/absolute-mode`](https://hai.superego.ai/task/ken/absolute-mode) - Chat
+- [`ken/absolute-mode`](https://api.hai.dog/task/ken/absolute-mode) - Chat
   with an AI lacking all bedside manner.
-- [`ken/baby-play`](https://hai.superego.ai/task/ken/baby-play) - Based on your
+- [`ken/baby-play`](https://api.hai.dog/task/ken/baby-play) - Based on your
   baby's age, gives age-appropriate ideas for activities.
-- [`ken/music-player`](https://hai.superego.ai/task/ken/music-player) - Plays
+- [`ken/music-player`](https://api.hai.dog/task/ken/music-player) - Plays
   random MP3s from your `music/*.mp3` assets. If lyrics are available in the
   file’s `lrc` metadata, it can display them line-by-line as the song plays.
-- [`ken/youtube`](https://hai.superego.ai/task/ken/youtube) - Get the transcript
+- [`ken/youtube`](https://api.hai.dog/task/ken/youtube) - Get the transcript
   of a YouTube video using [`yt-dlp`](https://github.com/yt-dlp/yt-dlp).
-- [`ken/code-review`](https://hai.superego.ai/task/ken/code-review) - Get a
+- [`ken/code-review`](https://api.hai.dog/task/ken/code-review) - Get a
   code review of unstaged/staged/committed changes in your local git repo.
-- [`hai/quick-task`](https://hai.superego.ai/task/hai/quick-task) - Ask AI to
+- [`hai/quick-task`](https://api.hai.dog/task/hai/quick-task) - Ask AI to
   help you write a task.
-- [`ken/task-safety-checker`](https://hai.superego.ai/task/ken/task-safety-checker) -
+- [`ken/task-safety-checker`](https://api.hai.dog/task/ken/task-safety-checker) -
   Check that a task in the hai task repo isn't _obviously_ destructive.
 
 ### Searching for a task
