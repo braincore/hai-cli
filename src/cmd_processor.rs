@@ -699,10 +699,6 @@ pub async fn process_cmd(
             outln!(io, "Authored by Ken Elkabany @ken");
             outln!(io, "ken@elkabany.com");
             outln!(io);
-            outln!(io, "Models come and go. Your data is forever.");
-            outln!(io);
-            outln!(io, "Every model is a projection. You are the basis.");
-            outln!(io);
             outln!(io, "Your data is all you need.");
             outln!(io);
             ProcessCmdResult::loop_next()
