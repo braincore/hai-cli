@@ -843,6 +843,7 @@ pub async fn launch_gateway(
 
     let io_clone = io.clone();
     let config_path_override_clone = config_path_override.map(|s| s.to_string());
+    let db_clone = db.clone();
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
@@ -879,6 +880,7 @@ pub async fn launch_gateway(
 
                     let io_clone_inner = io_clone.clone();
                     let config_path_override_inner = config_path_override_clone.clone();
+                    let db_clone_inner = db_clone.clone();
                     let token_clone_inner = token_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -898,6 +900,7 @@ pub async fn launch_gateway(
                         if let Err(e) = handle_connection(
                             &io_clone_inner,
                             config_path_override_inner.as_deref(),
+                            db_clone_inner,
                             stream,
                             peer_addr,
                             perm_addr,
@@ -991,6 +994,7 @@ pub async fn launch_gateway(
 async fn handle_connection(
     io: &Io,
     config_path_override: Option<&str>,
+    db: Arc<Mutex<rusqlite::Connection>>,
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     perm_addr: SocketAddr,
@@ -1038,6 +1042,7 @@ async fn handle_connection(
         handle_websocket_connection(
             io,
             config_path_override,
+            db,
             stream,
             &perm_addr,
             token,
@@ -1125,6 +1130,7 @@ async fn handle_vite_websocket_proxy(
 async fn handle_websocket_connection(
     io: &Io,
     config_path_override: Option<&str>,
+    db: Arc<Mutex<rusqlite::Connection>>,
     stream: tokio::net::TcpStream,
     perm_addr: &SocketAddr,
     token: &str,
@@ -1251,6 +1257,7 @@ async fn handle_websocket_connection(
                         handle_client_message(
                             io,
                             config_path_override,
+                            db.clone(),
                             perm_addr,
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
@@ -2611,6 +2618,7 @@ async fn send_bad_gateway_error(
 async fn handle_client_message(
     io: &Io,
     config_path_override: Option<&str>,
+    db: Arc<Mutex<rusqlite::Connection>>,
     perm_addr: &SocketAddr,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -2802,8 +2810,14 @@ async fn handle_client_message(
             .await;
         }
         "repl/starred" => {
-            let starred = match crate::config::get_config(config_path_override) {
-                Ok(Some(cfg)) => cfg
+            let starred = match crate::feature::config_sync::get_merged_config(
+                config_path_override,
+                db.clone(),
+                username,
+            )
+            .await
+            {
+                Ok(cfg) => cfg
                     .starred_task
                     .iter()
                     .map(|starred_task| StarredItem::Task {
@@ -2811,7 +2825,6 @@ async fn handle_client_message(
                         shortcut: starred_task.shortcut.clone(),
                     })
                     .collect(),
-                Ok(None) => vec![],
                 Err(e) => {
                     eprintln!("error: failed to read config: {}", e);
                     vec![]
