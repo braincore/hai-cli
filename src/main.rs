@@ -2189,6 +2189,12 @@ pub async fn prompt_ai(
             // Opus 4.7+ deprecated temperature
             let temperature_deprecated =
                 config::anthropic_model_temperature_deprecated(&anthropic_model);
+            let revised_tool_policy = tool_policy.clone().map(|mut tp| {
+                if config::anthropic_model_cannot_force_tool(&anthropic_model) {
+                    tp.force_tool = false;
+                }
+                tp
+            });
             anthropic::send_to_anthropic(
                 out,
                 api_url.as_deref(),
@@ -2204,7 +2210,7 @@ pub async fn prompt_ai(
                 temperature_deprecated,
                 msg_history,
                 &session.cmd_registry,
-                tool_policy.as_ref(),
+                revised_tool_policy.as_ref(),
                 &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,

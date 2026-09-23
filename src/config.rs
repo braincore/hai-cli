@@ -2191,6 +2191,11 @@ pub fn anthropic_model_modern_opts(
     }
 }
 
+/// Newer anthropic models do not support forcing a specific tool.
+pub fn anthropic_model_cannot_force_tool(anthropic_model: &AnthropicModel) -> bool {
+    matches!(anthropic_model, AnthropicModel::Opus55(_))
+}
+
 pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) -> bool {
     matches!(
         anthropic_model,
