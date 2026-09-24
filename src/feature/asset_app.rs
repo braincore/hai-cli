@@ -26,7 +26,6 @@ pub async fn start_app_and_launch_browser(
     target_asset_name: Option<&str>,
     skip_browser_launch: bool,
     reuse_existing_gateway: bool,
-    debug: bool,
     // When set, a local filesystem path to a vite project. `npm run dev` is
     // launched there and GET requests under `prog_asset_name` are proxied to
     // the vite dev server.
@@ -46,8 +45,6 @@ pub async fn start_app_and_launch_browser(
                 &gateway_info.addr,
                 &prog_asset_name,
                 target_asset_name.as_deref(),
-                &gateway_info.auth_token,
-                debug,
             );
             outln!(io, "Reusing existing gateway. Asset app URL: {}", final_url);
             if !skip_browser_launch {
@@ -72,7 +69,6 @@ pub async fn start_app_and_launch_browser(
         update_asset_tx,
         &prog_asset_name,
         target_asset_name.as_deref(),
-        debug,
         dev_mode,
     )
     .await
@@ -118,7 +114,6 @@ pub async fn start_app(
     update_asset_tx: tokio::sync::mpsc::Sender<crate::asset_async_writer::WorkerAssetMsg>,
     prog_asset_name: &str,
     target_asset_name: Option<&str>,
-    debug: bool,
     local_dev_path: Option<&str>,
 ) -> Option<(
     String,
@@ -159,13 +154,7 @@ pub async fn start_app(
         )
         .await
     {
-        let final_url = get_asset_app_url(
-            &addr,
-            prog_asset_name,
-            target_asset_name,
-            &auth_token,
-            debug,
-        );
+        let final_url = get_asset_app_url(&addr, prog_asset_name, target_asset_name);
         Some((
             final_url,
             addr,
@@ -269,13 +258,13 @@ pub fn get_asset_app_url(
     ws_addr: &SocketAddr,
     prog_asset_name: &str,
     target_asset_name: Option<&str>,
-    auth_token: &str,
-    debug: bool,
 ) -> String {
-    let (asset_app_url, localhost_serves_asset_app) =
-        get_asset_app_info(ws_addr, prog_asset_name, debug);
-
-    let gateway_localhost_addr = format!("localhost:{}", ws_addr.port());
+    let localhost_addr = format!("localhost:{}", ws_addr.port());
+    let asset_app_url = if asset_helper::get_public_asset_url(&prog_asset_name).is_some() {
+        format!("http://{}{}", localhost_addr, prog_asset_name)
+    } else {
+        format!("http://{}/~/{}", localhost_addr, prog_asset_name)
+    };
 
     let mut fragment_params: Vec<(&str, &str)> = Vec::new();
     let encoded_target;
@@ -284,10 +273,6 @@ pub fn get_asset_app_url(
             .replace("%2F", "/")
             .replace("%2B", "+");
         fragment_params.push(("asset", &encoded_target));
-    }
-    if !localhost_serves_asset_app {
-        fragment_params.push(("token", &auth_token));
-        fragment_params.push(("s", &gateway_localhost_addr));
     }
 
     if fragment_params.is_empty() {
@@ -299,30 +284,6 @@ pub fn get_asset_app_url(
             .collect::<Vec<_>>()
             .join("&");
         format!("{}#{}", asset_app_url, fragment)
-    }
-}
-
-pub fn get_asset_app_info(
-    ws_addr: &SocketAddr,
-    prog_asset_name: &str,
-    debug: bool,
-) -> (String, bool) {
-    let localhost_addr = format!("localhost:{}", ws_addr.port());
-    if let Some(asset_prog_url) = asset_helper::get_public_asset_url(&prog_asset_name) {
-        if debug {
-            (
-                format!("http://{}{}", localhost_addr, prog_asset_name),
-                true,
-            )
-        } else {
-            (asset_prog_url, false)
-        }
-    } else {
-        // Prog-asset is private -> use proxy through the gateway
-        (
-            format!("http://{}/~/{}", localhost_addr, prog_asset_name),
-            true,
-        )
     }
 }
 

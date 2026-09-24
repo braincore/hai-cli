@@ -10,7 +10,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::tungstenite::handshake::server;
+use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::{Bytes, Message, Utf8Bytes};
 use tokio_util::sync::CancellationToken;
 
@@ -41,6 +43,15 @@ fn encode_cookie_name_suffix(asset_app_name: &str, username: Option<&str>) -> St
         Some(username) => encode_cookie_name(&format!("{}_{}", username, asset_app_name)),
         None => encode_cookie_name(asset_app_name),
     }
+}
+
+fn auth_cookie_name(service_name: &str, username: Option<&str>, port: u16) -> String {
+    format!(
+        "{}_{}_{}",
+        HAI_TOKEN_COOKIE_NAME,
+        encode_cookie_name_suffix(service_name, username),
+        port
+    )
 }
 
 pub type ClientId = u64;
@@ -668,12 +679,16 @@ impl HttpResponse {
         self
     }
 
-    fn auth_cookie(username: Option<&str>, service_name: &str, token: &str) -> String {
+    fn auth_cookie(
+        username: Option<&str>,
+        service_name: &str,
+        local_addr: &SocketAddr,
+        token: &str,
+    ) -> String {
         // `Secure` is not set because this is used over localhost
         format!(
-            "{}_{}={}; Path=/; HttpOnly; SameSite=Strict",
-            HAI_TOKEN_COOKIE_NAME,
-            encode_cookie_name_suffix(service_name, username),
+            "{}={}; Path=/; HttpOnly; SameSite=Strict",
+            auth_cookie_name(service_name, username, local_addr.port()),
             token
         )
     }
@@ -844,6 +859,7 @@ pub async fn launch_gateway(
     let io_clone = io.clone();
     let config_path_override_clone = config_path_override.map(|s| s.to_string());
     let db_clone = db.clone();
+    let local_addr_clone = local_addr.clone();
     let token_clone = token.clone();
     let asset_keyring_clone = asset_keyring.clone();
     let asset_blob_cache_cloned = asset_blob_cache.clone();
@@ -881,6 +897,7 @@ pub async fn launch_gateway(
                     let io_clone_inner = io_clone.clone();
                     let config_path_override_inner = config_path_override_clone.clone();
                     let db_clone_inner = db_clone.clone();
+                    let local_addr_clone_inner = local_addr_clone.clone();
                     let token_clone_inner = token_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -902,7 +919,7 @@ pub async fn launch_gateway(
                             config_path_override_inner.as_deref(),
                             db_clone_inner,
                             stream,
-                            peer_addr,
+                            local_addr_clone_inner,
                             perm_addr,
                             &token_clone_inner,
                             asset_blob_cache_inner,
@@ -996,7 +1013,7 @@ async fn handle_connection(
     config_path_override: Option<&str>,
     db: Arc<Mutex<rusqlite::Connection>>,
     stream: tokio::net::TcpStream,
-    peer_addr: SocketAddr,
+    local_addr: SocketAddr,
     perm_addr: SocketAddr,
     token: &str,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -1038,12 +1055,13 @@ async fn handle_connection(
         if is_vite_hmr {
             return handle_vite_websocket_proxy(stream, &vite_proxy).await;
         }
-        // Handle as WebSocket - tokio-tungstenite will read the upgrade request
+        // Handle as WebSocket
         handle_websocket_connection(
             io,
             config_path_override,
             db,
             stream,
+            &local_addr,
             &perm_addr,
             token,
             api_client,
@@ -1058,15 +1076,14 @@ async fn handle_connection(
             update_asset_tx,
             next_client_id,
             cookie_set,
-            &peek_str,
         )
         .await
     } else {
-        // Handle as HTTP - we need to actually read and parse the request
+        // Handle as HTTP
         handle_http_connection(
             io,
             stream,
-            &peer_addr,
+            &local_addr,
             token,
             api_client,
             asset_blob_cache,
@@ -1080,25 +1097,6 @@ async fn handle_connection(
         )
         .await
     }
-}
-
-/// Extracts cookie value from raw HTTP headers (for peeked data)
-fn extract_cookie_from_raw(raw_headers: &str, cookie_name: &str) -> Option<String> {
-    for line in raw_headers.lines() {
-        let line_lower = line.to_lowercase();
-        if line_lower.starts_with("cookie:") {
-            let cookie_str = line.splitn(2, ':').nth(1)?.trim();
-            for pair in cookie_str.split(';') {
-                let pair = pair.trim();
-                if let Some((k, v)) = pair.split_once('=') {
-                    if k.trim() == cookie_name {
-                        return Some(v.trim().to_string());
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 async fn handle_vite_websocket_proxy(
@@ -1132,6 +1130,7 @@ async fn handle_websocket_connection(
     config_path_override: Option<&str>,
     db: Arc<Mutex<rusqlite::Connection>>,
     stream: tokio::net::TcpStream,
+    local_addr: &SocketAddr,
     perm_addr: &SocketAddr,
     token: &str,
     api_client: HaiClient,
@@ -1146,32 +1145,70 @@ async fn handle_websocket_connection(
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
-    peeked_request: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Check auth from cookie first (if cookie was already set)
-    let cookie_token = extract_cookie_from_raw(
-        peeked_request,
-        &format!(
-            "{}_{}",
-            HAI_TOKEN_COOKIE_NAME,
-            encode_cookie_name_suffix(service_name, username)
-        ),
-    );
-    let cookie_auth_valid = cookie_token.as_ref().map(|t| t == &token).unwrap_or(false);
+    let cookie_name = auth_cookie_name(service_name, username, local_addr.port());
 
-    // If cookie is set and valid, we're authenticated via cookie
-    // Otherwise, we'll require the auth message below
-    let pre_authenticated =
-        cookie_set.load(std::sync::atomic::Ordering::SeqCst) && cookie_auth_valid;
+    let mut cookie_auth_valid = false;
 
-    let mut ws_stream = match accept_async(stream).await {
+    let callback = |req: &server::Request,
+                    resp: server::Response|
+     -> Result<server::Response, server::ErrorResponse> {
+        let origin = req
+            .headers()
+            .get(http::header::ORIGIN)
+            .and_then(|v| v.to_str().ok());
+        match origin {
+            Some(o) if is_allowed_origin(local_addr, o) => {
+                // Allow connections from the same origin (localhost)
+            }
+            None => {
+                // Make it easier for non-browser clients to connect
+            }
+            _ => {
+                let mut err = server::ErrorResponse::new(Some("Forbidden origin".into()));
+                *err.status_mut() = http::StatusCode::FORBIDDEN;
+                return Err(err);
+            }
+        }
+
+        let host = req
+            .headers()
+            .get(http::header::HOST)
+            .and_then(|v| v.to_str().ok());
+        match host {
+            Some(h) if is_allowed_host(local_addr, h) => {
+                // Allow connections to the correct host
+            }
+            _ => {
+                let mut err = server::ErrorResponse::new(Some("Forbidden host".into()));
+                *err.status_mut() = http::StatusCode::FORBIDDEN;
+                return Err(err);
+            }
+        }
+
+        // Check valid cookie
+        cookie_auth_valid = req
+            .headers()
+            .get_all(http::header::COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|s| s.split(';'))
+            .filter_map(|kv| kv.trim().split_once('='))
+            .any(|(k, v)| k == cookie_name && v == token);
+
+        Ok(resp)
+    };
+
+    let mut ws_stream = match accept_hdr_async(stream, callback).await {
         Ok(ws) => ws,
         Err(e) => {
-            // Handeshake error
             eprintln!("WebSocket handshake error: {:?}", e);
             return Ok(());
         }
     };
+
+    let pre_authenticated =
+        cookie_set.load(std::sync::atomic::Ordering::SeqCst) && cookie_auth_valid;
 
     if !pre_authenticated {
         //
@@ -1333,7 +1370,7 @@ pub enum ClientMessageAuthResponse {
 async fn handle_http_connection(
     io: &Io,
     mut stream: tokio::net::TcpStream,
-    peer_addr: &std::net::SocketAddr,
+    local_addr: &std::net::SocketAddr,
     token: &str,
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -1357,7 +1394,7 @@ async fn handle_http_connection(
     let response = handle_http_request(
         io,
         &request,
-        &peer_addr,
+        &local_addr,
         &token,
         asset_blob_cache,
         asset_keyring,
@@ -1381,7 +1418,7 @@ async fn handle_http_connection(
 async fn handle_http_request(
     io: &Io,
     request: &HttpRequest,
-    #[allow(unused_variables)] peer_addr: &std::net::SocketAddr,
+    local_addr: &SocketAddr,
     expected_token: &str,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
@@ -1395,8 +1432,9 @@ async fn handle_http_request(
 ) -> HttpResponse {
     // Check if origin is allowed for CORS
     let origin = request.header("Origin");
+
     let allowed_origin = origin.and_then(|o| {
-        if is_allowed_origin(o) {
+        if is_allowed_origin(local_addr, o) {
             Some(o.to_string())
         } else {
             None
@@ -1408,12 +1446,21 @@ async fn handle_http_request(
         return build_cors_preflight_response(allowed_origin.as_deref());
     }
 
+    if let Some(origin) = origin
+        && !is_allowed_origin(local_addr, origin)
+    {
+        return HttpResponse::forbidden();
+    }
+
+    let host = request.header("Host");
+    if let Some(host) = host
+        && !is_allowed_host(local_addr, host)
+    {
+        return HttpResponse::forbidden();
+    }
+
     // Check token from multiple sources: cookie, bearer token, query param
-    let cookie_token = request.cookie(&format!(
-        "{}_{}",
-        HAI_TOKEN_COOKIE_NAME,
-        encode_cookie_name_suffix(service_name, username)
-    ));
+    let cookie_token = request.cookie(&auth_cookie_name(service_name, username, local_addr.port()));
     let bearer_token = request.bearer_token();
     let query_token = request.query_param("token");
 
@@ -1494,6 +1541,7 @@ async fn handle_http_request(
             handle_get(
                 io,
                 &request,
+                service_name,
                 &asset_name,
                 rev_id.as_deref(),
                 metadata_ref,
@@ -1552,31 +1600,26 @@ async fn handle_http_request(
     }
 
     if should_set_cookie {
-        response = response.with_cookie(HttpResponse::auth_cookie(
-            username,
-            service_name,
-            expected_token,
-        ));
+        response = response
+            .with_cookie(HttpResponse::auth_cookie(
+                username,
+                service_name,
+                local_addr,
+                expected_token,
+            ))
+            .with_header("Clear-Site-Data", "\"storage\"");
     }
 
     response
 }
 
 /// Check if the origin is allowed for CORS
-fn is_allowed_origin(origin: &str) -> bool {
-    if origin == "https://hai.dog" {
-        return true;
-    }
+fn is_allowed_origin(local_addr: &SocketAddr, origin: &str) -> bool {
+    origin == format!("http://localhost:{}", local_addr.port())
+}
 
-    // Check for *.hai.dog subdomains
-    if let Some(rest) = origin.strip_prefix("https://") {
-        if let Some(subdomain) = rest.strip_suffix(".hai.dog") {
-            // Ensure it's a valid subdomain (not empty, no slashes)
-            return !subdomain.is_empty() && !subdomain.contains('/');
-        }
-    }
-
-    false
+fn is_allowed_host(local_addr: &SocketAddr, host: &str) -> bool {
+    host == format!("localhost:{}", local_addr.port())
 }
 
 /// Build CORS preflight response
@@ -1598,6 +1641,7 @@ fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
 async fn handle_get(
     io: &Io,
     request: &HttpRequest,
+    service_name: &str,
     asset_name: &str,
     rev_id: Option<&str>,
     return_metadata: bool,
@@ -1638,6 +1682,20 @@ async fn handle_get(
         Err((_asset_name, e)) => {
             return asset_get_request_error_to_http_response(e);
         }
+    }
+
+    // IMPORTANT SECURITY DETAIL
+    // Reject service workers because they can register a hook that lets them
+    // persist beyond one asset-app and potentially exploit another asset-app
+    // that re-uses the same gateway port.
+    //
+    // The service worker can even reject a `Clear-Site-Data: storage` header
+    // from the gateway which means it can avoid its own removal.
+    //
+    // This approach was taken because web workers are still desirable and
+    // should not be affected by this.
+    if request.header("Service-Worker") == Some("script") {
+        return HttpResponse::forbidden();
     }
 
     let is_attachment = crate::asset_helper::is_attachment(asset_name);
@@ -1802,7 +1860,61 @@ async fn handle_get(
         return HttpResponse::no_content();
     };
 
-    HttpResponse::ok(decrypted_contents, &content_type)
+    let resp = HttpResponse::ok(decrypted_contents, &content_type);
+
+    // IMPORTANT SECURITY NOTE
+    // A worrisome attack vector is the user clicking on a link to another app.
+    // If that potentially malicious app is served by the same gateway (link
+    // was provided as a relative link) and assuming cookie authentication, a
+    // malicious app would be able to utilize all of the granted permissions.
+    // This is extremely bad.
+    //
+    // To prevent this, all content served that's unrelated to the asset-app
+    // (does not share the asset prefix) that the gateway was created for, has
+    // `sandbox` set so that scripts cannot be run. As added protection, we
+    // default disposition to attachment and tell the browser to not guess the
+    // content type.
+    if asset_name.starts_with(service_name) {
+        resp
+    } else {
+        let resp = resp
+            .with_header("Content-Security-Policy", "sandbox")
+            .with_header("X-Content-Type-Options", "nosniff");
+        if is_inline_safe(&content_type) {
+            resp
+        } else {
+            resp.with_header("Content-Disposition", "attachment")
+        }
+    }
+}
+
+fn is_inline_safe(content_type: &str) -> bool {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    matches!(
+        base.as_str(),
+        "image/png"
+            | "image/jpeg"
+            | "image/gif"
+            | "image/webp"
+            | "image/avif"
+            | "image/bmp"
+            | "video/mp4"
+            | "video/webm"
+            | "video/ogg"
+            | "audio/mpeg"
+            | "audio/ogg"
+            | "audio/wav"
+            | "audio/webm"
+            | "audio/flac"
+            | "audio/aac"
+            | "audio/mp4"
+    )
 }
 
 /// Proxies an internal `asset/get` response back to the app request that

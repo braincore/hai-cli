@@ -2353,7 +2353,6 @@ pub async fn process_cmd(
                     Some(&asset_name),
                     false,
                     true,
-                    debug,
                     None,
                 )
                 .await;
@@ -5438,7 +5437,6 @@ pub async fn process_cmd(
                 None,
                 no_open,
                 true,
-                debug,
                 dev_mode.as_deref(),
             )
             .await;
@@ -5543,7 +5541,6 @@ pub async fn process_cmd(
                     Some(&asset_name),
                     false,
                     true,
-                    debug,
                     None,
                 )
                 .await;
