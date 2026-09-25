@@ -2525,17 +2525,6 @@ pub static REGISTRY: &[Entry] = &[
         .for_audience(Audience::UserOnly)
         .with_traits(Traits::NONE.repl()),
     ),
-    Entry::Cmd(
-        cmd(
-            Slash,
-            Cow::Borrowed("gateway"),
-            Cow::Borrowed("debug"),
-            Cow::Borrowed(&[arg("auth_token", Text, Optional)]),
-            Doc::new("Start a test WebSocket gateway without an associated asset-app"),
-        )
-        .for_audience(Audience::Neither)
-        .with_traits(Traits::NONE.net()),
-    ),
     //
     //
     // Syntax

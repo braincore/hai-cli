@@ -189,8 +189,6 @@ pub enum Cmd {
     AssetPoolNew(AssetPoolNewCmd),
     /// List asset pools
     AssetPools,
-    /// Start gateway server (Only for testing, so modestly hidden)
-    Gateway(GatewayCmd),
     /// List chats and prompt for resumption
     Chats,
     /// Resume a chat
@@ -934,11 +932,6 @@ pub struct AssetOpenCmd {
 pub struct AssetPoolNewCmd {
     /// List of usernames
     pub usernames: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct GatewayCmd {
-    pub auth_token: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1942,9 +1935,6 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         //
         "dump" => Cmd::Dump,
         "dump-session" => Cmd::DumpSession,
-        "gateway" => Cmd::Gateway(GatewayCmd {
-            auth_token: r.opt_take(0),
-        }),
 
         //
         // Dynamic (runtime-injected)

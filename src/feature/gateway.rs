@@ -32,7 +32,6 @@ use crate::{
     io::{Io, Out},
 };
 
-pub const DEV_GATEWAY: &str = "DEV_GATEWAY";
 pub const HAI_TOKEN_COOKIE_NAME: &str = "hai_token";
 
 /// Useful for encoding asset names in cookie names.
