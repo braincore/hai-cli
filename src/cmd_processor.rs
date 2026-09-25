@@ -6592,6 +6592,11 @@ pub async fn process_cmd(
                         source: session::CmdSource::Internal(false),
                         reply_channel: None,
                     });
+                    new_cmds.push(session::CmdInput {
+                        input: "/asset-folder-new .app".to_string(),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    });
                 }
                 Err(e) => {
                     errorln!(io, "error: {}", e);

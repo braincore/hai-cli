@@ -805,6 +805,13 @@ pub async fn launch_gateway(
     let clients: Clients = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let clients_clone = clients.clone();
 
+    let maybe_slash = if service_name.ends_with("/") { "" } else { "/" };
+    let app_folder_prefix = if service_name.starts_with("/") {
+        format!(".app{}{}", service_name, maybe_slash)
+    } else {
+        format!(".app/p/{}{}", service_name, maybe_slash)
+    };
+
     let default_perms = vec![
         Perm::PublicAsset,
         Perm::AssetName {
@@ -817,7 +824,18 @@ pub async fn launch_gateway(
             },
         },
         Perm::AssetPrefix {
-            prefix: format!("{}/", service_name),
+            prefix: format!("{}{}", service_name, maybe_slash),
+            perm: AssetPerm {
+                read: true,
+                write: true,
+            },
+            prefix_perm: AssetPrefixPerm {
+                create: true,
+                list: true,
+            },
+        },
+        Perm::AssetPrefix {
+            prefix: app_folder_prefix,
             perm: AssetPerm {
                 read: true,
                 write: true,
