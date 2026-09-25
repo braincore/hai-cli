@@ -1549,11 +1549,6 @@ pub async fn process_cmd(
                         if pdf_as_markdown.len() == 0 {
                             errorln!(io, "extracted text from PDF at url has length 0: {}", url);
                         } else {
-                            println!(
-                                "Result type: {:?}, Markdown length: {}",
-                                result.pdf_type,
-                                pdf_as_markdown.len()
-                            );
                             let pdf_contents_with_delimeters = add_content_delimiters(
                                 "URL-PDF-TEXT-EXTRACTED",
                                 pdf_as_markdown,
