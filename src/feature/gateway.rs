@@ -799,11 +799,15 @@ pub async fn launch_gateway(
 
     infoln!(
         io,
-        "Gateway listening on http://{} (HTTP + WebSocket)",
-        local_addr
+        "Gateway listening on http://localhost:{} (HTTP + WebSocket)",
+        local_addr.port()
     );
     infoln!(io, "Token: {}", token);
-    infoln!(io, "Permissions server on http://{}", perm_addr);
+    infoln!(
+        io,
+        "Permissions server on http://localhost:{}",
+        perm_addr.port()
+    );
 
     let clients: Clients = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let clients_clone = clients.clone();
