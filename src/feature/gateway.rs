@@ -1135,8 +1135,14 @@ async fn handle_vite_websocket_proxy(
         None => return Ok(()),
     };
 
-    infoln!(
-        out,
+    if out.is_terminal() {
+        infoln!(
+            out,
+            "Proxying WebSocket connection to Vite dev server at {}",
+            vite_host
+        );
+    }
+    tracing::info!(
         "Proxying WebSocket connection to Vite dev server at {}",
         vite_host
     );
@@ -1230,7 +1236,10 @@ async fn handle_websocket_connection(
     let mut ws_stream = match accept_hdr_async(stream, callback).await {
         Ok(ws) => ws,
         Err(e) => {
-            errorln!(io, "WebSocket handshake error: {:?}", e);
+            if io.is_terminal() {
+                errorln!(io, "WebSocket handshake error: {:?}", e);
+            }
+            tracing::debug!("WebSocket handshake error: {:?}", e);
             return Ok(());
         }
     };
@@ -1997,7 +2006,10 @@ async fn proxy_get_to_vite_dev_server(
     let resp = match req.send().await {
         Ok(resp) => resp,
         Err(e) => {
-            errorln!(out, "dev-mode proxy request failed: {}", e);
+            if out.is_terminal() {
+                errorln!(out, "dev-mode proxy request failed: {}", e);
+            }
+            tracing::debug!("dev-mode proxy request failed: {}", e);
             return HttpResponse::internal_error("Dev-mode proxy request failed");
         }
     };
@@ -2013,7 +2025,10 @@ async fn proxy_get_to_vite_dev_server(
     let body = match resp.bytes().await {
         Ok(bytes) => bytes.to_vec(),
         Err(e) => {
-            errorln!(out, "failed to read dev-mode proxy response: {}", e);
+            if out.is_terminal() {
+                errorln!(out, "failed to read dev-mode proxy response: {}", e);
+            }
+            tracing::debug!("failed to read dev-mode proxy response: {}", e);
             return HttpResponse::internal_error("Failed to read dev-mode proxy response");
         }
     };
@@ -2119,7 +2134,10 @@ async fn handle_put(
         Err(e) => {
             match e {
                 asset_crypt::AkmSelectionError::Abort(msg) => {
-                    errorln!(io, "{}", msg);
+                    if io.is_terminal() {
+                        errorln!(io, "{}", msg);
+                    }
+                    tracing::debug!("{}", msg);
                 }
             }
             return HttpResponse::bad_request("Decryption key error");
@@ -2146,7 +2164,10 @@ async fn handle_put(
         ))
         .await
     {
-        errorln!(io, "failed to send to update worker: {}", e);
+        if io.is_terminal() {
+            errorln!(io, "failed to send to update worker: {}", e);
+        }
+        tracing::debug!("failed to send to update worker: {}", e);
         return HttpResponse::internal_error("Failed to process update");
     }
 
@@ -2157,7 +2178,10 @@ async fn handle_put(
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
         Ok(Err(e)) => {
-            errorln!(io, "failed to update asset: {:?}", e);
+            if io.is_terminal() {
+                errorln!(io, "failed to update asset: {:?}", e);
+            }
+            tracing::debug!("failed to update asset: {:?}", e);
             match e {
                 asset_async_writer::AssetSaveError::Put(RequestError::BadRequest(msg))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::BadRequest(msg))
@@ -2242,7 +2266,10 @@ async fn handle_put_metadata(
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
         Err(e) => {
-            errorln!(out, "metadata put failed: {}", e);
+            if out.is_terminal() {
+                errorln!(out, "metadata put failed: {}", e);
+            }
+            tracing::debug!("metadata put failed: {}", e);
             match e {
                 RequestError::BadRequest(msg) => {
                     return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
@@ -2972,7 +2999,10 @@ async fn handle_client_message(
                     })
                     .collect(),
                 Err(e) => {
-                    errorln!(io, "failed to read config: {}", e);
+                    if io.is_terminal() {
+                        errorln!(io, "failed to read config: {}", e);
+                    }
+                    tracing::debug!("failed to read config: {}", e);
                     vec![]
                 }
             };
@@ -4094,7 +4124,10 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            errorln!(io, "{}", msg);
+                            if io.is_terminal() {
+                                errorln!(io, "{}", msg);
+                            }
+                            tracing::debug!("{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
@@ -4121,7 +4154,10 @@ async fn handle_client_message(
                         .await
                         {
                             send_bad_gateway_error(ws_sink, mid, &e).await;
-                            errorln!(io, "failed to put asset encryption metadata: {}", e);
+                            if io.is_terminal() {
+                                errorln!(io, "failed to put asset encryption metadata: {}", e);
+                            }
+                            tracing::debug!("failed to put asset encryption metadata: {}", e);
                             return;
                         }
                     }
@@ -4321,7 +4357,10 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            errorln!(io, "{}", msg);
+                            if io.is_terminal() {
+                                errorln!(io, "{}", msg);
+                            }
+                            tracing::debug!("{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
@@ -4400,7 +4439,10 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            errorln!(io, "{}", msg);
+                            if io.is_terminal() {
+                                errorln!(io, "{}", msg);
+                            }
+                            tracing::debug!("{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
