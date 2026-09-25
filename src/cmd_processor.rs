@@ -2447,6 +2447,7 @@ pub async fn process_cmd(
                     .as_ref()
                     .map(|entry| (entry.entry_id.clone(), entry.asset.rev_id.clone()));
                 let _ = asset_editor::edit_with_editor_api(
+                    &io.out,
                     &api_client,
                     &session.shell,
                     &editor.clone().unwrap_or(session.editor.clone()),
@@ -2515,6 +2516,7 @@ pub async fn process_cmd(
                     .await;
             } else {
                 let _ = asset_editor::edit_with_editor_api(
+                    &io.out,
                     &api_client,
                     &session.shell,
                     &session.editor,

@@ -141,14 +141,14 @@ pub async fn hot_reload_websocket_server()
                     let (stream, _) = match accept_result {
                         Ok(pair) => pair,
                         Err(e) => {
-                            eprintln!("WebSocket accept error: {:?}", e);
+                            tracing::error!("WebSocket accept error: {:?}", e);
                             continue;
                         }
                     };
                     let ws_stream = match accept_async(stream).await {
                         Ok(ws) => ws,
                         Err(e) => {
-                            eprintln!("WebSocket handshake error: {:?}", e);
+                            tracing::error!("WebSocket handshake error: {:?}", e);
                             continue;
                         }
                     };

@@ -155,7 +155,7 @@ pub async fn execute_shell_based_tool(
     let ToolShellBasedArg { input, _continue } = serde_json::from_str::<ToolShellBasedArg>(arg)?;
     Ok((
         match tool {
-            Tool::CopyToClipboard => copy_to_clipboard(&input)?,
+            Tool::CopyToClipboard => copy_to_clipboard(out, &input)?,
             Tool::ExecPythonScript => exec_python_script(out, &input, env_vars).await?,
             Tool::ExecPythonUvScript => exec_python_uv_script(out, &input, env_vars).await?,
             Tool::ShellExecWithStdin(cmd) => {
@@ -268,9 +268,9 @@ pub fn extract_ai_defined_fn_def(arg: &str) -> Result<String, Box<dyn std::error
 
 // -- Shell-based tools
 
-pub fn copy_to_clipboard(text: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub fn copy_to_clipboard(out: &Out, text: &str) -> Result<String, Box<dyn std::error::Error>> {
     clipboard::copy_to_clipboard(text);
-    println!("Copied to clipboard");
+    outln!(out, "Copied to clipboard");
     Ok("Copied to clipboard".into())
 }
 

@@ -424,7 +424,7 @@ impl AssetBlobCache {
 async fn download_and_verify(url: &str, hash: &str) -> Result<Vec<u8>, DownloadAssetError> {
     let data = download_asset(url).await?;
     if !verify_sha256_in_memory(hash, &data) {
-        eprintln!("error: hash mismatch for {}", url);
+        tracing::warn!("error: hash mismatch for {}", url);
         return Err(DownloadAssetError::HashMismatch);
     }
     Ok(data)
@@ -526,14 +526,14 @@ pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
     let asset_get_resp = match reqwest::get(url).await {
         Ok(resp) => resp,
         Err(e) => {
-            eprintln!("error: {}", e);
+            tracing::error!("error: {}", e);
             return Err(DownloadAssetError::DataFetchFailed(
                 asset_reader::DataFetchFailure::Unexpected,
             ));
         }
     };
     if !asset_get_resp.status().is_success() {
-        eprintln!("error: failed to fetch asset: {}", asset_get_resp.status());
+        tracing::error!("error: failed to fetch asset: {}", asset_get_resp.status());
         if asset_get_resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             return Err(DownloadAssetError::DataFetchFailed(
                 asset_reader::DataFetchFailure::RateLimited,
@@ -547,7 +547,7 @@ pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
     match asset_get_resp.bytes().await {
         Ok(contents) => Ok(contents.to_vec()),
         Err(e) => {
-            eprintln!("error: failed to fetch asset: {}", e);
+            tracing::error!("error: failed to fetch asset: {}", e);
             Err(DownloadAssetError::DataFetchFailed(
                 asset_reader::DataFetchFailure::Unexpected,
             ))

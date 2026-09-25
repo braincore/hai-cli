@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 use crate::api::client::HaiClient;
 use crate::api::types::asset::{PutConflictPolicy, ReplaceConflictPolicy};
 use crate::asset_async_writer::{WorkerAssetInit, WorkerAssetMsg, WorkerAssetUpdate};
+use crate::{errorln, io::Out};
 
 #[allow(clippy::too_many_arguments)]
 /// Function to sync asset changes while editing asset with external editor.
@@ -15,6 +16,7 @@ use crate::asset_async_writer::{WorkerAssetInit, WorkerAssetMsg, WorkerAssetUpda
 /// A filewatcher is used to detect changes to the asset file and trigger
 /// a callback to write the changes to the asset backend.
 pub async fn edit_with_editor_api(
+    out: &Out,
     api_client: &HaiClient,
     shell: &str,
     editor: &str,
@@ -49,6 +51,7 @@ pub async fn edit_with_editor_api(
     }
 
     // Create a thread-safe notify watcher
+    let out_cloned = out.clone();
     let api_client_cloned = api_client.clone();
     let asset_name_cloned = asset_name.to_string();
     let asset_entry_ref_cloned = asset_entry_ref
@@ -87,7 +90,7 @@ pub async fn edit_with_editor_api(
                         let _ = tx.blocking_send(msg);
                     }
                 }
-                Err(e) => eprintln!("Watch error: {:?}", e),
+                Err(e) => errorln!(out_cloned, "Watch error: {:?}", e),
             }
         },
         notify::Config::default().with_compare_contents(true),
@@ -134,7 +137,7 @@ pub async fn edit_with_editor_api(
     let _ = tx_main.send(done_msg).await;
 
     if !status.success() {
-        eprintln!("error: editor did not exit successfully");
+        errorln!(out, "editor did not exit successfully");
         return Err(std::io::Error::other("Editor failed"));
     }
 

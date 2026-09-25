@@ -20,14 +20,16 @@ use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
-use crate::errorln;
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
 use crate::feature::kernel;
-use crate::io::Io;
 use crate::session::{self, CmdInputReply};
 use crate::{
     asset_async_writer, asset_helper, asset_reader,
     feature::asset_crypt::{self, KeyRecipient},
+};
+use crate::{
+    errorln, infoln,
+    io::{Io, Out},
 };
 
 pub const DEV_GATEWAY: &str = "DEV_GATEWAY";
@@ -795,12 +797,13 @@ pub async fn launch_gateway(
     };
     let perm_addr = perm_listener.local_addr()?;
 
-    println!(
+    infoln!(
+        io,
         "Gateway listening on http://{} (HTTP + WebSocket)",
         local_addr
     );
-    println!("Token: {}", token);
-    println!("Permissions server on http://{}", perm_addr);
+    infoln!(io, "Token: {}", token);
+    infoln!(io, "Permissions server on http://{}", perm_addr);
 
     let clients: Clients = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let clients_clone = clients.clone();
@@ -905,7 +908,7 @@ pub async fn launch_gateway(
                     let (stream, peer_addr) = match accept_result {
                         Ok(pair) => pair,
                         Err(e) => {
-                            eprintln!("Accept error: {:?}", e);
+                            errorln!(io_clone, "Accept error: {:?}", e);
                             continue;
                         }
                     };
@@ -954,7 +957,7 @@ pub async fn launch_gateway(
                             cookie_set_inner,
                             vite_proxy_inner,
                         ).await {
-                            eprintln!("Connection error from {}: {:?}", peer_addr, e);
+                            errorln!(io_clone_inner, "Connection error from {}: {:?}", peer_addr, e);
                         }
                     });
                 }
@@ -962,6 +965,7 @@ pub async fn launch_gateway(
         }
     });
 
+    let io_clone = io.clone();
     let repl_remote_clone = repl_remote.clone();
     let db_clone = db.clone();
     let asset_keyring_clone = asset_keyring.clone();
@@ -982,13 +986,14 @@ pub async fn launch_gateway(
                     let (stream, _peer_addr) = match accept_result {
                         Ok(pair) => pair,
                         Err(e) => {
-                            eprintln!("Perm server accept error: {:?}", e);
+                            errorln!(io_clone, "Perm server accept error: {:?}", e);
                             continue;
                         }
                     };
                     let _ = stream.set_nodelay(true);
 
                     let repl_remote_inner = repl_remote_clone.clone();
+                    let io_clone_inner = io_clone.clone();
                     let db_inner = db_clone.clone();
                     let api_client_clone_inner = api_client_clone.clone();
                     let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
@@ -1013,7 +1018,7 @@ pub async fn launch_gateway(
                             username_inner.as_deref(),
                             &service_name_inner,
                         ).await {
-                            eprintln!("Perm connection error: {:?}", e);
+                            errorln!(io_clone_inner, "Perm connection error: {:?}", e);
                         }
                     });
                 }
@@ -1071,7 +1076,7 @@ async fn handle_connection(
             && (peek_str.contains("Sec-WebSocket-Protocol: vite-hmr")
                 || peek_str.contains("sec-websocket-protocol: vite-hmr"));
         if is_vite_hmr {
-            return handle_vite_websocket_proxy(stream, &vite_proxy).await;
+            return handle_vite_websocket_proxy(&io.out, stream, &vite_proxy).await;
         }
         // Handle as WebSocket
         handle_websocket_connection(
@@ -1118,6 +1123,7 @@ async fn handle_connection(
 }
 
 async fn handle_vite_websocket_proxy(
+    out: &Out,
     mut client_stream: tokio::net::TcpStream,
     vite_proxy: &Arc<Option<ViteProxy>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1126,7 +1132,8 @@ async fn handle_vite_websocket_proxy(
         None => return Ok(()),
     };
 
-    println!(
+    infoln!(
+        out,
         "Proxying WebSocket connection to Vite dev server at {}",
         vite_host
     );
@@ -1220,7 +1227,7 @@ async fn handle_websocket_connection(
     let mut ws_stream = match accept_hdr_async(stream, callback).await {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!("WebSocket handshake error: {:?}", e);
+            errorln!(io, "WebSocket handshake error: {:?}", e);
             return Ok(());
         }
     };
@@ -1580,6 +1587,7 @@ async fn handle_http_request(
                     );
                 }
                 handle_put_metadata(
+                    &io.out,
                     &asset_name,
                     &request.body,
                     asset_blob_cache,
@@ -1680,7 +1688,7 @@ async fn handle_get(
     // client code and won't share the app's asset prefix.
     if let Some(vite_proxy) = vite_proxy.as_ref() {
         if asset_name.starts_with(&vite_proxy.asset_prefix) {
-            return proxy_get_to_vite_dev_server(&vite_proxy.host, request).await;
+            return proxy_get_to_vite_dev_server(&io.out, &vite_proxy.host, request).await;
         }
     }
 
@@ -1870,7 +1878,7 @@ async fn handle_get(
                 (decrypted_asset_contents, content_type)
             }
             Err(e) => {
-                eprintln!("error: failed to decrypt: {}", e);
+                tracing::error!("error: failed to decrypt: {}", e);
                 return HttpResponse::internal_error("Failed to decrypt asset");
             }
         }
@@ -1962,7 +1970,11 @@ fn asset_get_request_error_to_http_response(
 /// The full request path (including query string) is forwarded to
 /// `http://<vite_host><path>?<query>`. The response body, status, and
 /// content-type are relayed back to the caller.
-async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) -> HttpResponse {
+async fn proxy_get_to_vite_dev_server(
+    out: &Out,
+    vite_host: &str,
+    request: &HttpRequest,
+) -> HttpResponse {
     let query = request
         .query_string()
         .map(|qs| format!("?{}", qs))
@@ -1982,7 +1994,7 @@ async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) ->
     let resp = match req.send().await {
         Ok(resp) => resp,
         Err(e) => {
-            eprintln!("error: dev-mode proxy request failed: {}", e);
+            errorln!(out, "dev-mode proxy request failed: {}", e);
             return HttpResponse::internal_error("Dev-mode proxy request failed");
         }
     };
@@ -1998,7 +2010,7 @@ async fn proxy_get_to_vite_dev_server(vite_host: &str, request: &HttpRequest) ->
     let body = match resp.bytes().await {
         Ok(bytes) => bytes.to_vec(),
         Err(e) => {
-            eprintln!("error: failed to read dev-mode proxy response: {}", e);
+            errorln!(out, "failed to read dev-mode proxy response: {}", e);
             return HttpResponse::internal_error("Failed to read dev-mode proxy response");
         }
     };
@@ -2104,7 +2116,7 @@ async fn handle_put(
         Err(e) => {
             match e {
                 asset_crypt::AkmSelectionError::Abort(msg) => {
-                    eprintln!("error: {}", msg);
+                    errorln!(io, "{}", msg);
                 }
             }
             return HttpResponse::bad_request("Decryption key error");
@@ -2131,7 +2143,7 @@ async fn handle_put(
         ))
         .await
     {
-        eprintln!("error: failed to send to update worker: {}", e);
+        errorln!(io, "failed to send to update worker: {}", e);
         return HttpResponse::internal_error("Failed to process update");
     }
 
@@ -2142,7 +2154,7 @@ async fn handle_put(
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
         Ok(Err(e)) => {
-            eprintln!("error: failed to update asset: {:?}", e);
+            errorln!(io, "failed to update asset: {:?}", e);
             match e {
                 asset_async_writer::AssetSaveError::Put(RequestError::BadRequest(msg))
                 | asset_async_writer::AssetSaveError::Replace(RequestError::BadRequest(msg))
@@ -2193,6 +2205,7 @@ async fn handle_put(
 }
 
 async fn handle_put_metadata(
+    out: &Out,
     asset_name: &str,
     body: &[u8],
     _asset_blob_cache: Arc<AssetBlobCache>,
@@ -2226,7 +2239,7 @@ async fn handle_put_metadata(
             Err(_) => HttpResponse::internal_error("Failed to serialize response"),
         },
         Err(e) => {
-            eprintln!("error: metadata put failed: {}", e);
+            errorln!(out, "metadata put failed: {}", e);
             match e {
                 RequestError::BadRequest(msg) => {
                     return HttpResponse::bad_request(&format!("Unexpected error: {}", msg));
@@ -2956,7 +2969,7 @@ async fn handle_client_message(
                     })
                     .collect(),
                 Err(e) => {
-                    eprintln!("error: failed to read config: {}", e);
+                    errorln!(io, "failed to read config: {}", e);
                     vec![]
                 }
             };
@@ -4305,7 +4318,7 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
+                            errorln!(io, "{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
@@ -4384,7 +4397,7 @@ async fn handle_client_message(
                 Err(e) => {
                     match e {
                         asset_crypt::AkmSelectionError::Abort(msg) => {
-                            eprintln!("error: {}", msg);
+                            errorln!(io, "{}", msg);
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
