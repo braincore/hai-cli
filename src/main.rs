@@ -498,7 +498,7 @@ async fn repl(
     init_cmds: Vec<session::CmdInput>,
     exit_when_done: bool,
     force_yes: bool,
-    mute_all_but_final_ai_response: bool,
+    mute_all_but_final_output: bool,
     kernel_mode: bool,
 ) -> Result<u8, Box<dyn Error>> {
     let local_cfg_at_startup = match config::get_config(config_path_override) {
@@ -649,7 +649,7 @@ async fn repl(
     });
     drop(cmd_queue);
 
-    if mute_all_but_final_ai_response {
+    if mute_all_but_final_output {
         io.mute();
     }
 
@@ -1234,6 +1234,13 @@ async fn repl(
             }
             cmd_processor::ProcessCmdNext::Loop => {
                 if exit_when_done && session.cmd_queue.lock().await.is_empty() {
+                    if mute_all_but_final_output && !transcript.is_empty() {
+                        // Re-enable printing if we're in hai-bye mode and
+                        // there is no final LLM prompting. Treat the output of
+                        // this final command as the final printable output.
+                        io.unmute();
+                        out!(io, "{}", transcript);
+                    }
                     wrapup_and_cleanup(&session, update_asset_tx).await;
                     return Ok(0);
                 };
@@ -1317,7 +1324,7 @@ async fn repl(
             }
             outln!(io);
 
-            if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_ai_response {
+            if session.cmd_queue.lock().await.is_empty() && mute_all_but_final_output {
                 // Re-enable printing for the AI response if we're in hai-bye mode and
                 // we've printed all but the last command.
                 io.unmute();
