@@ -3,7 +3,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -430,6 +431,18 @@ async fn download_and_verify(url: &str, hash: &str) -> Result<Vec<u8>, DownloadA
     Ok(data)
 }
 
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(600))
+            .build()
+            .expect("failed to build HTTP client")
+    })
+}
+
 /// Downloads in chunks to a specified file path, verifying hash after
 /// download.
 ///
@@ -439,7 +452,7 @@ pub async fn download_and_verify_to_path(
     hash: &str,
     dest_path: &Path,
 ) -> Result<(), DownloadAssetError> {
-    let resp = match reqwest::get(url).await {
+    let resp = match http_client().get(url).send().await {
         Ok(resp) => resp,
         Err(_) => {
             return Err(DownloadAssetError::DataFetchFailed(
@@ -523,7 +536,7 @@ impl ::std::fmt::Debug for DownloadAssetError {
 
 /// Downloads an asset to memory.
 pub async fn download_asset(url: &str) -> Result<Vec<u8>, DownloadAssetError> {
-    let asset_get_resp = match reqwest::get(url).await {
+    let asset_get_resp = match http_client().get(url).send().await {
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("error: {}", e);
