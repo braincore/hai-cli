@@ -795,6 +795,13 @@ static STD_SUBCMDS: &[CmdSpec] = &[
         Cow::Borrowed(&[arg("prog", ArgKind::Text, Arity::Required)]),
         Doc::new("Check whether a program is available"),
     ),
+    cmd(
+        Sigil::Slash,
+        Cow::Borrowed("io-backend"),
+        Cow::Borrowed("std"),
+        Cow::Borrowed(&[]),
+        Doc::new("Print the i/o backend and featureset"),
+    ),
 ];
 
 const ONOFF: &[&str] = &["on", "off"];

@@ -983,6 +983,7 @@ pub enum StdCmd {
     Now,
     NewDayAlert,
     Which(String),
+    IoBackend,
 }
 
 #[derive(Clone, Debug)]
@@ -1588,6 +1589,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
                 "now" => StdCmd::Now,
                 "new-day-alert" => StdCmd::NewDayAlert,
                 "which" => StdCmd::Which(sub.arg(0).to_string()),
+                "io-backend" => StdCmd::IoBackend,
                 other => unreachable!("std subcommand {other} has no build arm"),
             })
         }

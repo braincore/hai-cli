@@ -5849,6 +5849,20 @@ pub async fn process_cmd(
                         }
                     };
                 }
+                cmd::StdCmd::IoBackend => {
+                    if io.is_terminal() {
+                        outln!(io, "terminal");
+                        if io.can_cursor() {
+                            outln!(io, "(color, interactive)");
+                        } else {
+                            outln!(io, "(color, no cursor)")
+                        }
+                    } else if io.drives_repl() {
+                        outln!(io, "websocket");
+                    } else {
+                        outln!(io, "pipe");
+                    }
+                }
             }
             ProcessCmdResult::loop_next()
         }
