@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::{cmd_parse, tool};
@@ -151,6 +152,10 @@ pub enum Cmd {
     AssetAclGetEffective(AssetAclGetEffectiveCmd),
     /// Set ACL for an asset
     AssetAclSet(AssetAclSetCmd),
+    /// Share an asset with a user
+    AssetShare(AssetShareCmd),
+    /// Unshare an asset
+    AssetUnshare(AssetUnshareCmd),
     /// Get metadata for asset
     AssetMdGet(AssetMdGetCmd),
     /// Set metadata for asset
@@ -169,6 +174,12 @@ pub enum Cmd {
     AssetFolderExpand(AssetFolderExpandCmd),
     /// List asset folder
     AssetFolderList(AssetFolderListCmd),
+    /// Grant user ability to decrypt asset
+    AssetCryptGrant(AssetCryptGrantCmd),
+    /// Remove user's decryption key from an asset
+    AssetCryptRevoke(AssetCryptRevokeCmd),
+    /// List users who hold a decryption key for an asset
+    AssetCryptRecipients(AssetCryptRecipientsCmd),
     /// Setup asset enc/dec & signing keys
     AssetCryptSetup,
     /// Unlock encryption key
@@ -785,7 +796,7 @@ pub enum AssetAcePrincipal {
     User(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum AssetAcePermission {
     ReadData,
     ReadRevisions,
@@ -806,10 +817,26 @@ pub struct AssetAclSetCmd {
     pub asset_name: String,
     /// Principal
     pub ace_principal: AssetAcePrincipal,
-    /// Permission to grant
-    pub ace_permission: AssetAcePermission,
-    /// Permission to grant
-    pub ace_effect: AssetAceEffect,
+    /// Permissions to set
+    pub settings: HashMap<AssetAcePermission, AssetAceEffect>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetShareCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Username or principal (user:...) to share with
+    pub recipient: String,
+    /// If false, only read access.
+    pub write: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetUnshareCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Username or principal (user:...) to share with
+    pub recipient: String,
 }
 
 #[derive(Clone, Debug)]
@@ -879,6 +906,28 @@ pub struct AssetFolderExpandCmd {
 pub struct AssetFolderListCmd {
     /// Prefix of folders to list
     pub prefix: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCryptGrantCmd {
+    /// Asset to add key to
+    pub asset_name: String,
+    /// Recipient to give decryption ability to
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCryptRevokeCmd {
+    /// Asset to remove key from
+    pub asset_name: String,
+    /// Recipient to remove decryption key
+    pub recipient: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetCryptRecipientsCmd {
+    /// Asset to list keys
+    pub asset_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1709,21 +1758,34 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "asset-acl-set" => {
             let principal = parse_principal(r.arg(1))
                 .ok_or_else(|| r.bad_value(1, "expected `everyone` or `user:<username>`"))?;
-            let (effect, permission) = parse_ace(r.arg(2)).ok_or_else(|| {
-                r.bad_value(
-                    2,
-                    "expected <effect>:<permission>, e.g. allow:read-data \
-                     (effect: allow|deny|inherit, permission: \
-                     read-data|read-revisions|write-data|push-data)",
-                )
-            })?;
+            let mut settings = HashMap::new();
+            for ace_arg in r.take_rest(2) {
+                let (effect, permission) = parse_ace(&ace_arg).ok_or_else(|| {
+                    r.bad_value(
+                        2,
+                        "expected <effect>:<permission>, e.g. allow:read-data \
+                        (effect: allow|deny|inherit, permission: \
+                        read-data|read-revisions|write-data|push-data)",
+                    )
+                })?;
+                settings.insert(permission, effect);
+            }
+
             Cmd::AssetAclSet(AssetAclSetCmd {
                 asset_name: r.take(0),
                 ace_principal: principal,
-                ace_permission: permission,
-                ace_effect: effect,
+                settings,
             })
         }
+        "asset-share" => Cmd::AssetShare(AssetShareCmd {
+            asset_name: r.take(0),
+            recipient: r.take(1),
+            write: r.arg(2) == "write",
+        }),
+        "asset-unshare" => Cmd::AssetUnshare(AssetUnshareCmd {
+            asset_name: r.take(0),
+            recipient: r.take(1),
+        }),
         "asset-md-get" => Cmd::AssetMdGet(AssetMdGetCmd {
             asset_name: r.take(0),
         }),
@@ -1755,6 +1817,17 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         "asset-pools" => Cmd::AssetPools,
         "asset-pool-new" => Cmd::AssetPoolNew(AssetPoolNewCmd {
             usernames: r.take_rest(0),
+        }),
+        "asset-crypt-grant" => Cmd::AssetCryptGrant(AssetCryptGrantCmd {
+            asset_name: r.take(0),
+            recipient: r.take(1),
+        }),
+        "asset-crypt-revoke" => Cmd::AssetCryptRevoke(AssetCryptRevokeCmd {
+            asset_name: r.take(0),
+            recipient: r.take(1),
+        }),
+        "asset-crypt-recipients" => Cmd::AssetCryptRecipients(AssetCryptRecipientsCmd {
+            asset_name: r.take(0),
         }),
         "asset-crypt-setup" => Cmd::AssetCryptSetup,
         "asset-crypt-lock" => Cmd::AssetCryptLock(AssetCryptLockCmd {
