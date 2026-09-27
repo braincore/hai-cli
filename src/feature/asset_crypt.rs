@@ -951,12 +951,37 @@ impl AssetKeyMaterial {
     }
 
     /// Add a new recipient to this shared key material.
-    #[allow(dead_code)]
-    pub fn add_recipient(&mut self, enc_key_info: EncryptKeyInfo) -> Result<(), String> {
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if the (recipient, key_id) was added, `Ok(false)` if the
+    /// (recipient, key_id) already exists.
+    pub fn add_recipient(&mut self, enc_key_info: EncryptKeyInfo) -> Result<bool, String> {
+        for locked in &self.locked_akms {
+            if locked.recipient == enc_key_info.recipient
+                && locked.enc_key_id == enc_key_info.enc_key_id
+            {
+                return Ok(false);
+            }
+        }
         let locked =
             LockedAssetKeyMaterial::new(enc_key_info, &self.unlocked_akm.sym_key_info.aes_key)?;
         self.locked_akms.push(locked);
-        Ok(())
+        Ok(true)
+    }
+
+    /// Remove a recipient from this shared key material.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(true)` if at least one entry for recipient (multiple key_ids
+    /// possible) was removed. `Ok(false)` if there were no entries for that
+    /// recipient.
+    pub fn remove_recipient(&mut self, recipient: &KeyRecipient) -> Result<bool, String> {
+        let before_len = self.locked_akms.len();
+        self.locked_akms
+            .retain(|locked| &locked.recipient != recipient);
+        Ok(before_len != self.locked_akms.len())
     }
 
     /// Get all recipient key infos for metadata serialization.
@@ -1042,6 +1067,33 @@ impl AssetKeyMaterial {
             sym_key_info,
             current_enc_key_info,
         )
+    }
+
+    pub fn get_locked_akms_from_metadata_json(
+        md_json: &serde_json::Value,
+    ) -> Result<Option<Vec<LockedAssetKeyMaterial>>, String> {
+        let Ok(enc_keys) = md_json
+            .get("encrypted")
+            .and_then(|e| e.get("keys"))
+            .and_then(|k| k.as_array())
+            .ok_or("No encrypted.keys array")
+        else {
+            return Ok(None);
+        };
+        let mut recipients = Vec::new();
+        for entry in enc_keys {
+            recipients.push(LockedAssetKeyMaterial::from_metadata_entry(entry)?);
+        }
+        Ok(Some(recipients))
+    }
+
+    pub fn get_locked_akms_from_metadata_contents(
+        md_contents: &[u8],
+    ) -> Result<Option<Vec<LockedAssetKeyMaterial>>, String> {
+        let md_json =
+            serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(md_contents))
+                .map_err(|e| format!("Failed to parse metadata: {}", e))?;
+        Self::get_locked_akms_from_metadata_json(&md_json)
     }
 }
 

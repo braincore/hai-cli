@@ -1722,12 +1722,39 @@ pub static REGISTRY: &[Entry] = &[
                 arg_doc(
                     "ace",
                     Text,
-                    Required,
+                    Repeated { at_least: 1 },
                     "`<effect>:<permission>` where effect is allow|deny|inherit and \
                      permission is read-data|read-revisions|write-data|push-data",
                 ),
             ]),
             Doc::new("Change the ACL on an asset"),
+        )
+        .with_traits(Traits::NONE.assets()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("asset-share"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+                arg("username", Text, Required),
+                arg("perm", Enum(&["read", "write"]), Required),
+            ]),
+            Doc::new("Share an asset (ACL + encryption key)"),
+        )
+        .with_traits(Traits::NONE.assets()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("asset-unshare"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+                arg("username", Text, Required),
+            ]),
+            Doc::new("Unshare an asset"),
         )
         .with_traits(Traits::NONE.assets()),
     ),
@@ -1877,6 +1904,44 @@ pub static REGISTRY: &[Entry] = &[
         )
         .for_audience(Audience::Both)
         .with_traits(Traits::NONE.net().account()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("asset-crypt-grant"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+                arg("username", Text, Required),
+            ]),
+            Doc::new("Grant a user the ability to decrypt an asset (does not change ACL)"),
+        )
+        .with_traits(Traits::NONE.assets()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("asset-crypt-revoke"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+                arg("username", Text, Required),
+            ]),
+            Doc::new("Remove a user's decryption key for an asset (does not change ACL)"),
+        )
+        .with_traits(Traits::NONE.assets()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("asset-crypt-recipients"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+            ]),
+            Doc::new("List users who hold a decryption key for an asset"),
+        )
+        .with_traits(Traits::NONE.assets()),
     ),
     Entry::Cmd(
         cmd(

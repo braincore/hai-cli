@@ -208,9 +208,6 @@ impl ProcessCmdResult {
         self
     }
 
-    // TODO: Proof-of-concept. Have not integrated with_error() throughout
-    // codebase so error cascading is also theoretical at this point.
-    #[allow(dead_code)]
     pub fn with_error(mut self, error: bool) -> Self {
         self.error = error;
         self
@@ -4698,12 +4695,11 @@ pub async fn process_cmd(
         cmd::Cmd::AssetAclSet(cmd::AssetAclSetCmd {
             asset_name,
             ace_principal,
-            ace_permission,
-            ace_effect,
+            settings,
         }) => {
             if session.account.is_none() {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
-                return ProcessCmdResult::loop_next();
+                return ProcessCmdResult::loop_next().with_error(true);
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
             use api::types::asset::{
@@ -4715,41 +4711,109 @@ pub async fn process_cmd(
                 }
                 cmd::AssetAcePrincipal::Everyone => AssetAcePrincipal::Everyone,
             };
-            let api_ace_effect = match ace_effect {
-                cmd::AssetAceEffect::Allow => AceEffectSet::Allow,
-                cmd::AssetAceEffect::Deny => AceEffectSet::Deny,
-                cmd::AssetAceEffect::Inherit => AceEffectSet::Inherit,
-            };
-            let _ = api_client
+            fn get_api_ace_effect(ace_effect: &cmd::AssetAceEffect) -> AceEffectSet {
+                match ace_effect {
+                    cmd::AssetAceEffect::Allow => AceEffectSet::Allow,
+                    cmd::AssetAceEffect::Deny => AceEffectSet::Deny,
+                    cmd::AssetAceEffect::Inherit => AceEffectSet::Inherit,
+                }
+            }
+            match api_client
                 .asset_entry_acl_set(AssetEntryAclSetArg {
                     entry_ref: EntryRef::Name(asset_name.to_owned()),
                     principal: api_ace_principal,
-                    read_data: if matches!(ace_permission, cmd::AssetAcePermission::ReadData) {
-                        Some(api_ace_effect.clone())
+                    read_data: if let Some(ace_effect) =
+                        settings.get(&cmd::AssetAcePermission::ReadData)
+                    {
+                        Some(get_api_ace_effect(ace_effect))
                     } else {
                         None
                     },
-                    read_revisions: if matches!(
-                        ace_permission,
-                        cmd::AssetAcePermission::ReadRevisions
-                    ) {
-                        Some(api_ace_effect.clone())
+                    read_revisions: if let Some(ace_effect) =
+                        settings.get(&cmd::AssetAcePermission::ReadRevisions)
+                    {
+                        Some(get_api_ace_effect(ace_effect))
                     } else {
                         None
                     },
-                    write_data: if matches!(ace_permission, cmd::AssetAcePermission::WriteData) {
-                        Some(api_ace_effect.clone())
+                    write_data: if let Some(ace_effect) =
+                        settings.get(&cmd::AssetAcePermission::WriteData)
+                    {
+                        Some(get_api_ace_effect(ace_effect))
                     } else {
                         None
                     },
-                    push_data: if matches!(ace_permission, cmd::AssetAcePermission::PushData) {
-                        Some(api_ace_effect.clone())
+                    push_data: if let Some(ace_effect) =
+                        settings.get(&cmd::AssetAcePermission::PushData)
+                    {
+                        Some(get_api_ace_effect(ace_effect))
                     } else {
                         None
                     },
                 })
-                .await;
+                .await
+            {
+                Ok(_) => ProcessCmdResult::loop_next(),
+                Err(e) => {
+                    errorln!(io, "could not set acl: {}", e);
+                    ProcessCmdResult::loop_next().with_error(true)
+                }
+            }
+        }
+        cmd::Cmd::AssetShare(cmd::AssetShareCmd {
+            asset_name,
+            recipient,
+            write,
+        }) => {
+            let principal = if recipient.contains(":") {
+                recipient.clone()
+            } else {
+                format!("user:{}", recipient)
+            };
+            let ace = if write {
+                "allow:read-data allow:read-revisions allow:write-data allow:push-data"
+            } else {
+                "allow:read-data allow:read-revisions"
+            };
             ProcessCmdResult::loop_next()
+                .with_new_cmds(vec![
+                    session::CmdInput {
+                        input: format!("/asset-crypt-grant '{}' {}", asset_name, recipient),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    },
+                    session::CmdInput {
+                        input: format!("/asset-acl-set '{}' {} {}", asset_name, principal, ace,),
+                        source: session::CmdSource::Internal(false),
+                        reply_channel: None,
+                    },
+                ])
+                .with_new_cmds_cascade_error(true)
+        }
+        cmd::Cmd::AssetUnshare(cmd::AssetUnshareCmd {
+            asset_name,
+            recipient,
+        }) => {
+            let principal = if recipient.contains(":") {
+                recipient.clone()
+            } else {
+                format!("user:{}", recipient)
+            };
+            ProcessCmdResult::loop_next().with_new_cmds(vec![
+                session::CmdInput {
+                    input: format!("/asset-crypt-revoke '{}' {}", asset_name, recipient),
+                    source: session::CmdSource::Internal(false),
+                    reply_channel: None,
+                },
+                session::CmdInput {
+                    input: format!(
+                        "/asset-acl-set '{}' {} inherit:read-data inherit:read-revisions inherit:write-data inherit:push-data",
+                        asset_name, principal
+                    ),
+                    source: session::CmdSource::Internal(false),
+                    reply_channel: None,
+                },
+            ]).with_new_cmds_cascade_error(true)
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
@@ -5052,6 +5116,252 @@ pub async fn process_cmd(
                 }
                 Err(e) => {
                     errorln!(io, "failed to list folders: {}", e);
+                }
+            }
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::AssetCryptGrant(cmd::AssetCryptGrantCmd {
+            asset_name,
+            recipient,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+
+            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
+            };
+            if let Some(md_contents) = md_contents.as_ref() {
+                let mut akm_info = match asset_crypt::extract_akm_from_metadata(
+                    io,
+                    asset_blob_cache.clone(),
+                    session.asset_keyring.clone(),
+                    api_client.clone(),
+                    Some(&KeyRecipient::User(username.clone())),
+                    Some(md_contents),
+                )
+                .await
+                {
+                    Ok(akm) => akm,
+                    Err(e) => {
+                        errorln!(io, "{}", e);
+                        return ProcessCmdResult::loop_next().with_error(true);
+                    }
+                };
+
+                if let Some(akm_info) = akm_info.as_mut() {
+                    // If there is encryption, add new username's key
+                    let enc_key_info = match asset_crypt::get_encryption_key(
+                        asset_blob_cache.clone(),
+                        &api_client,
+                        &KeyRecipient::User(recipient.clone()),
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(Some(enc_key)) => enc_key,
+                        Ok(None) => {
+                            errorln!(io, "Encryption key not found for user: {}", username);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                        Err(e) => {
+                            errorln!(io, "Failed to get encryption key: {}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    };
+                    match akm_info.add_recipient(enc_key_info) {
+                        Ok(true) => {
+                            let contents = String::from_utf8_lossy(&md_contents);
+                            let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata");
+                            let encrypted_key = akm_info.to_encrypted_metadata_json();
+                            if let Some(obj) = md_json.as_object_mut() {
+                                obj.insert("encrypted".to_string(), encrypted_key);
+                            } else {
+                                errorln!(io, "metadata is not a JSON object");
+                                return ProcessCmdResult::loop_next().with_error(true);
+                            }
+                            let md_contents_updated = serde_json::json!(md_json).to_string();
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: md_contents_updated,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    errorln!(io, "could not update metadata: {}", e);
+                                    return ProcessCmdResult::loop_next().with_error(true);
+                                }
+                            };
+                        }
+                        Ok(false) => {
+                            // If key already present, no-op, but continue to
+                            // set acl.
+                        }
+                        Err(e) => {
+                            errorln!(io, "Failed to add recipient: {}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    }
+                }
+            }
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::AssetCryptRevoke(cmd::AssetCryptRevokeCmd {
+            asset_name,
+            recipient,
+        }) => {
+            let username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+
+            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
+            };
+            if let Some(md_contents) = md_contents.as_ref() {
+                let mut akm_info = match asset_crypt::extract_akm_from_metadata(
+                    io,
+                    asset_blob_cache.clone(),
+                    session.asset_keyring.clone(),
+                    api_client.clone(),
+                    Some(&KeyRecipient::User(username.clone())),
+                    Some(md_contents),
+                )
+                .await
+                {
+                    Ok(akm) => akm,
+                    Err(e) => {
+                        errorln!(io, "{}", e);
+                        return ProcessCmdResult::loop_next().with_error(true);
+                    }
+                };
+
+                if let Some(akm_info) = akm_info.as_mut() {
+                    match akm_info.remove_recipient(&KeyRecipient::User(recipient.clone())) {
+                        Ok(true) => {
+                            let contents = String::from_utf8_lossy(&md_contents);
+                            let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata");
+                            let encrypted_key = akm_info.to_encrypted_metadata_json();
+                            if let Some(obj) = md_json.as_object_mut() {
+                                obj.insert("encrypted".to_string(), encrypted_key);
+                            } else {
+                                errorln!(io, "metadata is not a JSON object");
+                                return ProcessCmdResult::loop_next().with_error(true);
+                            }
+                            let md_contents_updated = serde_json::json!(md_json).to_string();
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: md_contents_updated,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    errorln!(io, "could not update metadata: {}", e);
+                                    return ProcessCmdResult::loop_next().with_error(true);
+                                }
+                            };
+                        }
+                        Ok(false) => {
+                            // If key already absent, no-op, but continue to
+                            // set acl.
+                        }
+                        Err(e) => {
+                            errorln!(io, "Failed to add recipient: {}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    }
+                }
+            }
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::AssetCryptRecipients(cmd::AssetCryptRecipientsCmd { asset_name }) => {
+            let _username = if let Some(account) = session.account.as_ref() {
+                account.username.clone()
+            } else {
+                errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
+                return ProcessCmdResult::loop_next();
+            };
+            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+
+            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            };
+            if let Some(md_contents) = md_contents.as_ref() {
+                match asset_crypt::AssetKeyMaterial::get_locked_akms_from_metadata_contents(
+                    md_contents,
+                ) {
+                    Ok(Some(locked_akms)) => {
+                        for locked_akm in locked_akms {
+                            match locked_akm.recipient {
+                                asset_crypt::KeyRecipient::User(username) => {
+                                    outln!(io, "user: {}: {}", username, locked_akm.enc_key_id);
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        outln!(
+                            io,
+                            "asset not encrypted (or missing encrypted metadata key)"
+                        );
+                    }
+                    Err(e) => {
+                        errorln!(io, "{}", e);
+                    }
                 }
             }
             ProcessCmdResult::loop_next()

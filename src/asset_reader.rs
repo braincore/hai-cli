@@ -23,10 +23,13 @@ use crate::{asset_helper, crypt};
 
 // --
 
+#[derive(Debug)]
 pub enum GetAssetError {
     BadName,
     DataFetchFailed(DataFetchFailure),
 }
+
+impl std::error::Error for GetAssetError {}
 
 impl std::fmt::Display for GetAssetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -37,11 +40,14 @@ impl std::fmt::Display for GetAssetError {
     }
 }
 
+#[derive(Debug)]
 pub enum DataFetchFailure {
     Unexpected,
     Retryable,
     RateLimited,
 }
+
+impl std::error::Error for DataFetchFailure {}
 
 impl std::fmt::Display for DataFetchFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1081,7 +1087,8 @@ pub async fn fetch_assets_from_names_in_memory_extended(
 
     // Collect unique assets to process
     let mut seen_assets: HashSet<String> = HashSet::new();
-    let mut assets_to_fetch: Vec<AssetEntry> = Vec::new();
+    // (asset ref, entry)
+    let mut assets_to_fetch: Vec<(String, AssetEntry)> = Vec::new();
     let mut assets_skipped_content_restrictions = Vec::new();
     let mut assets_skipped_folders = Vec::new();
 
@@ -1114,7 +1121,10 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                         continue;
                     }
                     seen_assets.insert(matched_asset_entry.name.clone());
-                    assets_to_fetch.push(matched_asset_entry.clone());
+                    assets_to_fetch.push((
+                        matched_asset_entry.name.clone(),
+                        matched_asset_entry.clone(),
+                    ));
                 }
 
                 expanded_globs.insert(
@@ -1136,7 +1146,7 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                         } else if matches!(get_res.entry.asset.kind, AssetKind::Folder) {
                             assets_skipped_folders.push(get_res.entry.name.clone());
                         } else {
-                            assets_to_fetch.push(get_res.entry);
+                            assets_to_fetch.push((asset_ref.clone(), get_res.entry));
                         }
                     }
                     Err(e) => {
@@ -1201,13 +1211,14 @@ pub struct AssetDownloadResult {
 pub type AssetExtendedDownloadMap =
     HashMap<String, Result<AssetDownloadResult, DownloadAssetError>>;
 
-// Internal enum to track what kind of download completed
+#[derive(Debug)]
+/// Internal enum to track what kind of download completed
 enum DownloadKind {
-    Data(String),     // asset name
-    Metadata(String), // asset name
+    Data(String),     // asset entry_id
+    Metadata(String), // asset entry_id
 }
 
-// Internal accumulator for a single asset's in-flight results
+/// Internal accumulator for a single asset's in-flight results
 struct PendingAsset {
     asset_entry: AssetEntry,
     data: Option<Result<Vec<u8>, DownloadAssetError>>,
@@ -1216,7 +1227,7 @@ struct PendingAsset {
 
 async fn download_assets_extended_parallel_in_memory(
     asset_blob_cache: Arc<AssetBlobCache>,
-    asset_entries: &[AssetEntry],
+    asset_entries: &[(String, AssetEntry)],
     max_concurrent_downloads: usize,
     download_metadata: bool,
 ) -> Result<AssetExtendedDownloadMap, String> {
@@ -1224,13 +1235,14 @@ async fn download_assets_extended_parallel_in_memory(
 
     let mut handles = Vec::new();
 
-    for asset_entry in asset_entries {
+    for (asset_ref, asset_entry) in asset_entries {
         // Spawn data download
         if let Some(data_url) = asset_entry.asset.url.as_ref()
             && let Some(hash) = asset_entry.asset.hash.as_ref()
         {
             let sem_clone = Arc::clone(&semaphore);
-            let name = asset_entry.name.clone();
+            let asset_ref_clone = asset_ref.clone();
+            let entry_id = asset_entry.entry_id.clone();
             let data_url_clone = data_url.clone();
             let hash_clone = hash.clone();
             let cache_clone = asset_blob_cache.clone();
@@ -1238,7 +1250,8 @@ async fn download_assets_extended_parallel_in_memory(
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 (
-                    DownloadKind::Data(name),
+                    asset_ref_clone,
+                    DownloadKind::Data(entry_id),
                     cache_clone
                         .get_or_download(&data_url_clone, &hash_clone)
                         .await,
@@ -1256,7 +1269,8 @@ async fn download_assets_extended_parallel_in_memory(
             }) = asset_entry.metadata.as_ref()
         {
             let sem_clone = Arc::clone(&semaphore);
-            let name = asset_entry.name.clone();
+            let asset_ref_clone = asset_ref.clone();
+            let entry_id = asset_entry.entry_id.clone();
             let metadata_url_clone = metadata_url.clone();
             let metadata_hash_clone = metadata_hash.clone();
             let cache_clone = asset_blob_cache.clone();
@@ -1264,7 +1278,8 @@ async fn download_assets_extended_parallel_in_memory(
             let handle = tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 (
-                    DownloadKind::Metadata(name),
+                    asset_ref_clone,
+                    DownloadKind::Metadata(entry_id),
                     cache_clone
                         .get_or_download(&metadata_url_clone, &metadata_hash_clone)
                         .await,
@@ -1280,10 +1295,10 @@ async fn download_assets_extended_parallel_in_memory(
     let mut intermediate: HashMap<String, PendingAsset> = HashMap::new();
 
     // Initialize entries for all assets that have data URLs
-    for asset_entry in asset_entries {
+    for (asset_ref, asset_entry) in asset_entries {
         if asset_entry.asset.url.is_some() && asset_entry.asset.hash.is_some() {
             intermediate.insert(
-                asset_entry.name.clone(),
+                asset_ref.clone(),
                 PendingAsset {
                     asset_entry: asset_entry.clone(),
                     data: None,
@@ -1296,14 +1311,14 @@ async fn download_assets_extended_parallel_in_memory(
     // Collect results
     for result in results {
         match result {
-            Ok((kind, download_result)) => match kind {
-                DownloadKind::Data(name) => {
-                    if let Some(entry) = intermediate.get_mut(&name) {
+            Ok((asset_ref, kind, download_result)) => match kind {
+                DownloadKind::Data(_entry_id) => {
+                    if let Some(entry) = intermediate.get_mut(&asset_ref) {
                         entry.data = Some(download_result);
                     }
                 }
-                DownloadKind::Metadata(name) => {
-                    if let Some(entry) = intermediate.get_mut(&name) {
+                DownloadKind::Metadata(_entry_id) => {
+                    if let Some(entry) = intermediate.get_mut(&asset_ref) {
                         entry.metadata = Some(download_result);
                     }
                 }
@@ -1318,7 +1333,7 @@ async fn download_assets_extended_parallel_in_memory(
     let mut asset_map: AssetExtendedDownloadMap = HashMap::new();
 
     for (
-        name,
+        asset_ref,
         PendingAsset {
             asset_entry,
             data,
@@ -1350,7 +1365,7 @@ async fn download_assets_extended_parallel_in_memory(
             }
         };
 
-        asset_map.insert(name, result);
+        asset_map.insert(asset_ref, result);
     }
 
     Ok(asset_map)
