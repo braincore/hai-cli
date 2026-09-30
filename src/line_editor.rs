@@ -73,6 +73,35 @@ impl LineEditor {
             ]),
         );
 
+        //
+        // Keybindings for quickly moving between words
+        // (already works on linux, but mac has issues)
+        //
+
+        // Option+Left/Right on Mac (iTerm2 default / terminals sending CSI 1;3D)
+        insert_keybindings.add_binding(
+            KeyModifiers::ALT,
+            KeyCode::Left,
+            ReedlineEvent::Edit(vec![EditCommand::MoveWordLeft { select: false }]),
+        );
+        insert_keybindings.add_binding(
+            KeyModifiers::ALT,
+            KeyCode::Right,
+            ReedlineEvent::Edit(vec![EditCommand::MoveWordRightStart { select: false }]),
+        );
+
+        // Option+Left/Right on Terminal.app (sends ESC b / ESC f)
+        insert_keybindings.add_binding(
+            KeyModifiers::ALT,
+            KeyCode::Char('b'),
+            ReedlineEvent::Edit(vec![EditCommand::MoveWordLeft { select: false }]),
+        );
+        insert_keybindings.add_binding(
+            KeyModifiers::ALT,
+            KeyCode::Char('f'),
+            ReedlineEvent::Edit(vec![EditCommand::MoveWordRightStart { select: false }]),
+        );
+
         let mut reedline = Reedline::create().use_bracketed_paste(true);
         if !incognito {
             let history = Box::new(
