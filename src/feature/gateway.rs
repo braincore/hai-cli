@@ -152,6 +152,7 @@ impl Perm {
                     && perm.read
                     && !name.starts_with(".keys/")
                     && !name.starts_with("vault/")
+                    && !name.starts_with(".sys/hai.toml")
             }
 
             // Prefix match for write by name
@@ -160,6 +161,7 @@ impl Perm {
                     && perm.write
                     && !name.starts_with(".keys/")
                     && !name.starts_with("vault/")
+                    && !name.starts_with(".sys/hai.toml")
             }
 
             // Prefix permissions for list
