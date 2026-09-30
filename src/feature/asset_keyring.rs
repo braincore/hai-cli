@@ -60,6 +60,13 @@ impl AssetKeyring {
             keyring::set_default_credential_builder(Box::new(backend));
         }
 
+        // On macOS, gate reads of stored passwords behind Touch ID / Face ID /
+        // Apple Watch (falling back to the login password).
+        #[cfg(target_os = "macos")]
+        keyring::set_default_credential_builder(Box::new(
+            macos_biometric::BiometricMacCredentialBuilder,
+        ));
+
         // Test if keyring is available by attempting a dummy operation
         Self {
             unlocked_decrypt_keys: HashMap::new(),
@@ -552,6 +559,9 @@ impl AssetKeyring {
             self.delete_password_from_keyring(&key_id);
         }
         self.unlocked_signing_keys.clear();
+        // Also require Touch ID again on next use.
+        #[cfg(target_os = "macos")]
+        macos_biometric::clear_session();
     }
 
     /// Check if idle timeout exceeded
@@ -628,6 +638,272 @@ impl CredentialBuilderApi for FallbackCredentialBuilder {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+// --
+
+/// macOS credential store that keeps using the (legacy, file-based) login
+/// keychain via `keyring::macos`, but requires the user to authenticate with
+/// Touch ID / Face ID (or the login password as fallback) via
+/// LocalAuthentication before a stored password is released.
+///
+/// Why not the data-protection keychain with `kSecAccessControlBiometryAny`?
+/// That requires the binary to be codesigned with a `keychain-access-groups`
+/// entitlement + provisioning profile; unsigned/ad-hoc CLI builds get
+/// `errSecMissingEntitlement`. This gate is enforced by hai rather than by the
+/// Secure Enclave, but works for any build.
+///
+/// Behavior notes:
+/// - Missing entries return `NoEntry` without prompting (so the availability
+///   probe and first-time unlocks never trigger a biometric prompt).
+/// - Writes and deletes are not gated.
+/// - A successful authentication lasts for the whole boot session, across
+///   hai processes (like keyutils on Linux): a marker holding the boot
+///   session UUID is kept in the keychain (ACL'd to the hai binary like the
+///   passwords themselves). After a reboot the UUID changes and Touch ID is
+///   requested again. `SESSION_MAX_AGE` can optionally cap this.
+/// - If authentication fails/is cancelled, an error is returned, which
+///   `AssetKeyring` treats as "no stored password" and falls back to
+///   prompting for the key password.
+#[cfg(target_os = "macos")]
+mod macos_biometric {
+    use block2::RcBlock;
+    use keyring::credential::{CredentialApi, CredentialBuilderApi};
+    use keyring::macos::MacCredential;
+    use objc2::runtime::Bool;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    use std::sync::{Mutex, mpsc};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    const AUTH_REASON: &str = "unlock your hai asset encryption key";
+
+    /// Keychain account (under `KEYRING_SERVICE`) holding the boot-session
+    /// auth marker.
+    const SESSION_ACCOUNT: &str = "__local_auth_session__";
+
+    /// Optional cap on how long one authentication lasts, even within a single
+    /// boot. `None` = until reboot (matches Linux keyutils behavior).
+    const SESSION_MAX_AGE: Option<Duration> = None;
+
+    /// In-process cache of the last successful authentication.
+    static LAST_AUTH: Mutex<Option<Instant>> = Mutex::new(None);
+
+    fn la_error(msg: String) -> keyring::Error {
+        keyring::Error::NoStorageAccess(msg.into())
+    }
+
+    fn within_max_age(age: Duration) -> bool {
+        SESSION_MAX_AGE.is_none_or(|max| age < max)
+    }
+
+    /// Authenticate the device owner, reusing a success from earlier in this
+    /// process or from any hai process since the last boot.
+    fn authenticate() -> keyring::Result<()> {
+        // Holding the lock across the prompt serializes concurrent prompts.
+        let mut last = LAST_AUTH.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = *last
+            && within_max_age(t.elapsed())
+        {
+            return Ok(());
+        }
+
+        let boot_id = boot_session_id();
+        if let Some(boot_id) = &boot_id
+            && session_marker_valid(boot_id)
+        {
+            *last = Some(Instant::now());
+            return Ok(());
+        }
+
+        evaluate_device_owner_policy(AUTH_REASON)?;
+        *last = Some(Instant::now());
+        if let Some(boot_id) = &boot_id {
+            write_session_marker(boot_id);
+        }
+        Ok(())
+    }
+
+    /// Forget the boot-session authentication (in-process and persisted).
+    pub fn clear_session() {
+        *LAST_AUTH.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Ok(cred) = session_cred() {
+            let _ = cred.delete_credential();
+        }
+    }
+
+    fn session_cred() -> keyring::Result<MacCredential> {
+        MacCredential::new_with_target(None, super::KEYRING_SERVICE, SESSION_ACCOUNT)
+    }
+
+    fn now_unix_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Marker format: `v1|<boot session id>|<unix secs of auth>`
+    fn session_marker_valid(boot_id: &str) -> bool {
+        let Ok(value) = session_cred().and_then(|c| c.get_password()) else {
+            return false;
+        };
+        let mut parts = value.splitn(3, '|');
+        let (Some("v1"), Some(id), Some(ts)) = (parts.next(), parts.next(), parts.next()) else {
+            return false;
+        };
+        if id != boot_id {
+            return false;
+        }
+        let Ok(ts) = ts.parse::<u64>() else {
+            return false;
+        };
+        within_max_age(Duration::from_secs(now_unix_secs().saturating_sub(ts)))
+    }
+
+    fn write_session_marker(boot_id: &str) {
+        let value = format!("v1|{}|{}", boot_id, now_unix_secs());
+        if let Err(e) = session_cred().and_then(|c| c.set_password(&value)) {
+            tracing::debug!("error: failed to store local-auth session marker: {}", e);
+        }
+    }
+
+    /// Identifier that changes on every boot. Prefers `kern.bootsessionuuid`;
+    /// falls back to `kern.boottime`.
+    fn boot_session_id() -> Option<String> {
+        if let Some(uuid) = sysctl_string(c"kern.bootsessionuuid")
+            && !uuid.is_empty()
+        {
+            return Some(uuid);
+        }
+        let mut tv = libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        };
+        let mut size = std::mem::size_of::<libc::timeval>();
+        let rc = unsafe {
+            libc::sysctlbyname(
+                c"kern.boottime".as_ptr(),
+                &mut tv as *mut _ as *mut libc::c_void,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        (rc == 0 && tv.tv_sec != 0).then(|| format!("boottime:{}", tv.tv_sec))
+    }
+
+    fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
+        let mut buf = [0u8; 128];
+        let mut size = buf.len();
+        let rc = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_void,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        let bytes = &buf[..size.min(buf.len())];
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        Some(String::from_utf8_lossy(&bytes[..end]).trim().to_string())
+    }
+
+    fn ns_error_to_string(err: &NSError) -> String {
+        format!("{} (LAError {})", err.localizedDescription(), err.code())
+    }
+
+    /// Blocks until the user completes (or cancels) the system auth prompt.
+    fn evaluate_device_owner_policy(reason: &str) -> keyring::Result<()> {
+        // Biometrics or Apple Watch, with login-password fallback.
+        let policy = LAPolicy::DeviceOwnerAuthentication;
+        let ctx = unsafe { LAContext::new() };
+        if let Err(e) = unsafe { ctx.canEvaluatePolicy_error(policy) } {
+            return Err(la_error(format!(
+                "local authentication unavailable: {}",
+                ns_error_to_string(&e)
+            )));
+        }
+
+        let (tx, rx) = mpsc::channel::<Result<(), String>>();
+        let reply = RcBlock::new(move |ok: Bool, err: *mut NSError| {
+            let res = if ok.as_bool() {
+                Ok(())
+            } else {
+                Err(unsafe { err.as_ref() }
+                    .map(ns_error_to_string)
+                    .unwrap_or_else(|| "authentication failed".to_string()))
+            };
+            let _ = tx.send(res);
+        });
+        let reason = NSString::from_str(reason);
+        unsafe { ctx.evaluatePolicy_localizedReason_reply(policy, &reason, &reply) };
+
+        match rx.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => Err(la_error(format!("local authentication failed: {}", msg))),
+            Err(_) => Err(la_error("local authentication reply dropped".to_string())),
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct BiometricMacCredential {
+        inner: MacCredential,
+    }
+
+    impl CredentialApi for BiometricMacCredential {
+        fn set_password(&self, password: &str) -> keyring::Result<()> {
+            self.inner.set_password(password)
+        }
+
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            self.inner.set_secret(secret)
+        }
+
+        fn get_password(&self) -> keyring::Result<String> {
+            // Returns NoEntry (without prompting) if nothing is stored.
+            let password = zeroize::Zeroizing::new(self.inner.get_password()?);
+            authenticate()?;
+            Ok(password.to_string())
+        }
+
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            let secret = zeroize::Zeroizing::new(self.inner.get_secret()?);
+            authenticate()?;
+            Ok(secret.to_vec())
+        }
+
+        fn delete_credential(&self) -> keyring::Result<()> {
+            self.inner.delete_credential()
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct BiometricMacCredentialBuilder;
+
+    impl CredentialBuilderApi for BiometricMacCredentialBuilder {
+        fn build(
+            &self,
+            target: Option<&str>,
+            service: &str,
+            user: &str,
+        ) -> keyring::Result<Box<dyn CredentialApi + Send + Sync + 'static>> {
+            let inner = MacCredential::new_with_target(target, service, user)?;
+            Ok(Box::new(BiometricMacCredential { inner }))
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 }
 
