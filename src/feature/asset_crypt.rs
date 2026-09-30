@@ -2231,7 +2231,7 @@ fn parse_signer_key_id(s: &str) -> Result<(String, String), String> {
     Err(format!("Invalid signer_key_id format: {}", s))
 }
 
-///
+// --
 
 pub enum SshKeyGenerationError {
     KeyNotFound,
@@ -2366,4 +2366,174 @@ pub fn to_openssh_private_key(
     let ssh_private = PrivateKey::from(ed25519_keypair);
 
     ssh_private.to_openssh(LineEnding::LF)
+}
+
+// --
+
+#[derive(Debug)]
+pub enum AkmGrantError {
+    KeyNotFound,
+    FetchFailed,
+    MetadataUpdateFailed,
+}
+
+impl std::error::Error for AkmGrantError {}
+
+impl std::fmt::Display for AkmGrantError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AkmGrantError::KeyNotFound => write!(f, "Encryption key not found"),
+            AkmGrantError::FetchFailed => write!(f, "Failed to fetch encryption key"),
+            AkmGrantError::MetadataUpdateFailed => write!(f, "Failed to update metadata"),
+        }
+    }
+}
+
+/// # Returns
+///
+/// - `Ok(Some(String))` if the recipient was successfully added and the
+///   metadata was updated.
+/// - `Ok(None)` if encryption key wasn't added either because the asset isn't
+///   encrypted or the recipient was already added.
+/// - `Err(AkmGrantError)` if an error occurred during the process.
+pub async fn akm_grant(
+    io: &Io,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    recipient: &KeyRecipient,
+    md_contents: &[u8],
+) -> Result<Option<String>, AkmGrantError> {
+    let mut akm_info = match extract_akm_from_metadata(
+        io,
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client.clone(),
+        Some(&KeyRecipient::User(username.to_string())),
+        Some(md_contents),
+    )
+    .await
+    {
+        Ok(akm) => akm,
+        Err(e) => {
+            errorln!(io, "{}", e);
+            return Err(AkmGrantError::FetchFailed);
+        }
+    };
+
+    if let Some(akm_info) = akm_info.as_mut() {
+        // If there is encryption, add new username's key
+        let enc_key_info =
+            match get_encryption_key(asset_blob_cache.clone(), &api_client, &recipient, None).await
+            {
+                Ok(Some(enc_key)) => enc_key,
+                Ok(None) => {
+                    return Err(AkmGrantError::KeyNotFound);
+                }
+                Err(_e) => {
+                    return Err(AkmGrantError::FetchFailed);
+                }
+            };
+        match akm_info.add_recipient(enc_key_info) {
+            Ok(true) => {
+                let contents = String::from_utf8_lossy(&md_contents);
+                let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                    .expect("failed to parse metadata");
+                let encrypted_key = akm_info.to_encrypted_metadata_json();
+                if let Some(obj) = md_json.as_object_mut() {
+                    obj.insert("encrypted".to_string(), encrypted_key);
+                    Ok(Some(serde_json::json!(md_json).to_string()))
+                } else {
+                    // Unexpected
+                    Err(AkmGrantError::MetadataUpdateFailed)
+                }
+            }
+            Ok(false) => {
+                // If key already present, no-op, but continue to
+                // set acl.
+                Ok(None)
+            }
+            Err(_e) => Err(AkmGrantError::MetadataUpdateFailed),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+#[derive(Debug)]
+pub enum AkmRevokeError {
+    FetchFailed,
+    MetadataUpdateFailed,
+}
+
+impl std::error::Error for AkmRevokeError {}
+
+impl std::fmt::Display for AkmRevokeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AkmRevokeError::FetchFailed => write!(f, "Failed to fetch encryption key"),
+            AkmRevokeError::MetadataUpdateFailed => write!(f, "Failed to update metadata"),
+        }
+    }
+}
+
+/// # Returns
+///
+/// - `Ok(Some(String))` if the recipient was successfully removed and the
+///   metadata was updated.
+/// - `Ok(None)` if encryption key wasn't removed either because the asset isn't
+///   encrypted or the recipient was already removed.
+/// - `Err(AkmRevokeError)` if an error occurred during the process.
+pub async fn akm_revoke(
+    io: &Io,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    username: &str,
+    recipient: &KeyRecipient,
+    md_contents: &[u8],
+) -> Result<Option<String>, AkmRevokeError> {
+    let mut akm_info = match extract_akm_from_metadata(
+        io,
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client.clone(),
+        Some(&KeyRecipient::User(username.to_string())),
+        Some(md_contents),
+    )
+    .await
+    {
+        Ok(akm) => akm,
+        Err(e) => {
+            errorln!(io, "{}", e);
+            return Err(AkmRevokeError::FetchFailed);
+        }
+    };
+
+    if let Some(akm_info) = akm_info.as_mut() {
+        match akm_info.remove_recipient(&recipient) {
+            Ok(true) => {
+                let contents = String::from_utf8_lossy(&md_contents);
+                let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                    .expect("failed to parse metadata");
+                let encrypted_key = akm_info.to_encrypted_metadata_json();
+                if let Some(obj) = md_json.as_object_mut() {
+                    obj.insert("encrypted".to_string(), encrypted_key);
+                    Ok(Some(serde_json::json!(md_json).to_string()))
+                } else {
+                    // Unexpected
+                    Err(AkmRevokeError::MetadataUpdateFailed)
+                }
+            }
+            Ok(false) => {
+                // If key already present, no-op, but continue to
+                // set acl.
+                Ok(None)
+            }
+            Err(_e) => Err(AkmRevokeError::MetadataUpdateFailed),
+        }
+    } else {
+        Ok(None)
+    }
 }

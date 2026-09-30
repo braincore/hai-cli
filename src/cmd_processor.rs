@@ -5147,84 +5147,42 @@ pub async fn process_cmd(
                 }
             };
             if let Some(md_contents) = md_contents.as_ref() {
-                let mut akm_info = match asset_crypt::extract_akm_from_metadata(
-                    io,
+                match asset_crypt::akm_grant(
+                    &io,
                     asset_blob_cache.clone(),
                     session.asset_keyring.clone(),
-                    api_client.clone(),
-                    Some(&KeyRecipient::User(username.clone())),
-                    Some(md_contents),
+                    &api_client,
+                    &username,
+                    &KeyRecipient::User(recipient.clone()),
+                    &md_contents,
                 )
                 .await
                 {
-                    Ok(akm) => akm,
+                    Ok(Some(updated_md)) => {
+                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                        match api_client
+                            .asset_metadata_put(AssetMetadataPutArg {
+                                name: asset_name.to_string(),
+                                data: updated_md,
+                                conflict_policy: PutConflictPolicy::Override,
+                            })
+                            .await
+                        {
+                            Ok(_put_res) => {}
+                            Err(e) => {
+                                errorln!(io, "could not update metadata: {}", e);
+                                return ProcessCmdResult::loop_next().with_error(true);
+                            }
+                        };
+                    }
+                    Ok(None) => {
+                        // No update needed
+                    }
                     Err(e) => {
-                        errorln!(io, "{}", e);
+                        errorln!(io, "Failed to grant access: {:?}", e);
                         return ProcessCmdResult::loop_next().with_error(true);
                     }
                 };
-
-                if let Some(akm_info) = akm_info.as_mut() {
-                    // If there is encryption, add new username's key
-                    let enc_key_info = match asset_crypt::get_encryption_key(
-                        asset_blob_cache.clone(),
-                        &api_client,
-                        &KeyRecipient::User(recipient.clone()),
-                        None,
-                    )
-                    .await
-                    {
-                        Ok(Some(enc_key)) => enc_key,
-                        Ok(None) => {
-                            errorln!(io, "Encryption key not found for user: {}", username);
-                            return ProcessCmdResult::loop_next().with_error(true);
-                        }
-                        Err(e) => {
-                            errorln!(io, "Failed to get encryption key: {}", e);
-                            return ProcessCmdResult::loop_next().with_error(true);
-                        }
-                    };
-                    match akm_info.add_recipient(enc_key_info) {
-                        Ok(true) => {
-                            let contents = String::from_utf8_lossy(&md_contents);
-                            let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
-                                .expect("failed to parse metadata");
-                            let encrypted_key = akm_info.to_encrypted_metadata_json();
-                            if let Some(obj) = md_json.as_object_mut() {
-                                obj.insert("encrypted".to_string(), encrypted_key);
-                            } else {
-                                errorln!(io, "metadata is not a JSON object");
-                                return ProcessCmdResult::loop_next().with_error(true);
-                            }
-                            let md_contents_updated = serde_json::json!(md_json).to_string();
-                            use crate::api::types::asset::{
-                                AssetMetadataPutArg, PutConflictPolicy,
-                            };
-                            match api_client
-                                .asset_metadata_put(AssetMetadataPutArg {
-                                    name: asset_name.to_string(),
-                                    data: md_contents_updated,
-                                    conflict_policy: PutConflictPolicy::Override,
-                                })
-                                .await
-                            {
-                                Ok(_put_res) => {}
-                                Err(e) => {
-                                    errorln!(io, "could not update metadata: {}", e);
-                                    return ProcessCmdResult::loop_next().with_error(true);
-                                }
-                            };
-                        }
-                        Ok(false) => {
-                            // If key already present, no-op, but continue to
-                            // set acl.
-                        }
-                        Err(e) => {
-                            errorln!(io, "Failed to add recipient: {}", e);
-                            return ProcessCmdResult::loop_next().with_error(true);
-                        }
-                    }
-                }
             }
             ProcessCmdResult::loop_next()
         }
@@ -5255,65 +5213,42 @@ pub async fn process_cmd(
                 }
             };
             if let Some(md_contents) = md_contents.as_ref() {
-                let mut akm_info = match asset_crypt::extract_akm_from_metadata(
-                    io,
+                match asset_crypt::akm_revoke(
+                    &io,
                     asset_blob_cache.clone(),
                     session.asset_keyring.clone(),
-                    api_client.clone(),
-                    Some(&KeyRecipient::User(username.clone())),
-                    Some(md_contents),
+                    &api_client,
+                    &username,
+                    &KeyRecipient::User(recipient.clone()),
+                    &md_contents,
                 )
                 .await
                 {
-                    Ok(akm) => akm,
+                    Ok(Some(updated_md)) => {
+                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                        match api_client
+                            .asset_metadata_put(AssetMetadataPutArg {
+                                name: asset_name.to_string(),
+                                data: updated_md,
+                                conflict_policy: PutConflictPolicy::Override,
+                            })
+                            .await
+                        {
+                            Ok(_put_res) => {}
+                            Err(e) => {
+                                errorln!(io, "could not update metadata: {}", e);
+                                return ProcessCmdResult::loop_next().with_error(true);
+                            }
+                        };
+                    }
+                    Ok(None) => {
+                        // No update needed
+                    }
                     Err(e) => {
-                        errorln!(io, "{}", e);
+                        errorln!(io, "Failed to revoke access: {:?}", e);
                         return ProcessCmdResult::loop_next().with_error(true);
                     }
                 };
-
-                if let Some(akm_info) = akm_info.as_mut() {
-                    match akm_info.remove_recipient(&KeyRecipient::User(recipient.clone())) {
-                        Ok(true) => {
-                            let contents = String::from_utf8_lossy(&md_contents);
-                            let mut md_json = serde_json::from_str::<serde_json::Value>(&contents)
-                                .expect("failed to parse metadata");
-                            let encrypted_key = akm_info.to_encrypted_metadata_json();
-                            if let Some(obj) = md_json.as_object_mut() {
-                                obj.insert("encrypted".to_string(), encrypted_key);
-                            } else {
-                                errorln!(io, "metadata is not a JSON object");
-                                return ProcessCmdResult::loop_next().with_error(true);
-                            }
-                            let md_contents_updated = serde_json::json!(md_json).to_string();
-                            use crate::api::types::asset::{
-                                AssetMetadataPutArg, PutConflictPolicy,
-                            };
-                            match api_client
-                                .asset_metadata_put(AssetMetadataPutArg {
-                                    name: asset_name.to_string(),
-                                    data: md_contents_updated,
-                                    conflict_policy: PutConflictPolicy::Override,
-                                })
-                                .await
-                            {
-                                Ok(_put_res) => {}
-                                Err(e) => {
-                                    errorln!(io, "could not update metadata: {}", e);
-                                    return ProcessCmdResult::loop_next().with_error(true);
-                                }
-                            };
-                        }
-                        Ok(false) => {
-                            // If key already absent, no-op, but continue to
-                            // set acl.
-                        }
-                        Err(e) => {
-                            errorln!(io, "Failed to add recipient: {}", e);
-                            return ProcessCmdResult::loop_next().with_error(true);
-                        }
-                    }
-                }
             }
             ProcessCmdResult::loop_next()
         }

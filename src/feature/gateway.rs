@@ -2493,6 +2493,34 @@ pub enum StarredItem {
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplShareArg {
+    asset_name: String,
+    recipient: String,
+    write: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplShareError {
+    BadName,
+    KeyNotFound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplUnshareArg {
+    asset_name: String,
+    recipient: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum ReplUnshareError {
+    BadName,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: MessageContent,
@@ -3015,6 +3043,267 @@ async fn handle_client_message(
                 false,
             )
             .await;
+        }
+        "repl/share" => {
+            let Some(username) = username else {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            };
+
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let share_arg: ReplShareArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &share_arg.asset_name,
+                &perms,
+                true,
+            )
+            .await
+            {
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
+            }
+
+            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &share_arg.asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(asset_reader::GetAssetError::BadName) => {
+                    send_error_response(ws_sink, mid, RequestError::Route(ReplShareError::BadName))
+                        .await;
+                    return;
+                }
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                    return;
+                }
+            };
+            if let Some(md_contents) = md_contents.as_ref() {
+                match asset_crypt::akm_grant(
+                    &io,
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    &api_client,
+                    &username,
+                    &KeyRecipient::User(share_arg.recipient.clone()),
+                    &md_contents,
+                )
+                .await
+                {
+                    Ok(Some(updated_md)) => {
+                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                        match api_client
+                            .asset_metadata_put(AssetMetadataPutArg {
+                                name: share_arg.asset_name.to_string(),
+                                data: updated_md,
+                                conflict_policy: PutConflictPolicy::Override,
+                            })
+                            .await
+                        {
+                            Ok(_put_res) => {}
+                            Err(e) => {
+                                send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                                return;
+                            }
+                        };
+                    }
+                    Ok(None) => {
+                        // No update needed
+                    }
+                    Err(asset_crypt::AkmGrantError::KeyNotFound) => {
+                        send_error_response(
+                            ws_sink,
+                            mid,
+                            RequestError::Route(ReplShareError::KeyNotFound),
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(asset_crypt::AkmGrantError::FetchFailed) => {
+                        send_bad_gateway_error(ws_sink, mid, "Failed to grant asset key").await;
+                        return;
+                    }
+                    Err(asset_crypt::AkmGrantError::MetadataUpdateFailed) => {
+                        send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                        return;
+                    }
+                };
+            }
+            use crate::api::types::asset::{
+                AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
+            };
+            match api_client
+                .asset_entry_acl_set(AssetEntryAclSetArg {
+                    entry_ref: EntryRef::Name(share_arg.asset_name.to_owned()),
+                    principal: AssetAcePrincipal::User(share_arg.recipient.clone()),
+                    read_data: Some(AceEffectSet::Allow),
+                    read_revisions: Some(AceEffectSet::Allow),
+                    write_data: if share_arg.write {
+                        Some(AceEffectSet::Allow)
+                    } else {
+                        None
+                    },
+                    push_data: if share_arg.write {
+                        Some(AceEffectSet::Allow)
+                    } else {
+                        None
+                    },
+                })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                    return;
+                }
+            }
+            send_response::<(), ReplShareError>(ws_sink, mid, Ok(()), false).await;
+        }
+        "repl/unshare" => {
+            let Some(username) = username else {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                return;
+            };
+
+            // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+            let unshare_arg: ReplUnshareArg = match serde_json::from_str(&arg.to_string()) {
+                Ok(arg) => arg,
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                    return;
+                }
+            };
+
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &unshare_arg.asset_name,
+                &perms,
+                true,
+            )
+            .await
+            {
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
+            }
+
+            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
+                asset_blob_cache.clone(),
+                &api_client,
+                &unshare_arg.asset_name,
+                false,
+            )
+            .await
+            {
+                Ok(res) => res,
+                Err(asset_reader::GetAssetError::BadName) => {
+                    send_error_response(
+                        ws_sink,
+                        mid,
+                        RequestError::Route(ReplUnshareError::BadName),
+                    )
+                    .await;
+                    return;
+                }
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                    return;
+                }
+            };
+            if let Some(md_contents) = md_contents.as_ref() {
+                match asset_crypt::akm_revoke(
+                    &io,
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    &api_client,
+                    &username,
+                    &KeyRecipient::User(unshare_arg.recipient.clone()),
+                    &md_contents,
+                )
+                .await
+                {
+                    Ok(Some(updated_md)) => {
+                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
+                        match api_client
+                            .asset_metadata_put(AssetMetadataPutArg {
+                                name: unshare_arg.asset_name.to_string(),
+                                data: updated_md,
+                                conflict_policy: PutConflictPolicy::Override,
+                            })
+                            .await
+                        {
+                            Ok(_put_res) => {}
+                            Err(e) => {
+                                send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                                return;
+                            }
+                        };
+                    }
+                    Ok(None) => {
+                        // No update needed
+                    }
+                    Err(asset_crypt::AkmRevokeError::FetchFailed) => {
+                        send_bad_gateway_error(ws_sink, mid, "Failed to revoke asset key").await;
+                        return;
+                    }
+                    Err(asset_crypt::AkmRevokeError::MetadataUpdateFailed) => {
+                        send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                        return;
+                    }
+                };
+            }
+            use crate::api::types::asset::{
+                AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
+            };
+            match api_client
+                .asset_entry_acl_set(AssetEntryAclSetArg {
+                    entry_ref: EntryRef::Name(unshare_arg.asset_name.to_owned()),
+                    principal: AssetAcePrincipal::User(unshare_arg.recipient.clone()),
+                    read_data: Some(AceEffectSet::Inherit),
+                    read_revisions: Some(AceEffectSet::Inherit),
+                    write_data: Some(AceEffectSet::Inherit),
+                    push_data: Some(AceEffectSet::Inherit),
+                })
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                    return;
+                }
+            }
+            send_response::<(), ReplShareError>(ws_sink, mid, Ok(()), false).await;
         }
         "repl/prompt" => {
             if let Err(PermCheckError::Unauthorized) =
