@@ -167,7 +167,10 @@ struct AssetPutTextArg
 # --
 
 route replace(AssetReplaceArg, AssetReplaceResult, AssetReplaceError)
-    "Replace an asset."
+    "Replace an asset.
+
+    If replacing a log (originally created via `push`), the `conflict_policy`
+    is effectively always `reject` since logs do not support forking."
 
 struct AssetReplaceArg
     entry_id String(min_length=1)
@@ -557,6 +560,10 @@ struct AssetEntryAclGetEffectiveArg
     entry_ref EntryRef
 
 struct AssetEntryAclGetEffectiveResult
+    pool_mounted Boolean
+        "Whether the user can reference the asset by basic asset name look up
+        (not by ID). Example: false if asset is in another user's private
+        pool."
     read_data Boolean
     read_revisions Boolean
     write_data Boolean

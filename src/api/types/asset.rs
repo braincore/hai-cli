@@ -925,6 +925,9 @@ impl ::std::fmt::Display for AssetEntryAclGetEffectiveError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetEntryAclGetEffectiveResult {
+    /// Whether the user can reference the asset by basic asset name look up (not by ID). Example:
+    /// false if asset is in another user's private pool.
+    pub pool_mounted: bool,
     pub read_data: bool,
     pub read_revisions: bool,
     pub write_data: bool,
@@ -932,8 +935,15 @@ pub struct AssetEntryAclGetEffectiveResult {
 }
 
 impl AssetEntryAclGetEffectiveResult {
-    pub fn new(read_data: bool, read_revisions: bool, write_data: bool, push_data: bool) -> Self {
+    pub fn new(
+        pool_mounted: bool,
+        read_data: bool,
+        read_revisions: bool,
+        write_data: bool,
+        push_data: bool,
+    ) -> Self {
         AssetEntryAclGetEffectiveResult {
+            pool_mounted,
             read_data,
             read_revisions,
             write_data,
@@ -942,8 +952,13 @@ impl AssetEntryAclGetEffectiveResult {
     }
 }
 
-const ASSET_ENTRY_ACL_GET_EFFECTIVE_RESULT_FIELDS: &[&str] =
-    &["read_data", "read_revisions", "write_data", "push_data"];
+const ASSET_ENTRY_ACL_GET_EFFECTIVE_RESULT_FIELDS: &[&str] = &[
+    "pool_mounted",
+    "read_data",
+    "read_revisions",
+    "write_data",
+    "push_data",
+];
 impl AssetEntryAclGetEffectiveResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -955,6 +970,7 @@ impl AssetEntryAclGetEffectiveResult {
         mut map: V,
         optional: bool,
     ) -> Result<Option<AssetEntryAclGetEffectiveResult>, V::Error> {
+        let mut field_pool_mounted = None;
         let mut field_read_data = None;
         let mut field_read_revisions = None;
         let mut field_write_data = None;
@@ -963,6 +979,12 @@ impl AssetEntryAclGetEffectiveResult {
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
             match key {
+                "pool_mounted" => {
+                    if field_pool_mounted.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("pool_mounted"));
+                    }
+                    field_pool_mounted = Some(map.next_value()?);
+                }
                 "read_data" => {
                     if field_read_data.is_some() {
                         return Err(::serde::de::Error::duplicate_field("read_data"));
@@ -997,6 +1019,8 @@ impl AssetEntryAclGetEffectiveResult {
             return Ok(None);
         }
         let result = AssetEntryAclGetEffectiveResult {
+            pool_mounted: field_pool_mounted
+                .ok_or_else(|| ::serde::de::Error::missing_field("pool_mounted"))?,
             read_data: field_read_data
                 .ok_or_else(|| ::serde::de::Error::missing_field("read_data"))?,
             read_revisions: field_read_revisions
@@ -1014,6 +1038,7 @@ impl AssetEntryAclGetEffectiveResult {
         s: &mut S::SerializeStruct,
     ) -> Result<(), S::Error> {
         use serde::ser::SerializeStruct;
+        s.serialize_field("pool_mounted", &self.pool_mounted)?;
         s.serialize_field("read_data", &self.read_data)?;
         s.serialize_field("read_revisions", &self.read_revisions)?;
         s.serialize_field("write_data", &self.write_data)?;
@@ -1048,7 +1073,7 @@ impl ::serde::ser::Serialize for AssetEntryAclGetEffectiveResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveResult", 4)?;
+        let mut s = serializer.serialize_struct("AssetEntryAclGetEffectiveResult", 5)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
