@@ -380,6 +380,9 @@ route entry/search(AssetEntrySearchArg, AssetEntrySearchResult, AssetEntrySearch
 struct AssetEntrySearchArg
     q String(min_length=1, max_length=1024)
     asset_pool_path String(min_length=1)?
+        "Deprecated"
+    prefix String(min_length=1)?
+        "Replaced by "
 
 struct AssetEntrySearchResult
     semantic_matches List(AssetEntry)

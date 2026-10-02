@@ -1420,10 +1420,10 @@ pub static REGISTRY: &[Entry] = &[
         )
         .alias(&["search"])
         .with_opts(&[opt(
-            "path",
+            "prefix",
             OptType::Str,
             None,
-            "Specify the asset-pool to search",
+            "Filter results by asset name prefix",
         )])
         .with_traits(Traits::NONE.net()),
     ),

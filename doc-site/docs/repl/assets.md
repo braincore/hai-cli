@@ -314,23 +314,23 @@ Assets can be searched semantically based on their contents:
 The search is powered by embeddings on the content and the `title` metadata key
 if it's set. The latter is especially important if the content is non-unicode.
 
-To search in a different asset pool (e.g. a public asset pool), use:
+To narrow search to any path, use:
 
 ```
-/asset-search.path="<asset-pool-path>"
+/asset-search.prefix="<prefix>" <q>
 ```
 
 Examples:
 
 ```
 # Search the hai account's public assets for a changelog
-/asset-search.path="/hai" changelog
+/asset-search.prefix="/hai" changelog
 
 # Your public assets
-/asset-search.path="/<username>" <query>
+/asset-search.prefix="/<username>" <query>
 
-# Your public assets using the "//" shorthand
-/asset-search.path="//" <query>
+# Search your chats
+/asset-search.prefix="chat" <query>
 ```
 
 ## Usage with `/exec`

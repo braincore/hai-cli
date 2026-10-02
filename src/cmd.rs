@@ -626,8 +626,8 @@ pub struct AssetListCmd {
 pub struct AssetSearchCmd {
     /// The search string to use
     pub q: String,
-    /// Optional asset-pool path to search within
-    pub path: Option<String>,
+    /// Optional asset name prefix to search within
+    pub prefix: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1658,7 +1658,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             hidden: r.opts.bool("hidden"),
         }),
         "asset-search" => Cmd::AssetSearch(AssetSearchCmd {
-            path: r.opts.string("path"),
+            prefix: r.opts.string("prefix"),
             q: r.take(0),
         }),
         "asset-read" => Cmd::AssetRead(AssetReadCmd {

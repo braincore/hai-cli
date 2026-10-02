@@ -2640,7 +2640,10 @@ impl ::serde::ser::Serialize for AssetEntryOp {
 #[non_exhaustive] // structs may have more fields added in the future.
 pub struct AssetEntrySearchArg {
     pub q: String,
+    /// Deprecated
     pub asset_pool_path: Option<String>,
+    /// Replaced by
+    pub prefix: Option<String>,
 }
 
 impl AssetEntrySearchArg {
@@ -2648,6 +2651,7 @@ impl AssetEntrySearchArg {
         AssetEntrySearchArg {
             q,
             asset_pool_path: None,
+            prefix: None,
         }
     }
 
@@ -2655,9 +2659,14 @@ impl AssetEntrySearchArg {
         self.asset_pool_path = Some(value);
         self
     }
+
+    pub fn with_prefix(mut self, value: String) -> Self {
+        self.prefix = Some(value);
+        self
+    }
 }
 
-const ASSET_ENTRY_SEARCH_ARG_FIELDS: &[&str] = &["q", "asset_pool_path"];
+const ASSET_ENTRY_SEARCH_ARG_FIELDS: &[&str] = &["q", "asset_pool_path", "prefix"];
 impl AssetEntrySearchArg {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -2671,6 +2680,7 @@ impl AssetEntrySearchArg {
     ) -> Result<Option<AssetEntrySearchArg>, V::Error> {
         let mut field_q = None;
         let mut field_asset_pool_path = None;
+        let mut field_prefix = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2687,6 +2697,12 @@ impl AssetEntrySearchArg {
                     }
                     field_asset_pool_path = Some(map.next_value()?);
                 }
+                "prefix" => {
+                    if field_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("prefix"));
+                    }
+                    field_prefix = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2699,6 +2715,7 @@ impl AssetEntrySearchArg {
         let result = AssetEntrySearchArg {
             q: field_q.ok_or_else(|| ::serde::de::Error::missing_field("q"))?,
             asset_pool_path: field_asset_pool_path.and_then(Option::flatten),
+            prefix: field_prefix.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2711,6 +2728,9 @@ impl AssetEntrySearchArg {
         s.serialize_field("q", &self.q)?;
         if let Some(val) = &self.asset_pool_path {
             s.serialize_field("asset_pool_path", val)?;
+        }
+        if let Some(val) = &self.prefix {
+            s.serialize_field("prefix", val)?;
         }
         Ok(())
     }
@@ -2742,7 +2762,7 @@ impl ::serde::ser::Serialize for AssetEntrySearchArg {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntrySearchArg", 2)?;
+        let mut s = serializer.serialize_struct("AssetEntrySearchArg", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
