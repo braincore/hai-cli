@@ -4004,8 +4004,8 @@ pub async fn process_cmd(
                         }
                     };
 
-                let source_attachment_id = format!(":{}", source_asset_entry.entry_id);
-                let target_attachment_id = format!(":{}", target_asset_entry.entry_id);
+                let source_attachment_id = format!(":{}:", source_asset_entry.entry_id);
+                let target_attachment_id = format!(":{}:", target_asset_entry.entry_id);
 
                 let source_md = source_md_contents.as_ref().and_then(|md| {
                     let contents = String::from_utf8_lossy(md)
@@ -5131,59 +5131,79 @@ pub async fn process_cmd(
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next().with_error(true);
             };
-            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
 
-            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
-                asset_blob_cache.clone(),
-                &api_client,
-                &asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    errorln!(io, "{}", e);
-                    return ProcessCmdResult::loop_next().with_error(true);
-                }
-            };
-            if let Some(md_contents) = md_contents.as_ref() {
-                match asset_crypt::akm_grant(
-                    &io,
+            let anchor_asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+
+            let mut grant_tasks = vec![anchor_asset_name];
+
+            while let Some(asset_name) = grant_tasks.pop() {
+                let (md_contents, asset_entry) = match asset_reader::get_only_asset_metadata(
                     asset_blob_cache.clone(),
-                    session.asset_keyring.clone(),
                     &api_client,
-                    &username,
-                    &KeyRecipient::User(recipient.clone()),
-                    &md_contents,
+                    &asset_name,
+                    false,
                 )
                 .await
                 {
-                    Ok(Some(updated_md)) => {
-                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                        match api_client
-                            .asset_metadata_put(AssetMetadataPutArg {
-                                name: asset_name.to_string(),
-                                data: updated_md,
-                                conflict_policy: PutConflictPolicy::Override,
-                            })
-                            .await
-                        {
-                            Ok(_put_res) => {}
-                            Err(e) => {
-                                errorln!(io, "could not update metadata: {}", e);
-                                return ProcessCmdResult::loop_next().with_error(true);
-                            }
-                        };
-                    }
-                    Ok(None) => {
-                        // No update needed
-                    }
+                    Ok(res) => res,
                     Err(e) => {
-                        errorln!(io, "Failed to grant access: {:?}", e);
+                        errorln!(io, "{}", e);
                         return ProcessCmdResult::loop_next().with_error(true);
                     }
                 };
+                if let Some(md_contents) = md_contents.as_ref() {
+                    match asset_crypt::akm_grant(
+                        &io,
+                        asset_blob_cache.clone(),
+                        session.asset_keyring.clone(),
+                        &api_client,
+                        &username,
+                        &KeyRecipient::User(recipient.clone()),
+                        &md_contents,
+                    )
+                    .await
+                    {
+                        Ok(Some(updated_md)) => {
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: updated_md,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    errorln!(io, "could not update metadata: {}", e);
+                                    return ProcessCmdResult::loop_next().with_error(true);
+                                }
+                            };
+                        }
+                        Ok(None) => {
+                            // No update needed
+                        }
+                        Err(e) => {
+                            errorln!(io, "Failed to grant access: {:?}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    };
+                }
+                let asset_entry_anchor_id = format!(":{}:", asset_entry.entry_id);
+                match asset_helper::list_all_asset_entries(&api_client, &asset_entry_anchor_id)
+                    .await
+                {
+                    Ok(entries) => {
+                        for entry in entries {
+                            grant_tasks.push(entry.name.clone());
+                        }
+                    }
+                    Err(_) => {
+                        errorln!(io, "failed to list attachments for asset: {}", asset_name);
+                    }
+                }
             }
             ProcessCmdResult::loop_next()
         }
@@ -5197,59 +5217,79 @@ pub async fn process_cmd(
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next().with_error(true);
             };
-            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
 
-            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
-                asset_blob_cache.clone(),
-                &api_client,
-                &asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(e) => {
-                    errorln!(io, "{}", e);
-                    return ProcessCmdResult::loop_next().with_error(true);
-                }
-            };
-            if let Some(md_contents) = md_contents.as_ref() {
-                match asset_crypt::akm_revoke(
-                    &io,
+            let anchor_asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+
+            let mut revoke_tasks = vec![anchor_asset_name];
+
+            while let Some(asset_name) = revoke_tasks.pop() {
+                let (md_contents, asset_entry) = match asset_reader::get_only_asset_metadata(
                     asset_blob_cache.clone(),
-                    session.asset_keyring.clone(),
                     &api_client,
-                    &username,
-                    &KeyRecipient::User(recipient.clone()),
-                    &md_contents,
+                    &asset_name,
+                    false,
                 )
                 .await
                 {
-                    Ok(Some(updated_md)) => {
-                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                        match api_client
-                            .asset_metadata_put(AssetMetadataPutArg {
-                                name: asset_name.to_string(),
-                                data: updated_md,
-                                conflict_policy: PutConflictPolicy::Override,
-                            })
-                            .await
-                        {
-                            Ok(_put_res) => {}
-                            Err(e) => {
-                                errorln!(io, "could not update metadata: {}", e);
-                                return ProcessCmdResult::loop_next().with_error(true);
-                            }
-                        };
-                    }
-                    Ok(None) => {
-                        // No update needed
-                    }
+                    Ok(res) => res,
                     Err(e) => {
-                        errorln!(io, "Failed to revoke access: {:?}", e);
+                        errorln!(io, "{}", e);
                         return ProcessCmdResult::loop_next().with_error(true);
                     }
                 };
+                if let Some(md_contents) = md_contents.as_ref() {
+                    match asset_crypt::akm_revoke(
+                        &io,
+                        asset_blob_cache.clone(),
+                        session.asset_keyring.clone(),
+                        &api_client,
+                        &username,
+                        &KeyRecipient::User(recipient.clone()),
+                        &md_contents,
+                    )
+                    .await
+                    {
+                        Ok(Some(updated_md)) => {
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: updated_md,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    errorln!(io, "could not update metadata: {}", e);
+                                    return ProcessCmdResult::loop_next().with_error(true);
+                                }
+                            };
+                        }
+                        Ok(None) => {
+                            // No update needed
+                        }
+                        Err(e) => {
+                            errorln!(io, "Failed to revoke access: {:?}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    };
+                }
+                let asset_entry_anchor_id = format!(":{}:", asset_entry.entry_id);
+                match asset_helper::list_all_asset_entries(&api_client, &asset_entry_anchor_id)
+                    .await
+                {
+                    Ok(entries) => {
+                        for entry in entries {
+                            revoke_tasks.push(entry.name.clone());
+                        }
+                    }
+                    Err(_) => {
+                        errorln!(io, "failed to list attachments for asset: {}", asset_name);
+                    }
+                }
             }
             ProcessCmdResult::loop_next()
         }

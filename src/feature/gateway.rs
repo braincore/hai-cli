@@ -3083,75 +3083,104 @@ async fn handle_client_message(
                 }
             }
 
-            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
-                asset_blob_cache.clone(),
-                &api_client,
-                &share_arg.asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(asset_reader::GetAssetError::BadName) => {
-                    send_error_response(ws_sink, mid, RequestError::Route(ReplShareError::BadName))
-                        .await;
-                    return;
-                }
-                Err(e) => {
-                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
-                    return;
-                }
-            };
-            if let Some(md_contents) = md_contents.as_ref() {
-                match asset_crypt::akm_grant(
-                    &io,
+            let mut grant_tasks = vec![share_arg.asset_name.clone()];
+
+            while let Some(asset_name) = grant_tasks.pop() {
+                let (md_contents, asset_entry) = match asset_reader::get_only_asset_metadata(
                     asset_blob_cache.clone(),
-                    asset_keyring.clone(),
                     &api_client,
-                    &username,
-                    &KeyRecipient::User(share_arg.recipient.clone()),
-                    &md_contents,
+                    &asset_name,
+                    false,
                 )
                 .await
                 {
-                    Ok(Some(updated_md)) => {
-                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                        match api_client
-                            .asset_metadata_put(AssetMetadataPutArg {
-                                name: share_arg.asset_name.to_string(),
-                                data: updated_md,
-                                conflict_policy: PutConflictPolicy::Override,
-                            })
-                            .await
-                        {
-                            Ok(_put_res) => {}
-                            Err(e) => {
-                                send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
-                                return;
-                            }
-                        };
-                    }
-                    Ok(None) => {
-                        // No update needed
-                    }
-                    Err(asset_crypt::AkmGrantError::KeyNotFound) => {
+                    Ok(res) => res,
+                    Err(asset_reader::GetAssetError::BadName) => {
                         send_error_response(
                             ws_sink,
                             mid,
-                            RequestError::Route(ReplShareError::KeyNotFound),
+                            RequestError::Route(ReplShareError::BadName),
                         )
                         .await;
                         return;
                     }
-                    Err(asset_crypt::AkmGrantError::FetchFailed) => {
-                        send_bad_gateway_error(ws_sink, mid, "Failed to grant asset key").await;
-                        return;
-                    }
-                    Err(asset_crypt::AkmGrantError::MetadataUpdateFailed) => {
-                        send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                    Err(e) => {
+                        send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
                         return;
                     }
                 };
+                if let Some(md_contents) = md_contents.as_ref() {
+                    match asset_crypt::akm_grant(
+                        &io,
+                        asset_blob_cache.clone(),
+                        asset_keyring.clone(),
+                        &api_client,
+                        &username,
+                        &KeyRecipient::User(share_arg.recipient.clone()),
+                        &md_contents,
+                    )
+                    .await
+                    {
+                        Ok(Some(updated_md)) => {
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: updated_md,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                                    return;
+                                }
+                            };
+                        }
+                        Ok(None) => {
+                            // No update needed
+                        }
+                        Err(asset_crypt::AkmGrantError::KeyNotFound) => {
+                            send_error_response(
+                                ws_sink,
+                                mid,
+                                RequestError::Route(ReplShareError::KeyNotFound),
+                            )
+                            .await;
+                            return;
+                        }
+                        Err(asset_crypt::AkmGrantError::FetchFailed) => {
+                            send_bad_gateway_error(ws_sink, mid, "Failed to grant asset key").await;
+                            return;
+                        }
+                        Err(asset_crypt::AkmGrantError::MetadataUpdateFailed) => {
+                            send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                            return;
+                        }
+                    };
+                }
+                let asset_entry_anchor_id = format!(":{}:", asset_entry.entry_id);
+                match asset_helper::list_all_asset_entries(&api_client, &asset_entry_anchor_id)
+                    .await
+                {
+                    Ok(entries) => {
+                        for entry in entries {
+                            grant_tasks.push(entry.name.clone());
+                        }
+                    }
+                    Err(_) => {
+                        send_bad_gateway_error(
+                            ws_sink,
+                            mid,
+                            "Failed to list attachments, share is incomplete",
+                        )
+                        .await;
+                        return;
+                    }
+                }
             }
             use crate::api::types::asset::{
                 AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
@@ -3218,70 +3247,96 @@ async fn handle_client_message(
                 }
             }
 
-            let (md_contents, _asset_entry) = match asset_reader::get_only_asset_metadata(
-                asset_blob_cache.clone(),
-                &api_client,
-                &unshare_arg.asset_name,
-                false,
-            )
-            .await
-            {
-                Ok(res) => res,
-                Err(asset_reader::GetAssetError::BadName) => {
-                    send_error_response(
-                        ws_sink,
-                        mid,
-                        RequestError::Route(ReplUnshareError::BadName),
-                    )
-                    .await;
-                    return;
-                }
-                Err(e) => {
-                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
-                    return;
-                }
-            };
-            if let Some(md_contents) = md_contents.as_ref() {
-                match asset_crypt::akm_revoke(
-                    &io,
+            let mut revoke_tasks = vec![unshare_arg.asset_name.clone()];
+
+            while let Some(asset_name) = revoke_tasks.pop() {
+                let (md_contents, asset_entry) = match asset_reader::get_only_asset_metadata(
                     asset_blob_cache.clone(),
-                    asset_keyring.clone(),
                     &api_client,
-                    &username,
-                    &KeyRecipient::User(unshare_arg.recipient.clone()),
-                    &md_contents,
+                    &asset_name,
+                    false,
                 )
                 .await
                 {
-                    Ok(Some(updated_md)) => {
-                        use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
-                        match api_client
-                            .asset_metadata_put(AssetMetadataPutArg {
-                                name: unshare_arg.asset_name.to_string(),
-                                data: updated_md,
-                                conflict_policy: PutConflictPolicy::Override,
-                            })
-                            .await
-                        {
-                            Ok(_put_res) => {}
-                            Err(e) => {
-                                send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
-                                return;
-                            }
-                        };
-                    }
-                    Ok(None) => {
-                        // No update needed
-                    }
-                    Err(asset_crypt::AkmRevokeError::FetchFailed) => {
-                        send_bad_gateway_error(ws_sink, mid, "Failed to revoke asset key").await;
+                    Ok(res) => res,
+                    Err(asset_reader::GetAssetError::BadName) => {
+                        send_error_response(
+                            ws_sink,
+                            mid,
+                            RequestError::Route(ReplUnshareError::BadName),
+                        )
+                        .await;
                         return;
                     }
-                    Err(asset_crypt::AkmRevokeError::MetadataUpdateFailed) => {
-                        send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                    Err(e) => {
+                        send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
                         return;
                     }
                 };
+                if let Some(md_contents) = md_contents.as_ref() {
+                    match asset_crypt::akm_revoke(
+                        &io,
+                        asset_blob_cache.clone(),
+                        asset_keyring.clone(),
+                        &api_client,
+                        &username,
+                        &KeyRecipient::User(unshare_arg.recipient.clone()),
+                        &md_contents,
+                    )
+                    .await
+                    {
+                        Ok(Some(updated_md)) => {
+                            use crate::api::types::asset::{
+                                AssetMetadataPutArg, PutConflictPolicy,
+                            };
+                            match api_client
+                                .asset_metadata_put(AssetMetadataPutArg {
+                                    name: asset_name.to_string(),
+                                    data: updated_md,
+                                    conflict_policy: PutConflictPolicy::Override,
+                                })
+                                .await
+                            {
+                                Ok(_put_res) => {}
+                                Err(e) => {
+                                    send_bad_gateway_error(ws_sink, mid, &e.to_string()).await;
+                                    return;
+                                }
+                            };
+                        }
+                        Ok(None) => {
+                            // No update needed
+                        }
+                        Err(asset_crypt::AkmRevokeError::FetchFailed) => {
+                            send_bad_gateway_error(ws_sink, mid, "Failed to revoke asset key")
+                                .await;
+                            return;
+                        }
+                        Err(asset_crypt::AkmRevokeError::MetadataUpdateFailed) => {
+                            send_bad_gateway_error(ws_sink, mid, "Metadata failed to update").await;
+                            return;
+                        }
+                    };
+                }
+                let asset_entry_anchor_id = format!(":{}:", asset_entry.entry_id);
+                match asset_helper::list_all_asset_entries(&api_client, &asset_entry_anchor_id)
+                    .await
+                {
+                    Ok(entries) => {
+                        for entry in entries {
+                            revoke_tasks.push(entry.name.clone());
+                        }
+                    }
+                    Err(_) => {
+                        send_bad_gateway_error(
+                            ws_sink,
+                            mid,
+                            "Failed to list attachments, share is incomplete",
+                        )
+                        .await;
+                        return;
+                    }
+                }
             }
             use crate::api::types::asset::{
                 AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
