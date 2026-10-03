@@ -732,7 +732,11 @@ output to that asset, making /asset-import and /asset-export unnecessary.";
 
 pub const ASSET_NAMING: &str = "\
 Asset names beginning with `/<username>` are public assets readable by anyone.
-Names beginning with `//` expand to `/<username>/`.";
+The REPL expands names beginning with `//` to `/<username>/`.
+
+Asset names can use ASCII letters, digits, `-` `_` `.` `(` `)` `/`, plus any
+non-ASCII character except whitespace and control characters. `:` is reserved
+for attachments.";
 
 pub const ATTACHMENTS_DOC: &str = "\
 Attachments are assets associated with a parent asset. An asset name containing

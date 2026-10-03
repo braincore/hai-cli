@@ -2642,7 +2642,7 @@ pub struct AssetEntrySearchArg {
     pub q: String,
     /// Deprecated
     pub asset_pool_path: Option<String>,
-    /// Replaced by
+    /// Asset name prefix to narrow search.
     pub prefix: Option<String>,
 }
 

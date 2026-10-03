@@ -14,6 +14,10 @@ To create or open an existing asset in an editor, use:
 /a <name>
 ```
 
+Asset names can use ASCII letters, digits, `-` `_` `.` `(` `)` `/`, plus any
+non-ASCII character except whitespace and control characters. Use of `:` is
+reserved for [attachments](#attachments).
+
 !!!tip "Asset names as paths"
     Asset names can mimic paths by using forward slash, e.g. `/asset a/b/c`
 

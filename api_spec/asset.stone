@@ -2,6 +2,10 @@ namespace asset
 
 import common
 
+# Asset names can use ASCII letters, digits, `-` `_` `.` `(` `)` `/`, plus any
+# non-ASCII character except whitespace and control characters. `:` is reserved
+# for attachments.
+
 # --
 
 route put(AssetPutArg, AssetPutResult, AssetPutError)
@@ -382,7 +386,7 @@ struct AssetEntrySearchArg
     asset_pool_path String(min_length=1)?
         "Deprecated"
     prefix String(min_length=1)?
-        "Replaced by "
+        "Asset name prefix to narrow search."
 
 struct AssetEntrySearchResult
     semantic_matches List(AssetEntry)
