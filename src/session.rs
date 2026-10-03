@@ -236,6 +236,8 @@ pub struct SessionState {
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
     /// Tools defined by the AI: name -> (Fn def, is task step?).
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
+    /// Custom-defined stool tools: name -> (JSON schema, tool description, is task step?).
+    pub stools: HashMap<String, (serde_json::Value, Option<String>, bool)>,
     /// Add new message if conversation has a day transition
     pub add_msg_on_new_day: bool,
     /// (Temp file for HTML output, is task step?, socket address for
@@ -342,6 +344,7 @@ impl SessionState {
             prompt_cache: false,
             temp_files: vec![],
             ai_defined_fns: HashMap::new(),
+            stools: HashMap::new(),
             add_msg_on_new_day: false,
             html_output: None,
             quick_index_vars: vec![],
@@ -431,6 +434,13 @@ impl SessionState {
         for (name, _) in removed_ai_defined_fns {
             self.cmd_registry.remove_cmd_by_name(&name);
         }
+        let removed_stools: Vec<_> = self
+            .stools
+            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_stools {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
@@ -475,6 +485,13 @@ impl SessionState {
             .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
             .collect();
         for (name, _) in removed_ai_defined_fns {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
+        let removed_stools: Vec<_> = self
+            .stools
+            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_stools {
             self.cmd_registry.remove_cmd_by_name(&name);
         }
 
@@ -533,6 +550,30 @@ impl SessionState {
         self.cmd_registry.add_cmd(
             cmd_spec,
             cmd_registry::InsertAt::AfterFamily("fn-tool".to_string()),
+        );
+    }
+
+    pub fn add_stool(
+        &mut self,
+        tool_name: &str,
+        tool_description: Option<&str>,
+        schema: serde_json::Value,
+        is_task_step: bool,
+    ) {
+        // FIXME: Check name conflict with ai-def-fn!
+        let stool_prefixed_name = format!("f_{}", tool_name);
+        self.stools.insert(
+            stool_prefixed_name.clone(),
+            (
+                schema,
+                tool_description.map(|s| s.to_string()),
+                is_task_step,
+            ),
+        );
+        let cmd_spec = cmd_registry::stool_cmd(stool_prefixed_name, "Custom defined stool");
+        self.cmd_registry.add_cmd(
+            cmd_spec,
+            cmd_registry::InsertAt::AfterFamily("stool".to_string()),
         );
     }
 

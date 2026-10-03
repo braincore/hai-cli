@@ -6104,6 +6104,49 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
+        cmd::Cmd::StoolNew(cmd::StoolNewCmd {
+            tool_name,
+            tool_description,
+            schema,
+        }) => {
+            let Some(schema) = schema else {
+                errorln!(io, "schema is required");
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+
+            // Check valid JSON
+            let Ok(schema_json) = serde_json::from_str::<serde_json::Value>(&schema) else {
+                errorln!(io, "invalid JSON: {}", schema);
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+
+            // Check valid jsonschema
+            if let Err(e) = jsonschema::meta::validate(&schema_json) {
+                errorln!(io, "not a valid JSON Schema: {}", e);
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            // Does it actually compile? (catches bad regexes, broken $refs, etc.)
+            if let Err(e) = jsonschema::validator_for(&schema_json)
+                .map_err(|e| format!("schema failed to compile: {e}"))
+            {
+                errorln!(io, "schema failed to compile: {}", e);
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            // LLM APIs require an object at the top level
+            if schema_json.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+                errorln!(
+                    io,
+                    r#"tool schemas must have "type": "object" at the top level"#
+                );
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            session.add_stool(&tool_name, tool_description.as_deref(), schema_json, false);
+
+            ProcessCmdResult::loop_next()
+        }
         cmd::Cmd::Std(std_cmd) => {
             match std_cmd {
                 cmd::StdCmd::Now => {

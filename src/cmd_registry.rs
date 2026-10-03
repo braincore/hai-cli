@@ -626,6 +626,15 @@ pub fn fn_tool_cmd(name: impl Into<Str>, summary: impl Into<Str>) -> CmdSpec {
     cmd_dyn(Slash, name, "fn-tool", FN_TOOL_ARGS, Doc::owned(summary))
 }
 
+/// All stool take a single string argument. But, the string will likely be
+/// interpreted as JSON.
+const STOOL_ARGS: &[Arg] = &[arg("arg", Text, Rest)];
+
+/// Like `cmd()` but specifically tailored to stools.
+pub fn stool_cmd(name: impl Into<Str>, summary: impl Into<Str>) -> CmdSpec {
+    cmd_dyn(Bang, name, "stool", STOOL_ARGS, Doc::owned(summary))
+}
+
 /// All MCP commands take a tool name and a JSON argument.
 const MCP_ARGS: &[Arg] = &[arg("tool_name", Text, Required), arg("arg", Json, Rest)];
 
@@ -1359,6 +1368,23 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("List all available functions"),
         )
         .for_audience(Audience::UserOnly),
+    ),
+    //
+    // Structured tools (stools)
+    //
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("stool-new"),
+            Cow::Borrowed("stool"),
+            Cow::Borrowed(&[arg("name", Text, Required),
+            arg("description", Text, RestOpt)
+            ]),
+            Doc::new("Define a new structured tool"),
+        ).with_body(Body::MultiLine {
+            name: "schema",
+            doc: "JSON schema for the structured tool",
+        }),
     ),
     //
     // Stdlib fns

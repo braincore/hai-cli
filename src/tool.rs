@@ -13,6 +13,7 @@ use crate::io::Out;
 use crate::{clipboard, session};
 use crate::{errln, outln};
 
+// FIXME: Make this about tool invocation!
 #[derive(Clone, Debug)]
 pub enum Tool {
     CopyToClipboard,
@@ -29,6 +30,7 @@ pub enum Tool {
     /// highlighting.
     ShellExecWithFile(String, Option<String>),
     ShellExecWithStdin(String),
+    Structured(String),
 }
 
 #[derive(Clone, Debug)]
@@ -59,7 +61,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::Fn(FnTool {
             kind: FnToolType::FnPy,
             name: Some(name),
-        }) => format!("fn-py(name=\"{}\")", name),
+        }) => format!("fn-py.name=\"{}\"", name),
         Tool::Fn(FnTool {
             kind: FnToolType::FnPyUv,
             name: None,
@@ -67,7 +69,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::Fn(FnTool {
             kind: FnToolType::FnPyUv,
             name: Some(name),
-        }) => format!("fn-pyuv(name=\"{}\")", name),
+        }) => format!("fn-pyuv.name=\"{}\"", name),
         Tool::Fn(FnTool {
             kind: FnToolType::FnSh,
             name: None,
@@ -75,7 +77,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::Fn(FnTool {
             kind: FnToolType::FnSh,
             name: Some(name),
-        }) => format!("fn-sh(name=\"{}\")", name),
+        }) => format!("fn-sh.name=\"{}\"", name),
         Tool::HaiRepl => "hai".to_string(),
         Tool::Html => "html".to_string(),
         Tool::ShellExecWithFile(cmd, ext) => {
@@ -87,6 +89,7 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         }
         Tool::ShellExecWithStdin(cmd) => format!("'{}'", cmd),
         Tool::ShellScriptExec => "sh".to_string(),
+        Tool::Structured(name) => format!("!s-{}", name),
     };
     let force_tool_symbol = if force_tool { "" } else { "?" };
     format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
@@ -124,6 +127,7 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::ShellExecWithFile(_, ext) => ext.to_owned(),
         Tool::ShellExecWithStdin(_) => Some("bash".to_string()),
         Tool::ShellScriptExec => Some("bash".to_string()),
+        Tool::Structured(_) => Some("json".to_string()),
     }
 }
 

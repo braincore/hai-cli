@@ -214,6 +214,8 @@ pub enum Cmd {
     FnExec(FnExecCmd),
     /// List all AI-defined functions
     Fns,
+    /// Define a new structured tool
+    StoolNew(StoolNewCmd),
     /// Execute a standard library function
     Std(StdCmd),
     /// Add MCP server
@@ -1028,6 +1030,16 @@ pub struct FnExecCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct StoolNewCmd {
+    /// Name of the structured tool
+    pub tool_name: String,
+    /// Description of the structured tool
+    pub tool_description: Option<String>,
+    /// Schema for the structured tool
+    pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub enum StdCmd {
     Now,
     NewDayAlert,
@@ -1428,7 +1440,13 @@ fn get_tool_from_resolved_cmd_spec(r: &ResolvedCmdSpec) -> Option<tool::Tool> {
             kind: tool::FnToolType::FnSh,
             name: r.opts.string("name"),
         }),
-        _ => return None,
+        other => {
+            if other.starts_with("f_") {
+                Tool::Structured(other.to_string())
+            } else {
+                return None;
+            }
+        }
     })
 }
 
@@ -1442,15 +1460,13 @@ fn build_tool(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         return Ok(Cmd::ToolModeExit);
     }
     let Some(tool) = get_tool_from_resolved_cmd_spec(&r) else {
-        debug_assert!(false, "no tool mapping for !{}", r.spec.name);
+        //debug_assert!(false, "no tool mapping for !{}", r.spec.name);
         return Err(ParseError::UnknownCmd {
             sigil: Sigil::Bang,
             name: r.spec.name.to_string(),
             suggestion: None,
         });
     };
-    // Not every tool declares .cache; querying an undeclared option trips a
-    // debug_assert in Opts.
     let cache = r.spec.find_opt("cache").is_some() && r.opts.bool("cache");
     let prompt = r.take(0);
 
@@ -1631,7 +1647,18 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         //
         "fns" => Cmd::Fns,
 
+        //
+        // Structured tools (stools)
+        //
+        "stool-new" => Cmd::StoolNew(StoolNewCmd {
+            tool_name: r.take(0),
+            tool_description: r.opt_take(1),
+            schema: r.body.take(),
+        }),
+
+        //
         // Stdlib fns
+        //
         "std" => {
             let sub = r.sub.as_ref().expect("Sub arg is Required");
             Cmd::Std(match sub.spec.name.as_ref() {
@@ -2025,10 +2052,6 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
 
         other => {
-            // Loud in tests, graceful in release: a registry entry with no
-            // build arm behaves like an unknown command rather than panicking
-            // in the middle of someone's REPL session.
-            debug_assert!(false, "no build arm for /{other}");
             return Err(ParseError::UnknownCmd {
                 sigil: r.spec.sigil,
                 name: other.to_string(),

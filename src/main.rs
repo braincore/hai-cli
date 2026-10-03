@@ -1711,6 +1711,59 @@ async fn repl(
                                     (err_text, None)
                                 }
                             }
+                        } else if let tool::Tool::Structured(name) = &tp.tool {
+                            // Validate structure
+                            if let Some((structured_tool_schema, _, _)) = session.stools.get(name) {
+                                // Perform validation or other operations with `structured_tool` here
+                                match jsonschema::validator_for(structured_tool_schema) {
+                                    Ok(validator) => {
+                                        match serde_json::from_str::<serde_json::Value>(&arg) {
+                                            Ok(mut arg_json) => {
+                                                if let Some(error) =
+                                                    validator.iter_errors(&arg_json).next()
+                                                {
+                                                    let err_text = format!(
+                                                        "Error at '{}': {}",
+                                                        error.instance_path(),
+                                                        error
+                                                    );
+                                                    errorln!(io, "{}", err_text);
+                                                    (err_text, None)
+                                                } else {
+                                                    let follow_up: Option<String> = arg_json
+                                                        .as_object_mut()
+                                                        .and_then(|o| o.remove("_continue"))
+                                                        .and_then(|v| match v {
+                                                            serde_json::Value::String(s) => Some(s),
+                                                            _ => None,
+                                                        });
+
+                                                    let fn_name = name[2..].to_string();
+                                                    let fn_arg = serde_json::to_string(&arg_json)
+                                                        .expect("failed to re-serialize");
+
+                                                    io.apply(&fn_name, &fn_arg);
+                                                    (format!("{}({})", fn_name, fn_arg), follow_up)
+                                                }
+                                            }
+                                            Err(_) => {
+                                                let err_text = format!("invalid JSON: {}", arg);
+                                                errorln!(io, "{}", err_text);
+                                                (err_text, None)
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let err_text = format!("Unexpected invalid schema: {}", e);
+                                        errorln!(io, "{}", err_text);
+                                        (err_text, None)
+                                    }
+                                }
+                            } else {
+                                let err_text = format!("Structured tool not found: {}", name);
+                                errorln!(io, "{}", err_text);
+                                (err_text, None)
+                            }
                         } else if matches!(tp.tool, tool::Tool::Html) {
                             match feature::html_tool::execute_html_tool(
                                 &mut session,
@@ -1998,6 +2051,7 @@ async fn get_tool_mode_and_tool_schema_input_tokens(
         };
         let tool_schema = tool_schema::get_tool_schema(
             &session.cmd_registry,
+            &session.stools,
             &tool_mode_cmd.tool,
             schema_key_name,
             &session.shell,
@@ -2152,6 +2206,19 @@ pub async fn prompt_ai(
                         }
                     }
                 };
+
+            let mut tool_schemas = vec![];
+            if let Some(tp) = tool_policy {
+                tool_schemas.push(tool_schema::get_tool_schema(
+                    &session.cmd_registry,
+                    &session.stools,
+                    &tp.tool,
+                    "parameters",
+                    &session.shell,
+                    tp.agentic,
+                ));
+            }
+
             openai::send_to_openai(
                 out,
                 base_url,
@@ -2160,9 +2227,8 @@ pub async fn prompt_ai(
                 config::get_ai_model_provider_name(&session.ai),
                 session.ai_temperature,
                 msg_history,
-                &session.cmd_registry,
+                &tool_schemas,
                 tool_policy.as_ref(),
-                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -2202,6 +2268,19 @@ pub async fn prompt_ai(
                 }
                 tp
             });
+
+            let mut tool_schemas = vec![];
+            if let Some(tp) = tool_policy {
+                tool_schemas.push(tool_schema::get_tool_schema(
+                    &session.cmd_registry,
+                    &session.stools,
+                    &tp.tool,
+                    "input_schema",
+                    &session.shell,
+                    tp.agentic,
+                ));
+            }
+
             anthropic::send_to_anthropic(
                 out,
                 api_url.as_deref(),
@@ -2216,9 +2295,8 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 temperature_deprecated,
                 msg_history,
-                &session.cmd_registry,
+                &tool_schemas,
                 revised_tool_policy.as_ref(),
-                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -2226,6 +2304,17 @@ pub async fn prompt_ai(
             .await
         }
         config::AiModel::Ollama(_) => {
+            let mut tool_schemas = vec![];
+            if let Some(tp) = tool_policy {
+                tool_schemas.push(tool_schema::get_tool_schema(
+                    &session.cmd_registry,
+                    &session.stools,
+                    &tp.tool,
+                    "parameters",
+                    &session.shell,
+                    tp.agentic,
+                ));
+            }
             ollama::send_to_ollama(
                 out,
                 cfg.ollama
@@ -2234,9 +2323,8 @@ pub async fn prompt_ai(
                 config::get_ai_model_provider_name(&session.ai),
                 session.ai_temperature,
                 msg_history,
-                &session.cmd_registry,
+                &tool_schemas,
                 tool_policy.as_ref(),
-                &session.shell,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,

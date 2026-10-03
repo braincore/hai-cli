@@ -387,6 +387,10 @@ impl Io {
         self.out.code_reset()
     }
 
+    pub fn apply(&self, fn_name: &str, fn_arg: &str) {
+        self.out.apply(fn_name, fn_arg);
+    }
+
     pub fn section_begin(&self, kind: SectionKind) -> SectionGuard<'_> {
         self.out.section_begin(kind)
     }
@@ -593,6 +597,9 @@ pub trait Output: Send {
     /// boundaries.
     fn push_code_reset(&mut self) {}
 
+    /// Invoke a function with the given argument.
+    fn push_apply(&mut self, _fn_name: &str, _fn_arg: &str) {}
+
     /// Beginning of a section.
     ///
     /// Can be ignored by unsophisticated backends.
@@ -736,6 +743,10 @@ pub enum Rec {
     Display {
         mime: String,
         data: String,
+    },
+    Apply {
+        fn_name: String,
+        fn_arg: String,
     },
     Input {
         text: String,
@@ -948,6 +959,17 @@ impl Out {
         self.backend.lock().unwrap().push_code_reset();
     }
 
+    pub fn apply(&self, fn_name: &str, fn_arg: &str) {
+        self.record(Rec::Apply {
+            fn_name: fn_name.to_string(),
+            fn_arg: fn_arg.to_string(),
+        });
+        if self.muted() {
+            return;
+        }
+        self.backend.lock().unwrap().push_apply(fn_name, fn_arg);
+    }
+
     //
     // Sections
     //
@@ -1100,15 +1122,16 @@ impl Out {
                 Rec::Display { data, .. } if include_display => s.push_str(data),
                 Rec::Display { .. } => {}
                 Rec::Code { text, .. } => s.push_str(text),
+                Rec::Apply { fn_name, fn_arg } => {
+                    s.push_str(fn_name);
+                    s.push('(');
+                    s.push_str(fn_arg);
+                    s.push(')');
+                    s.push('\n');
+                }
                 Rec::Input { text, .. } => {
                     s.push_str(text);
                     s.push('\n');
-                    /*if *secret {
-                        s.push_str("••••\n");
-                    } else {
-                        s.push_str(text);
-                        s.push('\n');
-                    }*/
                 }
             }
         }
@@ -1454,6 +1477,10 @@ impl Output for StdioOutput {
         }
     }
 
+    fn push_apply(&mut self, fn_name: &str, fn_arg: &str) {
+        self.push_out(&format!("{}({})", fn_name, fn_arg));
+    }
+
     fn push_terminal_transient(&mut self, s: &str) -> bool {
         if !self.terminal_capability.clone().can_cursor() {
             return false;
@@ -1516,6 +1543,7 @@ impl Output for NoopOutput {
     fn push_code(&mut self, _text: &str, _lang: Option<&str>) {}
     fn push_code_bg(&mut self, _text: &str, _lang: Option<&str>, _bg: Option<(u8, u8, u8)>) {}
     fn push_code_reset(&mut self) {}
+    fn push_apply(&mut self, _fn_name: &str, _fn_arg: &str) {}
     fn push_section_begin(&mut self, _id: SectionId, _kind: SectionKind) {}
     fn push_section_end(&mut self, _id: SectionId) {}
 

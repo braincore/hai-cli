@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 ///   powershell are rather different.
 pub fn get_tool_schema(
     cmd_registry: &cmd_registry::Registry,
+    stool_map: &std::collections::HashMap<String, (Value, Option<String>, bool)>,
     tool: &Tool,
     schema_key_name: &str,
     shell: &str,
@@ -283,6 +284,16 @@ of `cmds`.
                     },
             })
         }
+        Tool::Structured(name) => {
+            let (schema, tool_description, _) = stool_map
+                .get(name)
+                .unwrap_or_else(|| panic!("unknown structured tool: {}", name));
+            json!({
+                "name": tool_name,
+                "description": tool_description.clone().unwrap_or("".to_string()),
+                schema_key_name: schema.clone(),
+            })
+        }
     };
     if agentic {
         schema[schema_key_name]["properties"]["_continue"] = json!({
@@ -351,6 +362,7 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
         Tool::ShellScriptExec => "shell_script_exec",
+        Tool::Structured(_) => "structured",
     }
 }
 

@@ -1,10 +1,9 @@
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::get_tool_schema;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::ctrlc_handler::CtrlcHandler;
@@ -22,9 +21,8 @@ pub async fn send_to_ollama(
     model: &str,
     temperature: Option<f32>,
     history: &[chat::Message],
-    cmd_registry: &crate::cmd_registry::Registry,
+    tool_schemas: &[Value],
     tool_policy: Option<&tool::ToolPolicy>,
-    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -47,16 +45,6 @@ pub async fn send_to_ollama(
     };
 
     // Create JSON payload
-    let mut tool_schemas = vec![];
-    if let Some(tp) = tool_policy {
-        tool_schemas.push(get_tool_schema(
-            cmd_registry,
-            &tp.tool,
-            "parameters",
-            shell,
-            tp.agentic,
-        ))
-    }
     let mut request_body = if tool_schemas.is_empty() {
         json!({
             "model": model,
