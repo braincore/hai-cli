@@ -6104,6 +6104,67 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
+        cmd::Cmd::FnJson(cmd::FnJsonCmd {
+            fn_name,
+            fn_description,
+            schema,
+        }) => {
+            let Some(schema) = schema else {
+                errorln!(io, "schema is required");
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+
+            // Check valid JSON
+            let Ok(schema_json) = serde_json::from_str::<serde_json::Value>(&schema) else {
+                errorln!(io, "invalid JSON: {}", schema);
+                return ProcessCmdResult::loop_next().with_error(true);
+            };
+
+            // Check valid jsonschema
+            if let Err(e) = jsonschema::meta::validate(&schema_json) {
+                errorln!(io, "not a valid JSON Schema: {}", e);
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            // Check schema compiles
+            if let Err(e) = jsonschema::validator_for(&schema_json)
+                .map_err(|e| format!("schema failed to compile: {e}"))
+            {
+                errorln!(io, "schema failed to compile: {}", e);
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            // LLM APIs require an object at the top level
+            if schema_json.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+                errorln!(
+                    io,
+                    r#"tool schemas must have "type": "object" at the top level"#
+                );
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            let prefixed_fn_name = format!("f_{}", fn_name);
+            if session.ai_defined_fns.contains_key(&prefixed_fn_name) {
+                errorln!(
+                    io,
+                    "Function with name '{}' already exists",
+                    prefixed_fn_name
+                );
+                return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            session.add_fn_json_def(
+                &prefixed_fn_name,
+                fn_description.as_deref(),
+                schema_json,
+                false,
+            );
+
+            outln!(io, "Stored as command: /{} <arg>", prefixed_fn_name);
+            outln!(io, "Stored as tool: !{} <prompt>", prefixed_fn_name);
+
+            ProcessCmdResult::loop_next()
+        }
         cmd::Cmd::Std(std_cmd) => {
             match std_cmd {
                 cmd::StdCmd::Now => {
@@ -6153,43 +6214,68 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::FnExec(cmd::FnExecCmd { fn_name, arg }) => {
-            let ai_defined_fn =
-                if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(&fn_name) {
-                    ai_defined_fn
+            if let Some((ai_defined_fn, _)) = session.ai_defined_fns.get(&fn_name) {
+                let arg_with_default = if arg.is_empty()
+                    && matches!(
+                        ai_defined_fn.fn_tool.kind,
+                        tool::FnToolType::FnPy | tool::FnToolType::FnPyUv
+                    ) {
+                    "None".to_string()
                 } else {
-                    errorln!(io, "function '{}' is undefined", fn_name);
-                    return ProcessCmdResult::loop_next();
+                    arg.clone()
                 };
 
-            let arg_with_default = if arg.is_empty()
-                && matches!(
-                    ai_defined_fn.fn_tool.kind,
-                    tool::FnToolType::FnPy | tool::FnToolType::FnPyUv
-                ) {
-                "None".to_string()
-            } else {
-                arg.clone()
-            };
+                // Execute AI-defined tool/function
+                match tool::execute_ai_defined_tool(
+                    &io.out,
+                    &ai_defined_fn.fn_tool,
+                    &ai_defined_fn.fn_def,
+                    &arg_with_default,
+                    Some(&session.get_shell_exec_env_vars()),
+                )
+                .await
+                {
+                    Ok(_output) => {
+                        // Output is ignored since it prints via io.out already
+                        // which goes into the recorded transcript.
+                    }
+                    Err(e) => {
+                        errorln!(io, "failed to execute tool: {}", e);
+                    }
+                };
+                ProcessCmdResult::loop_next()
+            } else if let Some((fn_json_schema, _, _)) = session.fn_json_defs.get(&fn_name) {
+                // Perform validation or other operations with `structured_tool` here
+                match jsonschema::validator_for(fn_json_schema) {
+                    Ok(validator) => match serde_json::from_str::<serde_json::Value>(&arg) {
+                        Ok(arg_json) => {
+                            if let Some(error) = validator.iter_errors(&arg_json).next() {
+                                let err_text =
+                                    format!("Error at '{}': {}", error.instance_path(), error);
+                                errorln!(io, "{}", err_text);
+                            } else {
+                                let fn_name = fn_name[2..].to_string();
+                                let fn_arg = serde_json::to_string(&arg_json)
+                                    .expect("failed to re-serialize");
 
-            // Execute AI-defined tool/function
-            match tool::execute_ai_defined_tool(
-                &io.out,
-                &ai_defined_fn.fn_tool,
-                &ai_defined_fn.fn_def,
-                &arg_with_default,
-                Some(&session.get_shell_exec_env_vars()),
-            )
-            .await
-            {
-                Ok(_output) => {
-                    // Output is ignored since it prints via io.out already
-                    // which goes into the recorded transcript.
+                                io.apply(&fn_name, &fn_arg);
+                            }
+                        }
+                        Err(_) => {
+                            let err_text = format!("invalid JSON: {}", arg);
+                            errorln!(io, "{}", err_text);
+                        }
+                    },
+                    Err(e) => {
+                        let err_text = format!("Unexpected invalid schema: {}", e);
+                        errorln!(io, "{}", err_text);
+                    }
                 }
-                Err(e) => {
-                    errorln!(io, "failed to execute tool: {}", e);
-                }
-            };
-            ProcessCmdResult::loop_next()
+                ProcessCmdResult::loop_next()
+            } else {
+                errorln!(io, "function '{}' is undefined", fn_name);
+                ProcessCmdResult::loop_next().with_error(true)
+            }
         }
         cmd::Cmd::McpAdd(cmd::McpAddCmd { name, cmd }) => {
             let (mcp_service, mcp_tools) = match crate::feature::mcp::init_mcp(&io.out, &cmd).await

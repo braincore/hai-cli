@@ -18,7 +18,8 @@ pub enum Tool {
     CopyToClipboard,
     ExecPythonScript,
     ExecPythonUvScript,
-    Fn(FnTool),
+    FnDef(FnTool),
+    FnExec(String),
     HaiRepl,
     Html,
     ShellScriptExec,
@@ -52,30 +53,31 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         Tool::CopyToClipboard => "clip".to_string(),
         Tool::ExecPythonScript => "py".to_string(),
         Tool::ExecPythonUvScript => "pyuv".to_string(),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             name: None,
         }) => "fn-py".to_string(),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             name: Some(name),
-        }) => format!("fn-py(name=\"{}\")", name),
-        Tool::Fn(FnTool {
+        }) => format!("fn-py.name=\"{}\"", name),
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             name: None,
         }) => "fn-pyuv".to_string(),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             name: Some(name),
-        }) => format!("fn-pyuv(name=\"{}\")", name),
-        Tool::Fn(FnTool {
+        }) => format!("fn-pyuv.name=\"{}\"", name),
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             name: None,
         }) => "fn-sh".to_string(),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             name: Some(name),
-        }) => format!("fn-sh(name=\"{}\")", name),
+        }) => format!("fn-sh.name=\"{}\"", name),
+        Tool::FnExec(name) => format!("!f_{}", name),
         Tool::HaiRepl => "hai".to_string(),
         Tool::Html => "html".to_string(),
         Tool::ShellExecWithFile(cmd, ext) => {
@@ -105,18 +107,19 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
         Tool::CopyToClipboard => None,
         Tool::ExecPythonScript => Some("py".to_string()),
         Tool::ExecPythonUvScript => Some("py".to_string()),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             ..
         }) => Some("py".to_string()),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             ..
         }) => Some("py".to_string()),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             ..
         }) => Some("bash".to_string()),
+        Tool::FnExec(_) => Some("json".to_string()),
         Tool::HaiRepl => None,
         Tool::Html => Some("html".to_string()),
         // WARN: The work hasn't been done to ensure that syntax-highlighter

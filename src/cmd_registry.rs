@@ -626,6 +626,34 @@ pub fn fn_tool_cmd(name: impl Into<Str>, summary: impl Into<Str>) -> CmdSpec {
     cmd_dyn(Slash, name, "fn-tool", FN_TOOL_ARGS, Doc::owned(summary))
 }
 
+/// All fn-json-slash commands take a single JSON argument that must conform
+/// to its defined jsonschema.
+const FN_JSON_SLASH_ARGS: &[Arg] = &[arg("arg", Json, Rest)];
+
+/// Like `cmd()` but specifically tailored to fn-json-slash commands.
+pub fn fn_json_slash_cmd(name: impl Into<Str>, summary: impl Into<Str>) -> CmdSpec {
+    cmd_dyn(
+        Slash,
+        name,
+        "fn-tool",
+        FN_JSON_SLASH_ARGS,
+        Doc::owned(summary),
+    )
+}
+
+const FN_JSON_BANG_ARGS: &[Arg] = &[arg("prompt", Prompt, RestOpt)];
+
+/// Like `cmd()` but specifically tailored to fn-json-bang commands.
+pub fn fn_json_bang_cmd(name: impl Into<Str>, summary: impl Into<Str>) -> CmdSpec {
+    cmd_dyn(
+        Bang,
+        name,
+        "fn-tool",
+        FN_JSON_BANG_ARGS,
+        Doc::owned(summary),
+    )
+}
+
 /// All MCP commands take a tool name and a JSON argument.
 const MCP_ARGS: &[Arg] = &[arg("tool_name", Text, Required), arg("arg", Json, Rest)];
 
@@ -1303,10 +1331,10 @@ pub static REGISTRY: &[Entry] = &[
     section(
         Some("Function Tools"),
         Some(
-            "Function tools ask the AI to write a reusable function that takes a single \
-             argument. Each is assigned a name `f<index>` and invoked with `/f<index> <arg>`. \
-             For Python, <arg> must be an evaluable Python expression; for shell, a shell \
-             value or expression.",
+            "Functions can be defined in the REPL and invoked using the form `/f_<name> <arg>`. \
+             Use `/fn-*` commands to define functions. Use `!fn-*` commands to ask the AI to \
+             define the functions for you. For Python, <arg> must be an evaluable Python \
+             expression; for shell, a shell value or expression.",
         ),
         &[Anchor::Family("fn-tool")],
     ),
@@ -1316,7 +1344,7 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed("fn-py"),
             Cow::Borrowed("fn-tool"),
             Cow::Borrowed(&[arg("prompt", Prompt, Rest)]),
-            Doc::new("Ask AI to write a Python function to implement your prompt"),
+            Doc::new("Ask AI to define a Python function to implement your prompt"),
         )
         .with_opts(&[
             opt("name", OptType::Str, None, "Custom name: `/f_<name>`"),
@@ -1343,12 +1371,27 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed("fn-sh"),
             Cow::Borrowed("fn-tool"),
             Cow::Borrowed(&[arg("prompt", Prompt, Rest)]),
-            Doc::new("Ask AI to write a shell function to implement your prompt"),
+            Doc::new("Ask AI to define a shell function to implement your prompt"),
         )
         .with_opts(&[
             opt("name", OptType::Str, None, "Custom name: `/f_<name>`"),
             OPT_CACHE])
         .with_traits(Traits::NONE.exec()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("fn-json"),
+            Cow::Borrowed("fn-tool"),
+            Cow::Borrowed(&[arg("name", Text, Required),
+            arg("description", Text, RestOpt)
+            ]),
+            Doc::new("Define a function that validates a JSON object against a schema.")
+            .more("Invocations can be treated as function calls by listeners to i/o apply messages (websocket i/o)."),
+        ).with_body(Body::MultiLine {
+            name: "schema",
+            doc: "JSON schema for the structured tool",
+        }),
     ),
     Entry::Cmd(
         cmd(

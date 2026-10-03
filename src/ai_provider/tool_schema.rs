@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 ///   powershell are rather different.
 pub fn get_tool_schema(
     cmd_registry: &cmd_registry::Registry,
+    fn_json_defs: &std::collections::HashMap<String, (Value, Option<String>, bool)>,
     tool: &Tool,
     schema_key_name: &str,
     shell: &str,
@@ -79,7 +80,7 @@ If you use non-standard libraries, you must specify them with the following synt
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             ..
         }) => json!({
@@ -106,7 +107,7 @@ omitted (None) by default."#
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             ..
         }) => json!({
@@ -149,7 +150,7 @@ This is the only text allowed above the function definition.
                 "additionalProperties": false,
             },
         }),
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             ..
         }) => json!({
@@ -171,6 +172,16 @@ The script should print important values to stdout."#
                 "additionalProperties": false,
             },
         }),
+        Tool::FnExec(name) => {
+            let (schema, tool_description, _) = fn_json_defs
+                .get(name)
+                .unwrap_or_else(|| panic!("unknown structured tool: {}", name));
+            json!({
+                "name": tool_name,
+                "description": tool_description.clone().unwrap_or("".to_string()),
+                schema_key_name: schema.clone(),
+            })
+        }
         Tool::Html => json!({
             "name": tool_name,
             "description": format!("Generate HTML <body> tag (including embedded javascript/css) to implement the prompt.\nSystem = {}", system),
@@ -335,18 +346,19 @@ pub fn get_tool_name(tool: &Tool) -> &str {
         Tool::CopyToClipboard => "copy_to_clipboard",
         Tool::ExecPythonScript => "exec_python_script",
         Tool::ExecPythonUvScript => "exec_python_uv_script",
-        Tool::Fn(FnTool {
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             ..
-        }) => "fn_py",
-        Tool::Fn(FnTool {
+        }) => "fn_def_py",
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             ..
-        }) => "fn_pyuv",
-        Tool::Fn(FnTool {
+        }) => "fn_def_pyuv",
+        Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             ..
-        }) => "fn_sh",
+        }) => "fn_def_sh",
+        Tool::FnExec(_) => "fn_exec",
         Tool::Html => "html",
         Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
         Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",

@@ -71,6 +71,13 @@ impl Output for WsOutput {
         });
     }
 
+    fn push_apply(&mut self, fn_name: &str, fn_arg: &str) {
+        self.send(WsCmd::Apply {
+            fn_name: fn_name.to_string(),
+            fn_arg: fn_arg.to_string(),
+        });
+    }
+
     fn push_section_begin(&mut self, id: SectionId, kind: SectionKind) {
         self.send(WsCmd::SectionBegin { id, kind });
     }
@@ -250,6 +257,10 @@ pub enum ServerMsg {
         lang: Option<String>,
         bg: Option<(u8, u8, u8)>,
     },
+    Apply {
+        fn_name: String,
+        fn_arg: String,
+    },
 
     SectionBegin {
         id: SectionId,
@@ -407,6 +418,10 @@ pub enum WsCmd {
         text: String,
         lang: Option<String>,
         bg: Option<(u8, u8, u8)>,
+    },
+    Apply {
+        fn_name: String,
+        fn_arg: String,
     },
     SectionBegin {
         id: SectionId,
@@ -642,6 +657,9 @@ impl WsActor {
             WsCmd::Display { mime, data } => self.emit_or_buffer(ServerMsg::Display { mime, data }),
             WsCmd::Code { text, lang, bg } => {
                 self.emit_or_buffer(ServerMsg::Code { text, lang, bg })
+            }
+            WsCmd::Apply { fn_name, fn_arg } => {
+                self.emit_or_buffer(ServerMsg::Apply { fn_name, fn_arg })
             }
             WsCmd::SectionBegin { id, kind } => self.on_section_begin(id, kind),
             WsCmd::SectionEnd { id } => self.on_section_end(id),

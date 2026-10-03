@@ -1,11 +1,10 @@
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::get_tool_schema;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
@@ -57,9 +56,8 @@ pub async fn send_to_openai(
     model: &str,
     temperature: Option<f32>,
     history: &[chat::Message],
-    cmd_registry: &crate::cmd_registry::Registry,
+    tool_schemas: &[Value],
     tool_policy: Option<&tool::ToolPolicy>,
-    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -105,13 +103,6 @@ pub async fn send_to_openai(
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
         if let Some(tp) = tool_policy {
-            let tool_schemas = vec![get_tool_schema(
-                cmd_registry,
-                &tp.tool,
-                "parameters",
-                shell,
-                tp.agentic,
-            )];
             let tool_choice = if tp.force_tool { "required" } else { "auto" };
             // OpenAI has a wrapping over each tool schema.
             let function_wrappers: Vec<serde_json::Value> = tool_schemas

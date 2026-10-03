@@ -236,6 +236,8 @@ pub struct SessionState {
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
     /// Tools defined by the AI: name -> (Fn def, is task step?).
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
+    /// Custom-defined fn-json commands (arg is json, output is i/o apply).
+    pub fn_json_defs: HashMap<String, (serde_json::Value, Option<String>, bool)>,
     /// Add new message if conversation has a day transition
     pub add_msg_on_new_day: bool,
     /// (Temp file for HTML output, is task step?, socket address for
@@ -342,6 +344,7 @@ impl SessionState {
             prompt_cache: false,
             temp_files: vec![],
             ai_defined_fns: HashMap::new(),
+            fn_json_defs: HashMap::new(),
             add_msg_on_new_day: false,
             html_output: None,
             quick_index_vars: vec![],
@@ -431,6 +434,13 @@ impl SessionState {
         for (name, _) in removed_ai_defined_fns {
             self.cmd_registry.remove_cmd_by_name(&name);
         }
+        let removed_fn_json_defs: Vec<_> = self
+            .fn_json_defs
+            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_fn_json_defs {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
         self.quick_index_vars.clear();
         self.mcps
             .retain(|_, (_, is_task_step)| task_mode && *is_task_step);
@@ -475,6 +485,13 @@ impl SessionState {
             .extract_if(|_, (_, is_task_step)| !(task_mode && *is_task_step))
             .collect();
         for (name, _) in removed_ai_defined_fns {
+            self.cmd_registry.remove_cmd_by_name(&name);
+        }
+        let removed_fn_json_defs: Vec<_> = self
+            .fn_json_defs
+            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .collect();
+        for (name, _) in removed_fn_json_defs {
             self.cmd_registry.remove_cmd_by_name(&name);
         }
 
@@ -532,6 +549,38 @@ impl SessionState {
         let cmd_spec = cmd_registry::fn_tool_cmd(name.to_string(), "Custom defined function");
         self.cmd_registry.add_cmd(
             cmd_spec,
+            cmd_registry::InsertAt::AfterFamily("fn-tool".to_string()),
+        );
+    }
+
+    pub fn add_fn_json_def(
+        &mut self,
+        fn_name: &str,
+        fn_description: Option<&str>,
+        schema: serde_json::Value,
+        is_task_step: bool,
+    ) {
+        self.fn_json_defs.insert(
+            fn_name.to_string(),
+            (schema, fn_description.map(|s| s.to_string()), is_task_step),
+        );
+        let bang_cmd_summary = fn_description
+            .map(|s| s.to_string())
+            .unwrap_or("Tool for AI to invoke custom defined fn-json command".to_string());
+        let bang_cmd_spec =
+            cmd_registry::fn_json_bang_cmd(fn_name.to_string(), bang_cmd_summary.clone());
+        self.cmd_registry.add_cmd(
+            bang_cmd_spec,
+            cmd_registry::InsertAt::AfterFamily("fn-tool".to_string()),
+        );
+
+        let slash_cmd_summary = fn_description
+            .map(|s| s.to_string())
+            .unwrap_or("Custom defined fn-json command".to_string());
+        let slash_cmd_spec =
+            cmd_registry::fn_json_slash_cmd(fn_name.to_string(), slash_cmd_summary);
+        self.cmd_registry.add_cmd(
+            slash_cmd_spec,
             cmd_registry::InsertAt::AfterFamily("fn-tool".to_string()),
         );
     }

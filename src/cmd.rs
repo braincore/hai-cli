@@ -214,6 +214,8 @@ pub enum Cmd {
     FnExec(FnExecCmd),
     /// List all AI-defined functions
     Fns,
+    /// Define a new fn-json command/tool
+    FnJson(FnJsonCmd),
     /// Execute a standard library function
     Std(StdCmd),
     /// Add MCP server
@@ -1028,6 +1030,16 @@ pub struct FnExecCmd {
 }
 
 #[derive(Clone, Debug)]
+pub struct FnJsonCmd {
+    /// Name of the function
+    pub fn_name: String,
+    /// Description of the function
+    pub fn_description: Option<String>,
+    /// Schema for the function argument
+    pub schema: Option<String>,
+}
+
+#[derive(Clone, Debug)]
 pub enum StdCmd {
     Now,
     NewDayAlert,
@@ -1394,7 +1406,8 @@ fn parse_ace(s: &str) -> Option<(AssetAceEffect, AssetAcePermission)> {
     Some((effect, perm))
 }
 
-/// `/f1`, `/f_summarize`, ... — injected at runtime by the function-tool machinery.
+/// Checks for auto-assigned fn name (e.g. `/f0`) or named fn (e.g.
+/// `/f_summarize`)
 fn is_fn_cmd(name: &str) -> bool {
     name.starts_with("f_")
         || (name.len() > 1
@@ -1416,19 +1429,25 @@ fn get_tool_from_resolved_cmd_spec(r: &ResolvedCmdSpec) -> Option<tool::Tool> {
         "html" => Tool::Html,
         "hai" => Tool::HaiRepl,
         "clip" => Tool::CopyToClipboard,
-        "fn-py" => Tool::Fn(tool::FnTool {
+        "fn-py" => Tool::FnDef(tool::FnTool {
             kind: tool::FnToolType::FnPy,
             name: r.opts.string("name"),
         }),
-        "fn-pyuv" => Tool::Fn(tool::FnTool {
+        "fn-pyuv" => Tool::FnDef(tool::FnTool {
             kind: tool::FnToolType::FnPyUv,
             name: r.opts.string("name"),
         }),
-        "fn-sh" => Tool::Fn(tool::FnTool {
+        "fn-sh" => Tool::FnDef(tool::FnTool {
             kind: tool::FnToolType::FnSh,
             name: r.opts.string("name"),
         }),
-        _ => return None,
+        other => {
+            if other.starts_with("f_") {
+                Tool::FnExec(other.to_string())
+            } else {
+                return None;
+            }
+        }
     })
 }
 
@@ -1442,15 +1461,12 @@ fn build_tool(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         return Ok(Cmd::ToolModeExit);
     }
     let Some(tool) = get_tool_from_resolved_cmd_spec(&r) else {
-        debug_assert!(false, "no tool mapping for !{}", r.spec.name);
         return Err(ParseError::UnknownCmd {
             sigil: Sigil::Bang,
             name: r.spec.name.to_string(),
             suggestion: None,
         });
     };
-    // Not every tool declares .cache; querying an undeclared option trips a
-    // debug_assert in Opts.
     let cache = r.spec.find_opt("cache").is_some() && r.opts.bool("cache");
     let prompt = r.take(0);
 
@@ -1631,7 +1647,15 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         //
         "fns" => Cmd::Fns,
 
+        "fn-json" => Cmd::FnJson(FnJsonCmd {
+            fn_name: r.take(0),
+            fn_description: r.opt_take(1),
+            schema: r.body.take(),
+        }),
+
+        //
         // Stdlib fns
+        //
         "std" => {
             let sub = r.sub.as_ref().expect("Sub arg is Required");
             Cmd::Std(match sub.spec.name.as_ref() {
@@ -2025,10 +2049,6 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
 
         other => {
-            // Loud in tests, graceful in release: a registry entry with no
-            // build arm behaves like an unknown command rather than panicking
-            // in the middle of someone's REPL session.
-            debug_assert!(false, "no build arm for /{other}");
             return Err(ParseError::UnknownCmd {
                 sigil: r.spec.sigil,
                 name: other.to_string(),
@@ -2711,7 +2731,7 @@ mod tests {
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
-                    tool::Tool::Fn(tool::FnTool {
+                    tool::Tool::FnDef(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
                         name: None,
                     }),
@@ -2733,7 +2753,7 @@ mod tests {
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
-                    tool::Tool::Fn(tool::FnTool {
+                    tool::Tool::FnDef(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
                         name: None,
                     }),
@@ -2755,7 +2775,7 @@ mod tests {
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
-                    tool::Tool::Fn(tool::FnTool {
+                    tool::Tool::FnDef(tool::FnTool {
                         kind: tool::FnToolType::FnPy,
                         name: None,
                     }),

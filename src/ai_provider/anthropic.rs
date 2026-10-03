@@ -1,11 +1,11 @@
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::{get_tool_name, get_tool_schema};
+use crate::ai_provider::tool_schema::get_tool_name;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config;
@@ -103,9 +103,8 @@ pub async fn send_to_anthropic(
     temperature: Option<f32>,
     temperature_deprecated: bool,
     history: &[chat::Message],
-    cmd_registry: &crate::cmd_registry::Registry,
+    tool_schemas: &[Value],
     tool_policy: Option<&tool::ToolPolicy>,
-    shell: &str,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -154,16 +153,8 @@ pub async fn send_to_anthropic(
     }
 
     // Create the JSON payload
-    let mut tool_schemas = vec![];
     let tool_choice = if let Some(tp) = tool_policy {
         let tool_name = get_tool_name(&tp.tool);
-        tool_schemas.push(get_tool_schema(
-            cmd_registry,
-            &tp.tool,
-            "input_schema",
-            shell,
-            tp.agentic,
-        ));
         if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))
         } else {
@@ -527,6 +518,11 @@ pub async fn send_to_anthropic(
                                         // print the "begin" message.
                                     }
                                     ContentBlockType::ToolUse { id, name } => {
+                                        if !tool_calls.is_empty() {
+                                            outln!(out);
+                                            outln!(out, "‖");
+                                            outln!(out);
+                                        }
                                         tool_calls.insert(
                                             index,
                                             JsonObjectAccumulator::new(
@@ -598,12 +594,19 @@ pub async fn send_to_anthropic(
         });
     }
     if !tool_calls.is_empty() {
-        let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
-        responses.push(chat::ChatCompletionResponse::Tool {
-            tool_id: tool_call.tool_id,
-            tool_name: tool_call.tool_name,
-            arg: tool_call.buffer,
-        });
+        // Convert the map entries to a vector so we can sort them
+        let mut tool_call_entries: Vec<_> = tool_calls.into_iter().collect();
+        // Sort by key (assuming keys are integers)
+        tool_call_entries.sort_by_key(|(key, _)| *key);
+
+        // Add each tool call to responses in sorted order
+        for (_, tool_call) in tool_call_entries {
+            responses.push(chat::ChatCompletionResponse::Tool {
+                tool_id: tool_call.tool_id,
+                tool_name: tool_call.tool_name,
+                arg: tool_call.buffer,
+            });
+        }
     }
     Ok(responses)
 }
