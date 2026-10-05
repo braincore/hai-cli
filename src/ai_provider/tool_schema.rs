@@ -1,8 +1,10 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde_json::{Value, json};
+
 use crate::{
     cmd_registry, config,
     tool::{FnTool, FnToolType, Tool},
 };
-use serde_json::{Value, json};
 
 /// # Arguments
 /// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.
@@ -16,7 +18,7 @@ pub fn get_tool_schema(
     shell: &str,
     agentic: bool,
 ) -> Value {
-    let tool_name = get_tool_name(tool);
+    let tool_name = get_tool_name_for_api(tool);
     let system = config::get_machine_os_arch();
 
     let mut schema = match tool {
@@ -340,29 +342,34 @@ fn reorder_with_key_first(map: &mut serde_json::Map<String, Value>, first_key: &
     }
 }
 
-pub fn get_tool_name(tool: &Tool) -> &str {
+/// There must be a one-to-one mapping of name to tool when used with the API.
+pub fn get_tool_name_for_api(tool: &Tool) -> String {
     match tool {
-        Tool::HaiRepl => "hai_repl",
-        Tool::CopyToClipboard => "copy_to_clipboard",
-        Tool::ExecPythonScript => "exec_python_script",
-        Tool::ExecPythonUvScript => "exec_python_uv_script",
+        Tool::HaiRepl => "hai_repl".to_string(),
+        Tool::CopyToClipboard => "copy_to_clipboard".to_string(),
+        Tool::ExecPythonScript => "exec_python_script".to_string(),
+        Tool::ExecPythonUvScript => "exec_python_uv_script".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             ..
-        }) => "fn_def_py",
+        }) => "fn_def_py".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             ..
-        }) => "fn_def_pyuv",
+        }) => "fn_def_pyuv".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             ..
-        }) => "fn_def_sh",
-        Tool::FnExec(_) => "fn_exec",
-        Tool::Html => "html",
-        Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
-        Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
-        Tool::ShellScriptExec => "shell_script_exec",
+        }) => "fn_def_sh".to_string(),
+        Tool::FnExec(name) => format!("fn_exec_{}", URL_SAFE_NO_PAD.encode(name)),
+        Tool::Html => "html".to_string(),
+        Tool::ShellExecWithFile(cmd, _) => {
+            format!("shell_exec_with_file_{}", URL_SAFE_NO_PAD.encode(cmd))
+        }
+        Tool::ShellExecWithStdin(cmd) => {
+            format!("shell_exec_with_stdin_{}", URL_SAFE_NO_PAD.encode(cmd))
+        }
+        Tool::ShellScriptExec => "shell_script_exec".to_string(),
     }
 }
 

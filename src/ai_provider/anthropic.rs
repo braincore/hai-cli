@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::get_tool_name;
+use crate::ai_provider::tool_schema::get_tool_name_for_api;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config;
@@ -154,7 +154,7 @@ pub async fn send_to_anthropic(
 
     // Create the JSON payload
     let tool_choice = if let Some(tp) = tool_policy {
-        let tool_name = get_tool_name(&tp.tool);
+        let tool_name = get_tool_name_for_api(&tp.tool);
         if tp.force_tool {
             Some(json!({"type": "tool", "name": tool_name}))
         } else {

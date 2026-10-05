@@ -1554,10 +1554,15 @@ async fn repl(
             for ai_response in &ai_responses {
                 if let chat::ChatCompletionResponse::Tool {
                     tool_id,
-                    tool_name: _,
+                    tool_name,
                     arg,
                 } = &ai_response
                 {
+                    println!(
+                        "Executing tool: {} with policy {:?}",
+                        tool_name, tool_policy
+                    );
+
                     outln!(io);
                     if io.is_terminal() {
                         println!("{}", "⚙ ⚙ ⚙".white().on_black());
@@ -1647,6 +1652,10 @@ async fn repl(
                     };
 
                     if user_confirmed_tool_execute && let Some(ref tp) = tool_policy {
+                        println!(
+                            "tool_policy derived name: {:?}",
+                            tool_schema::get_tool_name_for_api(&tp.tool)
+                        );
                         // Use an AtomicBool since it's lock-free and cannot
                         // deadlock in the signal handler.
                         let interrupted = Arc::new(AtomicBool::new(false));

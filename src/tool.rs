@@ -23,7 +23,7 @@ pub enum Tool {
     HaiRepl,
     Html,
     ShellScriptExec,
-    /// (file_contents, extension)
+    /// (cmd, extension)
     /// Extension is important because some programs make decisions based on
     /// the file's extension. For example, `uv run {file}` does not execute the
     /// `file`` unless it has a .py extension. It also lets us add syntax
