@@ -4,15 +4,39 @@ Tools let the AI do more than just respond with a message.
 
 ![](../image/hai-tool.gif)
 
+## Toolbox
+
+To make tools available to the AI, add them to your toolbox using `!<tool>`.
+For example:
+
+```
+[0]: !sh
+Adding !sh to toolbox. Use `!-sh` or `!clear` to remove.
+```
+
+Later prompts will show the available tool:
+
+```
+[2] !sh: <prompt>
+```
+
+Multiple tools can be added:
+
+```
+[2] !sh: !py
+Adding !py to toolbox. Use `!-py` or `!clear` to remove.
+[4] !sh,py:
+```
+
 ## Shell tool `!sh`
 
-`!sh <prompt>` - Ask the AI to execute shell commands directly.
+`!sh` - Ask the AI to execute shell commands directly.
 
 The shell tool prompts the AI to generate a shell script to be executed on your
 machine. Both the code and the output is added to the conversation history.
 
 ```
-[0]: !sh list my home dir
+[0] !sh: list my home dir
 ```
 
 ```
@@ -30,10 +54,12 @@ Documents
 ## Require confirmation `!?`
 
 If you're worried about destructive side effects, you can require your final
-confirmation with `!?sh`.
+confirmation with `!?<tool>`.
 
 ```
-[0]: !?sh delete evidence.txt
+[0]: !?sh
+Adding !?sh to toolbox. Use `!-sh` or `!clear` to remove.
+[2]: delete evidence.txt
 ```
 
 ```
@@ -46,98 +72,36 @@ rm evidence.txt
 [QUESTION] Execute? y/[n]:
 ```
 
-## Make tool optional `?`
+## Force tool use
 
-To let the AI to decide whether to use your suggested tool, add a "?" as a
-suffix to the tool’s name.
+By default, the AI is free to decide whether to use any tool, and if so, which
+one.
 
-```
-[0]: !sh? how old is the earth?
-```
+To force the AI to use a specific tool, use the one-liner `!<tool> <prompt>`:
 
 ```
-The Earth is approximately 4.54 billion years old.
+[0]: !py add 11 + 31
 ```
 
-Note that the answer was given without invoking the shell tool.
-
-## Repeat `!`
-
-Sometimes simply asking the AI the same prompt over again helps it work through
-errors it may have encountered in script or code writing. A lone `!` in the
-REPL is a shortcut to do this. Note that the previous invocation and error is
-now in the conversation history which guides the AI to improve its answer.
+After using the tool, the tool will be added to the toolbox. To use the tool
+just one time without adding it to the toolbox, use `!-<tool>`:
 
 ```
-[0]: !sh what's the weather in santa clara, ca
-```
-```
-↓↓↓
-
-curl -s 'wttr.in/Santa+Clara,CA?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Unknown location; please try ~37.2333253,-121.6846349
-```
-```
-[3]: !
-```
-```
-↓↓↓
-
-curl -s 'wttr.in/Santa+Clara?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Partly cloudy +51°F
+[0]: !-py add 11 + 31
 ```
 
-## Same tool, different prompt `! <prompt>`
-
-If you need to change your prompt while using the same tool, use `! <prompt>`
-(note that `sh` is omitted). Following from the above weather example:
+This works regardless of what tools are already in the toolbox:
 
 ```
-[6]: ! how about tokyo?
+[0] !sh,py: !py add 11 + 31
 ```
-```
-↓↓↓
-
-curl -s 'wttr.in/Tokyo?format=%C+%t'
-
-⚙ ⚙ ⚙
-
-Clear +59°F
-```
-
-## Tool mode
-
-If you find yourself using the same tool over-and-over, you can enter tool-mode
-by specifying a tool without a prompt (e.g. `!sh`).
-
-```
-[0]: !sh
-```
-```
-Entering tool mode; All messages are treated as prompts for !sh.
-```
-
-To exit tool mode, use `!exit` or `Ctrl + D`.
-
-!!!tip "Tool mode in tasks"
-    When publishing tasks, you can place users directly into tool-mode by
-    making it the final command in your task's list of steps. This approach is
-    helpful when your task relies on a tool to respond to user requests. If
-    your task requires tool use and regular text responses, consider using the
-    optional suffix for the tool mode (e.g. `!sh?`).
 
 ## Python Tool `!py` `!pyuv`
 
 `!py` prompts the AI to write a Python script and execute it with your system
 Python or virtual env (`.venv`) if available in the current working directory.
 It may use dependencies that you do not have installed: you can either install
-them, try [repeat `!`](#repeat-) to see if the AI can work around it, or use
+them, pester the AI to try again to see if it can work around it, or use
 `!pyuv` described below.
 
 `!pyuv` prompts the AI to write Python with
@@ -288,87 +252,6 @@ The founder of the Silk Road marketplace was **Ross Ulbricht**, who operated und
 The AI is capable enough to know what URL to load and then ask itself a
 question about the contents.
 
-### !hai recursion
-
-Some LLMs (`sonnet-3.7` is most reliable) are able to work out whether they
-need to re-prompt themselves to act on intermediate information.
-
-In this example, only the first command is prompted by the user. The rest,
-prefixed by `hai-tool[ ]:`, are prompted by the AI. For brevity, user
-confirmations are omitted.
-
-```
-[0]: !hai get a random number. if it is even, ask the AI how large the sun is. if it is odd, delete `file1.txt`.
-```
-```
-↓↓↓
-
-- !py Generate a random number and determine if it's even or odd
-- !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
-```
-
-```
-⚙ ⚙ ⚙
-
-Pushed 2 command(s) into queue
-```
-
-```
-hai-tool[3]: !py Generate a random number and determine if it's even or odd
-```
-```
-↓↓↓
-
-import random
-
-# Generate a random number between 1 and 100
-random_number = random.randint(1, 100)
-
-# Check if the number is even or odd
-if random_number % 2 == 0:
-    result = "even"
-else:
-    result = "odd"
-
-print(f"The random number is: {random_number}")
-print(f"The number is {result}")
-```
-```
-⚙ ⚙ ⚙
-
-The random number is: 86
-The number is even
-```
-
-```
-hai-tool[6]: !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
-```
-```
-↓↓↓
-
-- /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
-```
-```
-⚙ ⚙ ⚙
-
-Pushed 1 command(s) into queue
-```
-
-```
-hai-tool[9]: /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
-```
-```
-↓↓↓
-
-# The Size of the Sun
-
-The Sun is enormously large compared to Earth. Here are the key measurements:
-
-- Sun's diameter: approximately 1.39 million kilometers (864,000 miles)
-- Sun's volume: approximately 1.41 × 10^18 cubic kilometers
-- Sun's mass: approximately 1.989 × 10^30 kilograms
-```
-
 ## Agentic mode
 
 > Let the LLM cook.
@@ -383,17 +266,13 @@ results until it decides the task is complete.
 When enabled, a 🤖 emoji appears in your prompt.
 
 The ability of agentic mode to produce quality results depends greatly on the
-model. You should experiment with various models, but `opus-4.5` is a good
-model to start with.
+model. You should experiment with various models, but the `opus` model family
+is a good starting point (`opus-4.5` minimum).
 
 ### How it works
 
 Agentic mode gives LLMs the option to loop when invoking a tool such as `!sh`
 or `!hai`.
-
-Specifically with `!hai`, it's easier for LLMs to reason about than
-[!hai recursion](#hai-recursion). As an aside, if the LLM chooses to loop, it's
-implemented as adding a recursive `!hai` as the final command.
 
 ### Prompt caching with Anthropic API
 
@@ -584,4 +463,88 @@ To see all functions declared in the current conversation, use:
 
 ```
 /fns
+```
+
+## !hai recursion
+
+> [Agentic mode](#agentic-mode) is the preferred way to achieve recursion. This
+> section remains for pre-agentic historical purposes.
+
+Some LLMs (`sonnet-3.7` is most reliable) are able to work out whether they
+need to re-prompt themselves to act on intermediate information.
+
+In this example, only the first command is prompted by the user. The rest,
+prefixed by `hai-tool[ ]:`, are prompted by the AI. For brevity, user
+confirmations are omitted.
+
+```
+[0]: !hai get a random number. if it is even, ask the AI how large the sun is. if it is odd, delete `file1.txt`.
+```
+```
+↓↓↓
+
+- !py Generate a random number and determine if it's even or odd
+- !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
+```
+
+```
+⚙ ⚙ ⚙
+
+Pushed 2 command(s) into queue
+```
+
+```
+hai-tool[3]: !py Generate a random number and determine if it's even or odd
+```
+```
+↓↓↓
+
+import random
+
+# Generate a random number between 1 and 100
+random_number = random.randint(1, 100)
+
+# Check if the number is even or odd
+if random_number % 2 == 0:
+    result = "even"
+else:
+    result = "odd"
+
+print(f"The random number is: {random_number}")
+print(f"The number is {result}")
+```
+```
+⚙ ⚙ ⚙
+
+The random number is: 86
+The number is even
+```
+
+```
+hai-tool[6]: !hai Based on the random number generated, if it's even, ask how large the sun is. If it's odd, delete file1.txt
+```
+```
+↓↓↓
+
+- /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+```
+```
+⚙ ⚙ ⚙
+
+Pushed 1 command(s) into queue
+```
+
+```
+hai-tool[9]: /prompt How large is the sun? Please provide information about its diameter, volume, and mass compared to Earth.
+```
+```
+↓↓↓
+
+# The Size of the Sun
+
+The Sun is enormously large compared to Earth. Here are the key measurements:
+
+- Sun's diameter: approximately 1.39 million kilometers (864,000 miles)
+- Sun's volume: approximately 1.41 × 10^18 cubic kilometers
+- Sun's mass: approximately 1.989 × 10^30 kilograms
 ```

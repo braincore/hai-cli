@@ -18,7 +18,7 @@ pub struct Config {
     pub default_editor: Option<String>,
     /// The shell (e.g. bash, zsh, fish, nu, powershell) to use for !sh tool
     pub default_shell: Option<String>,
-    /// The default tool-mode to initialize repl with
+    /// Tool to add to the toolbox when starting a new conversation.
     pub default_tool: Option<String>,
     #[serde(default)]
     pub tool_confirm: bool,
@@ -1041,8 +1041,8 @@ pub fn read_config_as_string_create_if_missing(
 # Temperature ranges differ by model, but 0 is generally best for math/coding (default: true)
 #default_ai_temperature_to_absolute_zero = true
 
-# Default tool-mode to initialize with (default: unset)
-#default_tool = "!hai?"
+# Tool to add to the toolbox when starting a new conversation (default: unset)
+#default_tool = "!hai"
 
 # Whether or not to confirm tool actions (default: false).
 #tool_confirm = false

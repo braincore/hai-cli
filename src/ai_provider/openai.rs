@@ -9,7 +9,6 @@ use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nu
 use crate::chat;
 use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::tool;
 use crate::{errorln, io::Out, out, outln};
 
 //
@@ -57,7 +56,7 @@ pub async fn send_to_openai(
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_schemas: &[Value],
-    tool_policy: Option<&tool::ToolPolicy>,
+    force_tool_api_name: Option<String>,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -102,8 +101,7 @@ pub async fn send_to_openai(
         if !model.starts_with("o") && !model.starts_with("gpt-5-") && !model.starts_with("gpt-5.") {
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
-        if let Some(tp) = tool_policy {
-            let tool_choice = if tp.force_tool { "required" } else { "auto" };
+        if !tool_schemas.is_empty() {
             // OpenAI has a wrapping over each tool schema.
             let function_wrappers: Vec<serde_json::Value> = tool_schemas
                 .into_iter()
@@ -115,11 +113,15 @@ pub async fn send_to_openai(
                 })
                 .collect();
             request_obj.insert("tools".to_string(), json!(function_wrappers));
-            request_obj.insert("tool_choice".to_string(), json!(tool_choice));
-            // Explicitly disable parallel tool calling. While this function
-            // supports it, callers are currently unprepared to structure the
-            // message history correctly.
-            request_obj.insert("parallel_tool_calls".to_string(), json!(false));
+            if let Some(force_tool_api_name) = &force_tool_api_name {
+                request_obj.insert(
+                    "tool_choice".to_string(),
+                    json!({ "type": "function", "function": { "name": force_tool_api_name } }),
+                );
+            } else {
+                request_obj.insert("tool_choice".to_string(), json!("auto"));
+            }
+            request_obj.insert("parallel_tool_calls".to_string(), json!(true));
         }
         if let Some(reasoning_effort) = reasoning_effort {
             let reasoning_effort_str = match reasoning_effort {
@@ -267,7 +269,7 @@ pub async fn send_to_openai(
     // Deepseek-reasoner only
     let mut reasoning_accumulator = TextAccumulator::new(masked_strings.clone());
 
-    let _span = tracing::debug_span!("--- openai", ?tool_policy).entered();
+    let _span = tracing::debug_span!("--- openai").entered();
 
     out.code_reset();
 
@@ -340,6 +342,11 @@ pub async fn send_to_openai(
                                     // AFAICT, both responses will have index=0 set so delineating
                                     // between the two that way isn't doable.
                                     outln!(out);
+                                } else if !reasoning_accumulator.printed_text.is_empty() {
+                                    outln!(out);
+                                    outln!(out);
+                                    outln!(out, "🧠 end");
+                                    outln!(out);
                                 }
                                 // Gemini returns an empty string as the
                                 // tool ID which the Anthropic API is not
@@ -349,14 +356,16 @@ pub async fn send_to_openai(
                                 } else {
                                     tool_id
                                 };
+                                let sh_lang_token =
+                                    crate::tool_schema::get_syntax_highlighter_token_from_tool_name(
+                                        &tool_name,
+                                    );
                                 tool_calls.insert(
                                     tool_response.index,
                                     JsonObjectAccumulator::new(
                                         tool_id.clone(),
                                         tool_name,
-                                        tool_policy.and_then(|tp| {
-                                            tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
-                                        }),
+                                        sh_lang_token,
                                         masked_strings.clone(),
                                     ),
                                 );
@@ -373,6 +382,8 @@ pub async fn send_to_openai(
                         {
                             if text_accumulator.printed_text.is_empty()
                                 && !reasoning_accumulator.printed_text.is_empty()
+                                // Sometimes the content is simply a no-op empty string (deepseek)
+                                && !content.is_empty()
                             {
                                 outln!(out);
                                 outln!(out);
@@ -401,12 +412,14 @@ pub async fn send_to_openai(
                         {
                             // This is for non-streaming cases
                             if let Some(tool_name) = tool_response.function.name {
+                                let sh_lang_token =
+                                    crate::tool_schema::get_syntax_highlighter_token_from_tool_name(
+                                        &tool_name,
+                                    );
                                 let mut json_accumulator = JsonObjectAccumulator::new(
                                     tool_response.id,
                                     tool_name,
-                                    tool_policy.and_then(|tp| {
-                                        tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
-                                    }),
+                                    sh_lang_token,
                                     masked_strings.clone(),
                                 );
                                 json_accumulator.acc(&tool_response.function.arguments, out);

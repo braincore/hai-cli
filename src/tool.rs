@@ -13,7 +13,7 @@ use crate::io::Out;
 use crate::{clipboard, session};
 use crate::{errln, outln};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Tool {
     CopyToClipboard,
     ExecPythonScript,
@@ -23,7 +23,7 @@ pub enum Tool {
     HaiRepl,
     Html,
     ShellScriptExec,
-    /// (file_contents, extension)
+    /// (cmd, extension)
     /// Extension is important because some programs make decisions based on
     /// the file's extension. For example, `uv run {file}` does not execute the
     /// `file`` unless it has a .py extension. It also lets us add syntax
@@ -32,24 +32,22 @@ pub enum Tool {
     ShellExecWithStdin(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FnTool {
     pub kind: FnToolType,
     pub name: Option<String>,
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FnToolType {
     FnPy,
     FnPyUv,
     FnSh,
 }
 
-/// Convert tool to repl command w/o prompt.
-pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> String {
-    let tool_symbol = if user_confirmation { "!?" } else { "!" };
-    let tool_cmd = match tool {
+pub fn tool_to_stem_cmd(tool: &Tool) -> String {
+    match tool {
         Tool::CopyToClipboard => "clip".to_string(),
         Tool::ExecPythonScript => "py".to_string(),
         Tool::ExecPythonUvScript => "pyuv".to_string(),
@@ -89,9 +87,14 @@ pub fn tool_to_cmd(tool: &Tool, user_confirmation: bool, force_tool: bool) -> St
         }
         Tool::ShellExecWithStdin(cmd) => format!("'{}'", cmd),
         Tool::ShellScriptExec => "sh".to_string(),
-    };
-    let force_tool_symbol = if force_tool { "" } else { "?" };
-    format!("{}{}{}", tool_symbol, tool_cmd, force_tool_symbol)
+    }
+}
+
+/// Convert tool to repl command w/o prompt.
+pub fn tool_to_bang_cmd(tool: &Tool, user_confirmation: bool) -> String {
+    let tool_symbol = if user_confirmation { "!?" } else { "!" };
+    let tool_stem_cmd = tool_to_stem_cmd(tool);
+    format!("{}{}", tool_symbol, tool_stem_cmd)
 }
 
 /// The cmd-string for shell-exec-with-file supports {file.EXT} placeholders
@@ -131,15 +134,93 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
 }
 
 #[derive(Clone, Debug)]
-pub struct ToolPolicy {
+pub struct ToolWithPolicy {
     pub tool: Tool,
     /// Whether user confirmation is required to execute the tool
     pub user_confirmation: bool,
-    /// Whether the AI is required to use this tool
-    pub force_tool: bool,
-    /// Whether the tool should give the option to continue responding after
-    /// tool execution
-    pub agentic: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Toolbox {
+    pub tools: Vec<ToolWithPolicy>,
+    pub temporary: Vec<Tool>,
+}
+
+pub enum ToolboxAddResult {
+    New,
+    Updated,
+    AlreadyExists,
+}
+
+impl Toolbox {
+    pub fn new() -> Self {
+        Toolbox {
+            tools: vec![],
+            temporary: vec![],
+        }
+    }
+
+    /// If tool already in toolbox, updates its user confirmation policy.
+    pub fn add_tool(&mut self, tool: Tool, user_confirmation: bool) -> ToolboxAddResult {
+        // If matching tool found, replace policy, otherwise add to end.
+        if let Some(existing_tool) = self.tools.iter_mut().find(|twp| twp.tool == tool) {
+            // Matching tool found
+            if existing_tool.user_confirmation == user_confirmation {
+                ToolboxAddResult::AlreadyExists
+            } else {
+                existing_tool.user_confirmation = user_confirmation;
+                ToolboxAddResult::Updated
+            }
+        } else {
+            self.tools.push(ToolWithPolicy {
+                tool,
+                user_confirmation,
+            });
+            ToolboxAddResult::New
+        }
+    }
+
+    /// If tool already in toolbox, updates its user confirmation policy.
+    pub fn add_tool_with_policy(&mut self, tool_with_policy: ToolWithPolicy) {
+        if let Some(existing_tool) = self
+            .tools
+            .iter_mut()
+            .find(|twp| twp.tool == tool_with_policy.tool)
+        {
+            *existing_tool = tool_with_policy;
+        } else {
+            self.tools.push(tool_with_policy);
+        }
+    }
+
+    pub fn get_tool(&self, tool: &Tool) -> Option<&ToolWithPolicy> {
+        self.tools.iter().find(|twp| &twp.tool == tool)
+    }
+
+    pub fn get_tool_by_api_name(&self, tool_api_name: &str) -> Option<&ToolWithPolicy> {
+        let tool = crate::tool_schema::get_tool_from_api_name(tool_api_name)?;
+        self.tools.iter().find(|twp| twp.tool == tool)
+    }
+
+    pub fn remove_tool(&mut self, tool: &Tool) {
+        self.tools.retain(|twp| &twp.tool != tool);
+    }
+
+    pub fn mark_temporary(&mut self, tool: &Tool) {
+        if !self.temporary.contains(tool) {
+            self.temporary.push(tool.clone());
+        }
+    }
+
+    pub fn clear_temporary(&mut self) {
+        self.tools.retain(|twp| !self.temporary.contains(&twp.tool));
+        self.temporary.clear();
+    }
+
+    pub fn clear(&mut self) {
+        self.tools.clear();
+        self.temporary.clear();
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

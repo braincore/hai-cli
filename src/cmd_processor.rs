@@ -52,7 +52,9 @@ pub struct ProcessCmdResult {
     pub new_temp_files: Vec<tempfile::NamedTempFile>,
     pub new_masked_strings: Vec<String>,
     pub purge_cmd_queue: bool,
-    pub tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>,
+    pub toolbox_add: Vec<crate::tool::ToolWithPolicy>,
+    pub toolbox_remove: Vec<tool::Tool>,
+    pub toolbox_clear: bool,
     pub error: bool,
 }
 
@@ -77,7 +79,9 @@ impl ProcessCmdResult {
         new_temp_files: Vec<tempfile::NamedTempFile>,
         new_masked_strings: Vec<String>,
         purge_cmd_queue: bool,
-        tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>,
+        toolbox_add: Vec<crate::tool::ToolWithPolicy>,
+        toolbox_remove: Vec<tool::Tool>,
+        toolbox_clear: bool,
         error: bool,
     ) -> Self {
         Self {
@@ -91,7 +95,9 @@ impl ProcessCmdResult {
             new_temp_files,
             new_masked_strings,
             purge_cmd_queue,
-            tool_mode_cmd,
+            toolbox_add,
+            toolbox_remove,
+            toolbox_clear,
             error,
         }
     }
@@ -108,7 +114,9 @@ impl ProcessCmdResult {
             vec![],
             vec![],
             false,
-            None,
+            vec![],
+            vec![],
+            false,
             false,
         )
     }
@@ -125,7 +133,9 @@ impl ProcessCmdResult {
             vec![],
             vec![],
             false,
-            None,
+            vec![],
+            vec![],
+            false,
             false,
         )
     }
@@ -142,7 +152,9 @@ impl ProcessCmdResult {
             vec![],
             vec![],
             false,
-            None,
+            vec![],
+            vec![],
+            false,
             false,
         )
     }
@@ -203,8 +215,18 @@ impl ProcessCmdResult {
         self
     }
 
-    pub fn with_tool_mode_cmd(mut self, tool_mode_cmd: Option<Option<cmd::ToolModeCmd>>) -> Self {
-        self.tool_mode_cmd = tool_mode_cmd;
+    pub fn with_toolbox_add(mut self, tool_policies: Vec<crate::tool::ToolWithPolicy>) -> Self {
+        self.toolbox_add = tool_policies;
+        self
+    }
+
+    pub fn with_toolbox_remove(mut self, tools: Vec<crate::tool::Tool>) -> Self {
+        self.toolbox_remove = tools;
+        self
+    }
+
+    pub fn with_toolbox_clear(mut self) -> Self {
+        self.toolbox_clear = true;
         self
     }
 
@@ -7417,21 +7439,57 @@ pub async fn process_cmd(
                 ProcessCmdResult::loop_next()
             }
         }
-        cmd::Cmd::ToolMode(tool_mode_cmd) => {
-            let was_recording = io.record_off();
-            outln!(
-                io,
-                "Entering tool mode; All messages are treated as prompts for {}. Use `!exit` or CTRL+D when done",
-                tool::tool_to_cmd(
-                    &tool_mode_cmd.tool,
-                    tool_mode_cmd.user_confirmation,
-                    tool_mode_cmd.force_tool
-                )
-            );
-            io.record_set(was_recording);
-            ProcessCmdResult::loop_next().with_tool_mode_cmd(Some(Some(tool_mode_cmd)))
+        cmd::Cmd::ToolboxAdd(toolbox_add_cmd) => {
+            let tool_stem_cmd = tool::tool_to_stem_cmd(&toolbox_add_cmd.tool);
+            let tool_bang_cmd =
+                tool::tool_to_bang_cmd(&toolbox_add_cmd.tool, toolbox_add_cmd.user_confirmation);
+            if let Some(existing_tool) = session.toolbox.get_tool(&toolbox_add_cmd.tool) {
+                if existing_tool.user_confirmation == toolbox_add_cmd.user_confirmation {
+                    // Tool already exists with the same user confirmation setting
+                    warnln!(
+                        io,
+                        "Tool {} already in toolbox. Use `!-{}` or `!clear` to remove.",
+                        tool_bang_cmd,
+                        tool_stem_cmd,
+                    );
+                } else {
+                    // Tool exists but with a different user confirmation setting
+                    outln!(
+                        io,
+                        "Updating {} in toolbox. Use `!-{}` or `!clear` to remove.",
+                        tool_bang_cmd,
+                        tool_stem_cmd,
+                    );
+                }
+            } else {
+                // Tool does not exist in the toolbox, will be added
+                outln!(
+                    io,
+                    "Adding {} to toolbox. Use `!-{}` or `!clear` to remove.",
+                    tool_bang_cmd,
+                    tool_stem_cmd,
+                );
+            }
+
+            let twp = tool::ToolWithPolicy {
+                tool: toolbox_add_cmd.tool.clone(),
+                user_confirmation: toolbox_add_cmd.user_confirmation,
+            };
+            ProcessCmdResult::loop_next().with_toolbox_add(vec![twp])
         }
-        cmd::Cmd::ToolModeExit => ProcessCmdResult::loop_next().with_tool_mode_cmd(Some(None)),
+        cmd::Cmd::ToolboxRemove(toolbox_remove_cmd) => {
+            if let Some(existing_tool) = session.toolbox.get_tool(&toolbox_remove_cmd.tool) {
+                let tool_bang_cmd =
+                    tool::tool_to_bang_cmd(&existing_tool.tool, existing_tool.user_confirmation);
+                outln!(io, "Removing {} from toolbox.", tool_bang_cmd,);
+                ProcessCmdResult::loop_next().with_toolbox_remove(vec![toolbox_remove_cmd.tool])
+            } else {
+                let tool_bang_cmd = tool::tool_to_bang_cmd(&toolbox_remove_cmd.tool, false);
+                outln!(io, "Tool {} not in toolbox.", tool_bang_cmd,);
+                ProcessCmdResult::loop_next()
+            }
+        }
+        cmd::Cmd::ToolboxClear => ProcessCmdResult::loop_next().with_toolbox_clear(),
         cmd::Cmd::Prompt(cmd::PromptCmd { prompt, cache })
         | cmd::Cmd::Tool(cmd::ToolCmd { prompt, cache, .. }) => {
             ProcessCmdResult::prompt_ai(prompt.to_owned(), cache)

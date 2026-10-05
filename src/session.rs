@@ -220,12 +220,10 @@ pub struct SessionState {
     pub asset_keyring: Arc<Mutex<AssetKeyring>>,
     /// Whether the session is in incognito mode (history-less)
     pub incognito: bool,
-    /// The default tool mode to set when starting repl
-    pub default_tool: Option<cmd::ToolModeCmd>,
-    /// The last tool that was used (for ! shortcut)
-    pub last_tool_cmd: Option<cmd::ToolCmd>,
-    /// The tool activated in tool-mode
-    pub tool_mode: Option<cmd::ToolModeCmd>,
+    /// The toolbox containing available tools for the session.
+    pub toolbox: tool::Toolbox,
+    /// Tool to add to the toolbox when starting a new conversation.
+    pub default_tool: Option<tool::ToolWithPolicy>,
     /// Whether to use hai-router for compatible AI models
     pub use_hai_router: HaiRouterState,
     /// Agentic mode
@@ -304,16 +302,24 @@ impl SessionState {
         } else {
             cfg.default_shell.clone().unwrap_or("bash".into())
         };
-        let default_tool = if let Some(default_tool) = cfg.default_tool.clone() {
-            match cmd::parse_tool_mode(&cmd_registry, &default_tool) {
-                Ok(tool_mode_cmd) => Some(tool_mode_cmd),
+        let (toolbox, default_tool) = if let Some(default_tool) = cfg.default_tool.clone() {
+            match cmd::parse_toolbox_add(&cmd_registry, &default_tool) {
+                Ok(toolbox_add_cmd) => {
+                    let mut toolbox = tool::Toolbox::new();
+                    let tool_with_policy = tool::ToolWithPolicy {
+                        tool: toolbox_add_cmd.tool,
+                        user_confirmation: toolbox_add_cmd.user_confirmation,
+                    };
+                    toolbox.add_tool_with_policy(tool_with_policy.clone());
+                    (toolbox, Some(tool_with_policy))
+                }
                 Err(e) => {
                     errorln!(out, "failed to parse default tool {}: {}", default_tool, e);
-                    None
+                    (tool::Toolbox::new(), None)
                 }
             }
         } else {
-            None
+            (tool::Toolbox::new(), None)
         };
 
         SessionState {
@@ -336,9 +342,8 @@ impl SessionState {
             account: account.clone(),
             asset_keyring: Arc::new(Mutex::new(AssetKeyring::new(cfg.use_os_keyring))),
             incognito,
+            toolbox,
             default_tool: default_tool.clone(),
-            last_tool_cmd: None,
-            tool_mode: default_tool,
             use_hai_router: HaiRouterState::Off,
             agentic: false,
             prompt_cache: false,
@@ -370,6 +375,54 @@ impl SessionState {
         }
         self.input_tokens = input_tokens;
         self.input_loaded_tokens = input_loaded_tokens;
+    }
+
+    /// Recalculate toolbox.
+    ///
+    /// Useful when history has been pruned.
+    pub fn recalculate_toolbox(&mut self) {
+        let mut toolbox = crate::tool::Toolbox::new();
+        for log_entry in &self.history {
+            if matches!(log_entry.message.role, chat::MessageRole::User) {
+                for content in &log_entry.message.content {
+                    if let chat::MessageContent::Text { text } = content {
+                        match cmd::parse_user_input(&self.cmd_registry, &text) {
+                            Ok(cmd::Cmd::Tool(tool_cmd)) if !tool_cmd.temporary => {
+                                toolbox.add_tool(tool_cmd.tool, tool_cmd.user_confirmation);
+                            }
+                            Ok(cmd::Cmd::ToolboxAdd(toolbox_add_cmd)) => {
+                                toolbox.add_tool(
+                                    toolbox_add_cmd.tool,
+                                    toolbox_add_cmd.user_confirmation,
+                                );
+                            }
+                            Ok(cmd::Cmd::ToolboxRemove(toolbox_remove_cmd)) => {
+                                toolbox.remove_tool(&toolbox_remove_cmd.tool);
+                            }
+                            Ok(cmd::Cmd::ToolboxClear) => {
+                                toolbox.clear();
+                            }
+                            Ok(_) => {}
+                            Err(_) => {}
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        self.toolbox = toolbox;
+    }
+
+    pub fn get_default_toolbox(&self) -> tool::Toolbox {
+        let mut toolbox = tool::Toolbox::new();
+        if let Some(default_tool) = self.default_tool.as_ref() {
+            toolbox.add_tool_with_policy(default_tool.clone());
+        }
+        toolbox
+    }
+
+    pub fn reset_toolbox(&mut self) {
+        self.toolbox = self.get_default_toolbox();
     }
 
     /// Adds a new masked string to the session.
@@ -413,6 +466,11 @@ impl SessionState {
         self.history
             .retain(|log_entry| task_mode && log_entry.retention_policy.0);
         self.recalculate_input_tokens();
+        if task_mode {
+            self.recalculate_toolbox();
+        } else {
+            self.reset_toolbox();
+        }
         self.temp_files
             .retain(|(_, is_task_step)| task_mode && *is_task_step);
         if let Some((_, is_task_step, _, _, cancel_token)) = self.html_output.as_ref()
@@ -466,6 +524,8 @@ impl SessionState {
                 || log_entry.retention_policy.1 != db::LogEntryRetentionPolicy::None
         });
         self.recalculate_input_tokens();
+        // FUTURE: Consider re-injecting the default_tool.
+        self.recalculate_toolbox();
         self.temp_files
             .retain(|(_, is_task_step)| task_mode && *is_task_step);
         if let Some((_, is_task_step, _, _, cancel_token)) = self.html_output.as_ref()
@@ -510,12 +570,11 @@ impl SessionState {
 
     /// Ends task mode.
     ///
-    /// Does not clear the conversation history.
+    /// Does not clear the conversation history nor the toolbox.
     pub async fn cmd_task_end(&mut self) -> bool {
         match self.repl_mode.clone() {
             ReplMode::Task(task_fqn, _, _) => {
                 self.repl_mode = ReplMode::Normal;
-                self.tool_mode = None;
                 // Support ending task prematurely while task steps are
                 // being executed by purging any remaining task steps from
                 // the queue.

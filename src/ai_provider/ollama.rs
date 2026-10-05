@@ -7,7 +7,6 @@ use tokio_util::sync::CancellationToken;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::tool;
 use crate::{errorln, io::Out, out, outln};
 
 //
@@ -22,7 +21,6 @@ pub async fn send_to_ollama(
     temperature: Option<f32>,
     history: &[chat::Message],
     tool_schemas: &[Value],
-    tool_policy: Option<&tool::ToolPolicy>,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -179,7 +177,7 @@ pub async fn send_to_ollama(
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut tool_calls = HashMap::<u32, JsonObjectAccumulator>::new();
 
-    let _span = tracing::debug_span!("--- ollama", ?tool_policy).entered();
+    let _span = tracing::debug_span!("--- ollama").entered();
 
     out.code_reset();
 
@@ -239,14 +237,16 @@ pub async fn send_to_ollama(
                             // HACK: Just serialize it again to re-use machinery.
                             let arguments =
                                 serde_json::to_string(&tool_response["arguments"]).unwrap();
+                            let sh_lang_token =
+                                crate::tool_schema::get_syntax_highlighter_token_from_tool_name(
+                                    &tool_name,
+                                );
                             tool_calls.insert(
                                 0,
                                 JsonObjectAccumulator::new(
                                     "STUB".to_string(),
                                     tool_name,
-                                    tool_policy.and_then(|tp| {
-                                        tool::get_tool_syntax_highlighter_lang_token(&tp.tool)
-                                    }),
+                                    sh_lang_token,
                                     masked_strings.clone(),
                                 ),
                             );

@@ -5,12 +5,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::tool_schema::get_tool_name;
 use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
 use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::tool;
 use crate::{errorln, io::Out, out, outln};
 
 //
@@ -104,7 +102,7 @@ pub async fn send_to_anthropic(
     temperature_deprecated: bool,
     history: &[chat::Message],
     tool_schemas: &[Value],
-    tool_policy: Option<&tool::ToolPolicy>,
+    force_tool_api_name: Option<String>,
     // FIXME: Function doesn't work (exits immediately) if None
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
@@ -153,10 +151,9 @@ pub async fn send_to_anthropic(
     }
 
     // Create the JSON payload
-    let tool_choice = if let Some(tp) = tool_policy {
-        let tool_name = get_tool_name(&tp.tool);
-        if tp.force_tool {
-            Some(json!({"type": "tool", "name": tool_name}))
+    let tool_choice = if !tool_schemas.is_empty() {
+        if let Some(force_tool_api_name) = force_tool_api_name {
+            Some(json!({"type": "tool", "name": force_tool_api_name}))
         } else {
             Some(json!({"type": "auto"}))
         }
@@ -286,61 +283,50 @@ pub async fn send_to_anthropic(
         )"#,
         // Tool result transform
         r#"
-        (.messages) as $msgs
-            | .messages = (
-                reduce range(0; $msgs|length) as $i (
-                    { arr: [], skip: false };
-                    if .skip then
-                    { arr: .arr, skip: false }
-                    else
-                    if ($i < ($msgs|length - 1))
-                        and ($msgs[$i].role == "tool")
-                        and ($msgs[$i+1].role == "user")
-                    then
-                        {
-                        arr: .arr + [
-                            $msgs[$i+1]
-                            | .content |= (
-                                [
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": $msgs[$i].tool_call_id,
-                                    "content": $msgs[$i].content
-                                }
-                                ]
-                                + .
-                            )
-                        ],
-                        skip: true
-                        }
-                    else
-                        {
-                        arr: .arr + [ $msgs[$i] ],
-                        skip: false
-                        }
-                    end
-                    end
-                )
-                | .arr
-                )
+        def to_blocks:
+        if . == null then []
+        elif type == "string" then (if . == "" then [] else [{type: "text", text: .}] end)
+        else . end;
+
+        .messages |= (
+        reduce .[] as $m ([];
+            if $m.role == "tool" then
+            {type: "tool_result", tool_use_id: $m.tool_call_id, content: ($m.content // "")} as $tr
+            | if length > 0 and .[-1]._tool_results == true
+                then .[-1].content += [$tr]
+                else . + [{role: "user", content: [$tr], _tool_results: true}]
+                end
+            elif $m.role == "user" and length > 0 and .[-1]._tool_results == true then
+            .[-1].content += ($m.content | to_blocks)
+            | del(.[-1]._tool_results)
+            else
+            . + [$m]
+            end
+        )
+        | map(del(._tool_results))
+        )
         "#,
         // Tool calls transform
         r#"
+        def to_blocks:
+        if . == null then []
+        elif type == "string" then (if . == "" then [] else [{type: "text", text: .}] end)
+        else . end;
+
         .messages |= map(
-            if .role == "assistant" and has("tool_calls") then
-            .content += (
-                .tool_calls 
-                | map({
-                    "type": "tool_use",
-                    "id": .id,
-                    "name": .function.name,
-                    "input": .function.arguments | fromjson
-                })
+        if .role == "assistant" and has("tool_calls") then
+            .content = (
+            (.content | to_blocks)
+            + ((.tool_calls // []) | map({
+                type: "tool_use",
+                id: .id,
+                name: .function.name,
+                input: (.function.arguments
+                        | if . == null or . == "" then {} else fromjson end)
+                }))
             )
             | del(.tool_calls)
-            else
-            .
-            end
+        else . end
         )
         "#,
     ];
@@ -523,16 +509,13 @@ pub async fn send_to_anthropic(
                                             outln!(out, "‖");
                                             outln!(out);
                                         }
+                                        let sh_lang_token = crate::tool_schema::get_syntax_highlighter_token_from_tool_name(&name);
                                         tool_calls.insert(
                                             index,
                                             JsonObjectAccumulator::new(
                                                 id,
                                                 name,
-                                                tool_policy.and_then(|tp| {
-                                                    tool::get_tool_syntax_highlighter_lang_token(
-                                                        &tp.tool,
-                                                    )
-                                                }),
+                                                sh_lang_token,
                                                 masked_strings.clone(),
                                             ),
                                         );

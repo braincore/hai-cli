@@ -1239,11 +1239,16 @@ pub static REGISTRY: &[Entry] = &[
     section(
         Some("Tools"),
         Some(
-            "Tools prompt the AI to write code for a tool: `!<tool> <prompt>`. `!<tool>` \
-             without a prompt enters tool mode, where every message is treated as a prompt \
-             for that tool; `!'<cmd>' <prompt>` runs any local program: the AI writes its \
-             stdin, or an input file if the command contains a {file} / {file.ext} placeholder. \
-             Exit with !exit or CTRL+D."
+            "Use `!<tool>` to add a tool to the toolbox. An AI can decide to use a tool \
+             when it is appropriate.
+
+- `!-<tool>` removes the specified tool from the toolbox.
+- `!clear` removes all tools from the toolbox.
+- `!<tool> <prompt>` forces the AI to use the specified tool and then adds \
+it to the toolbox.
+- `!-<tool> <prompt>` forces the AI to use the specified tool and does not \
+add it to the toolbox.
+- `!?<tool>` requires user confirmation before a tool is executed."
         ),
         &[Anchor::Family("tool")],
     ),
@@ -1310,19 +1315,18 @@ pub static REGISTRY: &[Entry] = &[
     )),
     Entry::Cmd(cmd(
         Bang,
-        Cow::Borrowed("exit"),
+        Cow::Borrowed("clear"),
         Cow::Borrowed("tool"),
         Cow::Borrowed(&[]),
-        Doc::new("Exit tool mode"),
+        Doc::new("Clear toolbox"),
     )),
     note(
-        "!'<cmd>' <prompt>  -- Ask AI to write a script piped to <cmd> through stdin.\n\
+        "!'<cmd>' -- Ask AI to write a script piped to <cmd> through stdin.\n\
          e.g. !'uv run --python 3 --with geopy -' distance from san francisco to nyc\n\
          Vars from haivars & /setvar can be used: !'$psql' describe users table\n\
          If `{file}` appears in <cmd>, the AI output is written to a temporary file and\n\
-         substituted for `{file}` in the command.\n\
-         ! <prompt>         -- Re-use the previous tool with a new prompt.\n\
-         !                  -- Re-use the previous tool and prompt.",
+         substituted for `{file}` in the command. Use `{file.ext}` to specify a file\n\
+         extension to enable syntax highlighting.",
         &[Anchor::Family("tool")],
     ),
     //
