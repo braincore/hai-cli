@@ -175,7 +175,7 @@ pub struct EditorPrompt {
     pub task_mode: Option<String>,
     pub incognito: bool,
     pub agentic: bool,
-    pub tool_mode: Option<String>,
+    pub toolbox_tools: Vec<String>,
     pub hai_router: HaiRouterState,
     pub is_dev: bool,
     pub username: Option<String>,
@@ -190,7 +190,7 @@ impl EditorPrompt {
             task_mode: None,
             incognito: false,
             agentic: false,
-            tool_mode: None,
+            toolbox_tools: vec![],
             hai_router: HaiRouterState::Off,
             is_dev: false,
             username: None,
@@ -221,8 +221,8 @@ impl EditorPrompt {
         self.agentic = agentic;
     }
 
-    pub fn set_tool_mode(&mut self, tool_mode: Option<String>) {
-        self.tool_mode = tool_mode;
+    pub fn set_toolbox(&mut self, toolbox_tools: Vec<String>) {
+        self.toolbox_tools = toolbox_tools;
     }
 
     pub fn set_hai_router(&mut self, hai_router: HaiRouterState) {
@@ -244,14 +244,21 @@ impl Prompt for EditorPrompt {
         let is_dev_emoji = if self.is_dev { "🔧" } else { "" };
         let agentic_emoji = if self.agentic { "🤖" } else { "" };
         let task_name = self.task_mode.clone().unwrap_or("".into());
-        let tool_mode = self
-            .tool_mode
-            .clone()
-            .map(|v| format!(" {}", v))
-            .unwrap_or("".into());
+        let toolbox = if self.toolbox_tools.is_empty() {
+            "".into()
+        } else {
+            format!(
+                " !{}",
+                self.toolbox_tools
+                    .iter()
+                    .map(|tb| tb[1..].to_string())
+                    .collect::<Vec<String>>()
+                    .join(",")
+            )
+        };
         Cow::Owned(format!(
             "{}{}{}{}[{}]{}",
-            is_dev_emoji, incognito_emoji, agentic_emoji, task_name, self.index, tool_mode
+            is_dev_emoji, incognito_emoji, agentic_emoji, task_name, self.index, toolbox
         ))
     }
 

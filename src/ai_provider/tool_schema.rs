@@ -1,13 +1,19 @@
-use crate::{
-    cmd_registry, config,
-    tool::{FnTool, FnToolType, Tool},
-};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
+use crate::{
+    cmd_registry, config,
+    tool::{self, FnTool, FnToolType, Tool},
+};
+
+/// Tool schemas are the jsonschema representations consumed by LLM APIs.
+///
 /// # Arguments
 /// - schema_key_name: "parameters" for OpenAI; "input_schema" for Anthropic.
 /// - shell: Allows AI to tailor the command especially since bash and
 ///   powershell are rather different.
+/// - strict: (Anthropic-specific) Forces generation to follow grammar
+///   resulting in strict adherence to the schema.
 pub fn get_tool_schema(
     cmd_registry: &cmd_registry::Registry,
     fn_json_defs: &std::collections::HashMap<String, (Value, Option<String>, bool)>,
@@ -15,8 +21,9 @@ pub fn get_tool_schema(
     schema_key_name: &str,
     shell: &str,
     agentic: bool,
+    strict: bool,
 ) -> Value {
-    let tool_name = get_tool_name(tool);
+    let tool_name = get_tool_name_for_api(tool);
     let system = config::get_machine_os_arch();
 
     let mut schema = match tool {
@@ -295,6 +302,9 @@ of `cmds`.
             })
         }
     };
+    if strict {
+        schema["strict"] = json!(true);
+    }
     if agentic {
         schema[schema_key_name]["properties"]["_continue"] = json!({
             "type": "string",
@@ -340,55 +350,116 @@ fn reorder_with_key_first(map: &mut serde_json::Map<String, Value>, first_key: &
     }
 }
 
-pub fn get_tool_name(tool: &Tool) -> &str {
+/// There must be a one-to-one mapping of name to tool when used with the API.
+pub fn get_tool_name_for_api(tool: &Tool) -> String {
     match tool {
-        Tool::HaiRepl => "hai_repl",
-        Tool::CopyToClipboard => "copy_to_clipboard",
-        Tool::ExecPythonScript => "exec_python_script",
-        Tool::ExecPythonUvScript => "exec_python_uv_script",
+        Tool::HaiRepl => "hai_repl".to_string(),
+        Tool::CopyToClipboard => "copy_to_clipboard".to_string(),
+        Tool::ExecPythonScript => "exec_python_script".to_string(),
+        Tool::ExecPythonUvScript => "exec_python_uv_script".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnPy,
             ..
-        }) => "fn_def_py",
+        }) => "fn_def_py".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnPyUv,
             ..
-        }) => "fn_def_pyuv",
+        }) => "fn_def_pyuv".to_string(),
         Tool::FnDef(FnTool {
             kind: FnToolType::FnSh,
             ..
-        }) => "fn_def_sh",
-        Tool::FnExec(_) => "fn_exec",
-        Tool::Html => "html",
-        Tool::ShellExecWithFile(_, _) => "shell_exec_with_file",
-        Tool::ShellExecWithStdin(_) => "shell_exec_with_stdin",
-        Tool::ShellScriptExec => "shell_script_exec",
+        }) => "fn_def_sh".to_string(),
+        Tool::FnExec(name) => format!("fn_exec__{}", URL_SAFE_NO_PAD.encode(name)),
+        Tool::Html => "html".to_string(),
+        Tool::ShellExecWithFile(cmd, ext) => {
+            format!(
+                "prog_file__{}__{}",
+                URL_SAFE_NO_PAD.encode(cmd),
+                ext.as_deref()
+                    .map(|s| URL_SAFE_NO_PAD.encode(s))
+                    .unwrap_or("".to_string())
+            )
+        }
+        Tool::ShellExecWithStdin(cmd) => {
+            format!("prog_stdin__{}", URL_SAFE_NO_PAD.encode(cmd))
+        }
+        Tool::ShellScriptExec => "shell_script_exec".to_string(),
     }
 }
 
-/// Must be kept in sync with tool:get_tool_sytax_highlighter_lang_token.
+/// Inverse of `get_tool_name_for_api`.
+///
+/// Returns `None` if the name is unrecognized or its encoded payload is invalid.
+pub fn get_tool_from_api_name(name: &str) -> Option<Tool> {
+    match name {
+        "hai_repl" => return Some(Tool::HaiRepl),
+        "copy_to_clipboard" => return Some(Tool::CopyToClipboard),
+        "exec_python_script" => return Some(Tool::ExecPythonScript),
+        "exec_python_uv_script" => return Some(Tool::ExecPythonUvScript),
+        "fn_def_py" => {
+            return Some(Tool::FnDef(FnTool {
+                kind: FnToolType::FnPy,
+                name: None,
+            }));
+        }
+        "fn_def_pyuv" => {
+            return Some(Tool::FnDef(FnTool {
+                kind: FnToolType::FnPyUv,
+                name: None,
+            }));
+        }
+        "fn_def_sh" => {
+            return Some(Tool::FnDef(FnTool {
+                kind: FnToolType::FnSh,
+                name: None,
+            }));
+        }
+        "html" => return Some(Tool::Html),
+        "shell_script_exec" => return Some(Tool::ShellScriptExec),
+        _ => {}
+    }
+
+    // Names with encoded payloads
+    // Because api-tool-names generally have a 64-char limit, a shorter
+    // api-tool-name (`prog_<type>__`) is introduced to free up some bytes.
+    // If this is insufficient, we'll have to move to a model where the name
+    // does not encode the tool's parameters and instead rely on a mapping. The
+    // annoyance there is that the mapping must be reconstructed on chat
+    // resumption.
+    if let Some(encoded) = name.strip_prefix("fn_exec__") {
+        decode_b64_string(encoded).map(Tool::FnExec)
+    } else if let Some(rest) = name
+        .strip_prefix("shell_exec_with_file__")
+        .or_else(|| name.strip_prefix("prog_file__"))
+    {
+        // Encoded UTF-8 never contains "__" and the encoded ext never starts
+        // with '_', but the encoded cmd may END with '_', so split on the LAST
+        // "__".
+        let (encoded_cmd, encoded_ext) = rest.rsplit_once("__")?;
+        let cmd = decode_b64_string(encoded_cmd)?;
+        let ext = if encoded_ext.is_empty() {
+            None
+        } else {
+            Some(decode_b64_string(encoded_ext)?)
+        };
+        Some(Tool::ShellExecWithFile(cmd, ext))
+    } else if let Some(encoded) = name
+        .strip_prefix("shell_exec_with_stdin__")
+        .or_else(|| name.strip_prefix("prog_stdin__"))
+    {
+        decode_b64_string(encoded).map(Tool::ShellExecWithStdin)
+    } else {
+        None
+    }
+}
+
+fn decode_b64_string(s: &str) -> Option<String> {
+    let bytes = URL_SAFE_NO_PAD.decode(s).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
 /// Useful when interpretting old AI chat history where the tool::Tool object
 /// is no longer available but a string representation of the tool name is.
 pub fn get_syntax_highlighter_token_from_tool_name(name: &str) -> Option<String> {
-    match name {
-        "hai_repl" => None,
-        "copy_to_clipboard" => None,
-        "exec_python_script" => Some("py".to_string()),
-        "exec_python_uv_script" => Some("py".to_string()),
-        // Replaced by `shell_script_exec`
-        "exec_shell_script" => Some("bash".to_string()),
-        "fn_py" => Some("py".to_string()),
-        "fn_pyuv" => Some("py".to_string()),
-        "fn_sh" => Some("sh".to_string()),
-        "html" => Some("html".to_string()),
-        // Replaced by `shell_script_exec`
-        "shell_exec" => Some("bash".to_string()),
-        "shell_exec_with_file" => None,
-        // This is deprecated, but included for compatibility with old saved
-        // chats.
-        "shell_exec_with_script" => Some("bash".to_string()),
-        "shell_exec_with_stdin" => Some("bash".to_string()),
-        "shell_script_exec" => Some("bash".to_string()),
-        _ => None,
-    }
+    get_tool_from_api_name(name).and_then(|t| tool::get_tool_syntax_highlighter_lang_token(&t))
 }

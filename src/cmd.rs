@@ -67,10 +67,12 @@ pub enum Cmd {
     Clip,
     /// Ask AI to use a tool
     Tool(ToolCmd),
-    /// Enter tool mode
-    ToolMode(ToolModeCmd),
-    /// Exit tool mode
-    ToolModeExit,
+    /// Add tool to toolbox
+    ToolboxAdd(ToolboxAddCmd),
+    /// Remove tool from toolbox
+    ToolboxRemove(ToolboxRemoveCmd),
+    /// Clear toolbox
+    ToolboxClear,
     /// Ask-human command to manually input data
     AskHuman(AskHumanCmd),
     /// Task-mode command for specific .haitask
@@ -470,20 +472,24 @@ pub struct ToolCmd {
     pub prompt: String,
     /// Whether to require user confirmation
     pub user_confirmation: bool,
-    /// Whether to require the use of the tool
-    pub force_tool: bool,
+    /// Whether the tool usage is temporary
+    pub temporary: bool,
     /// Whether to cache the AI response to re-use next time
     pub cache: bool,
 }
 
 #[derive(Clone, Debug)]
-pub struct ToolModeCmd {
+pub struct ToolboxAddCmd {
     /// The tool to use
     pub tool: tool::Tool,
     /// Whether to require user confirmation
     pub user_confirmation: bool,
-    /// Whether to require the use of the tool
-    pub force_tool: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolboxRemoveCmd {
+    /// The tool to remove
+    pub tool: tool::Tool,
 }
 
 #[derive(Clone, Debug)]
@@ -1130,8 +1136,6 @@ pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
 pub fn parse_user_input(
     cmd_registry: &crate::cmd_registry::Registry,
     input: &str,
-    last_tool_cmd: Option<ToolCmd>,
-    tool_mode: Option<ToolModeCmd>,
 ) -> Result<Cmd, cmd_parse::ParseError> {
     if input.trim().is_empty() {
         return Ok(Cmd::Noop);
@@ -1159,7 +1163,7 @@ pub fn parse_user_input(
 
     // FUTURE: Ideally, these would be handled by the cmd_registry. Revisit
     // when refactoring to allow any command to be made into a tool.
-    let (peeled_input, confirm, force) = peel_bang_modifiers(&input);
+    let (peeled_input, user_confirmation, tool_temporary) = peel_bang_modifiers(&input);
 
     // `!'<program>' <prompt>`: resolve the tool ourselves since it isn't in
     // the registry. Delegates tail to the generic parser.
@@ -1167,14 +1171,14 @@ pub fn parse_user_input(
         let resolved = cmd_parse::parse_with_spec(crate::cmd_registry::CUSTOM_TOOL_SPEC, tail)?;
         return Ok(apply_tool_modifiers(
             build_custom_tool(resolved, shell_cmd)?,
-            confirm,
-            force,
+            user_confirmation,
+            tool_temporary,
         ));
     }
 
     match crate::cmd_parse::parse(cmd_registry, &peeled_input) {
         Ok(resolved_cmd_spec) => match build(resolved_cmd_spec) {
-            Ok(cmd) => Ok(apply_tool_modifiers(cmd, confirm, force)),
+            Ok(cmd) => Ok(apply_tool_modifiers(cmd, user_confirmation, tool_temporary)),
             Err(e) => Err(e),
         },
         Err(ParseError::NotACommand) => {
@@ -1186,79 +1190,6 @@ pub fn parse_user_input(
                     message: message.into(),
                     accent: None,
                 }))
-            } else if peeled_input.trim_end() == "!" {
-                if let Some(last_tool_cmd) = last_tool_cmd {
-                    let merged_user_confirmation = if confirm {
-                        true
-                    } else {
-                        last_tool_cmd.user_confirmation
-                    };
-                    let merged_force_tool = if !force {
-                        false
-                    } else {
-                        last_tool_cmd.force_tool
-                    };
-                    let tool_cmd = Cmd::Tool(ToolCmd {
-                        tool: last_tool_cmd.tool,
-                        prompt: last_tool_cmd.prompt.clone(),
-                        user_confirmation: merged_user_confirmation,
-                        force_tool: merged_force_tool,
-                        cache: false,
-                    });
-                    Ok(tool_cmd)
-                } else {
-                    // NOTE: Caller should alert user why their tool shorthand
-                    // was converted into a prompt.
-                    Ok(Cmd::Prompt(PromptCmd {
-                        prompt: input.into(),
-                        cache: false,
-                    }))
-                }
-            } else if let Some(remaining) = peeled_input.strip_prefix("! ") {
-                if let Some(last_tool_cmd) = last_tool_cmd {
-                    let merged_user_confirmation = if confirm {
-                        true
-                    } else {
-                        last_tool_cmd.user_confirmation
-                    };
-                    let merged_force_tool = if !force {
-                        false
-                    } else {
-                        last_tool_cmd.force_tool
-                    };
-                    let tool_cmd = Cmd::Tool(ToolCmd {
-                        tool: last_tool_cmd.tool,
-                        prompt: remaining.into(),
-                        user_confirmation: merged_user_confirmation,
-                        force_tool: merged_force_tool,
-                        cache: false,
-                    });
-                    return Ok(apply_tool_modifiers(
-                        tool_cmd,
-                        merged_user_confirmation,
-                        merged_force_tool,
-                    ));
-                } else {
-                    // NOTE: Caller should alert user why their tool shorthand
-                    // was converted into a prompt.
-                    Ok(Cmd::Prompt(PromptCmd {
-                        prompt: input.into(),
-                        cache: false,
-                    }))
-                }
-            } else if let Some(tool_mode) = tool_mode {
-                let tool_cmd = Cmd::Tool(ToolCmd {
-                    tool: tool_mode.tool,
-                    prompt: input.into(),
-                    user_confirmation: tool_mode.user_confirmation,
-                    force_tool: tool_mode.force_tool,
-                    cache: false,
-                });
-                return Ok(apply_tool_modifiers(
-                    tool_cmd,
-                    tool_mode.user_confirmation,
-                    tool_mode.force_tool,
-                ));
             } else {
                 Ok(Cmd::Prompt(PromptCmd {
                     prompt: input.into(),
@@ -1272,27 +1203,33 @@ pub fn parse_user_input(
 
 // --
 
-/// The registry parser doesn't understand the `!?<tool>` and `!<tool>?`
-/// modifiers. For example:
+/// The registry parser doesn't understand the `!?<tool>` modifier nor the
+/// `!-<tool>` modifier.
 ///
 ///   !?sh ...  -> user_confirmation = true
-///   !sh? ...  -> force_tool = false
+///   !-<tool> ...  -> remove = true
 ///
 /// While ideally these would be moved to the parser, it's currently easier
 /// just to keep track of these at this layer and pass an unmodified version to
 /// the registry parser.
+///
+/// Also, drops the deprecated ! suffix which previously forced a tool to be
+/// used.
+///
+/// # Returns
+///
+/// (bang_cmd, user_confirmation, remove)
 fn peel_bang_modifiers(input: &str) -> (String, bool, bool) {
-    let (mut confirm, mut force) = (false, true);
-
     let Some(rest) = input.strip_prefix('!') else {
-        return (input.to_string(), confirm, force);
+        return (input.to_string(), false, false);
     };
-    let rest = match rest.strip_prefix('?') {
-        Some(r) => {
-            confirm = true;
-            r
-        }
-        None => rest,
+    let (rest, user_confirmation) = match rest.strip_prefix('?') {
+        Some(rest) => (rest, true),
+        None => (rest, false),
+    };
+    let (rest, remove) = match rest.strip_prefix('-') {
+        Some(rest) => (rest, true),
+        None => (rest, false),
     };
 
     // End of the tool word: a quoted string, or a run of name chars.
@@ -1308,7 +1245,7 @@ fn peel_bang_modifiers(input: &str) -> (String, bool, bool) {
                     Some(_) => {}
                     // Unterminated: hand it back untouched and let the old
                     // path report it.
-                    None => return (input.to_string(), false, true),
+                    None => return (input.to_string(), false, false),
                 }
             }
         }
@@ -1319,21 +1256,27 @@ fn peel_bang_modifiers(input: &str) -> (String, bool, bool) {
 
     let tail = match rest[end..].strip_prefix('?') {
         Some(t) => {
-            force = false;
+            // deprecated force flag
             t
         }
         None => &rest[end..],
     };
-    (format!("!{}{}", &rest[..end], tail), confirm, force)
+    (
+        format!("!{}{}", &rest[..end], tail),
+        user_confirmation,
+        remove,
+    )
 }
 
-/// Applies `user_confirmation` and `force_tool` to a `Cmd` since these flags
-/// were determined by `peel_bang_modifiers` rather than by the registry
-/// parser.
+/// Applies `user_confirmation` to a `Cmd` since it was determined by
+/// `peel_bang_modifiers` rather than by the registry parser.
+///
+/// Will switch an add command to a remove command if the `remove` flag is set
+/// since `ToolboxRemove` cannot be generated directly from the parser.
 ///
 /// Also, adds the `!tool` prefix to the prompt for `Cmd::Tool` to assist the
 /// LLM.
-fn apply_tool_modifiers(cmd: Cmd, user_confirmation: bool, force_tool: bool) -> Cmd {
+fn apply_tool_modifiers(cmd: Cmd, user_confirmation: bool, remove: bool) -> Cmd {
     match cmd {
         Cmd::Tool(c) => {
             // Conditionally add !tool to prompt + flags
@@ -1341,15 +1284,20 @@ fn apply_tool_modifiers(cmd: Cmd, user_confirmation: bool, force_tool: bool) -> 
             Cmd::Tool(ToolCmd {
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary: remove,
                 ..c
             })
         }
-        Cmd::ToolMode(c) => Cmd::ToolMode(ToolModeCmd {
-            user_confirmation,
-            force_tool,
-            ..c
-        }),
+        Cmd::ToolboxAdd(c) => {
+            if remove {
+                Cmd::ToolboxRemove(ToolboxRemoveCmd { tool: c.tool })
+            } else {
+                Cmd::ToolboxAdd(ToolboxAddCmd {
+                    user_confirmation,
+                    ..c
+                })
+            }
+        }
         other => other,
     }
 }
@@ -1451,14 +1399,14 @@ fn get_tool_from_resolved_cmd_spec(r: &ResolvedCmdSpec) -> Option<tool::Tool> {
     })
 }
 
-/// `!<tool> [<prompt>]`. An empty prompt enters tool mode.
+/// `!<tool> [<prompt>]`. An empty prompt adds tool to the toolbox.
 ///
 /// `user_confirmation` is left false: the `?` in `!?sh` is stripped by the
 /// bespoke `!` grammar before `parse_with_spec`, so that layer owns the flag.
-/// Use `set_user_confirmation` on the result.
+/// The same applies to `temporary` (i.e. `!-sh`).
 fn build_tool(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
-    if r.spec.name == "exit" {
-        return Ok(Cmd::ToolModeExit);
+    if r.spec.name == "clear" {
+        return Ok(Cmd::ToolboxClear);
     }
     let Some(tool) = get_tool_from_resolved_cmd_spec(&r) else {
         return Err(ParseError::UnknownCmd {
@@ -1471,17 +1419,16 @@ fn build_tool(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
     let prompt = r.take(0);
 
     Ok(if prompt.trim().is_empty() {
-        Cmd::ToolMode(ToolModeCmd {
+        Cmd::ToolboxAdd(ToolboxAddCmd {
             tool,
             user_confirmation: false,
-            force_tool: true,
         })
     } else {
         Cmd::Tool(ToolCmd {
             tool,
             prompt,
             user_confirmation: false,
-            force_tool: true,
+            temporary: false,
             cache,
         })
     })
@@ -2092,7 +2039,7 @@ fn split_custom_tool(input: &str) -> Option<(String, &str)> {
 /// Switches between Tool::ShellExecWithFile and Tool::ShellExecWithStdin
 /// based on whether the shell command contains a file placeholder.
 ///
-/// Like regular tools, an empty prompt returns a ToolMode cmd.
+/// Like regular tools, an empty prompt returns a `ToolboxAdd` cmd.
 fn build_custom_tool(mut r: ResolvedCmdSpec, shell_cmd: String) -> Result<Cmd, ParseError> {
     let tool = match tool::get_file_placeholder_re().captures(&shell_cmd) {
         Some(caps) => {
@@ -2104,17 +2051,16 @@ fn build_custom_tool(mut r: ResolvedCmdSpec, shell_cmd: String) -> Result<Cmd, P
     let prompt = r.take(0);
 
     Ok(if prompt.trim().is_empty() {
-        Cmd::ToolMode(ToolModeCmd {
+        Cmd::ToolboxAdd(ToolboxAddCmd {
             tool,
             user_confirmation: false,
-            force_tool: true,
         })
     } else {
         Cmd::Tool(ToolCmd {
             tool,
             prompt,
             user_confirmation: false,
-            force_tool: true,
+            temporary: false,
             cache: false,
         })
     })
@@ -2125,15 +2071,20 @@ fn build_custom_tool(mut r: ResolvedCmdSpec, shell_cmd: String) -> Result<Cmd, P
 ///
 /// - No trailing prompt
 /// - No bare `!`
-pub fn parse_tool_mode(
+pub fn parse_toolbox_add(
     cmd_registry: &crate::cmd_registry::Registry,
     input: &str,
-) -> Result<ToolModeCmd, String> {
+) -> Result<ToolboxAddCmd, String> {
     let input = input.trim();
     if !input.starts_with('!') {
         return Err(format!("invalid tool {input:?}: must start with `!`"));
     }
-    let (peeled, confirm, force) = peel_bang_modifiers(input);
+    let (peeled, user_confirmation, remove) = peel_bang_modifiers(input);
+    if remove {
+        return Err(format!(
+            "invalid tool {input:?}: cannot be marked for removal"
+        ));
+    }
 
     let cmd = if let Some((shell_cmd, tail)) = split_custom_tool(&peeled) {
         let r = cmd_parse::parse_with_spec(crate::cmd_registry::CUSTOM_TOOL_SPEC, tail)
@@ -2150,15 +2101,14 @@ pub fn parse_tool_mode(
         }
     };
     match cmd {
-        Cmd::ToolMode(c) => Ok(ToolModeCmd {
-            user_confirmation: confirm,
-            force_tool: force,
+        Cmd::ToolboxAdd(c) => Ok(ToolboxAddCmd {
+            user_confirmation,
             ..c
         }),
         Cmd::Tool(_) => Err(format!(
             "{input:?} takes no prompt here — configure the tool only, e.g. `!py`"
         )),
-        Cmd::ToolModeExit => Err("`!exit` ends tool mode; it can't be entered".into()),
+        Cmd::ToolboxClear => Err("`!clear` clears the toolbox; it can't be entered".into()),
         _ => Err(format!("{input:?} is not a tool")),
     }
 }
@@ -2198,7 +2148,7 @@ mod tests {
         // treated as an AI prompt and never as a command. This eases issues
         // with pasting code that looks like a command.
         let input = " /load xyz";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Prompt(PromptCmd { prompt, .. })) => {
                 assert_eq!(prompt, input);
@@ -2211,7 +2161,7 @@ mod tests {
     fn test_arguments() {
         // Test no arguments
         let input = "/ask-human agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2227,7 +2177,7 @@ mod tests {
 
         // Test one argument
         let input = "/ask-human(secret=true) agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2243,7 +2193,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human(secret=true,cache=true) agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2259,7 +2209,7 @@ mod tests {
 
         // Test two arguments separated by space
         let input = "/ask-human(secret=true, cache=true) agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2278,7 +2228,7 @@ mod tests {
     fn test_arguments_new() {
         // Test one argument
         let input = "/ask-human.secret=true agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2294,7 +2244,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human.secret=true.cache=true agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2310,7 +2260,7 @@ mod tests {
 
         // Test two arguments shorthand
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2326,7 +2276,7 @@ mod tests {
 
         // Test string argument
         let input = "/task.key=\"test\".trust user/task";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,
@@ -2344,7 +2294,7 @@ mod tests {
     #[test]
     fn test_clip_tool_command() {
         let input = "!clip Copy this to clipboard";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::CopyToClipboard,
@@ -2362,7 +2312,7 @@ mod tests {
     #[test]
     fn test_py_tool_command() {
         let input = "!py print('Hello, World!')";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2380,7 +2330,7 @@ mod tests {
     #[test]
     fn test_sh_tool_command() {
         let input = "!sh ls -lah";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
@@ -2399,14 +2349,14 @@ mod tests {
     #[test]
     fn test_invalid_tool_command() {
         let input = "!invalid_tool Something";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         matches!(cmd, Err(ParseError::UnknownCmd { sigil: Sigil::Bang, name, .. }) if name == "invalid_tool");
     }
 
     #[test]
     fn test_optional_tool_command() {
         let input = "!?py print('Hello, World!')";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2424,7 +2374,7 @@ mod tests {
     #[test]
     fn test_custom_tool_command() {
         let input = "!?'psql' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2441,7 +2391,7 @@ mod tests {
 
         // custom tool with space
         let input = "!?'psql -hlocalhost' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2458,7 +2408,7 @@ mod tests {
 
         // custom tool with double-quotes
         let input = "!?'psql -h \"localhost\"' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2475,7 +2425,7 @@ mod tests {
 
         // custom tool with escaped single-quote
         let input = "!?'psql -h loc\\'alhost' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2492,7 +2442,7 @@ mod tests {
 
         // custom tool with file+ext placeholder
         let input = "!?'uv run {file.py}' distance sf to nyc";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -2510,7 +2460,7 @@ mod tests {
 
         // custom tool with file sans ext placeholder
         let input = "!?'uv run {file}' distance sf to nyc";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -2528,206 +2478,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_reuse_command() {
-        let last_tool_cmd = ToolCmd {
-            tool: tool::Tool::ExecPythonScript,
-            prompt: "!py 1 + 2".to_string(),
-            user_confirmation: false,
-            force_tool: true,
-            cache: false,
-        };
-
-        // Test tool re-use
-        let input = "! 3 + 4";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecPythonScript,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "!py 3 + 4");
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-
-        // Test tool re-use with !?
-        let input = "!? 3 + 4";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecPythonScript,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "!?py 3 + 4");
-                assert!(user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-
-        // Test tool & prompt re-use
-        let input = "!";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecPythonScript,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "!py 1 + 2");
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-
-        // Test tool & prompt re-use with extraneous space and !?
-        let input = "!? ";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecPythonScript,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                // The prompt is taken from the previous one so isn't changed to !?
-                assert_eq!(prompt, "!py 1 + 2");
-                // The actual require bit is changed correctly
-                assert!(user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-
-        //
-        // Test custom tool
-        //
-
-        let last_tool_cmd = ToolCmd {
-            tool: tool::Tool::ShellExecWithStdin("psql -hlocalhost".to_string()),
-            prompt: "!'psql -hlocalhost' dump user table".to_string(),
-            user_confirmation: false,
-            force_tool: true,
-            cache: false,
-        };
-
-        // Test tool re-use
-        let input = "! dump task table";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithStdin(cmd),
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(cmd, "psql -hlocalhost");
-                assert_eq!(prompt, "!'psql -hlocalhost' dump task table");
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-
-        // Test tool & prompt re-use
-        let input = "!";
-        let cmd = parse_user_input(&Registry::new(), input, Some(last_tool_cmd.clone()), None);
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellExecWithStdin(cmd),
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(cmd, "psql -hlocalhost");
-                assert_eq!(prompt, "!'psql -hlocalhost' dump user table");
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-    }
-
-    #[test]
-    fn test_tool_mode() {
-        let last_tool_cmd = ToolCmd {
-            tool: tool::Tool::ShellScriptExec,
-            prompt: "list home dir".to_string(),
-            user_confirmation: true,
-            force_tool: true,
-            cache: false,
-        };
-
-        //
-        // Test entering tool mode
-        //
-
-        let cmd = parse_user_input(&Registry::new(), "!py", None, None);
-        match cmd {
-            Ok(Cmd::ToolMode(ToolModeCmd {
-                tool: tool::Tool::ExecPythonScript,
-                user_confirmation,
-                ..
-            })) => {
-                assert!(!user_confirmation);
-            }
-            _ => panic!("Failed to enter tool mode"),
-        }
-
-        //
-        // Test tool mode
-        //
-
-        let tool_mode = ToolModeCmd {
-            tool: tool::Tool::ExecPythonScript,
-            user_confirmation: true,
-            force_tool: true,
-        };
-        let input = "3 + 4";
-        let cmd = parse_user_input(&Registry::new(), input, None, Some(tool_mode.clone()));
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ExecPythonScript,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "!?py 3 + 4");
-                assert!(user_confirmation);
-            }
-            _ => panic!("Failed to use tool mode"),
-        }
-
-        //
-        // Test tool mode abides by last_tool_cmd
-        //
-
-        let cmd = parse_user_input(
-            &Registry::new(),
-            "! get system time",
-            Some(last_tool_cmd),
-            Some(tool_mode.clone()),
-        );
-        match cmd {
-            Ok(Cmd::Tool(ToolCmd {
-                tool: tool::Tool::ShellScriptExec,
-                prompt,
-                user_confirmation,
-                ..
-            })) => {
-                assert_eq!(prompt, "get system time");
-                assert!(user_confirmation);
-            }
-            _ => panic!("Failed to re-use tool"),
-        }
-    }
-
-    #[test]
     fn test_tool_command_with_option() {
         let input = "!fn-py(cache=true) double a number";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2737,19 +2490,19 @@ mod tests {
                     }),
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary,
                 cache,
             })) => {
                 assert_eq!(prompt, "double a number");
                 assert!(!user_confirmation);
-                assert!(force_tool);
+                assert!(!temporary);
                 assert!(cache);
             }
             _ => panic!("Failed to parse !fn-py command properly"),
         }
 
         let input = "!fn-py.cache=true double a number";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2759,19 +2512,19 @@ mod tests {
                     }),
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary,
                 cache,
             })) => {
                 assert_eq!(prompt, "double a number");
                 assert!(!user_confirmation);
-                assert!(force_tool);
+                assert!(!temporary);
                 assert!(cache);
             }
             _ => panic!("Failed to parse !fn-py command properly"),
         }
 
         let input = "!fn-py.cache double a number";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2781,12 +2534,12 @@ mod tests {
                     }),
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary,
                 cache,
             })) => {
                 assert_eq!(prompt, "double a number");
                 assert!(!user_confirmation);
-                assert!(force_tool);
+                assert!(!temporary);
                 assert!(cache);
             }
             _ => panic!("Failed to parse !fn-py command properly"),
@@ -2796,35 +2549,35 @@ mod tests {
     #[test]
     fn test_tool_require() {
         let input = "!py area of circle w/ radius 3";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary,
                 ..
             })) => {
                 assert_eq!(prompt, "!py area of circle w/ radius 3");
                 assert!(!user_confirmation);
-                assert!(force_tool);
+                assert!(!temporary);
             }
             _ => panic!("Failed to parse !py command properly"),
         }
 
         let input = "!py? area of circle w/ radius 3";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
                 prompt,
                 user_confirmation,
-                force_tool,
+                temporary,
                 ..
             })) => {
                 assert_eq!(prompt, "!py area of circle w/ radius 3");
                 assert!(!user_confirmation);
-                assert!(!force_tool);
+                assert!(!temporary);
             }
             _ => panic!("Failed to parse !py command properly"),
         }
@@ -2843,7 +2596,7 @@ mod tests {
     fn test_string_option() {
         // Test simple
         let input = "/task.key=\"A\".trust hai/test";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,
@@ -2860,7 +2613,7 @@ mod tests {
 
         // Test comma in string
         let input = "/task.key=\"A,B\".trust hai/test";
-        let cmd = parse_user_input(&Registry::new(), input, None, None);
+        let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,

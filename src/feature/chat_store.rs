@@ -501,11 +501,13 @@ pub async fn resume_chat_from_db_or_asset(
         if matches!(log_entry.message.role, chat::MessageRole::User) {
             for content in &log_entry.message.content {
                 if let chat::MessageContent::Text { text } = content {
-                    if let Ok(parse_res) = crate::cmd_parse::parse(&full_cmd_registry, &text) {
-                        if parse_res.spec.name == "task" {
-                            cur_task_name = Some(parse_res.arg(0).to_string());
+                    match cmd::parse_user_input(&full_cmd_registry, &text) {
+                        Ok(cmd::Cmd::Task(task_cmd)) => {
+                            cur_task_name = Some(task_cmd.task_ref.to_string());
                             cur_task_subindex = 0;
                         }
+                        Ok(_) => {}
+                        Err(_) => {}
                     }
                     break;
                 }
@@ -700,6 +702,7 @@ pub async fn resume_chat_from_db_or_asset(
             }
         }
     }
+    session.recalculate_toolbox();
 }
 
 /// Prints conversation history to i/o.
@@ -895,7 +898,7 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
 use crate::{cmd, cmd_registry, io};
 
 pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &str) {
-    let parsed_cmd = cmd::parse_user_input(&cmd_registry, input, None, None);
+    let parsed_cmd = cmd::parse_user_input(&cmd_registry, input);
     let (notice_section_guard, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
     | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
         parsed_cmd.as_ref()
@@ -969,11 +972,11 @@ async fn prompt_ai_simple(
     let res = crate::prompt_ai(
         &out,
         &msg_history,
-        &None,
         &Vec::new(),
         session,
         cfg,
         ctrlc_handler,
+        None,
         debug,
     )
     .await;

@@ -761,15 +761,16 @@ async fn repl(
                 } else {
                     None
                 };
-                let (tool_mode_str, tool_mode_tokens) =
-                    get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+                let (toolbox_as_strings, toolbox_tokens) =
+                    get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone())
+                        .await;
                 io.repl_status(
                     index,
                     llm_model_name,
                     session.use_hai_router.clone(),
-                    session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
+                    session.input_tokens + session.input_loaded_tokens + toolbox_tokens,
                     task_mode,
-                    tool_mode_str,
+                    toolbox_as_strings,
                     incognito,
                     session.agentic,
                 );
@@ -857,8 +858,8 @@ async fn repl(
             } else {
                 None
             };
-            let (tool_mode_str, tool_mode_tokens) =
-                get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+            let (toolbox_as_strings, toolbox_tokens) =
+                get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
             io.update_config(
                 &session.cmd_registry,
                 &account,
@@ -869,9 +870,9 @@ async fn repl(
                 index,
                 llm_model_name,
                 session.use_hai_router.clone(),
-                session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
+                session.input_tokens + session.input_loaded_tokens + toolbox_tokens,
                 task_mode,
-                tool_mode_str,
+                toolbox_as_strings,
                 incognito,
                 session.agentic,
             ) {
@@ -908,9 +909,9 @@ async fn repl(
             } else {
                 editor_prompt.set_task_mode(None);
             }
-            let (tool_mode_str, tool_mode_tokens) =
-                get_tool_mode_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
-            editor_prompt.set_tool_mode(tool_mode_str);
+            let (toolbox_tools, tool_mode_tokens) =
+                get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+            editor_prompt.set_toolbox(toolbox_tools);
             editor_prompt.set_input_tokens(
                 session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
             );
@@ -999,9 +1000,6 @@ async fn repl(
         };
         let task_step_requires_user_confirmation = is_task_mode_step && !trusted;
 
-        let last_tool_cmd = session.last_tool_cmd.clone();
-        let tool_mode = session.tool_mode.clone();
-
         // Block further progress until tokenizer has been loaded. Rarely
         // should it take this long. NOTE: It's important that this is placed
         // after the user's input. Though, in task-mode where user input is
@@ -1018,12 +1016,7 @@ async fn repl(
         let tokenizer_locked = tokenizer.lock().await;
         let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
 
-        let mut cmd = match cmd::parse_user_input(
-            &session.cmd_registry,
-            &cmd_input.input,
-            last_tool_cmd,
-            tool_mode,
-        ) {
+        let mut cmd = match cmd::parse_user_input(&session.cmd_registry, &cmd_input.input) {
             Ok(cmd) => cmd,
             Err(e) => match e {
                 cmd_parse::ParseError::UnknownCmd { .. } => {
@@ -1062,8 +1055,6 @@ async fn repl(
                 "Message is queued up and will be sent with your next message."
             );
             infoln!(io, "It was not sent because it ended with two blank lines.");
-        } else if cmd_input.input.starts_with("!") && matches!(cmd, cmd::Cmd::Prompt { .. }) {
-            warnln!(io, "No previous tool command to repeat.");
         }
 
         if exit_when_done
@@ -1138,19 +1129,19 @@ async fn repl(
         if cmd_result.error {
             session.cmd_queue.lock().await.fail_current();
         }
-        if cmd_result.new_cmds.len() > 0 {
+        if !cmd_result.new_cmds.is_empty() {
             session
                 .cmd_queue
                 .lock()
                 .await
                 .push_cmds(cmd_result.new_cmds, cmd_result.new_cmds_cascade_error);
         }
-        if cmd_result.new_temp_files.len() > 0 {
+        if !cmd_result.new_temp_files.is_empty() {
             for new_temp_file in cmd_result.new_temp_files.into_iter() {
                 session.temp_files.push((new_temp_file, is_task_mode_step));
             }
         }
-        if cmd_result.new_masked_strings.len() > 0 {
+        if !cmd_result.new_masked_strings.is_empty() {
             for new_masked_string in cmd_result.new_masked_strings.into_iter() {
                 session.masked_strings.push(new_masked_string);
             }
@@ -1158,11 +1149,20 @@ async fn repl(
         if cmd_result.purge_cmd_queue {
             session.cmd_queue.lock().await.clear();
         }
-        if let Some(tool_mode_cmd) = cmd_result.tool_mode_cmd {
-            if tool_mode_cmd.is_none() && session.tool_mode.is_none() {
-                warnln!(io, "tool mode was not active");
+        if !cmd_result.toolbox_add.is_empty() {
+            for toolbox_add in cmd_result.toolbox_add.into_iter() {
+                session
+                    .toolbox
+                    .add_tool(toolbox_add.tool, toolbox_add.user_confirmation);
             }
-            session.tool_mode = tool_mode_cmd;
+        }
+        if !cmd_result.toolbox_remove.is_empty() {
+            for tool_to_remove in cmd_result.toolbox_remove.into_iter() {
+                session.toolbox.remove_tool(&tool_to_remove);
+            }
+        }
+        if cmd_result.toolbox_clear {
+            session.toolbox.clear();
         }
 
         match cmd_result.next {
@@ -1272,14 +1272,14 @@ async fn repl(
         // REPL Eval/Print Prompt for AI
         //
 
-        let tool_policy = if let cmd::Cmd::Tool(tool_cmd) = &cmd {
-            session.last_tool_cmd = Some(tool_cmd.clone());
-            Some(tool::ToolPolicy {
-                tool: tool_cmd.tool.clone(),
-                user_confirmation: tool_cmd.user_confirmation,
-                force_tool: tool_cmd.force_tool,
-                agentic: session.agentic,
-            })
+        let force_tool_api_name = if let cmd::Cmd::Tool(tool_cmd) = &cmd {
+            session
+                .toolbox
+                .add_tool(tool_cmd.tool.clone(), tool_cmd.user_confirmation);
+            if tool_cmd.temporary {
+                session.toolbox.mark_temporary(&tool_cmd.tool);
+            }
+            Some(tool_schema::get_tool_name_for_api(&tool_cmd.tool))
         } else {
             None
         };
@@ -1392,11 +1392,11 @@ async fn repl(
                             prompt_ai(
                                 &io.out,
                                 &msg_history,
-                                &tool_policy,
                                 &masked_strings,
                                 &mut session,
                                 &cfg,
                                 ctrlc_handler,
+                                force_tool_api_name.clone(),
                                 debug,
                             )
                             .await,
@@ -1408,11 +1408,11 @@ async fn repl(
                         prompt_ai(
                             &io.out,
                             &msg_history,
-                            &tool_policy,
                             &masked_strings,
                             &mut session,
                             &cfg,
                             ctrlc_handler,
+                            force_tool_api_name.clone(),
                             debug,
                         )
                         .await,
@@ -1473,13 +1473,20 @@ async fn repl(
             }
 
             let mut tool_id_to_entry_uuid_map: HashMap<String, String> = HashMap::new();
+
+            // New log entry for assistant response
+            let assistant_msg_uuid = Uuid::now_v7().to_string();
+            let mut assistant_msg_content: Vec<chat::MessageContent> = vec![];
+            let mut assistant_msg_tool_calls: Vec<chat::ToolCall> = vec![];
+            let mut assistant_msg_tokens = 0;
+
             for ai_response in &ai_responses {
                 //
                 // Bookkeeping
                 //
 
                 // Increment `input_tokens` b/c the AI output will be part of the next input
-                let tokens = match ai_response {
+                assistant_msg_tokens += match ai_response {
                     chat::ChatCompletionResponse::Message { text } => {
                         bpe_tokenizer.encode_with_special_tokens(text).len() as u32
                     }
@@ -1487,65 +1494,52 @@ async fn repl(
                         bpe_tokenizer.encode_with_special_tokens(arg).len() as u32
                     }
                 };
-                session.input_tokens += tokens;
 
                 // Append AI's response to history
                 match ai_response {
                     chat::ChatCompletionResponse::Message { text } => {
-                        session.history.push(db::LogEntry {
-                            uuid: Uuid::now_v7().to_string(),
-                            ts: chrono::Local::now(),
-                            message: chat::Message {
-                                role: chat::MessageRole::Assistant,
-                                content: vec![chat::MessageContent::Text { text: text.clone() }],
-                                tool_calls: None,
-                                tool_call_id: None,
-                            },
-                            tokens,
-                            retention_policy: (
-                                is_task_mode_step,
-                                db::LogEntryRetentionPolicy::None,
-                            ),
-                            model: Some(config::ai_model_to_string(&session.ai)),
-                            visible: true,
-                            result_of: None,
-                        });
+                        assistant_msg_content
+                            .push(chat::MessageContent::Text { text: text.clone() });
                     }
                     chat::ChatCompletionResponse::Tool {
                         tool_id,
                         tool_name,
                         arg,
                     } => {
-                        let uuid = Uuid::now_v7().to_string();
-                        tool_id_to_entry_uuid_map.insert(tool_id.clone(), uuid.clone());
-                        session.history.push(db::LogEntry {
-                            uuid,
-                            ts: chrono::Local::now(),
-                            message: chat::Message {
-                                role: chat::MessageRole::Assistant,
-                                content: vec![],
-                                tool_calls: Some(vec![chat::ToolCall {
-                                    id: tool_id.clone(),
-                                    type_: "function".to_string(),
-                                    function: chat::Function {
-                                        name: tool_name.to_owned(),
-                                        arguments: arg.clone(),
-                                    },
-                                }]),
-                                tool_call_id: None,
+                        tool_id_to_entry_uuid_map
+                            .insert(tool_id.clone(), assistant_msg_uuid.clone());
+                        assistant_msg_tool_calls.push(chat::ToolCall {
+                            id: tool_id.clone(),
+                            type_: "function".to_string(),
+                            function: chat::Function {
+                                name: tool_name.to_owned(),
+                                arguments: arg.clone(),
                             },
-                            tokens,
-                            retention_policy: (
-                                is_task_mode_step,
-                                db::LogEntryRetentionPolicy::None,
-                            ),
-                            model: Some(config::ai_model_to_string(&session.ai)),
-                            visible: true,
-                            result_of: None,
                         });
                     }
                 }
             }
+
+            session.input_tokens += assistant_msg_tokens;
+            session.history.push(db::LogEntry {
+                uuid: assistant_msg_uuid,
+                ts: chrono::Local::now(),
+                message: chat::Message {
+                    role: chat::MessageRole::Assistant,
+                    content: assistant_msg_content,
+                    tool_calls: if assistant_msg_tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(assistant_msg_tool_calls)
+                    },
+                    tool_call_id: None,
+                },
+                tokens,
+                retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                model: Some(config::ai_model_to_string(&session.ai)),
+                visible: true,
+                result_of: None,
+            });
 
             //
             // Execute optional tool
@@ -1554,10 +1548,16 @@ async fn repl(
             for ai_response in &ai_responses {
                 if let chat::ChatCompletionResponse::Tool {
                     tool_id,
-                    tool_name: _,
+                    tool_name,
                     arg,
                 } = &ai_response
                 {
+                    let Some(toolbox_tool_policy) = session.toolbox.get_tool_by_api_name(tool_name)
+                    else {
+                        errorln!(io, "tool not found in toolbox: {}", tool_name);
+                        continue;
+                    };
+
                     outln!(io);
                     if io.is_terminal() {
                         println!("{}", "⚙ ⚙ ⚙".white().on_black());
@@ -1567,26 +1567,18 @@ async fn repl(
                     }
                     outln!(io);
 
-                    let tool_policy = tool_policy.clone();
-
                     // The tools that don't need user-confirmation are those that
                     // don't have destructive potential. !fn-py only assigns a
                     // function but does not execute it. !clip can be abused but
                     // it's more of a nuisance. Also, the prompting of the AI may
                     // still require user confirmation.
                     let tool_needs_user_confirmation = !matches!(
-                        tool_policy,
-                        Some(tool::ToolPolicy {
-                            tool: tool::Tool::FnDef(_) | tool::Tool::CopyToClipboard,
-                            ..
-                        })
+                        toolbox_tool_policy.tool,
+                        tool::Tool::FnDef(_) | tool::Tool::CopyToClipboard,
                     );
                     // If the tool is a no-op, then it doesn't need user confirmation.
-                    let tool_noops = match tool_policy {
-                        Some(tool::ToolPolicy {
-                            tool: tool::Tool::HaiRepl,
-                            ..
-                        }) => {
+                    let tool_noops = match &toolbox_tool_policy.tool {
+                        tool::Tool::HaiRepl => {
                             if let Ok(hai_repl_arg) =
                                 serde_json::from_str::<tool::ToolHaiReplArg>(arg)
                             {
@@ -1595,21 +1587,14 @@ async fn repl(
                                 false
                             }
                         }
-                        Some(_) | None => false,
+                        _ => false,
                     };
-
-                    // The negation of the policy to require the AI to use a tool
-                    // doubles as a way to require user confirmation.
-                    let tool_policy_needs_user_confirmation = tool_policy
-                        .clone()
-                        .map(|tp| tp.user_confirmation)
-                        .unwrap_or(false);
 
                     let user_confirmed_tool_execute = if !force_yes
                         && !tool_noops
                         && tool_needs_user_confirmation
                         && (cfg.tool_confirm
-                            || tool_policy_needs_user_confirmation
+                            || toolbox_tool_policy.user_confirmation
                             || task_step_requires_user_confirmation)
                     {
                         let answer = io
@@ -1646,7 +1631,7 @@ async fn repl(
                         true
                     };
 
-                    if user_confirmed_tool_execute && let Some(ref tp) = tool_policy {
+                    if user_confirmed_tool_execute {
                         // Use an AtomicBool since it's lock-free and cannot
                         // deadlock in the signal handler.
                         let interrupted = Arc::new(AtomicBool::new(false));
@@ -1662,149 +1647,161 @@ async fn repl(
                             index: session.history.len() as u32,
                             tool_id: tool_id.clone(),
                         });
-                        let (mut output_text, follow_up) = if matches!(tp.tool, tool::Tool::HaiRepl)
-                        {
-                            let mut cmd_queue = session.cmd_queue.lock().await;
-                            match tool::execute_hai_repl_tool(&io.out, &tp.tool, arg) {
-                                Ok((output_text, new_cmds)) => {
-                                    cmd_queue.push_cmds(new_cmds, false);
-                                    (output_text, None)
-                                }
-                                Err(e) => {
-                                    let err_text = format!("error executing hai-repl tool: {}", e);
-                                    outln!(io, "{}", err_text);
-                                    (err_text, None)
-                                }
-                            }
-                        } else if let tool::Tool::FnDef(fn_tool) = &tp.tool {
-                            let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref()
-                                && !session.fn_json_defs.contains_key(&format!("f_{}", name))
-                            {
-                                // If name already in use, replaces.
-                                // This makes iteration easier.
-                                format!("f_{}", name)
-                            } else {
-                                // Get first free name
-                                let mut i = session.ai_defined_fns.len();
-                                loop {
-                                    let test_name = format!("f{}", i);
-                                    if !session.ai_defined_fns.contains_key(&test_name) {
-                                        break test_name;
-                                    }
-                                    i += 1;
-                                }
-                            };
-                            match tool::extract_ai_defined_fn_def(arg) {
-                                Ok(fn_def) => {
-                                    session.add_ai_defined_fn(
-                                        &ai_defined_tool_name,
-                                        &fn_def,
-                                        fn_tool.clone(),
-                                        is_task_mode_step,
-                                    );
-                                    let output_text =
-                                        format!("Stored as command: /{}", ai_defined_tool_name);
-                                    outln!(io, "{}", output_text);
-                                    (output_text, None)
-                                }
-                                Err(e) => {
-                                    let err_text = format!("error extracting function: {}", e);
-                                    outln!(io, "{}", err_text);
-                                    (err_text, None)
-                                }
-                            }
-                        } else if let tool::Tool::FnExec(name) = &tp.tool {
-                            // Validate structure
-                            if let Some((structured_tool_schema, _, _)) =
-                                session.fn_json_defs.get(name)
-                            {
-                                // Perform validation or other operations with `structured_tool` here
-                                match jsonschema::validator_for(structured_tool_schema) {
-                                    Ok(validator) => {
-                                        match serde_json::from_str::<serde_json::Value>(&arg) {
-                                            Ok(mut arg_json) => {
-                                                if let Some(error) =
-                                                    validator.iter_errors(&arg_json).next()
-                                                {
-                                                    let err_text = format!(
-                                                        "Error at '{}': {}",
-                                                        error.instance_path(),
-                                                        error
-                                                    );
-                                                    errorln!(io, "{}", err_text);
-                                                    (err_text, None)
-                                                } else {
-                                                    let follow_up: Option<String> = arg_json
-                                                        .as_object_mut()
-                                                        .and_then(|o| o.remove("_continue"))
-                                                        .and_then(|v| match v {
-                                                            serde_json::Value::String(s) => Some(s),
-                                                            _ => None,
-                                                        });
-
-                                                    let fn_name = name[2..].to_string();
-                                                    let fn_arg = serde_json::to_string(&arg_json)
-                                                        .expect("failed to re-serialize");
-
-                                                    io.apply(&fn_name, &fn_arg);
-                                                    (format!("{}({})", fn_name, fn_arg), follow_up)
-                                                }
-                                            }
-                                            Err(_) => {
-                                                let err_text = format!("invalid JSON: {}", arg);
-                                                errorln!(io, "{}", err_text);
-                                                (err_text, None)
-                                            }
-                                        }
+                        let (mut output_text, follow_up) =
+                            if matches!(toolbox_tool_policy.tool, tool::Tool::HaiRepl) {
+                                let mut cmd_queue = session.cmd_queue.lock().await;
+                                match tool::execute_hai_repl_tool(
+                                    &io.out,
+                                    &toolbox_tool_policy.tool,
+                                    arg,
+                                ) {
+                                    Ok((output_text, new_cmds)) => {
+                                        cmd_queue.push_cmds(new_cmds, false);
+                                        (output_text, None)
                                     }
                                     Err(e) => {
-                                        let err_text = format!("Unexpected invalid schema: {}", e);
-                                        errorln!(io, "{}", err_text);
+                                        let err_text =
+                                            format!("error executing hai-repl tool: {}", e);
+                                        outln!(io, "{}", err_text);
+                                        (err_text, None)
+                                    }
+                                }
+                            } else if let tool::Tool::FnDef(fn_tool) = &toolbox_tool_policy.tool {
+                                let ai_defined_tool_name = if let Some(name) = fn_tool.name.as_ref()
+                                    && !session.fn_json_defs.contains_key(&format!("f_{}", name))
+                                {
+                                    // If name already in use, replaces.
+                                    // This makes iteration easier.
+                                    format!("f_{}", name)
+                                } else {
+                                    // Get first free name
+                                    let mut i = session.ai_defined_fns.len();
+                                    loop {
+                                        let test_name = format!("f{}", i);
+                                        if !session.ai_defined_fns.contains_key(&test_name) {
+                                            break test_name;
+                                        }
+                                        i += 1;
+                                    }
+                                };
+                                match tool::extract_ai_defined_fn_def(arg) {
+                                    Ok(fn_def) => {
+                                        session.add_ai_defined_fn(
+                                            &ai_defined_tool_name,
+                                            &fn_def,
+                                            fn_tool.clone(),
+                                            is_task_mode_step,
+                                        );
+                                        let output_text =
+                                            format!("Stored as command: /{}", ai_defined_tool_name);
+                                        outln!(io, "{}", output_text);
+                                        (output_text, None)
+                                    }
+                                    Err(e) => {
+                                        let err_text = format!("error extracting function: {}", e);
+                                        outln!(io, "{}", err_text);
+                                        (err_text, None)
+                                    }
+                                }
+                            } else if let tool::Tool::FnExec(name) = &toolbox_tool_policy.tool {
+                                // Validate structure
+                                if let Some((structured_tool_schema, _, _)) =
+                                    session.fn_json_defs.get(name)
+                                {
+                                    // Perform validation or other operations with `structured_tool` here
+                                    match jsonschema::validator_for(structured_tool_schema) {
+                                        Ok(validator) => {
+                                            match serde_json::from_str::<serde_json::Value>(&arg) {
+                                                Ok(mut arg_json) => {
+                                                    if let Some(error) =
+                                                        validator.iter_errors(&arg_json).next()
+                                                    {
+                                                        let err_text = format!(
+                                                            "Error at '{}': {}",
+                                                            error.instance_path(),
+                                                            error
+                                                        );
+                                                        errorln!(io, "{}", err_text);
+                                                        (err_text, None)
+                                                    } else {
+                                                        let follow_up: Option<String> = arg_json
+                                                            .as_object_mut()
+                                                            .and_then(|o| o.remove("_continue"))
+                                                            .and_then(|v| match v {
+                                                                serde_json::Value::String(s) => {
+                                                                    Some(s)
+                                                                }
+                                                                _ => None,
+                                                            });
+
+                                                        let fn_name = name[2..].to_string();
+                                                        let fn_arg =
+                                                            serde_json::to_string(&arg_json)
+                                                                .expect("failed to re-serialize");
+
+                                                        io.apply(&fn_name, &fn_arg);
+                                                        (
+                                                            format!("{}({})", fn_name, fn_arg),
+                                                            follow_up,
+                                                        )
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    let err_text = format!("invalid JSON: {}", arg);
+                                                    errorln!(io, "{}", err_text);
+                                                    (err_text, None)
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let err_text =
+                                                format!("Unexpected invalid schema: {}", e);
+                                            errorln!(io, "{}", err_text);
+                                            (err_text, None)
+                                        }
+                                    }
+                                } else {
+                                    let err_text = format!("Structured tool not found: {}", name);
+                                    errorln!(io, "{}", err_text);
+                                    (err_text, None)
+                                }
+                            } else if matches!(toolbox_tool_policy.tool, tool::Tool::Html) {
+                                match feature::html_tool::execute_html_tool(
+                                    &mut session,
+                                    is_task_mode_step,
+                                    arg,
+                                )
+                                .await
+                                {
+                                    Ok(temp_file_path) => {
+                                        let output_text = format!("Updated {}", temp_file_path);
+                                        outln!(io, "{}", output_text);
+                                        (output_text, None)
+                                    }
+                                    Err(e) => {
+                                        let err_text = format!("error executing HTML tool: {}", e);
+                                        outln!(io, "{}", err_text);
                                         (err_text, None)
                                     }
                                 }
                             } else {
-                                let err_text = format!("Structured tool not found: {}", name);
-                                errorln!(io, "{}", err_text);
-                                (err_text, None)
-                            }
-                        } else if matches!(tp.tool, tool::Tool::Html) {
-                            match feature::html_tool::execute_html_tool(
-                                &mut session,
-                                is_task_mode_step,
-                                arg,
-                            )
-                            .await
-                            {
-                                Ok(temp_file_path) => {
-                                    let output_text = format!("Updated {}", temp_file_path);
-                                    outln!(io, "{}", output_text);
-                                    (output_text, None)
+                                match tool::execute_shell_based_tool(
+                                    &io.out,
+                                    &toolbox_tool_policy.tool,
+                                    arg,
+                                    &session.shell,
+                                    Some(&session.get_shell_exec_env_vars()),
+                                )
+                                .await
+                                {
+                                    Ok((output_text, follow_up)) => (output_text, follow_up),
+                                    Err(e) => {
+                                        let err_text = format!("error executing tool: {}", e);
+                                        outln!(io, "{}", err_text);
+                                        (err_text, None)
+                                    }
                                 }
-                                Err(e) => {
-                                    let err_text = format!("error executing HTML tool: {}", e);
-                                    outln!(io, "{}", err_text);
-                                    (err_text, None)
-                                }
-                            }
-                        } else {
-                            match tool::execute_shell_based_tool(
-                                &io.out,
-                                &tp.tool,
-                                arg,
-                                &session.shell,
-                                Some(&session.get_shell_exec_env_vars()),
-                            )
-                            .await
-                            {
-                                Ok((output_text, follow_up)) => (output_text, follow_up),
-                                Err(e) => {
-                                    let err_text = format!("error executing tool: {}", e);
-                                    outln!(io, "{}", err_text);
-                                    (err_text, None)
-                                }
-                            }
-                        };
+                            };
                         if ai_follow_up_requested.is_none() {
                             ai_follow_up_requested = follow_up;
                         }
@@ -1845,6 +1842,8 @@ async fn repl(
                     }
                 }
             }
+
+            session.toolbox.clear_temporary();
 
             if exit_when_done && session.cmd_queue.lock().await.is_empty() {
                 wrapup_and_cleanup(&session, update_asset_tx).await;
@@ -1905,13 +1904,7 @@ async fn repl(
 /// client). Returns the synthetic command to run, or `None` to break the
 /// REPL loop.
 fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
-    if session.tool_mode.is_some() {
-        Some(session::CmdInput {
-            input: "!exit".to_string(),
-            source: session::CmdSource::Internal(true),
-            reply_channel: None,
-        })
-    } else if matches!(session.repl_mode, ReplMode::Task(..)) {
+    if matches!(session.repl_mode, ReplMode::Task(..)) {
         Some(session::CmdInput {
             input: "/task-end".to_string(),
             source: session::CmdSource::Internal(true),
@@ -1996,7 +1989,7 @@ fn print_internal_cmd_input(
         masked_input = masked_input.replace(masked_string, &mask);
     }
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
-        let parsed_cmd = cmd::parse_user_input(&cmd_registry, input, None, None);
+        let parsed_cmd = cmd::parse_user_input(&cmd_registry, input);
         // For prep & pin, we print the message w/o the command prefix.
         let (message, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, message }))
         | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, message })) =
@@ -2040,15 +2033,17 @@ fn print_internal_cmd_input(
 
 // --
 
-async fn get_tool_mode_and_tool_schema_input_tokens(
+async fn get_toolbox_strings_and_tool_schema_input_tokens(
     session: &SessionState,
     tokenizer: Arc<Mutex<Option<tiktoken_rs::CoreBPE>>>,
-) -> (Option<String>, u32) {
-    if let Some(tool_mode_cmd) = session.tool_mode.clone() {
-        // If in tool mode, we need the tokenizer to be available to calculate
-        // the number of tokens the tool schema will consume. Since the
-        // tokenizer is loaded lazily, we block further progress until the
-        // tokenizer has been loaded.
+) -> (Vec<String>, u32) {
+    let mut tool_schema_input_tokens = 0;
+    let mut tool_names = vec![];
+    for twp in &session.toolbox.tools {
+        // We need the tokenizer to be available to calculate the number of
+        // tokens the tool schema will consume. Since the tokenizer is loaded
+        // lazily, we block further progress until the tokenizer has been
+        // loaded.
         {
             let tokenizer_locked = tokenizer.lock().await;
             if tokenizer_locked.is_none() {
@@ -2068,27 +2063,20 @@ async fn get_tool_mode_and_tool_schema_input_tokens(
         let tool_schema = tool_schema::get_tool_schema(
             &session.cmd_registry,
             &session.fn_json_defs,
-            &tool_mode_cmd.tool,
+            &twp.tool,
             schema_key_name,
             &session.shell,
             session.agentic,
+            matches!(session.ai, config::AiModel::Anthropic(_)),
         );
         let tool_schema_str =
             serde_json::to_string(&tool_schema).expect("Failed to serialize tool schema");
-        let tool_schema_input_tokens = bpe_tokenizer
+        tool_schema_input_tokens += bpe_tokenizer
             .encode_with_special_tokens(&tool_schema_str)
             .len() as u32;
-        (
-            Some(tool::tool_to_cmd(
-                &tool_mode_cmd.tool,
-                tool_mode_cmd.user_confirmation,
-                tool_mode_cmd.force_tool,
-            )),
-            tool_schema_input_tokens,
-        )
-    } else {
-        (None, 0)
+        tool_names.push(tool::tool_to_bang_cmd(&twp.tool, twp.user_confirmation));
     }
+    (tool_names, tool_schema_input_tokens)
 }
 
 // --
@@ -2119,7 +2107,7 @@ fn preprocess_cmd(out: &Out, cmd: cmd::Cmd, haivars: &HashMap<String, String>) -
         tool: tool::Tool::ShellExecWithFile(_, _) | tool::Tool::ShellExecWithStdin(_),
         prompt,
         user_confirmation,
-        force_tool,
+        temporary,
         cache,
     }) = cmd
     {
@@ -2129,7 +2117,7 @@ fn preprocess_cmd(out: &Out, cmd: cmd::Cmd, haivars: &HashMap<String, String>) -
             // vars are sometimes too opaque for the AI to understand.
             prompt: feature::haivar::replace_haivars(out, &prompt, haivars),
             user_confirmation,
-            force_tool,
+            temporary,
             cache,
         })
     } else {
@@ -2142,11 +2130,11 @@ fn preprocess_cmd(out: &Out, cmd: cmd::Cmd, haivars: &HashMap<String, String>) -
 pub async fn prompt_ai(
     out: &Out,
     msg_history: &[chat::Message],
-    tool_policy: &Option<tool::ToolPolicy>,
     masked_strings: &Vec<String>,
     session: &mut SessionState,
     cfg: &config::Config,
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
+    force_tool_api_name: Option<String>,
     debug: bool,
 ) -> Vec<ChatCompletionResponse> {
     let api_base_url = get_api_base_url();
@@ -2223,17 +2211,22 @@ pub async fn prompt_ai(
                     }
                 };
 
-            let mut tool_schemas = vec![];
-            if let Some(tp) = tool_policy {
-                tool_schemas.push(tool_schema::get_tool_schema(
-                    &session.cmd_registry,
-                    &session.fn_json_defs,
-                    &tp.tool,
-                    "parameters",
-                    &session.shell,
-                    tp.agentic,
-                ));
-            }
+            let tool_schemas = session
+                .toolbox
+                .tools
+                .iter()
+                .map(|twp| {
+                    tool_schema::get_tool_schema(
+                        &session.cmd_registry,
+                        &session.fn_json_defs,
+                        &twp.tool,
+                        "parameters",
+                        &session.shell,
+                        session.agentic,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>();
 
             openai::send_to_openai(
                 out,
@@ -2244,7 +2237,7 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 msg_history,
                 &tool_schemas,
-                tool_policy.as_ref(),
+                force_tool_api_name,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -2278,24 +2271,29 @@ pub async fn prompt_ai(
             // Opus 4.7+ deprecated temperature
             let temperature_deprecated =
                 config::anthropic_model_temperature_deprecated(&anthropic_model);
-            let revised_tool_policy = tool_policy.clone().map(|mut tp| {
-                if config::anthropic_model_cannot_force_tool(&anthropic_model) {
-                    tp.force_tool = false;
-                }
-                tp
-            });
+            let force_tool_api_name = if config::anthropic_model_cannot_force_tool(&anthropic_model)
+            {
+                None
+            } else {
+                force_tool_api_name
+            };
 
-            let mut tool_schemas = vec![];
-            if let Some(tp) = tool_policy {
-                tool_schemas.push(tool_schema::get_tool_schema(
-                    &session.cmd_registry,
-                    &session.fn_json_defs,
-                    &tp.tool,
-                    "input_schema",
-                    &session.shell,
-                    tp.agentic,
-                ));
-            }
+            let tool_schemas = session
+                .toolbox
+                .tools
+                .iter()
+                .map(|twp| {
+                    tool_schema::get_tool_schema(
+                        &session.cmd_registry,
+                        &session.fn_json_defs,
+                        &twp.tool,
+                        "input_schema",
+                        &session.shell,
+                        session.agentic,
+                        true,
+                    )
+                })
+                .collect::<Vec<_>>();
 
             anthropic::send_to_anthropic(
                 out,
@@ -2312,7 +2310,7 @@ pub async fn prompt_ai(
                 temperature_deprecated,
                 msg_history,
                 &tool_schemas,
-                revised_tool_policy.as_ref(),
+                force_tool_api_name,
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,
@@ -2320,17 +2318,22 @@ pub async fn prompt_ai(
             .await
         }
         config::AiModel::Ollama(_) => {
-            let mut tool_schemas = vec![];
-            if let Some(tp) = tool_policy {
-                tool_schemas.push(tool_schema::get_tool_schema(
-                    &session.cmd_registry,
-                    &session.fn_json_defs,
-                    &tp.tool,
-                    "parameters",
-                    &session.shell,
-                    tp.agentic,
-                ));
-            }
+            let tool_schemas = session
+                .toolbox
+                .tools
+                .iter()
+                .map(|twp| {
+                    tool_schema::get_tool_schema(
+                        &session.cmd_registry,
+                        &session.fn_json_defs,
+                        &twp.tool,
+                        "parameters",
+                        &session.shell,
+                        session.agentic,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>();
             ollama::send_to_ollama(
                 out,
                 cfg.ollama
@@ -2340,7 +2343,6 @@ pub async fn prompt_ai(
                 session.ai_temperature,
                 msg_history,
                 &tool_schemas,
-                tool_policy.as_ref(),
                 Some(ctrlc_handler),
                 masked_strings,
                 debug,

@@ -254,7 +254,7 @@ impl Io {
         use_hai_router: session::HaiRouterState,
         input_tokens: u32,
         task_mode: Option<String>,
-        tool_mode: Option<String>,
+        toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
     ) -> Answer {
@@ -264,7 +264,7 @@ impl Io {
             use_hai_router,
             input_tokens,
             task_mode,
-            tool_mode,
+            toolbox,
             incognito,
             agentic,
         )
@@ -335,7 +335,7 @@ impl Io {
         use_hai_router: session::HaiRouterState,
         input_tokens: u32,
         task_mode: Option<String>,
-        tool_mode: Option<String>,
+        toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
     ) {
@@ -345,7 +345,7 @@ impl Io {
             use_hai_router,
             input_tokens,
             task_mode,
-            tool_mode,
+            toolbox,
             incognito,
             agentic,
         )
@@ -465,7 +465,7 @@ pub trait Input: Send {
         _use_hai_router: session::HaiRouterState,
         _input_tokens: u32,
         _task_mode: Option<String>,
-        _tool_mode: Option<String>,
+        _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
     ) -> Answer {
@@ -651,7 +651,7 @@ pub trait Output: Send {
         use_hai_router: session::HaiRouterState,
         input_tokens: u32,
         task_mode: Option<String>,
-        tool_mode: Option<String>,
+        toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
     );
@@ -847,7 +847,7 @@ impl Out {
         use_hai_router: session::HaiRouterState,
         input_tokens: u32,
         task_mode: Option<String>,
-        tool_mode: Option<String>,
+        toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
     ) {
@@ -857,7 +857,7 @@ impl Out {
             use_hai_router,
             input_tokens,
             task_mode,
-            tool_mode,
+            toolbox,
             incognito,
             agentic,
         );
@@ -1504,7 +1504,7 @@ impl Output for StdioOutput {
         _use_hai_router: session::HaiRouterState,
         _input_tokens: u32,
         _task_mode: Option<String>,
-        _tool_mode: Option<String>,
+        _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
     ) {
@@ -1570,7 +1570,7 @@ impl Output for NoopOutput {
         _use_hai_router: session::HaiRouterState,
         _input_tokens: u32,
         _task_mode: Option<String>,
-        _tool_mode: Option<String>,
+        _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
     ) {
@@ -1599,7 +1599,7 @@ impl Input for NoopInput {
         _use_hai_router: session::HaiRouterState,
         _input_tokens: u32,
         _task_mode: Option<String>,
-        _tool_mode: Option<String>,
+        _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
     ) -> Answer {
