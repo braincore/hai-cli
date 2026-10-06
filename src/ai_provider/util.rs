@@ -79,7 +79,7 @@ pub struct MaskedPrinter {
 impl MaskedPrinter {
     pub fn new(masked_strings: Vec<String>) -> Self {
         MaskedPrinter {
-            sh_printer: SyntaxHighlighterPrinter::new(false),
+            sh_printer: SyntaxHighlighterPrinter::new(false, None),
             buffer: String::new(),
             masked_buffer: String::new(),
             masked_strings,
@@ -131,6 +131,46 @@ impl MaskedPrinter {
 
 use two_face::re_exports::syntect::highlighting::Color;
 
+/// Characters that commonly wrap a path but aren't part of it.
+fn trim_path_noise(s: &str) -> &str {
+    s.trim_matches(|c: char| {
+        matches!(
+            c,
+            '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';' | ':'
+        )
+    })
+}
+
+/// Find a syntect-compatible lang token from a file extension on the line.
+/// Prefers the last token, but scans backwards in case there are tail
+/// arguments that aren't releevant.
+fn lang_from_line_extension(line: &str) -> Option<String> {
+    let ss = term_color::get_syntax_set();
+    for raw in line.split_whitespace().rev() {
+        let token = trim_path_noise(raw);
+        // Strip directory part (unix or windows separators)
+        let filename = token.rsplit(['/', '\\']).next().unwrap_or(token);
+
+        // Try the extension first (`foo.rs` -> `rs`, `.bashrc` -> `bashrc`).
+        if let Some((_, ext)) = filename.rsplit_once('.')
+            && !ext.is_empty()
+            && ext
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+            && ss.find_syntax_by_extension(ext).is_some()
+        {
+            return Some(ext.to_string());
+        }
+
+        // Extensionless names that syntect supports (`Makefile`, `Dockerfile`,
+        // ...).
+        if !filename.is_empty() && ss.find_syntax_by_extension(filename).is_some() {
+            return Some(filename.to_string());
+        }
+    }
+    None
+}
+
 pub struct SyntaxHighlighterPrinter {
     buffer: String,
     lang_token: Option<String>,
@@ -141,10 +181,10 @@ pub struct SyntaxHighlighterPrinter {
 }
 
 impl SyntaxHighlighterPrinter {
-    pub fn new(one_shot: bool) -> Self {
+    pub fn new(one_shot: bool, lang: Option<&str>) -> Self {
         SyntaxHighlighterPrinter {
             buffer: String::new(),
-            lang_token: Some("markdown".to_string()),
+            lang_token: Some(lang.unwrap_or("markdown").to_string()),
             // The default_lang_token starts out as the "active" lang token.
             default_lang_token: None,
             background_color: None,
@@ -183,11 +223,15 @@ impl SyntaxHighlighterPrinter {
     }
 
     pub fn lang_token_check_start(&mut self, line: &str) {
-        let markdown_code_block_re = term_color::get_markdown_code_block_re();
-        if let Some(captures) = markdown_code_block_re.captures(line)
-            && let Some(lang) = captures.get(1).map(|m| m.as_str().to_string())
+        if self.lang_token.as_deref() == Some(term_color::HAIREPL_LANG_TOKEN) {
+            match lang_from_line_extension(line) {
+                Some(lang) => self.set_lang_token(&lang),
+                None => self.set_lang_token("markdown"),
+            }
+        } else if let Some(captures) = term_color::get_markdown_code_block_re().captures(line)
+            && let Some(lang) = captures.get(1)
         {
-            self.set_lang_token(&lang);
+            self.set_lang_token(lang.as_str());
         }
     }
 
@@ -437,7 +481,7 @@ impl MaskedJsonStringPrinter {
             buffer_print_cursor: 0,
             printed_text: String::new(),
             unmasked_printed_text: String::new(),
-            sh_printer: SyntaxHighlighterPrinter::new(false),
+            sh_printer: SyntaxHighlighterPrinter::new(false, None),
         }
     }
 
@@ -712,6 +756,7 @@ impl JsonObjectAccumulator {
                                 (
                                     Printer::Array(JsonArrayAccumulator::new(
                                         self.masked_strings.clone(),
+                                        self.sh_lang_token.clone(),
                                     )),
                                     third_quote_index,
                                 )
@@ -726,7 +771,10 @@ impl JsonObjectAccumulator {
                             (Printer::String(printer), third_quote_index)
                         }
                         (None, Some(array_open_index)) => (
-                            Printer::Array(JsonArrayAccumulator::new(self.masked_strings.clone())),
+                            Printer::Array(JsonArrayAccumulator::new(
+                                self.masked_strings.clone(),
+                                self.sh_lang_token.clone(),
+                            )),
                             array_open_index,
                         ),
                         (None, None) => {
@@ -822,17 +870,19 @@ pub struct JsonArrayAccumulator {
     masked_strings: Vec<String>,
     cur_printer: Option<MaskedJsonStringPrinter>,
     items: usize,
+    lang_token: Option<String>,
 }
 
 impl JsonArrayAccumulator {
-    pub fn new(masked_strings: Vec<String>) -> JsonArrayAccumulator {
-        JsonArrayAccumulator {
+    pub fn new(masked_strings: Vec<String>, lang_token: Option<String>) -> Self {
+        Self {
             buffer: String::new(),
             printed_text: String::new(),
             unmasked_printed_text: String::new(),
             masked_strings,
             cur_printer: None,
             items: 0,
+            lang_token,
         }
     }
 
@@ -898,7 +948,9 @@ impl JsonArrayAccumulator {
                     // know which lang is being used. Can be markdown or code.
                     // FUTURE: Try best effort detection of file extensions in
                     // the first line?
-                    item_printer.set_lang_token("unknown");
+                    if let Some(lang_token) = self.lang_token.as_deref() {
+                        item_printer.set_lang_token(lang_token);
+                    }
 
                     remove_first_n_chars(&mut self.buffer, quote_index);
 
@@ -940,7 +992,7 @@ mod tests {
     fn test_json_array_acc_basic() {
         let out = Out::stdio();
         let masked_strings = vec![];
-        let mut accumulator = JsonArrayAccumulator::new(masked_strings);
+        let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1, &out);
         assert_eq!(acc_res.printed_text_chunk, "- mango\n- pear\n");
@@ -951,7 +1003,7 @@ mod tests {
 
         // Test with masks
         let masked_strings = vec!["ear".to_string()];
-        let mut accumulator = JsonArrayAccumulator::new(masked_strings);
+        let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1, &out);
         assert_eq!(accumulator.printed_text, "- mango\n- p***\n");
@@ -963,7 +1015,7 @@ mod tests {
     fn test_json_array_acc_odd_spacing() {
         let out = Out::stdio();
         let masked_strings = vec![];
-        let mut accumulator = JsonArrayAccumulator::new(masked_strings);
+        let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = "[    \n   \"mango\"     , \n     \"pear\"      ]    ";
         accumulator.acc(input1, &out);
         assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
@@ -974,7 +1026,7 @@ mod tests {
     fn test_json_array_acc_many_pieces() {
         let out = Out::stdio();
         let masked_strings = vec![];
-        let mut accumulator = JsonArrayAccumulator::new(masked_strings);
+        let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = r#"["#;
         let input2 = r#""mang"#;
         let input3 = r#"o","#;

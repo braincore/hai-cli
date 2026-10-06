@@ -120,7 +120,7 @@ pub fn get_tool_syntax_highlighter_lang_token(tool: &Tool) -> Option<String> {
             ..
         }) => Some("bash".to_string()),
         Tool::FnExec(_) => Some("json".to_string()),
-        Tool::HaiRepl => None,
+        Tool::HaiRepl => Some(crate::term_color::HAIREPL_LANG_TOKEN.to_string()),
         Tool::Html => Some("html".to_string()),
         // WARN: The work hasn't been done to ensure that syntax-highlighter
         // tokens match all file extensions correctly.

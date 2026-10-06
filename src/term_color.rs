@@ -171,6 +171,12 @@ pub fn get_markdown_code_block_re() -> &'static Regex {
     MARKDOWN_CODE_BLOCK_RE.get_or_init(|| Regex::new(r"^\s*```([a-zA-Z0-9_+-]+)?$").unwrap())
 }
 
+/// The language token used for hai-repl lines.
+/// While syntect does not natively recognize this token, it's used by our own
+/// syntax highlighting logic to custom analyze hai-repl lines to determine the
+/// language token for repl-command bodies.
+pub const HAIREPL_LANG_TOKEN: &str = "hairepl";
+
 // --
 
 use crate::io::Io;
@@ -193,8 +199,9 @@ pub fn print_multi_lang_syntax_highlighting(
     out: &Out,
     markdown: &str,
     background_color: &Option<(u8, u8, u8)>,
+    lang: Option<&str>,
 ) {
-    let mut sh_printer = crate::ai_provider::util::SyntaxHighlighterPrinter::new(true);
+    let mut sh_printer = crate::ai_provider::util::SyntaxHighlighterPrinter::new(true, lang);
     if let Some((r, g, b)) = background_color {
         sh_printer.set_background_color(*r, *g, *b, 255);
     };

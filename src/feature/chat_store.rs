@@ -895,9 +895,10 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
 use crate::{cmd, cmd_registry, io};
 
 pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &str) {
+    let parsed_cmd = cmd::parse_user_input(&cmd_registry, input, None, None);
     let (notice_section_guard, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
     | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
-        cmd::parse_user_input(&cmd_registry, input, None, None)
+        parsed_cmd.as_ref()
     {
         let notice_section_guard = if io.is_section_aware()
             && let Some(accent) = accent.as_ref()
@@ -926,7 +927,23 @@ pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &
     } else {
         (None, None)
     };
-    crate::term_color::print_multi_lang_syntax_highlighting(&io.out, input.trim_end(), &color);
+    let lang = if matches!(
+        parsed_cmd,
+        Ok(cmd::Cmd::Pin(_))
+            | Ok(cmd::Cmd::Prep(_))
+            | Ok(cmd::Cmd::Prompt(_))
+            | Ok(cmd::Cmd::SystemPrompt(_))
+    ) {
+        Some("markdown")
+    } else {
+        Some(crate::term_color::HAIREPL_LANG_TOKEN)
+    };
+    crate::term_color::print_multi_lang_syntax_highlighting(
+        &io.out,
+        input.trim_end(),
+        &color,
+        lang,
+    );
     outln!(io);
     drop(notice_section_guard);
 }

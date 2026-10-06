@@ -1996,10 +1996,11 @@ fn print_internal_cmd_input(
         masked_input = masked_input.replace(masked_string, &mask);
     }
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
+        let parsed_cmd = cmd::parse_user_input(&cmd_registry, input, None, None);
         // For prep & pin, we print the message w/o the command prefix.
         let (message, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, message }))
         | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, message })) =
-            cmd::parse_user_input(cmd_registry, &masked_input, None, None)
+            parsed_cmd.as_ref()
         {
             (
                 message,
@@ -2012,9 +2013,20 @@ fn print_internal_cmd_input(
                 },
             )
         } else {
-            (masked_input, None)
+            (&masked_input, None)
         };
-        term_color::print_multi_lang_syntax_highlighting(&io.out, &message, &color);
+        let lang = if matches!(
+            parsed_cmd,
+            Ok(cmd::Cmd::Pin(_))
+                | Ok(cmd::Cmd::Prep(_))
+                | Ok(cmd::Cmd::Prompt(_))
+                | Ok(cmd::Cmd::SystemPrompt(_))
+        ) {
+            Some("markdown")
+        } else {
+            Some(term_color::HAIREPL_LANG_TOKEN)
+        };
+        term_color::print_multi_lang_syntax_highlighting(&io.out, &message, &color, lang);
         outln!(io);
     } else {
         if io.is_terminal() {
