@@ -1478,7 +1478,7 @@ impl Output for StdioOutput {
     }
 
     fn push_apply(&mut self, fn_name: &str, fn_arg: &str) {
-        self.push_out(&format!("{}({})\n", fn_name, fn_arg));
+        self.push_code(&format!("{}({})\n", fn_name, fn_arg), Some("tsx"));
     }
 
     fn push_terminal_transient(&mut self, s: &str) -> bool {
