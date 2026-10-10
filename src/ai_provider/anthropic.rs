@@ -65,7 +65,69 @@ pub enum ContentBlockType {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MessageDeltaInfo {
-    stop_reason: String,
+    #[serde(default)]
+    pub stop_reason: Option<StopReason>,
+    pub stop_details: Option<StopDetails>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[serde(from = "String", into = "String")]
+pub enum StopReason {
+    EndTurn,
+    MaxTokens,
+    StopSequence,
+    ToolUse,
+    PauseTurn,
+    Refusal,
+    ModelContextWindowExceeded,
+    Other(String),
+}
+
+impl StopReason {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::EndTurn => "end_turn",
+            Self::MaxTokens => "max_tokens",
+            Self::StopSequence => "stop_sequence",
+            Self::ToolUse => "tool_use",
+            Self::PauseTurn => "pause_turn",
+            Self::Refusal => "refusal",
+            Self::ModelContextWindowExceeded => "model_context_window_exceeded",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl From<String> for StopReason {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "end_turn" => Self::EndTurn,
+            "max_tokens" => Self::MaxTokens,
+            "stop_sequence" => Self::StopSequence,
+            "tool_use" => Self::ToolUse,
+            "pause_turn" => Self::PauseTurn,
+            "refusal" => Self::Refusal,
+            "model_context_window_exceeded" => Self::ModelContextWindowExceeded,
+            _ => Self::Other(s),
+        }
+    }
+}
+
+impl From<StopReason> for String {
+    fn from(r: StopReason) -> Self {
+        match r {
+            StopReason::Other(s) => s,
+            known => known.as_str().to_owned(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StopDetails {
+    #[serde(rename = "type")]
+    type_: Option<String>,
+    category: Option<String>,
+    explanation: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -546,6 +608,26 @@ pub async fn send_to_anthropic(
                             }
                             MessageStreamResponse::Error { error } => {
                                 errorln!(out, "unexpected: {}: {}", error.type_, error.message);
+                            }
+                            MessageStreamResponse::MessageDelta { delta } => {
+                                if let Some(stop_reason) = delta.stop_reason {
+                                    let mut unexpected = false;
+                                    if matches!(
+                                        stop_reason,
+                                        StopReason::MaxTokens
+                                            | StopReason::Refusal
+                                            | StopReason::ModelContextWindowExceeded
+                                    ) {
+                                        unexpected = true;
+                                        errorln!(out, "stop reason: {:?}", stop_reason);
+                                    } else if let StopReason::Other(other_err) = stop_reason {
+                                        unexpected = true;
+                                        errorln!(out, "stop reason: {}", other_err);
+                                    }
+                                    if unexpected && let Some(stop_details) = delta.stop_details {
+                                        errorln!(out, "stop details: {:?}", stop_details);
+                                    }
+                                }
                             }
                             _ => {}
                         }
