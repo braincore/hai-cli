@@ -1,4 +1,4 @@
-use ai_provider::{anthropic, ollama, openai, tool_schema, void};
+use ai_provider::{anthropic, ollama, openai, openai_responses, tool_schema, void};
 use chat::ChatCompletionResponse;
 use clap::{Parser, Subcommand};
 use colored::*;
@@ -2161,7 +2161,7 @@ pub async fn prompt_ai(
                     let api_key = if let Some(ref account) = session.account {
                         account.token.clone()
                     } else {
-                        errln!(out, "error: you must be logged-in to use the hai-router");
+                        errorln!(out, "you must be logged-in to use the hai-router");
                         return vec![];
                     };
                     let provider_header = match session.ai {
@@ -2170,7 +2170,7 @@ pub async fn prompt_ai(
                         config::AiModel::DeepSeek(_) => "deepseek".to_string(),
                         config::AiModel::Xai(_) => "xai".to_string(),
                         _ => {
-                            errln!(out, "error: unexpected provider");
+                            errorln!(out, "unexpected provider");
                             return vec![];
                         }
                     };
@@ -2228,24 +2228,44 @@ pub async fn prompt_ai(
                 })
                 .collect::<Vec<_>>();
 
-            openai::send_to_openai(
-                out,
-                base_url,
-                &api_key,
-                provider_header,
-                config::get_ai_model_provider_name(&session.ai),
-                session.ai_temperature,
-                msg_history,
-                &tool_schemas,
-                force_tool_api_name,
-                Some(ctrlc_handler),
-                masked_strings,
-                debug,
-                openai_reasoning_effort,
-                openai_verbosity,
-                deepseek_flatten_nonuser_content,
-            )
-            .await
+            if config::openai_use_responses_api(&session.ai) {
+                openai_responses::send_to_openai(
+                    out,
+                    base_url,
+                    &api_key,
+                    provider_header,
+                    config::get_ai_model_provider_name(&session.ai),
+                    session.ai_temperature,
+                    msg_history,
+                    &tool_schemas,
+                    force_tool_api_name,
+                    Some(ctrlc_handler),
+                    masked_strings,
+                    debug,
+                    openai_reasoning_effort,
+                    openai_verbosity,
+                )
+                .await
+            } else {
+                openai::send_to_openai(
+                    out,
+                    base_url,
+                    &api_key,
+                    provider_header,
+                    config::get_ai_model_provider_name(&session.ai),
+                    session.ai_temperature,
+                    msg_history,
+                    &tool_schemas,
+                    force_tool_api_name,
+                    Some(ctrlc_handler),
+                    masked_strings,
+                    debug,
+                    openai_reasoning_effort,
+                    openai_verbosity,
+                    deepseek_flatten_nonuser_content,
+                )
+                .await
+            }
         }
         config::AiModel::Anthropic(ref anthropic_model) => {
             let (api_url, api_key, provider_header) =

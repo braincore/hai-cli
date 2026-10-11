@@ -154,7 +154,7 @@ pub async fn send_to_openai(
     remove_nulls(&mut request_body);
 
     let mut jq_transforms = vec![
-        // Truncate tool ID: Non-OpenAI APIs can return longer than 40char tool
+        // Truncate tool ID: Non-OpenAI APIs can return longer than 40 char tool
         // IDs which cause OpenAI to error out. This filter simply truncates
         // the tool ID.
         r#".messages |= map(

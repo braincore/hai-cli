@@ -2169,6 +2169,21 @@ pub fn openai_compat_verbosity(model: &AiModel) -> &Option<OpenAiVerbosity> {
     }
 }
 
+/// Use the OpenAI Responses API for newer models because they removed support
+/// for simultaneous tool-use + reasoning from the chat completions API.
+pub fn openai_use_responses_api(model: &AiModel) -> bool {
+    match model {
+        AiModel::OpenAi(
+            OpenAiModel::Gpt56Sol(_)
+            | OpenAiModel::Gpt56Luna(_)
+            | OpenAiModel::Gpt56Terra(_)
+            | OpenAiModel::Gpt6Astra(_),
+        ) => true,
+        AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(_)) => true,
+        _ => false,
+    }
+}
+
 // --
 
 /// # Returns
