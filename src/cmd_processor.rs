@@ -372,6 +372,22 @@ pub async fn process_cmd(
                             );
                             session.use_hai_router = HaiRouterState::On;
                         }
+                        let selected_ai_model_default_agentic =
+                            config::model_default_agentic(&selected_ai_model);
+                        if !session.agentic && selected_ai_model_default_agentic {
+                            infoln!(
+                                io,
+                                "Activating agentic mode because {} is agentic by default",
+                                model_name
+                            );
+                            session.agentic = selected_ai_model_default_agentic;
+                        } else if session.agentic && !selected_ai_model_default_agentic {
+                            warnln!(
+                                io,
+                                "Keeping agentic mode on (already active) even though {} is not agentic by default",
+                                model_name
+                            );
+                        }
                         session.ai = selected_ai_model;
                     }
                 } else {
@@ -578,10 +594,19 @@ pub async fn process_cmd(
                 session.agentic = on;
                 session.prompt_cache = use_prompt_cache;
             } else {
+                let prompt_cache_status = if config::model_can_turn_on_prompt_cache(&session.ai) {
+                    format!(
+                        " (prompt-cache: {})",
+                        if session.prompt_cache { "on" } else { "off" }
+                    )
+                } else {
+                    "".to_string()
+                };
                 outln!(
                     io,
-                    "agentic mode: {}",
-                    if session.agentic { "on" } else { "off" }
+                    "agentic mode: {}{}",
+                    if session.agentic { "on" } else { "off" },
+                    prompt_cache_status
                 );
             }
             ProcessCmdResult::loop_next()

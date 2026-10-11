@@ -289,6 +289,17 @@ To disable prompt caching, use:
 This is not relevant to OpenAI since their API always caches and does not have
 additional costs.
 
+### Default agentic models
+
+Certain models turn on agentic mode by default (e.g. `opus`, `sonnet`,
+`gemini-flash`, `sol`) based on their scores on
+[TERMINAL-BENCH](https://www.tbench.ai/) and my own subjective experience with
+them.
+
+For Anthropic models, an explicit `/agentic on` will be necessary to
+enable prompt caching since human-paced discourse is more likely to incur
+excess costs if the cache is enabled.
+
 ## Function tool `!fn-*`
 
 A drawback of `!py` and `!sh` is that there's no ability to re-use the code

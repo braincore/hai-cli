@@ -1473,11 +1473,12 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
         "agentic" => Cmd::Agentic(AgenticCmd {
             // (agentic-mode, use-prompt-cache)
-            on: Some(match r.arg(0) {
-                "on" => (true, true),
-                "on-without-cache" => (true, false),
-                _ => (false, false),
-            }),
+            on: match r.opt_arg(0) {
+                Some("on") => Some((true, true)),
+                Some("on-without-cache") => Some((true, false)),
+                Some("off") | Some(_) => Some((false, false)),
+                None => None,
+            },
         }),
         "temperature" => Cmd::Temperature(TemperatureCmd {
             temperature: {

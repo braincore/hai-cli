@@ -296,6 +296,7 @@ impl SessionState {
         if let Some(force_ai_model) = force_ai_model {
             default_ai_model = force_ai_model;
         }
+        let agentic = config::model_default_agentic(&default_ai_model);
         let default_editor = cfg.default_editor.clone().unwrap_or("vim".into());
         let default_shell = if cfg!(target_os = "windows") {
             cfg.default_shell.clone().unwrap_or("powershell".into())
@@ -345,7 +346,10 @@ impl SessionState {
             toolbox,
             default_tool: default_tool.clone(),
             use_hai_router: HaiRouterState::Off,
-            agentic: false,
+            agentic,
+            // Prompt-cache is disabled by default because it can increase
+            // costs for human-paced conversations. The user is expected to
+            // enable it manually.
             prompt_cache: false,
             temp_files: vec![],
             ai_defined_fns: HashMap::new(),

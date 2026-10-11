@@ -938,7 +938,7 @@ pub static REGISTRY: &[Entry] = &[
             Slash,
             Cow::Borrowed("agentic"),
             Cow::Borrowed("ai"),
-            Cow::Borrowed(&[arg("state", Enum(&["on", "on-without-cache", "off"]), Required)]),
+            Cow::Borrowed(&[arg("state", Enum(&["on", "on-without-cache", "off"]), Optional)]),
             Doc::new("Agentic mode allows the LLM to loop autonomously"),
         )
         .for_audience(Audience::UserOnly)

@@ -2317,6 +2317,47 @@ pub fn anthropic_model_use_deprecated_thinking(anthropic_model: &AnthropicModel)
 
 // --
 
+/// Determines if the `prompt_cache` session setting is relevant for a given
+/// model. For now, this is Anthropic specific when setting `cache_control`.
+pub fn model_can_turn_on_prompt_cache(model: &AiModel) -> bool {
+    match model {
+        AiModel::Anthropic(_) => true,
+        _ => false,
+    }
+}
+
+/// Determines the default agentic behavior for a given AI model.
+///
+/// This list is constructed based on personal experience and performance on
+/// TERMINAL-BENCH 4.0.
+///
+/// # Returns
+///
+/// `true` if the model is considered agentic by default, `false` otherwise.
+pub fn model_default_agentic(model: &AiModel) -> bool {
+    match model {
+        AiModel::Anthropic(
+            AnthropicModel::Fable51(_)
+            | AnthropicModel::Opus48(_)
+            | AnthropicModel::Opus5(_)
+            | AnthropicModel::Opus55(_)
+            | AnthropicModel::Sonnet55(_),
+        ) => true,
+        AiModel::OpenAi(
+            OpenAiModel::Gpt56Sol(_)
+            | OpenAiModel::Gpt56Terra(_)
+            | OpenAiModel::Gpt56Luna(_)
+            | OpenAiModel::Gpt6Sol(_)
+            | OpenAiModel::Gpt61Sol(_),
+        ) => true,
+        AiModel::Google(GoogleModel::Gemini38Flash(_)) => true,
+        AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(_)) => true,
+        _ => false,
+    }
+}
+
+// --
+
 /// Returns: (mill / 1M input tokens, mill / 1M output tokens)
 /// mill = one-thousandth of a US dollar
 pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
