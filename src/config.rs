@@ -222,7 +222,10 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "o3" => Some(AiModel::OpenAi(OpenAiModel::O3)),
         "o3mini" | "o3m" => Some(AiModel::OpenAi(OpenAiModel::O3Mini)),
         "o4mini" | "o4m" => Some(AiModel::OpenAi(OpenAiModel::O4Mini)),
-        "haiku" | "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
+        "haiku35" => Some(AiModel::Anthropic(AnthropicModel::Haiku35)),
+        "haiku" | "haiku55" => Some(AiModel::Anthropic(AnthropicModel::Haiku55(
+            parse_anthropic46_opts(opts),
+        ))),
         "llama" | "llama32" => Some(AiModel::Ollama(OllamaModel::Llama32)),
         "llamavision" | "llama32vision" => Some(AiModel::Ollama(OllamaModel::Llama32Vision)),
         "fable" | "fable51" => Some(AiModel::Anthropic(AnthropicModel::Fable51(
@@ -272,7 +275,10 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "sonnet46" => Some(AiModel::Anthropic(AnthropicModel::Sonnet46(
             parse_anthropic46_opts(opts),
         ))),
-        "sonnet" | "sonnet5" => Some(AiModel::Anthropic(AnthropicModel::Sonnet5(
+        "sonnet5" => Some(AiModel::Anthropic(AnthropicModel::Sonnet5(
+            parse_anthropic46_opts(opts),
+        ))),
+        "sonnet" | "sonnet55" => Some(AiModel::Anthropic(AnthropicModel::Sonnet55(
             parse_anthropic46_opts(opts),
         ))),
         "llamacpp" => Some(AiModel::LlamaCpp(LlamaCppModel::Other("n/a".to_string()))),
@@ -389,7 +395,9 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "o3",
     "o3-mini",
     "o4-mini",
+    "haiku",
     "haiku35",
+    "haiku55",
     "opus",
     "opus4",
     "opus4-thinking",
@@ -409,6 +417,7 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "sonnet45",
     "sonnet46",
     "sonnet5",
+    "sonnet55",
     "llama32",
     "llama32-vision",
     "flash",
@@ -673,6 +682,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
                 append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
+            AnthropicModel::Haiku55(opts) => {
+                let base = "haiku-5.5".to_string();
+                append_anthropic46_opts(base, opts)
+            }
             AnthropicModel::Opus4(thinking) => {
                 if *thinking {
                     "opus-4,thinking=true".to_string()
@@ -742,6 +755,10 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Sonnet5(opts) => {
                 let base = "sonnet-5".to_string();
+                append_anthropic46_opts(base, opts)
+            }
+            AnthropicModel::Sonnet55(opts) => {
+                let base = "sonnet-5.5".to_string();
                 append_anthropic46_opts(base, opts)
             }
             AnthropicModel::Other(name) => format!("anthropic/{}", name),
@@ -1429,6 +1446,7 @@ pub enum AiModel {
 pub enum AnthropicModel {
     Fable51(Anthropic46Options),
     Haiku35,
+    Haiku55(Anthropic46Options),
     Opus4(bool),  // If true, enables thinking
     Opus41(bool), // If true, enables thinking
     Opus45(bool), // If true, enables thinking
@@ -1443,6 +1461,7 @@ pub enum AnthropicModel {
     Sonnet45(bool), // If true, enables thinking
     Sonnet46(Anthropic46Options),
     Sonnet5(Anthropic46Options),
+    Sonnet55(Anthropic46Options),
     Other(String),
 }
 
@@ -1592,6 +1611,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Fable51(_) => "claude-fable-5-1",
             AnthropicModel::Haiku35 => "claude-3-5-haiku-20241022",
+            AnthropicModel::Haiku55(_) => "claude-haiku-5-5",
             AnthropicModel::Opus4(_) => "claude-opus-4-20250514",
             AnthropicModel::Opus41(_) => "claude-opus-4-1-20250805",
             AnthropicModel::Opus45(_) => "claude-opus-4-5-20251101",
@@ -1606,6 +1626,7 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Sonnet45(_) => "claude-sonnet-4-5-20250929",
             AnthropicModel::Sonnet46(_) => "claude-sonnet-4-6",
             AnthropicModel::Sonnet5(_) => "claude-sonnet-5",
+            AnthropicModel::Sonnet55(_) => "claude-sonnet-5-5",
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
@@ -1695,6 +1716,7 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Fable51(_) => "fable-5.1".to_string(),
             AnthropicModel::Haiku35 => "haiku-3.5".to_string(),
+            AnthropicModel::Haiku55(_) => "haiku-5.5".to_string(),
             AnthropicModel::Opus4(false) => "opus-4".to_string(),
             AnthropicModel::Opus4(true) => "opus-4(t)".to_string(),
             AnthropicModel::Opus41(false) => "opus-4.1".to_string(),
@@ -1728,6 +1750,9 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             }
             AnthropicModel::Sonnet5(opts) => {
                 format!("sonnet-5{}", get_anthropic46_opts_display(opts))
+            }
+            AnthropicModel::Sonnet55(opts) => {
+                format!("sonnet-5.5{}", get_anthropic46_opts_display(opts))
             }
             AnthropicModel::Other(name) => name.clone(),
         },
@@ -2028,6 +2053,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                 model,
                 AnthropicModel::Fable51(_)
                     | AnthropicModel::Haiku35
+                    | AnthropicModel::Haiku55(_)
                     | AnthropicModel::Opus4(_)
                     | AnthropicModel::Opus41(_)
                     | AnthropicModel::Opus45(_)
@@ -2042,6 +2068,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
                     | AnthropicModel::Sonnet45(_)
                     | AnthropicModel::Sonnet46(_)
                     | AnthropicModel::Sonnet5(_)
+                    | AnthropicModel::Sonnet55(_)
             )
         }
         AiModel::DeepSeek(model) => matches!(
@@ -2199,6 +2226,8 @@ pub fn anthropic_model_modern_opts(
         | AnthropicModel::Opus5(opts)
         | AnthropicModel::Opus55(opts)
         | AnthropicModel::Sonnet5(opts)
+        | AnthropicModel::Sonnet55(opts)
+        | AnthropicModel::Haiku55(opts)
         | AnthropicModel::Fable51(opts) => {
             (opts.thinking, opts.thinking_display, opts.effort.as_ref())
         }
@@ -2208,7 +2237,10 @@ pub fn anthropic_model_modern_opts(
 
 /// Newer anthropic models do not support forcing a specific tool.
 pub fn anthropic_model_cannot_force_tool(anthropic_model: &AnthropicModel) -> bool {
-    matches!(anthropic_model, AnthropicModel::Opus55(_))
+    matches!(
+        anthropic_model,
+        AnthropicModel::Opus55(_) | AnthropicModel::Sonnet55(_) | AnthropicModel::Haiku55(_)
+    )
 }
 
 pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) -> bool {
@@ -2219,6 +2251,8 @@ pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) 
             | AnthropicModel::Opus5(_)
             | AnthropicModel::Opus55(_)
             | AnthropicModel::Sonnet5(_)
+            | AnthropicModel::Sonnet55(_)
+            | AnthropicModel::Haiku55(_)
             | AnthropicModel::Fable51(_)
     )
 }
@@ -2245,6 +2279,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
         AiModel::Anthropic(model) => match model {
             AnthropicModel::Fable51(_) => Some((10000, 50000)),
             AnthropicModel::Haiku35 => Some((800, 4000)),
+            AnthropicModel::Haiku55(_) => Some((100, 500)),
             AnthropicModel::Opus4(_) => Some((15000, 75000)),
             AnthropicModel::Opus41(_) => Some((15000, 75000)),
             AnthropicModel::Opus45(_)
@@ -2259,6 +2294,7 @@ pub fn get_ai_model_cost(ai_model: &AiModel) -> Option<(u32, u32)> {
             | AnthropicModel::Sonnet45(_)
             | AnthropicModel::Sonnet46(_) => Some((3000, 15000)),
             AnthropicModel::Sonnet5(_) => Some((2000, 10000)),
+            AnthropicModel::Sonnet55(_) => Some((2000, 10000)),
             AnthropicModel::Other(_) => None,
         },
         AiModel::DeepSeek(model) => match model {
@@ -2737,7 +2773,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
             verbosity: None,
         }))
     } else if get_anthropic_api_key(cfg).is_some() {
-        AiModel::Anthropic(AnthropicModel::Sonnet5(Anthropic46Options {
+        AiModel::Anthropic(AnthropicModel::Sonnet55(Anthropic46Options {
             effort: None,
             thinking: None,
             thinking_display: None,
@@ -2755,7 +2791,7 @@ pub fn choose_init_ai_model(cfg: &Config) -> AiModel {
     } else {
         // Do not default to a llama.cpp or ollama model since there are too
         // many options and it is not clear which one to use.
-        AiModel::OpenAi(OpenAiModel::Gpt52(Gpt5Options {
+        AiModel::OpenAi(OpenAiModel::Gpt56Terra(Gpt5Options {
             reasoning_effort: None,
             verbosity: None,
         }))
