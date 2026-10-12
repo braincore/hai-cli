@@ -75,7 +75,7 @@ pub fn tool_to_stem_cmd(tool: &Tool) -> String {
             kind: FnToolType::FnSh,
             name: Some(name),
         }) => format!("fn-sh.name=\"{}\"", name),
-        Tool::FnExec(name) => format!("!f_{}", name),
+        Tool::FnExec(name) => format!("{}", name),
         Tool::HaiRepl => "hai".to_string(),
         Tool::Html => "html".to_string(),
         Tool::ShellExecWithFile(cmd, ext) => {
