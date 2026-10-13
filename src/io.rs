@@ -387,8 +387,15 @@ impl Io {
         self.out.code_reset()
     }
 
-    pub fn apply(&self, fn_name: &str, fn_arg: &str) {
-        self.out.apply(fn_name, fn_arg);
+    /// Signal for backend to apply a function. If `expect_result`, blocks
+    /// (with timeout) until client result if backend supports it.
+    pub fn apply(
+        &self,
+        fn_name: &str,
+        fn_arg: &str,
+        expect_result: bool,
+    ) -> Result<Option<String>, ApplyError> {
+        self.out.apply(fn_name, fn_arg, expect_result)
     }
 
     pub fn section_begin(&self, kind: SectionKind) -> SectionGuard<'_> {
@@ -598,7 +605,19 @@ pub trait Output: Send {
     fn push_code_reset(&mut self) {}
 
     /// Invoke a function with the given argument.
-    fn push_apply(&mut self, _fn_name: &str, _fn_arg: &str) {}
+    ///
+    /// If `expect_result` and the backend can return a result from the
+    /// client, returns a receiver that yields the JSON-encoded result.
+    /// `None` means no result will come.
+    fn push_apply(
+        &mut self,
+        _apply_id: ApplyId,
+        _fn_name: &str,
+        _fn_arg: &str,
+        _expect_result: bool,
+    ) -> Option<std::sync::mpsc::Receiver<String>> {
+        None
+    }
 
     /// Beginning of a section.
     ///
@@ -717,6 +736,72 @@ pub fn next_section_id() -> SectionId {
     NEXT_SECTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+// --
+
+//
+// Apply: invoke a client-side function and (optionally) wait for its result.
+//
+
+pub type ApplyId = u64;
+
+/// How long to wait for a client to return an apply result.
+pub const APPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+static NEXT_APPLY_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Process-wide monotonic apply IDs for correlating apply/result.
+pub fn next_apply_id() -> ApplyId {
+    NEXT_APPLY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+#[derive(Clone, Debug)]
+pub enum ApplyError {
+    /// No result before `APPLY_TIMEOUT`.
+    Timeout,
+    /// Reply channel dropped before a result arrived.
+    Disconnected,
+}
+
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ApplyError::Timeout => write!(f, "timeout"),
+            ApplyError::Disconnected => write!(f, "disconnected"),
+        }
+    }
+}
+
+impl std::error::Error for ApplyError {}
+
+/*
+#[derive(Clone, Debug)]
+pub enum ApplyResult {
+    /// JSON-encoded result returned by the client.
+    Ok(String),
+    /// No result arrived within `APPLY_TIMEOUT`.
+    Timeout,
+    /// Reply channel dropped before a result arrived.
+    Disconnected,
+}
+
+impl ApplyResult {
+    /// Text suitable for the transcript / conversation. `None` if there's
+    /// nothing to say (backend doesn't produce results).
+    pub fn summary(&self) -> Option<String> {
+        match self {
+            ApplyResult::Ok(r) => Some(format!("-> {}", r)),
+            ApplyResult::Timeout => Some(format!(
+                "error: no result within {}s",
+                APPLY_TIMEOUT.as_secs()
+            )),
+            ApplyResult::Disconnected => {
+                Some("error: client disconnected before result".to_string())
+            }
+        }
+    }
+}
+*/
+
 /// Emits the end marker on drop, including during unwind.
 pub struct SectionGuard<'a> {
     out: &'a Out,
@@ -745,8 +830,13 @@ pub enum Rec {
         data: String,
     },
     Apply {
+        apply_id: ApplyId,
         fn_name: String,
         fn_arg: String,
+    },
+    ApplyResult {
+        apply_id: ApplyId,
+        result: Result<String, ApplyError>,
     },
     Input {
         text: String,
@@ -959,15 +1049,44 @@ impl Out {
         self.backend.lock().unwrap().push_code_reset();
     }
 
-    pub fn apply(&self, fn_name: &str, fn_arg: &str) {
+    /// Muted is not relevant to apply() since it's not producing output
+    /// directly.
+    pub fn apply(
+        &self,
+        fn_name: &str,
+        fn_arg: &str,
+        expect_result: bool,
+    ) -> Result<Option<String>, ApplyError> {
+        let apply_id = next_apply_id();
         self.record(Rec::Apply {
+            apply_id,
             fn_name: fn_name.to_string(),
             fn_arg: fn_arg.to_string(),
         });
-        if self.muted() {
-            return;
-        }
-        self.backend.lock().unwrap().push_apply(fn_name, fn_arg);
+        let rx = self
+            .backend
+            .lock()
+            .unwrap()
+            .push_apply(apply_id, fn_name, fn_arg, expect_result);
+        let Some(rx) = rx else {
+            if expect_result {
+                // Unexpected case
+                return Err(ApplyError::Disconnected);
+            } else {
+                // No receiver was set because no result is expected.
+                return Ok(None);
+            }
+        };
+        let result = match rx.recv_timeout(APPLY_TIMEOUT) {
+            Ok(r) => Ok(r),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(ApplyError::Timeout),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(ApplyError::Disconnected),
+        };
+        self.record(Rec::ApplyResult {
+            apply_id,
+            result: result.clone(),
+        });
+        result.map(|r| Some(r))
     }
 
     //
@@ -1122,11 +1241,24 @@ impl Out {
                 Rec::Display { data, .. } if include_display => s.push_str(data),
                 Rec::Display { .. } => {}
                 Rec::Code { text, .. } => s.push_str(text),
-                Rec::Apply { fn_name, fn_arg } => {
+                Rec::Apply {
+                    fn_name, fn_arg, ..
+                } => {
                     s.push_str(fn_name);
                     s.push('(');
                     s.push_str(fn_arg);
                     s.push(')');
+                    s.push('\n');
+                }
+                Rec::ApplyResult { result, .. } => {
+                    match result {
+                        Ok(r) => {
+                            s.push_str(&r);
+                        }
+                        Err(e) => {
+                            s.push_str(&format!("error: {}", e));
+                        }
+                    }
                     s.push('\n');
                 }
                 Rec::Input { text, .. } => {
@@ -1477,8 +1609,16 @@ impl Output for StdioOutput {
         }
     }
 
-    fn push_apply(&mut self, fn_name: &str, fn_arg: &str) {
+    fn push_apply(
+        &mut self,
+        _apply_id: ApplyId,
+        fn_name: &str,
+        fn_arg: &str,
+        _expect_result: bool,
+    ) -> Option<std::sync::mpsc::Receiver<String>> {
         self.push_code(&format!("{}({})\n", fn_name, fn_arg), Some("tsx"));
+        // Terminal can't produce a result.
+        None
     }
 
     fn push_terminal_transient(&mut self, s: &str) -> bool {
@@ -1543,7 +1683,15 @@ impl Output for NoopOutput {
     fn push_code(&mut self, _text: &str, _lang: Option<&str>) {}
     fn push_code_bg(&mut self, _text: &str, _lang: Option<&str>, _bg: Option<(u8, u8, u8)>) {}
     fn push_code_reset(&mut self) {}
-    fn push_apply(&mut self, _fn_name: &str, _fn_arg: &str) {}
+    fn push_apply(
+        &mut self,
+        _apply_id: ApplyId,
+        _fn_name: &str,
+        _fn_arg: &str,
+        _expect_result: bool,
+    ) -> Option<std::sync::mpsc::Receiver<String>> {
+        None
+    }
     fn push_section_begin(&mut self, _id: SectionId, _kind: SectionKind) {}
     fn push_section_end(&mut self, _id: SectionId) {}
 

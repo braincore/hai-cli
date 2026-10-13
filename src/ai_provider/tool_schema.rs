@@ -16,7 +16,7 @@ use crate::{
 ///   resulting in strict adherence to the schema.
 pub fn get_tool_schema(
     cmd_registry: &cmd_registry::Registry,
-    fn_json_defs: &std::collections::HashMap<String, (Value, Option<String>, bool)>,
+    fn_json_defs: &std::collections::HashMap<String, (Value, Option<Value>, Option<String>, bool)>,
     tool: &Tool,
     schema_key_name: &str,
     shell: &str,
@@ -180,13 +180,13 @@ The script should print important values to stdout."#
             },
         }),
         Tool::FnExec(name) => {
-            let (schema, tool_description, _) = fn_json_defs
+            let (fn_arg_schema, _, tool_description, _) = fn_json_defs
                 .get(name)
                 .unwrap_or_else(|| panic!("unknown structured tool: {}", name));
             json!({
                 "name": tool_name,
                 "description": tool_description.clone().unwrap_or("".to_string()),
-                schema_key_name: schema.clone(),
+                schema_key_name: fn_arg_schema.clone(),
             })
         }
         Tool::Html => json!({

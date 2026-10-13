@@ -1705,11 +1705,11 @@ async fn repl(
                                 }
                             } else if let tool::Tool::FnExec(name) = &toolbox_tool_policy.tool {
                                 // Validate structure
-                                if let Some((structured_tool_schema, _, _)) =
+                                if let Some((fn_arg_schema, fn_result_schema, _, _)) =
                                     session.fn_json_defs.get(name)
                                 {
                                     // Perform validation or other operations with `structured_tool` here
-                                    match jsonschema::validator_for(structured_tool_schema) {
+                                    match jsonschema::validator_for(fn_arg_schema) {
                                         Ok(validator) => {
                                             match serde_json::from_str::<serde_json::Value>(&arg) {
                                                 Ok(mut arg_json) => {
@@ -1739,11 +1739,30 @@ async fn repl(
                                                             serde_json::to_string(&arg_json)
                                                                 .expect("failed to re-serialize");
 
-                                                        io.apply(&fn_name, &fn_arg);
-                                                        (
-                                                            format!("{}({})", fn_name, fn_arg),
-                                                            follow_up,
-                                                        )
+                                                        let apply_result = io.apply(
+                                                            &fn_name,
+                                                            &fn_arg,
+                                                            fn_result_schema.is_some(),
+                                                        );
+                                                        let mut tool_output =
+                                                            format!("{}({})", fn_name, fn_arg);
+                                                        match apply_result {
+                                                            Ok(None) => {
+                                                                // No result expected
+                                                            }
+                                                            Ok(Some(r)) => {
+                                                                tool_output.push_str("\n");
+                                                                tool_output.push_str(&r);
+                                                            }
+                                                            Err(e) => {
+                                                                tool_output.push_str("\n");
+                                                                tool_output.push_str(&format!(
+                                                                    "error: {}",
+                                                                    e
+                                                                ));
+                                                            }
+                                                        }
+                                                        (tool_output, follow_up)
                                                     }
                                                 }
                                                 Err(_) => {

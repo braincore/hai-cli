@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::cmd_registry;
 use crate::ctrlc_handler::CtrlcHandler;
-use crate::io::{Input, Output, SectionId, SectionKind, TerminalCapability};
+use crate::io::{ApplyId, Input, Output, SectionId, SectionKind, TerminalCapability};
 
 // --
 
@@ -71,11 +71,28 @@ impl Output for WsOutput {
         });
     }
 
-    fn push_apply(&mut self, fn_name: &str, fn_arg: &str) {
+    fn push_apply(
+        &mut self,
+        apply_id: ApplyId,
+        fn_name: &str,
+        fn_arg: &str,
+        expect_result: bool,
+    ) -> Option<std::sync::mpsc::Receiver<String>> {
+        let (reply, rx) = if expect_result {
+            let (tx, rx) = std::sync::mpsc::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         self.send(WsCmd::Apply {
+            apply_id,
             fn_name: fn_name.to_string(),
             fn_arg: fn_arg.to_string(),
+            reply,
         });
+        // If the actor is gone, `reply` is dropped and the caller sees
+        // `Disconnected` immediately rather than waiting out the timeout.
+        rx
     }
 
     fn push_section_begin(&mut self, id: SectionId, kind: SectionKind) {
@@ -258,8 +275,11 @@ pub enum ServerMsg {
         bg: Option<(u8, u8, u8)>,
     },
     Apply {
+        apply_id: ApplyId,
         fn_name: String,
         fn_arg: String,
+        /// Whether the client should respond with `ClientMsg::ApplyResult`.
+        expects_result: bool,
     },
 
     SectionBegin {
@@ -380,6 +400,12 @@ pub enum ClientMsg {
         input: String,
     },
 
+    ApplyResult {
+        apply_id: u64,
+        /// JSON-encoded result of the function execution.
+        result: String,
+    },
+
     /// Request the list of registered commands.
     /// Server will echo back `mid` in response.
     CmdRegistryList {
@@ -419,9 +445,14 @@ pub enum WsCmd {
         lang: Option<String>,
         bg: Option<(u8, u8, u8)>,
     },
+    /// Output is the invocation of the function on the client side. Input is
+    /// optional depending on whether the function defined a result.
     Apply {
+        apply_id: ApplyId,
         fn_name: String,
         fn_arg: String,
+        /// `None` if no result is expected.
+        reply: Option<std::sync::mpsc::Sender<String>>,
     },
     SectionBegin {
         id: SectionId,
@@ -479,6 +510,14 @@ pub struct PendingClientInput {
     server_msg: ServerMsg,
 }
 
+/// An apply awaiting its result from the client.
+///
+/// Unlike queries, the kernel will give up after a timeout.
+pub struct PendingClientApply {
+    reply: std::sync::mpsc::Sender<String>,
+    created: std::time::Instant,
+}
+
 pub struct WsActor {
     ctrlc_handler: CtrlcHandler,
 
@@ -502,6 +541,9 @@ pub struct WsActor {
     /// Pending input requests that have been sent to the client.
     pending_client_queries: HashMap<u64, PendingClientInput>,
     pending_client_repl: Option<PendingClientInput>,
+
+    /// Applies sent to the client awaiting an `ApplyResult`.
+    pending_client_applies: HashMap<ApplyId, PendingClientApply>,
 
     /// Currently open sections, outermost first.
     ///
@@ -551,6 +593,7 @@ impl WsActor {
             conn_tx_buffer: VecDeque::new(),
             pending_client_queries: HashMap::new(),
             pending_client_repl: None,
+            pending_client_applies: HashMap::new(),
             section_stack: Vec::new(),
             next_id: 0,
             eval_queue: VecDeque::new(),
@@ -658,8 +701,29 @@ impl WsActor {
             WsCmd::Code { text, lang, bg } => {
                 self.emit_or_buffer(ServerMsg::Code { text, lang, bg })
             }
-            WsCmd::Apply { fn_name, fn_arg } => {
-                self.emit_or_buffer(ServerMsg::Apply { fn_name, fn_arg })
+            WsCmd::Apply {
+                apply_id,
+                fn_name,
+                fn_arg,
+                reply,
+            } => {
+                self.prune_stale_applies();
+                let expects_result = reply.is_some();
+                if let Some(reply) = reply {
+                    self.pending_client_applies.insert(
+                        apply_id,
+                        PendingClientApply {
+                            reply,
+                            created: std::time::Instant::now(),
+                        },
+                    );
+                }
+                self.emit_or_buffer(ServerMsg::Apply {
+                    apply_id,
+                    fn_name,
+                    fn_arg,
+                    expects_result,
+                })
             }
             WsCmd::SectionBegin { id, kind } => self.on_section_begin(id, kind),
             WsCmd::SectionEnd { id } => self.on_section_end(id),
@@ -780,6 +844,13 @@ impl WsActor {
         self.next_id += 1;
         id
     }
+
+    /// Drop pending applies the kernel has already given up on.
+    fn prune_stale_applies(&mut self) {
+        let max_age = crate::io::APPLY_TIMEOUT * 2;
+        self.pending_client_applies
+            .retain(|_, p| p.created.elapsed() < max_age);
+    }
 }
 
 // --
@@ -862,6 +933,18 @@ impl WsActor {
                     // If server isn't actively waiting for input, just queue
                     // it up.
                     self.eval_queue.push_back(input);
+                }
+            }
+            ClientMsg::ApplyResult { apply_id, result } => {
+                tracing::debug!("kernel: client msg: apply_result: {apply_id}");
+                match self.pending_client_applies.remove(&apply_id) {
+                    // Send fails if kernel already timed out; that's fine.
+                    Some(p) => {
+                        let _ = p.reply.send(result);
+                    }
+                    None => {
+                        tracing::debug!("kernel: apply_result for unknown/expired {apply_id}");
+                    }
                 }
             }
             ClientMsg::CmdRegistryList { mid } => {

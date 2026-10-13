@@ -1394,7 +1394,7 @@ add it to the toolbox.
             .more("Invocations can be treated as function calls by listeners to i/o apply messages (websocket i/o)."),
         ).with_body(Body::MultiLine {
             name: "schema",
-            doc: "JSON schema for the structured tool",
+            doc: "JSON schema for the arg to the function. Optionally followed by a concatenated JSON schema for the result.",
         }),
     ),
     Entry::Cmd(

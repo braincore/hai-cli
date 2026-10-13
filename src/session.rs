@@ -234,8 +234,16 @@ pub struct SessionState {
     pub temp_files: Vec<(tempfile::NamedTempFile, bool)>,
     /// Tools defined by the AI: name -> (Fn def, is task step?).
     pub ai_defined_fns: HashMap<String, (AiDefinedFn, bool)>,
-    /// Custom-defined fn-json commands (arg is json, output is i/o apply).
-    pub fn_json_defs: HashMap<String, (serde_json::Value, Option<String>, bool)>,
+    /// Custom-defined fn-json commands (arg is json, result is optional json, output is i/o apply).
+    pub fn_json_defs: HashMap<
+        String,
+        (
+            serde_json::Value,
+            Option<serde_json::Value>,
+            Option<String>,
+            bool,
+        ),
+    >,
     /// Add new message if conversation has a day transition
     pub add_msg_on_new_day: bool,
     /// (Temp file for HTML output, is task step?, socket address for
@@ -498,7 +506,7 @@ impl SessionState {
         }
         let removed_fn_json_defs: Vec<_> = self
             .fn_json_defs
-            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .extract_if(|_, (_, _, _, is_task_step)| !(task_mode && *is_task_step))
             .collect();
         for (name, _) in removed_fn_json_defs {
             self.cmd_registry.remove_cmd_by_name(&name);
@@ -553,7 +561,7 @@ impl SessionState {
         }
         let removed_fn_json_defs: Vec<_> = self
             .fn_json_defs
-            .extract_if(|_, (_, _, is_task_step)| !(task_mode && *is_task_step))
+            .extract_if(|_, (_, _, _, is_task_step)| !(task_mode && *is_task_step))
             .collect();
         for (name, _) in removed_fn_json_defs {
             self.cmd_registry.remove_cmd_by_name(&name);
@@ -620,12 +628,18 @@ impl SessionState {
         &mut self,
         fn_name: &str,
         fn_description: Option<&str>,
-        schema: serde_json::Value,
+        arg_schema: serde_json::Value,
+        result_schema: Option<serde_json::Value>,
         is_task_step: bool,
     ) {
         self.fn_json_defs.insert(
             fn_name.to_string(),
-            (schema, fn_description.map(|s| s.to_string()), is_task_step),
+            (
+                arg_schema,
+                result_schema,
+                fn_description.map(|s| s.to_string()),
+                is_task_step,
+            ),
         );
         let bang_cmd_summary = fn_description
             .map(|s| s.to_string())

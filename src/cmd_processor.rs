@@ -6161,33 +6161,67 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next().with_error(true);
             };
 
-            // Check valid JSON
-            let Ok(schema_json) = serde_json::from_str::<serde_json::Value>(&schema) else {
-                errorln!(io, "invalid JSON: {}", schema);
-                return ProcessCmdResult::loop_next().with_error(true);
+            /// Checks that `schema` is a valid JSON Schema and that it compiles.
+            fn validate_json_schema(schema: &serde_json::Value) -> Result<(), String> {
+                jsonschema::meta::validate(schema)
+                    .map_err(|e| format!("not a valid JSON Schema: {e}"))?;
+                jsonschema::validator_for(schema)
+                    .map_err(|e| format!("schema failed to compile: {e}"))?;
+                Ok(())
+            }
+
+            // Parse one or more concatenated JSON blobs
+            let blobs = match serde_json::Deserializer::from_str(&schema)
+                .into_iter::<serde_json::Value>()
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(blobs) => blobs,
+                Err(e) => {
+                    errorln!(io, "invalid JSON: {}", e);
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
             };
 
-            // Check valid jsonschema
-            if let Err(e) = jsonschema::meta::validate(&schema_json) {
-                errorln!(io, "not a valid JSON Schema: {}", e);
+            // First blob: arg (required)
+            // Second blob: result (optional)
+            let (arg_schema, result_schema) = match blobs.len() {
+                0 => {
+                    errorln!(io, "schema is required");
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
+                1 | 2 => {
+                    let mut it = blobs.into_iter();
+                    (it.next().unwrap(), it.next())
+                }
+                n => {
+                    errorln!(
+                        io,
+                        "expected at most 2 JSON schemas (arg, result), got {}",
+                        n
+                    );
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
+            };
+
+            if let Err(e) = validate_json_schema(&arg_schema) {
+                errorln!(io, "argument schema: {}", e);
                 return ProcessCmdResult::loop_next().with_error(true);
             }
 
-            // Check schema compiles
-            if let Err(e) = jsonschema::validator_for(&schema_json)
-                .map_err(|e| format!("schema failed to compile: {e}"))
-            {
-                errorln!(io, "schema failed to compile: {}", e);
-                return ProcessCmdResult::loop_next().with_error(true);
-            }
-
-            // LLM APIs require an object at the top level
-            if schema_json.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+            // LLM APIs require an object at the top level of the argument schema
+            if arg_schema.get("type").and_then(serde_json::Value::as_str) != Some("object") {
                 errorln!(
                     io,
-                    r#"tool schemas must have "type": "object" at the top level"#
+                    r#"argument schema must have "type": "object" at the top level"#
                 );
                 return ProcessCmdResult::loop_next().with_error(true);
+            }
+
+            if let Some(result_schema) = &result_schema {
+                if let Err(e) = validate_json_schema(result_schema) {
+                    errorln!(io, "return schema: {}", e);
+                    return ProcessCmdResult::loop_next().with_error(true);
+                }
             }
 
             let prefixed_fn_name = format!("f_{}", fn_name);
@@ -6203,7 +6237,8 @@ pub async fn process_cmd(
             session.add_fn_json_def(
                 &prefixed_fn_name,
                 fn_description.as_deref(),
-                schema_json,
+                arg_schema,
+                result_schema,
                 false,
             );
 
@@ -6291,9 +6326,11 @@ pub async fn process_cmd(
                     }
                 };
                 ProcessCmdResult::loop_next()
-            } else if let Some((fn_json_schema, _, _)) = session.fn_json_defs.get(&fn_name) {
-                // Perform validation or other operations with `structured_tool` here
-                match jsonschema::validator_for(fn_json_schema) {
+            } else if let Some((fn_arg_schema, fn_result_schema, _, _)) =
+                session.fn_json_defs.get(&fn_name)
+            {
+                // Validate input matches JSON schema
+                match jsonschema::validator_for(fn_arg_schema) {
                     Ok(validator) => match serde_json::from_str::<serde_json::Value>(&arg) {
                         Ok(arg_json) => {
                             if let Some(error) = validator.iter_errors(&arg_json).next() {
@@ -6304,8 +6341,8 @@ pub async fn process_cmd(
                                 let fn_name = fn_name[2..].to_string();
                                 let fn_arg = serde_json::to_string(&arg_json)
                                     .expect("failed to re-serialize");
-
-                                io.apply(&fn_name, &fn_arg);
+                                // Output captured into transcript
+                                let _ = io.apply(&fn_name, &fn_arg, fn_result_schema.is_some());
                             }
                         }
                         Err(_) => {
