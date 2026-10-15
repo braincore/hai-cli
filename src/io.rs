@@ -785,35 +785,6 @@ impl std::fmt::Display for ApplyError {
 
 impl std::error::Error for ApplyError {}
 
-/*
-#[derive(Clone, Debug)]
-pub enum ApplyResult {
-    /// JSON-encoded result returned by the client.
-    Ok(String),
-    /// No result arrived within `APPLY_TIMEOUT`.
-    Timeout,
-    /// Reply channel dropped before a result arrived.
-    Disconnected,
-}
-
-impl ApplyResult {
-    /// Text suitable for the transcript / conversation. `None` if there's
-    /// nothing to say (backend doesn't produce results).
-    pub fn summary(&self) -> Option<String> {
-        match self {
-            ApplyResult::Ok(r) => Some(format!("-> {}", r)),
-            ApplyResult::Timeout => Some(format!(
-                "error: no result within {}s",
-                APPLY_TIMEOUT.as_secs()
-            )),
-            ApplyResult::Disconnected => {
-                Some("error: client disconnected before result".to_string())
-            }
-        }
-    }
-}
-*/
-
 /// Emits the end marker on drop, including during unwind.
 pub struct SectionGuard<'a> {
     out: &'a Out,
