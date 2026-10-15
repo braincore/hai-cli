@@ -5,7 +5,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
+use crate::ai_provider::{
+    AiProviderResponse,
+    usage::{TokenUsage, merge_usage_json},
+    util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq},
+};
 use crate::chat;
 use crate::config;
 use crate::ctrlc_handler::CtrlcHandler;
@@ -32,6 +36,9 @@ pub enum MessageStreamResponse {
     },
     MessageDelta {
         delta: MessageDeltaInfo,
+        /// Cumulative usage.
+        #[serde(default)]
+        usage: Option<Value>,
     },
     MessageStart {
         message: MessageStart,
@@ -135,6 +142,8 @@ pub struct MessageStart {
     id: String,
     role: chat::MessageRole,
     model: String,
+    #[serde(default)]
+    usage: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -169,7 +178,7 @@ pub async fn send_to_anthropic(
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
     #[allow(unused_variables)] debug: bool,
-) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+) -> Result<AiProviderResponse, Box<dyn Error>> {
     // Prepare messages in Anthropic format
     // Assuming similar format, modify as per actual API requirements if needed
     let messages: Vec<_> = history
@@ -425,7 +434,7 @@ pub async fn send_to_anthropic(
                 out!(out, "^C");
             }
             outln!(out, "AI Interrupted");
-            return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
+            return Ok(AiProviderResponse::interrupted(String::new()));
         }
     };
     let mut res = fat_res?;
@@ -439,6 +448,10 @@ pub async fn send_to_anthropic(
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut thinking_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut tool_calls = HashMap::<u32, JsonObjectAccumulator>::new();
+
+    // Usage arrives in `message_start` and is updated (cumulatively) by
+    // `message_delta`.
+    let mut usage_raw = serde_json::Map::new();
 
     let _span = tracing::debug_span!("--- anthropic").entered();
 
@@ -464,11 +477,9 @@ pub async fn send_to_anthropic(
             outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
-                return Ok(vec![chat::ChatCompletionResponse::Message {
-                    text: tool_call.printed_text + "^CAI Interrupted",
-                }])
+                return Ok(AiProviderResponse::interrupted(tool_call.printed_text))
             } else {
-                return Ok(vec![chat::ChatCompletionResponse::Message { text: text_accumulator.printed_text + "^CAI Interrupted" }])
+                return Ok(AiProviderResponse::interrupted(text_accumulator.printed_text))
             }
         }
     } {
@@ -609,7 +620,10 @@ pub async fn send_to_anthropic(
                             MessageStreamResponse::Error { error } => {
                                 errorln!(out, "unexpected: {}: {}", error.type_, error.message);
                             }
-                            MessageStreamResponse::MessageDelta { delta } => {
+                            MessageStreamResponse::MessageDelta { delta, usage } => {
+                                if let Some(usage) = &usage {
+                                    merge_usage_json(&mut usage_raw, usage);
+                                }
                                 if let Some(stop_reason) = delta.stop_reason {
                                     let mut unexpected = false;
                                     if matches!(
@@ -627,6 +641,11 @@ pub async fn send_to_anthropic(
                                     if unexpected && let Some(stop_details) = delta.stop_details {
                                         errorln!(out, "stop details: {:?}", stop_details);
                                     }
+                                }
+                            }
+                            MessageStreamResponse::MessageStart { message } => {
+                                if let Some(usage) = &message.usage {
+                                    merge_usage_json(&mut usage_raw, usage);
                                 }
                             }
                             _ => {}
@@ -673,5 +692,10 @@ pub async fn send_to_anthropic(
             });
         }
     }
-    Ok(responses)
+    let usage = if usage_raw.is_empty() {
+        None
+    } else {
+        TokenUsage::from_anthropic(&Value::Object(usage_raw))
+    };
+    Ok(AiProviderResponse { responses, usage })
 }

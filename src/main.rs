@@ -741,6 +741,7 @@ async fn repl(
         let is_first_user_input = session.history.len() == 0
             || (session.history.len() == 1
                 && matches!(session.history[0].message.role, chat::MessageRole::System));
+        let (reported_usage, cost) = session.get_reported_usage_and_cost();
 
         //
         // REPL Read
@@ -773,6 +774,8 @@ async fn repl(
                     toolbox_as_strings,
                     incognito,
                     session.agentic,
+                    reported_usage,
+                    cost,
                 );
             }
             if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
@@ -875,6 +878,8 @@ async fn repl(
                 toolbox_as_strings,
                 incognito,
                 session.agentic,
+                reported_usage,
+                cost,
             ) {
                 Answer::Text(buffer) => session::CmdInput {
                     input: buffer,
@@ -1311,6 +1316,8 @@ async fn repl(
             model: None,
             visible: true,
             result_of: None,
+            reported_usage: None,
+            cost: None,
         });
 
         loop {
@@ -1342,7 +1349,7 @@ async fn repl(
                 .map(|log_entry| log_entry.message)
                 .collect();
 
-            let (ai_responses, from_cache) =
+            let ((ai_responses, reported_usage), from_cache) =
                 if let Some((ref task_fqn, ref task_key, step_index)) = task_step_signature {
                     let ai_responses_from_cache = if cache {
                         // An error deserializing is likely due to a change
@@ -1371,7 +1378,8 @@ async fn repl(
                         None
                     };
                     if let Some(ai_responses_from_cache) = ai_responses_from_cache {
-                        (ai_responses_from_cache, true)
+                        // If from cache, mark it as having no reported usage.
+                        ((ai_responses_from_cache, None), true)
                     } else {
                         if task_step_requires_user_confirmation && !force_yes {
                             // If we're initializing a task, it's critical that we ask the
@@ -1520,10 +1528,19 @@ async fn repl(
                 }
             }
 
+            let ts = chrono::Local::now();
             session.input_tokens += assistant_msg_tokens;
+            let cost = if let Some(reported_usage) = reported_usage
+                && let Some(model_pricing) =
+                    crate::feature::model_pricing::get_ai_model_pricing(&session.ai)
+            {
+                Some(model_pricing.cost_mills(&reported_usage, ts.with_timezone(&chrono::Utc)))
+            } else {
+                None
+            };
             session.history.push(db::LogEntry {
                 uuid: assistant_msg_uuid,
-                ts: chrono::Local::now(),
+                ts,
                 message: chat::Message {
                     role: chat::MessageRole::Assistant,
                     content: assistant_msg_content,
@@ -1539,6 +1556,8 @@ async fn repl(
                 model: Some(config::ai_model_to_string(&session.ai)),
                 visible: true,
                 result_of: None,
+                reported_usage,
+                cost,
             });
 
             //
@@ -1624,6 +1643,8 @@ async fn repl(
                                 model: None,
                                 visible: true,
                                 result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
+                                reported_usage: None,
+                                cost: None,
                             });
                         }
                         answered_yes
@@ -1857,6 +1878,8 @@ async fn repl(
                             model: None,
                             visible: true,
                             result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
+                            reported_usage: None,
+                            cost: None,
                         });
                     }
                 }
@@ -1901,6 +1924,8 @@ async fn repl(
                     model: None,
                     visible: true,
                     result_of: None,
+                    reported_usage: None,
+                    cost: None,
                 });
             } else {
                 break;
@@ -2155,7 +2180,10 @@ pub async fn prompt_ai(
     ctrlc_handler: &mut ctrlc_handler::CtrlcHandler,
     force_tool_api_name: Option<String>,
     debug: bool,
-) -> Vec<ChatCompletionResponse> {
+) -> (
+    Vec<ChatCompletionResponse>,
+    Option<crate::ai_provider::usage::TokenUsage>,
+) {
     let api_base_url = get_api_base_url();
     let mut used_hai_router = false;
 
@@ -2181,7 +2209,7 @@ pub async fn prompt_ai(
                         account.token.clone()
                     } else {
                         errorln!(out, "you must be logged-in to use the hai-router");
-                        return vec![];
+                        return (vec![], None);
                     };
                     let provider_header = match session.ai {
                         config::AiModel::OpenAi(_) => "openai".to_string(),
@@ -2190,7 +2218,7 @@ pub async fn prompt_ai(
                         config::AiModel::Xai(_) => "xai".to_string(),
                         _ => {
                             errorln!(out, "unexpected provider");
-                            return vec![];
+                            return (vec![], None);
                         }
                     };
                     used_hai_router = true;
@@ -2225,7 +2253,7 @@ pub async fn prompt_ai(
                         ),
                         _ => {
                             errln!(out, "error: unexpected provider");
-                            return vec![];
+                            return (vec![], None);
                         }
                     }
                 };
@@ -2293,7 +2321,7 @@ pub async fn prompt_ai(
                         account.token.clone()
                     } else {
                         errln!(out, "error: you must be logged-in to use the hai-router");
-                        return vec![];
+                        return (vec![], None);
                     };
                     used_hai_router = true;
                     (
@@ -2398,7 +2426,12 @@ pub async fn prompt_ai(
         }
     };
     match ai_provider_response {
-        Ok(chat_response) => chat_response,
+        Ok(provider_response) => {
+            if let Some(usage) = provider_response.usage {
+                tracing::debug!(?usage, "ai provider token usage");
+            }
+            (provider_response.responses, provider_response.usage)
+        }
         Err(e) => {
             errln!(out, "error: ai provider: {}", e);
             if used_hai_router
@@ -2409,7 +2442,7 @@ pub async fn prompt_ai(
                 errln!(out, "error: account needs funds, disabling hai-router");
                 session::hai_router_set(session, false);
             }
-            vec![]
+            (vec![], None)
         }
     }
 }

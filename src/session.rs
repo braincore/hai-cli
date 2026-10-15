@@ -676,6 +676,26 @@ impl SessionState {
             cmd_registry::InsertAt::AfterFamily("mcp".to_string()),
         );
     }
+
+    pub fn get_reported_usage_and_cost(
+        &self,
+    ) -> (Option<crate::ai_provider::usage::TokenUsage>, Option<f64>) {
+        self.history
+            .iter()
+            .fold((None, None), |(acc_usage, acc_cost), entry| {
+                let usage = match (acc_usage, &entry.reported_usage) {
+                    (Some(a), Some(b)) => Some(a + b.clone()),
+                    (None, Some(b)) => Some(b.clone()),
+                    (a, None) => a,
+                };
+                let cost = match (acc_cost, entry.cost) {
+                    (Some(a), Some(b)) => Some(a + b),
+                    (None, Some(b)) => Some(b),
+                    (a, None) => a,
+                };
+                (usage, cost)
+            })
+    }
 }
 
 /// Convenience function to add "user text" into conversation history while
@@ -719,6 +739,8 @@ pub fn session_history_add_user_text_entry(
         model: None,
         visible,
         result_of,
+        reported_usage: None,
+        cost: None,
     });
     (uuid, token_count)
 }
@@ -801,6 +823,8 @@ pub fn session_history_add_user_image_entry(
         model: None,
         visible,
         result_of,
+        reported_usage: None,
+        cost: None,
     });
     (uuid, token_count)
 }
@@ -902,6 +926,8 @@ pub fn session_history_add_assistant_text_entry(
         model: model.map(|m| config::ai_model_to_string(m)),
         visible: true,
         result_of: None,
+        reported_usage: None,
+        cost: None,
     });
     token_count
 }

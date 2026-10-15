@@ -32,7 +32,7 @@ use crate::{
     db::{self, LogEntryRetentionPolicy},
     feature::{
         asset_crypt::{self, KeyRecipient},
-        chat_store, haivar,
+        chat_store, haivar, model_pricing,
     },
     io::Io,
     io::Out,
@@ -1072,6 +1072,8 @@ pub async fn process_cmd(
                     model: None,
                     visible: true,
                     result_of: None,
+                    reported_usage: None,
+                    cost: None,
                 },
             );
             ProcessCmdResult::loop_next()
@@ -7329,90 +7331,102 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::Cost => {
-            fn print_ai_model_prices(io: &Io, ai: &config::AiModel) {
-                if let Some((input_cost_in_mills_per_million, output_cost_in_mills_per_million)) =
-                    config::get_ai_model_cost(ai)
-                {
+            fn print_ai_model_prices(io: &Io, ai: &config::AiModel, active: bool) {
+                if let Some(pricing) = model_pricing::get_ai_model_pricing(ai) {
+                    let prices = pricing.prices_for(0, chrono::Utc::now());
+                    let label = format!(
+                        "{}{}",
+                        config::get_ai_model_display_name(ai),
+                        if active { " (active)" } else { "" }
+                    );
                     outln!(
                         io,
                         "{:<24} {:<24} {}",
-                        config::get_ai_model_display_name(ai),
-                        config::mills_to_dollars(input_cost_in_mills_per_million),
-                        config::mills_to_dollars(output_cost_in_mills_per_million)
+                        label,
+                        model_pricing::mills_to_dollars(prices.input),
+                        model_pricing::mills_to_dollars(prices.output)
                     )
                 }
             }
 
-            let mut agg_output_tokens = 0;
-            let mut agg_input_tokens = 0;
-            let mut cur_input_tokens = 0;
-            for log in &session.history {
-                if matches!(log.message.role, chat::MessageRole::Assistant) {
-                    // AI was prompted, so compute cost
-                    agg_output_tokens += log.tokens;
-                    agg_input_tokens += cur_input_tokens;
+            //
+            // Print next-message context size
+            //
 
-                    // The AI output becomes part of the next input
-                    cur_input_tokens += log.tokens;
-                } else {
-                    // AI wasn't prompted, so only increment input token count
-                    cur_input_tokens += log.tokens;
-                }
-            }
-            if let Some((input_cost_in_mills_per_million, output_cost_in_mills_per_million)) =
-                config::get_ai_model_cost(&session.ai)
-            {
-                let agg_input_mills = ((input_cost_in_mills_per_million as f64)
-                    * (agg_input_tokens as f64 / 1_000_000.0))
-                    as u32;
-                let agg_output_mills = ((output_cost_in_mills_per_million as f64)
-                    * (agg_output_tokens as f64 / 1_000_000.0))
-                    as u32;
-                let agg_mills = agg_input_mills + agg_output_mills;
-                let agg_output_cost = config::mills_to_dollars(agg_output_mills);
-                let agg_input_cost = config::mills_to_dollars(agg_input_mills);
-                let agg_cost = config::mills_to_dollars(agg_mills);
-
-                outln!(
-                    io,
-                    "=== Cost is *approximate* based on active model ({}) and GPT-3 tokenization ===",
-                    config::get_ai_model_display_name(&session.ai)
-                );
-                outln!(io);
-                let cur_input_context_cost = config::mills_to_dollars(
+            let cur_input_tokens: u64 = session.history.iter().map(|log| log.tokens as u64).sum();
+            if let Some(pricing) = model_pricing::get_ai_model_pricing(&session.ai) {
+                let prices = pricing.prices_for(cur_input_tokens as u64, chrono::Utc::now());
+                let input_cost_in_mills_per_million = prices.input;
+                let cur_input_context_cost = model_pricing::mills_to_dollars(
                     ((input_cost_in_mills_per_million as f64)
                         * (cur_input_tokens as f64 / 1_000_000.0)) as u32,
                 );
                 outln!(
                     io,
-                    "Your next prompt to the AI will have an input cost of: {} ({} tokens)",
+                    "Next message context (estimate): {} tok ({} if uncached)",
+                    cur_input_tokens.to_formatted_string(&Locale::en),
                     cur_input_context_cost,
-                    cur_input_tokens.to_formatted_string(&Locale::en)
-                );
-                outln!(io);
-                outln!(io, "This conversation has so far cost: {}", agg_cost);
-                outln!(
-                    io,
-                    "    input: {} ({} tokens)    output: {} ({} tokens)",
-                    agg_input_cost,
-                    agg_input_tokens.to_formatted_string(&Locale::en),
-                    agg_output_cost,
-                    agg_output_tokens.to_formatted_string(&Locale::en)
                 );
             } else {
                 outln!(
                     io,
-                    "=== No price data for {} ===",
+                    "No pricing data for {}",
                     config::get_ai_model_display_name(&session.ai)
                 );
-                outln!(io, "This conversation has used this many tokens:");
                 outln!(
                     io,
-                    "    input: {} tokens      output: {} tokens",
-                    agg_input_tokens.to_formatted_string(&Locale::en),
-                    agg_output_tokens.to_formatted_string(&Locale::en)
+                    "Next message context (estimate): {} tok",
+                    cur_input_tokens.to_formatted_string(&Locale::en),
                 );
             }
+
+            let (reported_usage, cost) = session.get_reported_usage_and_cost();
+            if let Some(reported_usage) = reported_usage {
+                outln!(io);
+                outln!(io, "== Conversation Usage ==");
+
+                let total_input_tokens = reported_usage.input_tokens
+                    + reported_usage.cache_read_tokens
+                    + reported_usage.cache_write_tokens;
+                outln!(io);
+                outln!(io, "Input tokens: {}", total_input_tokens);
+                outln!(io, "  uncached: {}", reported_usage.input_tokens);
+                outln!(
+                    io,
+                    "  cache read tokens: {}",
+                    reported_usage.cache_read_tokens
+                );
+                outln!(
+                    io,
+                    "  cache write tokens: {}",
+                    reported_usage.cache_write_tokens
+                );
+
+                let total_output_tokens =
+                    reported_usage.output_tokens + reported_usage.reasoning_tokens;
+                outln!(io);
+                outln!(io, "Output tokens: {}", total_output_tokens);
+                outln!(io, "  response: {}", reported_usage.output_tokens);
+                outln!(
+                    io,
+                    "  reasoning tokens: {}",
+                    reported_usage.reasoning_tokens
+                );
+
+                let cache_hit_rate = if total_input_tokens > 0 {
+                    (reported_usage.cache_read_tokens as f64 / total_input_tokens as f64) * 100.0
+                } else {
+                    0.0
+                };
+                outln!(io);
+                outln!(io, "Cache hit rate: {:.2}%", cache_hit_rate);
+            }
+
+            if let Some(cost) = cost {
+                outln!(io);
+                outln!(io, "Total cost: ${}", cost / 1000.0);
+            }
+
             if !is_task_mode_step {
                 // If a task is being initialized, don't include this extra
                 // info since the task is probably just trying to make the user
@@ -7420,58 +7434,62 @@ pub async fn process_cmd(
                 // model.
                 let was_recording = io.record_off();
                 outln!(io);
-                outln!(io, "=== Popular model prices ===");
+                outln!(io, "=== Model prices ===");
                 outln!(
                     io,
                     "{:<24} {:<24} Per 1M output tokens",
                     "Model",
                     "Per 1M input tokens"
                 );
+                // Might reprint again below, that's okay.
+                print_ai_model_prices(io, &session.ai, true);
                 for ai in [
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5(config::Gpt5Options {
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt61Sol(config::Gpt5Options {
                         reasoning_effort: None,
                         verbosity: None,
                     })),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5Mini(config::Gpt5Options {
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt6Luna(config::Gpt5Options {
                         reasoning_effort: None,
                         verbosity: None,
                     })),
-                    config::AiModel::OpenAi(config::OpenAiModel::Gpt5Nano(config::Gpt5Options {
+                    config::AiModel::OpenAi(config::OpenAiModel::Gpt6Astra(config::Gpt5Options {
                         reasoning_effort: None,
                         verbosity: None,
                     })),
-                    config::AiModel::OpenAi(config::OpenAiModel::O3),
-                    config::AiModel::OpenAi(config::OpenAiModel::O4Mini),
                     config::AiModel::Google(config::GoogleModel::Gemini38Flash(
                         config::GeminiOptions {
                             thinking_level: None,
                         },
                     )),
-                    config::AiModel::Google(config::GoogleModel::Gemini31Pro(
-                        config::GeminiOptions {
-                            thinking_level: None,
-                        },
-                    )),
-                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet5(
+                    config::AiModel::Anthropic(config::AnthropicModel::Sonnet55(
                         config::Anthropic46Options {
                             effort: None,
                             thinking: None,
                             thinking_display: None,
                         },
                     )),
-                    config::AiModel::Anthropic(config::AnthropicModel::Opus5(
+                    config::AiModel::Anthropic(config::AnthropicModel::Opus55(
                         config::Anthropic46Options {
                             effort: None,
                             thinking: None,
                             thinking_display: None,
                         },
                     )),
-                    config::AiModel::Anthropic(config::AnthropicModel::Haiku35),
-                    config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekChat),
-                    config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekReasoner),
-                    config::AiModel::Xai(config::XaiModel::Grok4),
+                    config::AiModel::Anthropic(config::AnthropicModel::Haiku55(
+                        config::Anthropic46Options {
+                            effort: None,
+                            thinking: None,
+                            thinking_display: None,
+                        },
+                    )),
+                    config::AiModel::DeepSeek(config::DeepSeekModel::DeepSeekV41Flash(
+                        config::DeepSeekV4Options {
+                            reasoning_effort: None,
+                        },
+                    )),
+                    config::AiModel::Xai(config::XaiModel::Grok46),
                 ] {
-                    print_ai_model_prices(io, &ai);
+                    print_ai_model_prices(io, &ai, false);
                 }
                 io.record_set(was_recording);
             }

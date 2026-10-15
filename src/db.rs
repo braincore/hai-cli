@@ -28,6 +28,12 @@ pub struct LogEntry {
     /// or by an entry that shares the same `result_of` value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_of: Option<String>,
+    /// Token usage reported by provider API (definitive counts).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+    /// Cost in USD mills inferred from `reported_usage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
 }
 
 fn default_true() -> bool {

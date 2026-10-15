@@ -4,7 +4,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
+use crate::ai_provider::{
+    AiProviderResponse,
+    usage::TokenUsage,
+    util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq},
+};
 use crate::chat;
 use crate::ctrlc_handler::CtrlcHandler;
 use crate::{errorln, io::Out, out, outln};
@@ -25,7 +29,7 @@ pub async fn send_to_ollama(
     ctrlc_handler: Option<&mut CtrlcHandler>,
     masked_strings: &Vec<String>,
     #[allow(unused_variables)] debug: bool,
-) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+) -> Result<AiProviderResponse, Box<dyn Error>> {
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
 
     // Register ctrl+c interrupt handler
@@ -167,7 +171,7 @@ pub async fn send_to_ollama(
                 out!(out, "^C");
             }
             outln!(out, "AI Interrupted");
-            return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
+            return Ok(AiProviderResponse::interrupted(String::new()));
         }
     };
     let mut res = fat_res?;
@@ -176,6 +180,9 @@ pub async fn send_to_ollama(
     let mut buffer = String::new();
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
     let mut tool_calls = HashMap::<u32, JsonObjectAccumulator>::new();
+
+    // Reported on the final (`done: true`) chunk.
+    let mut usage: Option<TokenUsage> = None;
 
     let _span = tracing::debug_span!("--- ollama").entered();
 
@@ -203,11 +210,9 @@ pub async fn send_to_ollama(
             outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
-                return Ok(vec![chat::ChatCompletionResponse::Message {
-                    text: tool_call.printed_text + "^CAI Interrupted",
-                }])
+                return Ok(AiProviderResponse::interrupted(tool_call.printed_text))
             } else {
-                return Ok(vec![chat::ChatCompletionResponse::Message { text: text_accumulator.printed_text + "^CAI Interrupted" }])
+                return Ok(AiProviderResponse::interrupted(text_accumulator.printed_text))
             }
         }
     } {
@@ -229,6 +234,9 @@ pub async fn send_to_ollama(
                         serde_json::from_str::<serde_json::Value>(&buffer[json_start_index..=i])
                     {
                         json_length = Some(i + 1);
+                        if let Some(u) = TokenUsage::from_ollama(&json_data) {
+                            usage = Some(u);
+                        }
                         if let Ok(tool_response) = serde_json::from_value::<serde_json::Value>(
                             json_data["message"]["tool_calls"][0]["function"].clone(),
                         ) && !tool_response.is_null()
@@ -302,5 +310,5 @@ pub async fn send_to_ollama(
             arg: tool_call.buffer,
         });
     }
-    Ok(responses)
+    Ok(AiProviderResponse { responses, usage })
 }

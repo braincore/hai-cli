@@ -5,7 +5,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq};
+use crate::ai_provider::{
+    AiProviderResponse,
+    usage::TokenUsage,
+    util::{JsonObjectAccumulator, TextAccumulator, remove_nulls, run_jaq},
+};
 use crate::chat;
 use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
@@ -64,7 +68,7 @@ pub async fn send_to_openai(
     reasoning_effort: &Option<OpenAiReasoningEffort>,
     verbosity: &Option<OpenAiVerbosity>,
     deepseek_flatten_nonuser_content: bool, // DeepSeek specific
-) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+) -> Result<AiProviderResponse, Box<dyn Error>> {
     let messages: Vec<_> = history.iter().map(|msg| json!(msg)).collect();
 
     // Register ctrl+c interrupt handler
@@ -256,7 +260,7 @@ pub async fn send_to_openai(
                 handler.remove_handler(handler_id);
             }
             outln!(out, "AI Interrupted");
-            return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
+            return Ok(AiProviderResponse::interrupted(String::new()));
         }
     };
     let mut res = fat_res?;
@@ -268,6 +272,10 @@ pub async fn send_to_openai(
 
     // Deepseek-reasoner only
     let mut reasoning_accumulator = TextAccumulator::new(masked_strings.clone());
+
+    // Reported in the final chunk (stream_options.include_usage) or in the
+    // non-streaming response body.
+    let mut usage: Option<TokenUsage> = None;
 
     let _span = tracing::debug_span!("--- openai").entered();
 
@@ -299,11 +307,9 @@ pub async fn send_to_openai(
             outln!(out, "AI Interrupted");
             if !tool_calls.is_empty() {
                 let (_key, tool_call) = tool_calls.into_iter().next().unwrap();
-                return Ok(vec![chat::ChatCompletionResponse::Message {
-                    text: tool_call.printed_text + "^CAI Interrupted",
-                }])
+                return Ok(AiProviderResponse::interrupted(tool_call.printed_text))
             } else {
-                return Ok(vec![chat::ChatCompletionResponse::Message { text: text_accumulator.printed_text + "^CAI Interrupted" }])
+                return Ok(AiProviderResponse::interrupted(text_accumulator.printed_text))
             }
         }
     } {
@@ -325,6 +331,9 @@ pub async fn send_to_openai(
                         serde_json::from_str::<serde_json::Value>(&buffer[json_start_index..=i])
                     {
                         json_length = Some(i + 1);
+                        if let Some(u) = TokenUsage::from_openai_chat(&json_data["usage"]) {
+                            usage = Some(u);
+                        }
                         if let Ok(tool_response) = serde_json::from_value::<ToolCallResponse>(
                             json_data["choices"][0]["delta"]["tool_calls"][0].clone(),
                         ) {
@@ -475,5 +484,5 @@ pub async fn send_to_openai(
             });
         }
     }
-    Ok(responses)
+    Ok(AiProviderResponse { responses, usage })
 }

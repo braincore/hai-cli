@@ -257,6 +257,8 @@ impl Io {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     ) -> Answer {
         self.input.lock().unwrap().next_repl(
             index,
@@ -267,6 +269,8 @@ impl Io {
             toolbox,
             incognito,
             agentic,
+            reported_usage,
+            cost,
         )
     }
 
@@ -338,6 +342,8 @@ impl Io {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     ) {
         self.out.repl_status(
             index,
@@ -348,6 +354,8 @@ impl Io {
             toolbox,
             incognito,
             agentic,
+            reported_usage,
+            cost,
         )
     }
 
@@ -475,6 +483,8 @@ pub trait Input: Send {
         _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
+        _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        _cost: Option<f64>,
     ) -> Answer {
         self.ask(&Query::line("").with_record_message(false))
     }
@@ -673,6 +683,8 @@ pub trait Output: Send {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     );
 }
 
@@ -940,6 +952,8 @@ impl Out {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     ) {
         self.backend.lock().unwrap().repl_status(
             index,
@@ -950,6 +964,8 @@ impl Out {
             toolbox,
             incognito,
             agentic,
+            reported_usage,
+            cost,
         );
     }
 
@@ -1647,6 +1663,8 @@ impl Output for StdioOutput {
         _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
+        _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        _cost: Option<f64>,
     ) {
         // No-op since terminal does not support inter-repl-prompt status line
         // rendering.
@@ -1721,6 +1739,8 @@ impl Output for NoopOutput {
         _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
+        _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        _cost: Option<f64>,
     ) {
     }
 }
@@ -1750,6 +1770,8 @@ impl Input for NoopInput {
         _toolbox: Vec<String>,
         _incognito: bool,
         _agentic: bool,
+        _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        _cost: Option<f64>,
     ) -> Answer {
         Answer::Eof
     }

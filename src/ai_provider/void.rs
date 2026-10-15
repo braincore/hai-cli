@@ -9,7 +9,7 @@ pub async fn send_to_void(
     out: &Out,
     model: &str,
     masked_strings: &Vec<String>,
-) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+) -> Result<crate::ai_provider::AiProviderResponse, Box<dyn Error>> {
     out.code_reset();
     let mut text_accumulator = TextAccumulator::new(masked_strings.clone());
 
@@ -364,5 +364,8 @@ pub async fn send_to_void(
             text: text_accumulator.printed_text,
         });
     }
-    Ok(responses)
+    Ok(crate::ai_provider::AiProviderResponse {
+        responses,
+        usage: None,
+    })
 }

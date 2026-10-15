@@ -14,7 +14,11 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::ai_provider::util::{JsonObjectAccumulator, TextAccumulator, remove_nulls};
+use crate::ai_provider::{
+    AiProviderResponse,
+    usage::TokenUsage,
+    util::{JsonObjectAccumulator, TextAccumulator, remove_nulls},
+};
 use crate::chat::{self, MessageContent, MessageRole};
 use crate::config::{OpenAiReasoningEffort, OpenAiVerbosity};
 use crate::ctrlc_handler::CtrlcHandler;
@@ -119,6 +123,8 @@ struct ResponseState {
     /// Keyed by `output_index` so that ordering is preserved.
     tool_calls: BTreeMap<u64, JsonObjectAccumulator>,
     masked_strings: Vec<String>,
+    /// From `response.completed` (or `.incomplete`/`.failed`).
+    usage: Option<TokenUsage>,
 }
 
 impl ResponseState {
@@ -129,6 +135,7 @@ impl ResponseState {
             reasoning_ended: false,
             tool_calls: BTreeMap::new(),
             masked_strings: masked_strings.to_vec(),
+            usage: None,
         }
     }
 
@@ -247,6 +254,11 @@ impl ResponseState {
     fn handle_stream_event(&mut self, ev: &Value, out: &Out) {
         let output_index = ev["output_index"].as_u64().unwrap_or(0);
         let delta = ev["delta"].as_str().unwrap_or_default();
+        // response.completed / response.incomplete / response.failed carry
+        // the final usage.
+        if let Some(u) = TokenUsage::from_openai_responses(&ev["response"]["usage"]) {
+            self.usage = Some(u);
+        }
         match ev["type"].as_str().unwrap_or_default() {
             "response.output_text.delta" | "response.refusal.delta" => {
                 self.on_text_delta(delta, out);
@@ -315,15 +327,13 @@ impl ResponseState {
         }
     }
 
-    fn interrupted_response(self) -> Vec<chat::ChatCompletionResponse> {
+    fn interrupted_response(self) -> AiProviderResponse {
         let text = if let Some((_, tool_call)) = self.tool_calls.into_iter().next() {
             tool_call.printed_text
         } else {
             self.text_accumulator.printed_text
         };
-        vec![chat::ChatCompletionResponse::Message {
-            text: text + "^CAI Interrupted",
-        }]
+        AiProviderResponse::interrupted(text)
     }
 }
 
@@ -388,7 +398,7 @@ pub async fn send_to_openai(
     #[allow(unused_variables)] debug: bool,
     reasoning_effort: &Option<OpenAiReasoningEffort>,
     verbosity: &Option<OpenAiVerbosity>,
-) -> Result<Vec<chat::ChatCompletionResponse>, Box<dyn Error>> {
+) -> Result<AiProviderResponse, Box<dyn Error>> {
     // Register ctrl+c interrupt handler
     let cancel_info = if let Some(handler) = ctrlc_handler {
         let parent_cancel_token = CancellationToken::new();
@@ -514,7 +524,7 @@ pub async fn send_to_openai(
                 handler.remove_handler(handler_id);
             }
             outln!(out, "AI Interrupted");
-            return Ok(vec![chat::ChatCompletionResponse::Message { text: "^CAI Interrupted".to_string() }]);
+            return Ok(AiProviderResponse::interrupted(String::new()));
         }
     };
     let mut res = fat_res?;
@@ -596,5 +606,8 @@ pub async fn send_to_openai(
             arg: tool_call.buffer,
         });
     }
-    Ok(responses)
+    Ok(AiProviderResponse {
+        responses,
+        usage: state.usage,
+    })
 }

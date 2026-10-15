@@ -121,6 +121,8 @@ impl Output for WsOutput {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     ) {
         let use_hai_router = match use_hai_router {
             crate::session::HaiRouterState::On => HaiRouterState::On,
@@ -138,6 +140,8 @@ impl Output for WsOutput {
                 toolbox,
                 incognito,
                 agentic,
+                reported_usage,
+                cost,
             })
             .is_err()
         {
@@ -196,6 +200,8 @@ impl Input for WsInput {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     ) -> Answer {
         let (reply, rx) = std::sync::mpsc::channel();
         let use_hai_router = match use_hai_router {
@@ -215,6 +221,8 @@ impl Input for WsInput {
                 toolbox,
                 incognito,
                 agentic,
+                reported_usage,
+                cost,
             })
             .is_err()
         {
@@ -307,6 +315,8 @@ pub enum ServerMsg {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     },
 
     /// In-between REPL inputs, kernel is sending an update for the REPL status
@@ -320,6 +330,8 @@ pub enum ServerMsg {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     },
 
     //
@@ -479,6 +491,8 @@ pub enum WsCmd {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     },
 
     /// Update REPL status line in-between REPL prompts (ReplLine)
@@ -491,6 +505,8 @@ pub enum WsCmd {
         toolbox: Vec<String>,
         incognito: bool,
         agentic: bool,
+        reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
+        cost: Option<f64>,
     },
 
     /// Update the state of the actor.
@@ -756,6 +772,8 @@ impl WsActor {
                 toolbox,
                 incognito,
                 agentic,
+                reported_usage,
+                cost,
             } => {
                 // Should not be necessary, but as a backstop, if there are any
                 // sections open, close them. This takes advantage of the fact
@@ -776,6 +794,8 @@ impl WsActor {
                     toolbox,
                     incognito,
                     agentic,
+                    reported_usage,
+                    cost,
                 };
                 self.pending_client_repl = Some(PendingClientInput {
                     reply,
@@ -794,6 +814,8 @@ impl WsActor {
                 toolbox,
                 incognito,
                 agentic,
+                reported_usage,
+                cost,
             } => {
                 let server_msg = ServerMsg::ReplStatus {
                     index,
@@ -804,6 +826,8 @@ impl WsActor {
                     toolbox,
                     incognito,
                     agentic,
+                    reported_usage,
+                    cost,
                 };
                 self.emit_or_drop(server_msg);
             }

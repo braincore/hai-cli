@@ -10,6 +10,7 @@ pub mod haivar;
 pub mod html_tool;
 pub mod kernel;
 pub mod mcp;
+pub mod model_pricing;
 pub mod queue_listen;
 
 /// Returns the command and args needed to re-invoke this program.

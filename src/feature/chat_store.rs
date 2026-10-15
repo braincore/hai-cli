@@ -969,7 +969,7 @@ async fn prompt_ai_simple(
         tool_call_id: None,
         tool_calls: None,
     }];
-    let res = crate::prompt_ai(
+    let (responses, _usage) = crate::prompt_ai(
         &out,
         &msg_history,
         &Vec::new(),
@@ -980,7 +980,7 @@ async fn prompt_ai_simple(
         debug,
     )
     .await;
-    for chat_response in &res {
+    for chat_response in &responses {
         if let chat::ChatCompletionResponse::Message { text } = chat_response {
             return Some(text.clone());
         }
