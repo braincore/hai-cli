@@ -216,15 +216,6 @@ pub fn get_ai_model_pricing(ai_model: &AiModel) -> Option<ModelPricing> {
         },
         AiModel::DeepSeek(model) => {
             let (standard, offpeak) = match model {
-                DeepSeekModel::DeepSeekChat => {
-                    (tp(140, 280, Some(14), None), tp(70, 140, Some(7), None))
-                }
-                DeepSeekModel::DeepSeekReasoner => {
-                    (tp(140, 280, Some(14), None), tp(70, 140, Some(7), None))
-                }
-                DeepSeekModel::DeepSeekV4Flash(_) => {
-                    (tp(140, 280, Some(14), None), tp(70, 140, Some(7), None))
-                }
                 DeepSeekModel::DeepSeekV4Pro(_) => (
                     tp(1320, 3960, Some(44), None),
                     tp(660, 1980, Some(22), None),

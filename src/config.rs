@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use crate::{errorln, io::Out};
 
@@ -110,7 +111,8 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
     opts.remove(0);
     match model_name.as_str() {
         "chatgpt4o" => Some(AiModel::OpenAi(OpenAiModel::ChatGpt4o)),
-        "ds" | "deepseek" | "deepseek4" | "deepseek4flash" | "ds4" | "ds4f" => {
+        // v3 / r1 for migrating deprecated models
+        "ds" | "deepseek" | "deepseek4" | "deepseek4flash" | "ds4" | "ds4f" | "v3" | "r1" => {
             Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(
                 parse_deepseek_v4_opts(opts),
             )))
@@ -118,8 +120,6 @@ pub fn ai_model_from_string(ai_model: &str) -> Option<AiModel> {
         "deepseek4pro" | "ds4p" | "dsp" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekV4Pro(
             parse_deepseek_v4_opts(opts),
         ))),
-        "deepseekchat" | "v3" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekChat)),
-        "deepseekreasoner" | "r1" => Some(AiModel::DeepSeek(DeepSeekModel::DeepSeekReasoner)),
         "flash15" | "gemini15flash" => Some(AiModel::Google(GoogleModel::Gemini15Flash)),
         "flash158b" | "gemini15flash8b" => Some(AiModel::Google(GoogleModel::Gemini15Flash8B)),
         "flash20" | "gemini20flash" => Some(AiModel::Google(GoogleModel::Gemini20Flash)),
@@ -451,8 +451,6 @@ pub static AUTOCOMPLETE_AI_MODEL_SUGGESTIONS: &[&str] = &[
     "deepseek",
     "deepseek4-flash",
     "deepseek4-pro",
-    "v3",
-    "r1",
     "grok",
     "grok-3",
     "grok-3-fast",
@@ -778,12 +776,6 @@ pub fn ai_model_to_string(ai_model: &AiModel) -> String {
 
         // DeepSeek models
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => "deepseek-chat".to_string(),
-            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner".to_string(),
-            DeepSeekModel::DeepSeekV4Flash(opts) => {
-                let base = "deepseek-v4-flash".to_string();
-                append_deepseek_v4_opts(base, opts)
-            }
             DeepSeekModel::DeepSeekV4Pro(opts) => {
                 let base = "deepseek-v4-pro".to_string();
                 append_deepseek_v4_opts(base, opts)
@@ -1453,6 +1445,45 @@ impl Config {
 
 // ---
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ModelVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+
+impl ModelVersion {
+    pub const fn new(major: u32, minor: u32) -> Self {
+        Self { major, minor }
+    }
+}
+
+// Version with a dot separator: gpt-5.6-terra
+static VERSION_DOT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|\D)(\d{1,2})\.(\d{1,2})(?:\D|$)").unwrap());
+
+// Version with a dash separator: claude-opus-5-5
+static VERSION_DASH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:^|\D)(\d{1,2})-(\d{1,2})(?:\D|$)").unwrap());
+
+/// Ignore nums that look like YYYY-MM-DD or MMDD or similar
+static PROBABLY_DATE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{4,}").unwrap());
+
+pub fn guess_version(name: &str) -> Option<ModelVersion> {
+    // Drop date-looking suffixes
+    let name = PROBABLY_DATE_RE
+        .find(name)
+        .map_or(name, |m| &name[..m.start()]);
+
+    [&*VERSION_DOT_RE, &*VERSION_DASH_RE]
+        .into_iter()
+        .find_map(|re| {
+            re.captures(name)
+                .map(|c| ModelVersion::new(c[1].parse().unwrap(), c[2].parse().unwrap()))
+        })
+}
+
+// --
+
 #[derive(Debug)]
 pub enum AiModel {
     Anthropic(AnthropicModel),
@@ -1504,6 +1535,46 @@ pub enum AnthropicEffort {
     Max,
 }
 
+impl AnthropicModel {
+    pub fn version(&self) -> Option<ModelVersion> {
+        use AnthropicModel::*;
+        let v = match self {
+            Fable51(_) => (5, 1),
+            Haiku35 => (3, 5),
+            Haiku55(_) => (5, 5),
+            Opus4(_) => (4, 0),
+            Opus41(_) => (4, 1),
+            Opus45(_) => (4, 5),
+            Opus46(_) => (4, 6),
+            Opus47(_) => (4, 7),
+            Opus48(_) => (4, 8),
+            Opus5(_) => (5, 0),
+            Opus55(_) => (5, 5),
+            Sonnet35 => (3, 5),
+            Sonnet37(_) => (3, 7),
+            Sonnet4(_) => (4, 0),
+            Sonnet45(_) => (4, 5),
+            Sonnet46(_) => (4, 6),
+            Sonnet5(_) => (5, 0),
+            Sonnet55(_) => (5, 5),
+            Other(s) => return guess_version(s),
+        };
+        Some(ModelVersion::new(v.0, v.1))
+    }
+
+    pub fn get_anthropic46_options(&self) -> Option<&Anthropic46Options> {
+        use AnthropicModel::*;
+        match self {
+            Fable51(opts) | Haiku55(opts) | Opus46(opts) | Opus47(opts) | Opus48(opts)
+            | Opus5(opts) | Opus55(opts) | Sonnet46(opts) | Sonnet5(opts) | Sonnet55(opts) => {
+                Some(opts)
+            }
+            Haiku35 | Opus4(_) | Opus41(_) | Opus45(_) | Sonnet35 | Sonnet37(_) | Sonnet4(_)
+            | Sonnet45(_) | Other(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct DeepSeekV4Options {
     pub reasoning_effort: Option<OpenAiReasoningEffort>,
@@ -1511,12 +1582,21 @@ pub struct DeepSeekV4Options {
 
 #[derive(Debug)]
 pub enum DeepSeekModel {
-    DeepSeekChat,
-    DeepSeekReasoner,
-    DeepSeekV4Flash(DeepSeekV4Options),
     DeepSeekV4Pro(DeepSeekV4Options),
     DeepSeekV41Flash(DeepSeekV4Options),
     Other(String),
+}
+
+impl DeepSeekModel {
+    pub fn version(&self) -> Option<ModelVersion> {
+        use DeepSeekModel::*;
+        let v = match self {
+            DeepSeekV4Pro(_) => (4, 0),
+            DeepSeekV41Flash(_) => (4, 1),
+            Other(s) => return guess_version(s),
+        };
+        Some(ModelVersion::new(v.0, v.1))
+    }
 }
 
 #[derive(Debug)]
@@ -1542,6 +1622,48 @@ pub enum GoogleModel {
     Gemini37Flash(GeminiOptions),
     Gemini38Flash(GeminiOptions),
     Other(String),
+}
+
+impl GoogleModel {
+    pub fn version(&self) -> Option<ModelVersion> {
+        use GoogleModel::*;
+        let v = match self {
+            Gemini15Flash => (1, 5),
+            Gemini15Flash8B => (1, 5),
+            Gemini15Pro => (1, 5),
+            Gemini20Flash => (2, 0),
+            Gemini25Flash => (2, 5),
+            Gemini25Pro => (2, 5),
+            Gemini3Pro(_) => (3, 0),
+            Gemini3Flash(_) => (3, 0),
+            Gemini31FlashLite(_) => (3, 1),
+            Gemini31Pro(_) => (3, 1),
+            Gemini35Flash(_) => (3, 5),
+            Gemini35FlashLite(_) => (3, 5),
+            Gemini36Flash(_) => (3, 6),
+            Gemini37Flash(_) => (3, 7),
+            Gemini38Flash(_) => (3, 8),
+            Other(s) => return guess_version(s),
+        };
+        Some(ModelVersion::new(v.0, v.1))
+    }
+
+    pub fn get_gemini3_options(&self) -> Option<&GeminiOptions> {
+        use GoogleModel::*;
+        match self {
+            Gemini3Pro(opts)
+            | Gemini3Flash(opts)
+            | Gemini31FlashLite(opts)
+            | Gemini31Pro(opts)
+            | Gemini35Flash(opts)
+            | Gemini35FlashLite(opts)
+            | Gemini36Flash(opts)
+            | Gemini37Flash(opts)
+            | Gemini38Flash(opts) => Some(opts),
+            Gemini15Flash | Gemini15Flash8B | Gemini15Pro | Gemini20Flash | Gemini25Flash
+            | Gemini25Pro | Other(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1617,6 +1739,41 @@ pub enum OpenAiModel {
     Other(String),
 }
 
+impl OpenAiModel {
+    /// `None` for models outside the primary GPT line
+    pub fn version(&self) -> Option<ModelVersion> {
+        use OpenAiModel::*;
+        let v = match self {
+            ChatGpt4o | Gpt4o | Gpt4oMini => (4, 0),
+            Gpt41 | Gpt41Mini | Gpt41Nano => (4, 1),
+            Gpt5(_) | Gpt5Chat | Gpt5Mini(_) | Gpt5Nano(_) => (5, 0),
+            Gpt51(_) | Gpt51Chat => (5, 1),
+            Gpt52(_) | Gpt52Chat => (5, 2),
+            Gpt53Chat => (5, 3),
+            Gpt54(_) | Gpt54Mini(_) | Gpt54Nano(_) => (5, 4),
+            Gpt55(_) => (5, 5),
+            Gpt56Sol(_) | Gpt56Terra(_) | Gpt56Luna(_) => (5, 6),
+            Gpt6Astra(_) | Gpt6Sol(_) | Gpt6Luna(_) => (6, 0),
+            Gpt61Sol(_) => (6, 1),
+            O1 | O1Mini | O3 | O3Mini | O4Mini => return None,
+            Other(s) => return guess_version(s),
+        };
+        Some(ModelVersion::new(v.0, v.1))
+    }
+
+    pub fn get_gpt5_options(&self) -> Option<&Gpt5Options> {
+        use OpenAiModel::*;
+        match self {
+            Gpt5(opts) | Gpt5Mini(opts) | Gpt5Nano(opts) | Gpt51(opts) | Gpt52(opts)
+            | Gpt54(opts) | Gpt54Mini(opts) | Gpt54Nano(opts) | Gpt55(opts) | Gpt56Sol(opts)
+            | Gpt56Terra(opts) | Gpt56Luna(opts) | Gpt6Astra(opts) | Gpt6Sol(opts)
+            | Gpt6Luna(opts) | Gpt61Sol(opts) => Some(opts),
+            Gpt5Chat | Gpt51Chat | Gpt52Chat | Gpt53Chat | ChatGpt4o | Gpt4o | Gpt4oMini
+            | Gpt41 | Gpt41Mini | Gpt41Nano | O1 | O1Mini | O3 | O3Mini | O4Mini | Other(_) => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum XaiModel {
     Grok3,
@@ -1626,6 +1783,22 @@ pub enum XaiModel {
     Grok4,
     Grok46,
     Other(String),
+}
+
+impl XaiModel {
+    pub fn version(&self) -> Option<ModelVersion> {
+        use XaiModel::*;
+        let v = match self {
+            Grok3 => (3, 0),
+            Grok3Fast => (3, 0),
+            Grok3Mini => (3, 0),
+            Grok3MiniFast => (3, 0),
+            Grok4 => (4, 0),
+            Grok46 => (4, 6),
+            Other(s) => return guess_version(s),
+        };
+        Some(ModelVersion::new(v.0, v.1))
+    }
 }
 
 #[derive(Debug)]
@@ -1657,9 +1830,6 @@ pub fn get_ai_model_provider_name(ai_model: &AiModel) -> &str {
             AnthropicModel::Other(name) => name,
         },
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => "deepseek-chat",
-            DeepSeekModel::DeepSeekReasoner => "deepseek-reasoner",
-            DeepSeekModel::DeepSeekV4Flash(_) => "deepseek-v4-flash",
             DeepSeekModel::DeepSeekV4Pro(_) => "deepseek-v4-pro",
             DeepSeekModel::DeepSeekV41Flash(_) => "deepseek-flash",
             DeepSeekModel::Other(name) => name,
@@ -1787,11 +1957,6 @@ pub fn get_ai_model_display_name(ai_model: &AiModel) -> String {
             AnthropicModel::Other(name) => name.clone(),
         },
         AiModel::DeepSeek(model) => match model {
-            DeepSeekModel::DeepSeekChat => "deepseek-v4-flash".to_string(),
-            DeepSeekModel::DeepSeekReasoner => "deepseek-v4-flash".to_string(),
-            DeepSeekModel::DeepSeekV4Flash(opts) => {
-                format!("deepseek-v4-flash{}", get_deepseek_v4_opts_display(opts))
-            }
             DeepSeekModel::DeepSeekV4Pro(opts) => {
                 format!("deepseek-v4-pro{}", get_deepseek_v4_opts_display(opts))
             }
@@ -2106,11 +2271,7 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
         }
         AiModel::DeepSeek(model) => matches!(
             model,
-            DeepSeekModel::DeepSeekChat
-                | DeepSeekModel::DeepSeekReasoner
-                | DeepSeekModel::DeepSeekV4Flash(_)
-                | DeepSeekModel::DeepSeekV4Pro(_)
-                | DeepSeekModel::DeepSeekV41Flash(_)
+            DeepSeekModel::DeepSeekV4Pro(_) | DeepSeekModel::DeepSeekV41Flash(_)
         ),
         AiModel::Google(model) => matches!(
             model,
@@ -2182,36 +2343,16 @@ pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
 
 pub fn openai_compat_reasoning_effort(model: &AiModel) -> &Option<OpenAiReasoningEffort> {
     match model {
-        AiModel::OpenAi(
-            OpenAiModel::Gpt5(opts)
-            | OpenAiModel::Gpt5Mini(opts)
-            | OpenAiModel::Gpt5Nano(opts)
-            | OpenAiModel::Gpt52(opts)
-            | OpenAiModel::Gpt54(opts)
-            | OpenAiModel::Gpt55(opts)
-            | OpenAiModel::Gpt56Sol(opts)
-            | OpenAiModel::Gpt56Terra(opts)
-            | OpenAiModel::Gpt56Luna(opts)
-            | OpenAiModel::Gpt6Astra(opts)
-            | OpenAiModel::Gpt6Sol(opts)
-            | OpenAiModel::Gpt6Luna(opts)
-            | OpenAiModel::Gpt61Sol(opts),
-        ) => &opts.reasoning_effort,
-        AiModel::Google(
-            GoogleModel::Gemini3Flash(opts)
-            | GoogleModel::Gemini3Pro(opts)
-            | GoogleModel::Gemini31FlashLite(opts)
-            | GoogleModel::Gemini31Pro(opts)
-            | GoogleModel::Gemini35Flash(opts)
-            | GoogleModel::Gemini35FlashLite(opts)
-            | GoogleModel::Gemini36Flash(opts)
-            | GoogleModel::Gemini37Flash(opts)
-            | GoogleModel::Gemini38Flash(opts),
-        ) => &opts.thinking_level,
+        AiModel::OpenAi(openai_model) => &openai_model
+            .get_gpt5_options()
+            .map(|opts| &opts.reasoning_effort)
+            .unwrap_or(&None),
+        AiModel::Google(gemini_model) => &gemini_model
+            .get_gemini3_options()
+            .map(|opts| &opts.thinking_level)
+            .unwrap_or(&None),
         AiModel::DeepSeek(
-            DeepSeekModel::DeepSeekV4Flash(opts)
-            | DeepSeekModel::DeepSeekV4Pro(opts)
-            | DeepSeekModel::DeepSeekV41Flash(opts),
+            DeepSeekModel::DeepSeekV4Pro(opts) | DeepSeekModel::DeepSeekV41Flash(opts),
         ) => &opts.reasoning_effort,
         _ => &None,
     }
@@ -2219,21 +2360,10 @@ pub fn openai_compat_reasoning_effort(model: &AiModel) -> &Option<OpenAiReasonin
 
 pub fn openai_compat_verbosity(model: &AiModel) -> &Option<OpenAiVerbosity> {
     match model {
-        AiModel::OpenAi(
-            OpenAiModel::Gpt5(opts)
-            | OpenAiModel::Gpt5Mini(opts)
-            | OpenAiModel::Gpt5Nano(opts)
-            | OpenAiModel::Gpt52(opts)
-            | OpenAiModel::Gpt54(opts)
-            | OpenAiModel::Gpt55(opts)
-            | OpenAiModel::Gpt56Sol(opts)
-            | OpenAiModel::Gpt56Terra(opts)
-            | OpenAiModel::Gpt56Luna(opts)
-            | OpenAiModel::Gpt6Astra(opts)
-            | OpenAiModel::Gpt6Sol(opts)
-            | OpenAiModel::Gpt6Luna(opts)
-            | OpenAiModel::Gpt61Sol(opts),
-        ) => &opts.verbosity,
+        AiModel::OpenAi(model) => &model
+            .get_gpt5_options()
+            .map(|opts| &opts.verbosity)
+            .unwrap_or(&None),
         _ => &None,
     }
 }
@@ -2242,16 +2372,23 @@ pub fn openai_compat_verbosity(model: &AiModel) -> &Option<OpenAiVerbosity> {
 /// for simultaneous tool-use + reasoning from the chat completions API.
 pub fn openai_use_responses_api(model: &AiModel) -> bool {
     match model {
-        AiModel::OpenAi(
-            OpenAiModel::Gpt56Sol(_)
-            | OpenAiModel::Gpt56Luna(_)
-            | OpenAiModel::Gpt56Terra(_)
-            | OpenAiModel::Gpt6Astra(_)
-            | OpenAiModel::Gpt6Sol(_)
-            | OpenAiModel::Gpt6Luna(_)
-            | OpenAiModel::Gpt61Sol(_),
-        ) => true,
+        AiModel::OpenAi(model) => model.version() >= Some(ModelVersion::new(5, 6)),
         AiModel::DeepSeek(DeepSeekModel::DeepSeekV41Flash(_)) => true,
+        _ => false,
+    }
+}
+
+pub fn openai_temperature_deprecated(model: &AiModel) -> bool {
+    match model {
+        AiModel::OpenAi(OpenAiModel::O1)
+        | AiModel::OpenAi(OpenAiModel::O1Mini)
+        | AiModel::OpenAi(OpenAiModel::O3)
+        | AiModel::OpenAi(OpenAiModel::O3Mini)
+        | AiModel::OpenAi(OpenAiModel::O4Mini) => true,
+        AiModel::OpenAi(OpenAiModel::Other(name)) => {
+            name.starts_with('o') || name.starts_with("gpt-5")
+        }
+        AiModel::OpenAi(openai_model) => openai_model.version() >= Some(ModelVersion::new(5, 0)),
         _ => false,
     }
 }
@@ -2263,21 +2400,10 @@ pub fn openai_use_responses_api(model: &AiModel) -> bool {
 pub fn anthropic_model_modern_opts(
     anthropic_model: &AnthropicModel,
 ) -> (Option<bool>, Option<bool>, Option<&AnthropicEffort>) {
-    match anthropic_model {
-        AnthropicModel::Opus46(opts)
-        | AnthropicModel::Sonnet46(opts)
-        | AnthropicModel::Opus47(opts)
-        | AnthropicModel::Opus48(opts)
-        | AnthropicModel::Opus5(opts)
-        | AnthropicModel::Opus55(opts)
-        | AnthropicModel::Sonnet5(opts)
-        | AnthropicModel::Sonnet55(opts)
-        | AnthropicModel::Haiku55(opts)
-        | AnthropicModel::Fable51(opts) => {
-            (opts.thinking, opts.thinking_display, opts.effort.as_ref())
-        }
-        _ => (None, None, None),
-    }
+    anthropic_model
+        .get_anthropic46_options()
+        .map(|opts| (opts.thinking, opts.thinking_display, opts.effort.as_ref()))
+        .unwrap_or((None, None, None))
 }
 
 /// Newer anthropic models do not support forcing a specific tool.
@@ -2289,17 +2415,7 @@ pub fn anthropic_model_cannot_force_tool(anthropic_model: &AnthropicModel) -> bo
 }
 
 pub fn anthropic_model_temperature_deprecated(anthropic_model: &AnthropicModel) -> bool {
-    matches!(
-        anthropic_model,
-        AnthropicModel::Opus47(_)
-            | AnthropicModel::Opus48(_)
-            | AnthropicModel::Opus5(_)
-            | AnthropicModel::Opus55(_)
-            | AnthropicModel::Sonnet5(_)
-            | AnthropicModel::Sonnet55(_)
-            | AnthropicModel::Haiku55(_)
-            | AnthropicModel::Fable51(_)
-    )
+    anthropic_model.version() >= Some(ModelVersion::new(4, 7))
 }
 
 /// This is the old thinking flag which is now deprecated.
@@ -2322,6 +2438,7 @@ pub fn anthropic_model_use_deprecated_thinking(anthropic_model: &AnthropicModel)
 pub fn model_can_turn_on_prompt_cache(model: &AiModel) -> bool {
     match model {
         AiModel::Anthropic(_) => true,
+        AiModel::OpenAi(openai_model) => openai_model.version() >= Some(ModelVersion::new(5, 6)),
         _ => false,
     }
 }
@@ -2346,7 +2463,6 @@ pub fn model_default_agentic(model: &AiModel) -> bool {
         AiModel::OpenAi(
             OpenAiModel::Gpt56Sol(_)
             | OpenAiModel::Gpt56Terra(_)
-            | OpenAiModel::Gpt56Luna(_)
             | OpenAiModel::Gpt6Sol(_)
             | OpenAiModel::Gpt61Sol(_),
         ) => true,

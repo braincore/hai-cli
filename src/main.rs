@@ -2275,6 +2275,9 @@ pub async fn prompt_ai(
                 })
                 .collect::<Vec<_>>();
 
+            // GPT-5+ deprecated temperature
+            let temperature_deprecated = config::openai_temperature_deprecated(&session.ai);
+
             if config::openai_use_responses_api(&session.ai) {
                 openai_responses::send_to_openai(
                     out,
@@ -2283,6 +2286,7 @@ pub async fn prompt_ai(
                     provider_header,
                     config::get_ai_model_provider_name(&session.ai),
                     session.ai_temperature,
+                    temperature_deprecated,
                     msg_history,
                     &tool_schemas,
                     force_tool_api_name,
@@ -2291,6 +2295,7 @@ pub async fn prompt_ai(
                     debug,
                     openai_reasoning_effort,
                     openai_verbosity,
+                    session.prompt_cache,
                 )
                 .await
             } else {
@@ -2301,6 +2306,7 @@ pub async fn prompt_ai(
                     provider_header,
                     config::get_ai_model_provider_name(&session.ai),
                     session.ai_temperature,
+                    temperature_deprecated,
                     msg_history,
                     &tool_schemas,
                     force_tool_api_name,

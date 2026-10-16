@@ -58,6 +58,7 @@ pub async fn send_to_openai(
     provider_header: Option<String>,
     model: &str,
     temperature: Option<f32>,
+    temperature_deprecated: bool,
     history: &[chat::Message],
     tool_schemas: &[Value],
     force_tool_api_name: Option<String>,
@@ -101,8 +102,7 @@ pub async fn send_to_openai(
                 }),
             );
         }
-        // Reasoning models & gpt-5 do not support temperature
-        if !model.starts_with("o") && !model.starts_with("gpt-5-") && !model.starts_with("gpt-5.") {
+        if !temperature_deprecated {
             request_obj.insert("temperature".to_string(), json!(temperature));
         }
         if !tool_schemas.is_empty() {

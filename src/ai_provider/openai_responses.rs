@@ -389,6 +389,7 @@ pub async fn send_to_openai(
     provider_header: Option<String>,
     model: &str,
     temperature: Option<f32>,
+    temperature_deprecated: bool,
     history: &[chat::Message],
     tool_schemas: &[Value],
     force_tool_api_name: Option<String>,
@@ -398,6 +399,7 @@ pub async fn send_to_openai(
     #[allow(unused_variables)] debug: bool,
     reasoning_effort: &Option<OpenAiReasoningEffort>,
     verbosity: &Option<OpenAiVerbosity>,
+    use_automatic_caching: bool,
 ) -> Result<AiProviderResponse, Box<dyn Error>> {
     // Register ctrl+c interrupt handler
     let cancel_info = if let Some(handler) = ctrlc_handler {
@@ -421,13 +423,18 @@ pub async fn send_to_openai(
         "model": model,
         "input": history_to_input(history),
         "stream": true,
-        // Stateless: the full history is sent every time.
+        // Stateless: send full history every time.
         "store": false,
     });
     if let Some(request_obj) = request_body.as_object_mut() {
-        // Reasoning models & gpt-5 do not support temperature
-        if !model.starts_with("o") && !model.starts_with("gpt-5-") && !model.starts_with("gpt-5.") {
+        if !temperature_deprecated {
             request_obj.insert("temperature".to_string(), json!(temperature));
+        }
+        if use_automatic_caching {
+            request_obj.insert(
+                "prompt_cache_options".to_string(),
+                json!({ "mode": "implicit", "ttl": "30m" }),
+            );
         }
         if !tool_schemas.is_empty() {
             // Responses API tools are flat: {type, name, description, parameters}
