@@ -3505,6 +3505,30 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next().with_history_entries(history_entries)
         }
+        cmd::Cmd::AssetRevisionRedact(cmd::AssetRevisionRedactCmd { asset_name, rev_id }) => {
+            let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            let entry_id =
+                match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
+                    Ok(get_res) => get_res.entry.entry_id,
+                    Err(e) => {
+                        errorln!(io, "failed to get asset entry: {}", e);
+                        return ProcessCmdResult::loop_next();
+                    }
+                };
+            use crate::api::types::asset::AssetRevisionRedactArg;
+            match api_client
+                .asset_revision_redact(AssetRevisionRedactArg { entry_id, rev_id })
+                .await
+            {
+                Ok(_redact_res) => {
+                    outln!(io, "ok");
+                }
+                Err(e) => {
+                    errorln!(io, "failed to redact revisions: {}", e);
+                }
+            };
+            ProcessCmdResult::loop_next()
+        }
         cmd::Cmd::AssetFollow(cmd::AssetFollowCmd { asset_name }) => {
             outln!(io, "WARN: /asset-follow is for debugging.");
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
@@ -8229,15 +8253,16 @@ fn mk_revision_header(revision: &crate::api::types::asset::AssetRevision) -> Str
 
     // Operation
     let op_str = match revision.op {
-        AssetEntryOp::Add => "add",
-        AssetEntryOp::Push => "push",
-        AssetEntryOp::Delete => "delete",
-        AssetEntryOp::Edit => "edit",
-        AssetEntryOp::Fork => "fork",
-        AssetEntryOp::Metadata => "metadata",
-        AssetEntryOp::Move => "move",
-        AssetEntryOp::Acl => "acl",
-        AssetEntryOp::Other => "other",
+        AssetEntryOp::Add => "add".to_string(),
+        AssetEntryOp::Push => "push".to_string(),
+        AssetEntryOp::Delete => "delete".to_string(),
+        AssetEntryOp::Edit => "edit".to_string(),
+        AssetEntryOp::Fork => "fork".to_string(),
+        AssetEntryOp::Metadata => "metadata".to_string(),
+        AssetEntryOp::Move => "move".to_string(),
+        AssetEntryOp::Acl => "acl".to_string(),
+        AssetEntryOp::Redact(ref redact_op) => format!("redact: {}", redact_op.redacted_rev_id),
+        AssetEntryOp::Other => "other".to_string(),
     };
     output.push(format!("Operation: {}", op_str));
 
@@ -8246,6 +8271,9 @@ fn mk_revision_header(revision: &crate::api::types::asset::AssetRevision) -> Str
     output.push(format!("  Rev ID:     {}", revision.asset.rev_id));
     output.push(format!("  Created By: {:?}", revision.asset.created_by));
     output.push(format!("  Size:       {} bytes", revision.asset.size));
+    if revision.redacted {
+        output.push("  Redacted:   true".to_string());
+    }
     if let Some(hash) = &revision.asset.hash {
         output.push(format!("  Hash:       {}", hash));
     }

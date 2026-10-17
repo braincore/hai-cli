@@ -432,6 +432,15 @@ impl HaiClient {
             .await
     }
 
+    pub async fn asset_revision_redact(
+        &self,
+        arg: asset::AssetRevisionRedactArg,
+    ) -> Result<asset::AssetRevisionRedactResult, RequestError<asset::AssetRevisionRedactError>>
+    {
+        self.mk_api_request::<_, _, _>("/asset/revision/redact", &arg)
+            .await
+    }
+
     pub async fn asset_pool_create_shared(
         &self,
         arg: asset::AssetPoolCreateSharedArg,

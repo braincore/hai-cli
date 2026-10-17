@@ -1567,6 +1567,22 @@ add it to the toolbox.
     Entry::Cmd(
         cmd(
             Slash,
+            Cow::Borrowed("asset-revision-redact"),
+            Cow::Borrowed("asset"),
+            Cow::Borrowed(&[
+                arg("name", AssetName { glob_ok: false }, Required),
+                arg("rev-id", Text, Required),
+            ]),
+            Doc::new("Redact the content of a specific revision")
+                .more("Only content-changing revisions can be redacted (push, edit). \
+                 Redaction must be performed by the revision creator."),
+        )
+        .with_opts(&[OPT_N])
+        .with_traits(Traits::NONE.net()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
             Cow::Borrowed("asset-listen"),
             Cow::Borrowed("asset"),
             Cow::Borrowed(&[

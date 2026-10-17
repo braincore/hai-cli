@@ -129,6 +129,8 @@ pub enum Cmd {
     AssetCopy(AssetCopyCmd),
     /// Show revisions of an asset
     AssetRevisions(AssetRevisionsCmd),
+    /// Redact a revision of an asset
+    AssetRevisionRedact(AssetRevisionRedactCmd),
     /// Listen to changes to an asset
     AssetListen(AssetListenCmd),
     /// Follow changes to an asset
@@ -686,6 +688,14 @@ pub struct AssetRevisionsCmd {
     pub count: Option<u32>,
     /// Whether to include line numbers
     pub show_line_numbers: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct AssetRevisionRedactCmd {
+    /// Name of the asset
+    pub asset_name: String,
+    /// Revision ID to redact
+    pub rev_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1666,6 +1676,10 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             show_line_numbers: r.opts.bool("n"),
             count: r.num(1)?,
             asset_name: r.take(0),
+        }),
+        "asset-revision-redact" => Cmd::AssetRevisionRedact(AssetRevisionRedactCmd {
+            asset_name: r.take(0),
+            rev_id: r.take(1),
         }),
         "asset-listen" => Cmd::AssetListen(AssetListenCmd {
             asset_name: r.take(0),

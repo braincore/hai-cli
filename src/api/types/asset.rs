@@ -2534,6 +2534,8 @@ pub enum AssetEntryOp {
     Move,
     /// Asset ACL was changed.
     Acl,
+    /// A previous revision was redacted.
+    Redact(RedactOp),
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -2563,6 +2565,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryOp {
                     "metadata" => AssetEntryOp::Metadata,
                     "move" => AssetEntryOp::Move,
                     "acl" => AssetEntryOp::Acl,
+                    "redact" => AssetEntryOp::Redact(RedactOp::internal_deserialize(&mut map)?),
                     _ => AssetEntryOp::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -2570,7 +2573,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryOp {
             }
         }
         const VARIANTS: &[&str] = &[
-            "add", "fork", "edit", "push", "delete", "metadata", "move", "acl", "other",
+            "add", "fork", "edit", "push", "delete", "metadata", "move", "acl", "redact", "other",
         ];
         deserializer.deserialize_struct("AssetEntryOp", VARIANTS, EnumVisitor)
     }
@@ -2627,6 +2630,13 @@ impl ::serde::ser::Serialize for AssetEntryOp {
                 // unit
                 let mut s = serializer.serialize_struct("AssetEntryOp", 1)?;
                 s.serialize_field(".tag", "acl")?;
+                s.end()
+            }
+            AssetEntryOp::Redact(ref x) => {
+                // struct
+                let mut s = serializer.serialize_struct("AssetEntryOp", 2)?;
+                s.serialize_field(".tag", "redact")?;
+                x.internal_serialize::<S>(&mut s)?;
                 s.end()
             }
             AssetEntryOp::Other => Err(::serde::ser::Error::custom(
@@ -7626,6 +7636,10 @@ pub struct AssetRevision {
     pub op: AssetEntryOp,
     pub asset: AssetInfo,
     pub metadata: Option<AssetMetadataInfo>,
+    /// Set if this revision was redacted via [`revision_redact()`](crate::asset::revision_redact),
+    /// either directly or because it inherited the content of a redacted revision. Redacted
+    /// revisions have no asset hash or url.
+    pub redacted: bool,
 }
 
 impl AssetRevision {
@@ -7634,6 +7648,7 @@ impl AssetRevision {
             op,
             asset,
             metadata: None,
+            redacted: false,
         }
     }
 
@@ -7641,9 +7656,14 @@ impl AssetRevision {
         self.metadata = Some(value);
         self
     }
+
+    pub fn with_redacted(mut self, value: bool) -> Self {
+        self.redacted = value;
+        self
+    }
 }
 
-const ASSET_REVISION_FIELDS: &[&str] = &["op", "asset", "metadata"];
+const ASSET_REVISION_FIELDS: &[&str] = &["op", "asset", "metadata", "redacted"];
 impl AssetRevision {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -7658,6 +7678,7 @@ impl AssetRevision {
         let mut field_op = None;
         let mut field_asset = None;
         let mut field_metadata = None;
+        let mut field_redacted = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -7680,6 +7701,12 @@ impl AssetRevision {
                     }
                     field_metadata = Some(map.next_value()?);
                 }
+                "redacted" => {
+                    if field_redacted.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("redacted"));
+                    }
+                    field_redacted = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -7693,6 +7720,7 @@ impl AssetRevision {
             op: field_op.ok_or_else(|| ::serde::de::Error::missing_field("op"))?,
             asset: field_asset.ok_or_else(|| ::serde::de::Error::missing_field("asset"))?,
             metadata: field_metadata.and_then(Option::flatten),
+            redacted: field_redacted.unwrap_or(false),
         };
         Ok(Some(result))
     }
@@ -7706,6 +7734,9 @@ impl AssetRevision {
         s.serialize_field("asset", &self.asset)?;
         if let Some(val) = &self.metadata {
             s.serialize_field("metadata", val)?;
+        }
+        if self.redacted {
+            s.serialize_field("redacted", &self.redacted)?;
         }
         Ok(())
     }
@@ -7733,7 +7764,7 @@ impl ::serde::ser::Serialize for AssetRevision {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetRevision", 3)?;
+        let mut s = serializer.serialize_struct("AssetRevision", 4)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -8636,6 +8667,353 @@ impl ::serde::ser::Serialize for AssetRevisionIterResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetRevisionRedactArg {
+    pub entry_id: String,
+    pub rev_id: String,
+}
+
+impl AssetRevisionRedactArg {
+    pub fn new(entry_id: String, rev_id: String) -> Self {
+        AssetRevisionRedactArg { entry_id, rev_id }
+    }
+}
+
+const ASSET_REVISION_REDACT_ARG_FIELDS: &[&str] = &["entry_id", "rev_id"];
+impl AssetRevisionRedactArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetRevisionRedactArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetRevisionRedactArg>, V::Error> {
+        let mut field_entry_id = None;
+        let mut field_rev_id = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "entry_id" => {
+                    if field_entry_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry_id"));
+                    }
+                    field_entry_id = Some(map.next_value()?);
+                }
+                "rev_id" => {
+                    if field_rev_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("rev_id"));
+                    }
+                    field_rev_id = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetRevisionRedactArg {
+            entry_id: field_entry_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("entry_id"))?,
+            rev_id: field_rev_id.ok_or_else(|| ::serde::de::Error::missing_field("rev_id"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("entry_id", &self.entry_id)?;
+        s.serialize_field("rev_id", &self.rev_id)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionRedactArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetRevisionRedactArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionRedactArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetRevisionRedactArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetRevisionRedactArg",
+            ASSET_REVISION_REDACT_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionRedactArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetRevisionRedactArg", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AssetRevisionRedactError {
+    BadEntryId,
+    NoPermission,
+    BadRevId,
+    AlreadyRedacted,
+    /// Folders cannot be redacted.
+    BadAssetKind,
+    /// Only log pushes and blob edits (excluding the first revision) can be redacted.
+    BadRevOp,
+    /// The redaction requires examining too many revisions in the chain. No changes were made.
+    ChainTooLong,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionRedactError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AssetRevisionRedactError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionRedactError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_entry_id" => AssetRevisionRedactError::BadEntryId,
+                    "no_permission" => AssetRevisionRedactError::NoPermission,
+                    "bad_rev_id" => AssetRevisionRedactError::BadRevId,
+                    "already_redacted" => AssetRevisionRedactError::AlreadyRedacted,
+                    "bad_asset_kind" => AssetRevisionRedactError::BadAssetKind,
+                    "bad_rev_op" => AssetRevisionRedactError::BadRevOp,
+                    "chain_too_long" => AssetRevisionRedactError::ChainTooLong,
+                    _ => AssetRevisionRedactError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "bad_entry_id",
+            "no_permission",
+            "bad_rev_id",
+            "already_redacted",
+            "bad_asset_kind",
+            "bad_rev_op",
+            "chain_too_long",
+            "other",
+        ];
+        deserializer.deserialize_struct("AssetRevisionRedactError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionRedactError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AssetRevisionRedactError::BadEntryId => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "bad_entry_id")?;
+                s.end()
+            }
+            AssetRevisionRedactError::NoPermission => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "no_permission")?;
+                s.end()
+            }
+            AssetRevisionRedactError::BadRevId => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "bad_rev_id")?;
+                s.end()
+            }
+            AssetRevisionRedactError::AlreadyRedacted => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "already_redacted")?;
+                s.end()
+            }
+            AssetRevisionRedactError::BadAssetKind => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "bad_asset_kind")?;
+                s.end()
+            }
+            AssetRevisionRedactError::BadRevOp => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "bad_rev_op")?;
+                s.end()
+            }
+            AssetRevisionRedactError::ChainTooLong => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "chain_too_long")?;
+                s.end()
+            }
+            AssetRevisionRedactError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AssetRevisionRedactError {}
+
+impl ::std::fmt::Display for AssetRevisionRedactError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AssetRevisionRedactError::BadAssetKind => f.write_str("Folders cannot be redacted."),
+            AssetRevisionRedactError::BadRevOp => f.write_str("Only log pushes and blob edits (excluding the first revision) can be redacted."),
+            AssetRevisionRedactError::ChainTooLong => f.write_str("The redaction requires examining too many revisions in the chain. No changes were made."),
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AssetRevisionRedactResult {
+    /// Updated target revision that's been newly redacted.
+    pub revision: AssetRevision,
+    /// Set to new version of entry which is created if entry was not deleted to begin with (i.e.
+    /// new redact revision was created).
+    pub entry: Option<AssetEntry>,
+}
+
+impl AssetRevisionRedactResult {
+    pub fn new(revision: AssetRevision) -> Self {
+        AssetRevisionRedactResult {
+            revision,
+            entry: None,
+        }
+    }
+
+    pub fn with_entry(mut self, value: AssetEntry) -> Self {
+        self.entry = Some(value);
+        self
+    }
+}
+
+const ASSET_REVISION_REDACT_RESULT_FIELDS: &[&str] = &["revision", "entry"];
+impl AssetRevisionRedactResult {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AssetRevisionRedactResult, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AssetRevisionRedactResult>, V::Error> {
+        let mut field_revision = None;
+        let mut field_entry = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "revision" => {
+                    if field_revision.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("revision"));
+                    }
+                    field_revision = Some(map.next_value()?);
+                }
+                "entry" => {
+                    if field_entry.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("entry"));
+                    }
+                    field_entry = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AssetRevisionRedactResult {
+            revision: field_revision
+                .ok_or_else(|| ::serde::de::Error::missing_field("revision"))?,
+            entry: field_entry.and_then(Option::flatten),
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("revision", &self.revision)?;
+        if let Some(val) = &self.entry {
+            s.serialize_field("entry", val)?;
+        }
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionRedactResult {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AssetRevisionRedactResult;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AssetRevisionRedactResult struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AssetRevisionRedactResult::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AssetRevisionRedactResult",
+            ASSET_REVISION_REDACT_RESULT_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AssetRevisionRedactResult {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AssetRevisionRedactResult", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
 /// Empty placeholder for future proofing.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive] // structs may have more fields added in the future.
@@ -8883,6 +9261,96 @@ impl ::serde::ser::Serialize for PutConflictPolicy {
                 "cannot serialize 'Other' variant",
             )),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct RedactOp {
+    /// The revision that was redacted.
+    pub redacted_rev_id: String,
+}
+
+impl RedactOp {
+    pub fn new(redacted_rev_id: String) -> Self {
+        RedactOp { redacted_rev_id }
+    }
+}
+
+const REDACT_OP_FIELDS: &[&str] = &["redacted_rev_id"];
+impl RedactOp {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<RedactOp, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<RedactOp>, V::Error> {
+        let mut field_redacted_rev_id = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "redacted_rev_id" => {
+                    if field_redacted_rev_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("redacted_rev_id"));
+                    }
+                    field_redacted_rev_id = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = RedactOp {
+            redacted_rev_id: field_redacted_rev_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("redacted_rev_id"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("redacted_rev_id", &self.redacted_rev_id)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for RedactOp {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = RedactOp;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a RedactOp struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                RedactOp::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct("RedactOp", REDACT_OP_FIELDS, StructVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for RedactOp {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("RedactOp", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
     }
 }
 

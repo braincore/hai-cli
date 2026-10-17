@@ -156,6 +156,12 @@ union AssetEntryOp
     move
     acl
         "Asset ACL was changed."
+    redact RedactOp
+        "A previous revision was redacted."
+
+struct RedactOp
+    redacted_rev_id String(min_length=1)
+        "The revision that was redacted."
 
 # --
 
@@ -432,6 +438,10 @@ struct AssetRevision
     op AssetEntryOp
     asset AssetInfo
     metadata AssetMetadataInfo?
+    redacted Boolean = false
+        "Set if this revision was redacted via :route:`revision/redact`, either
+        directly or because it inherited the content of a redacted revision.
+        Redacted revisions have no asset hash or url."
 
 union AssetRevisionIterError
     bad_entry_ref
@@ -475,6 +485,55 @@ union AssetRevisionGetError
     bad_entry_ref
     no_permission
     bad_rev_id
+
+# --
+
+route revision/redact(AssetRevisionRedactArg, AssetRevisionRedactResult, AssetRevisionRedactError)
+    "Redact the content of a specific revision of an asset.
+
+    A redacted revision omits its url and hash.
+
+    Only content-changing revisions can be redacted: pushes of log assets and
+    edits of blob assets. The first revision of an asset (add, fork, or push)
+    cannot be redacted.
+
+    This marks the target as redacted and subsequent revisions that did not
+    change content (metadata, acl, move, redact, ...) are also redacted.
+
+    A new redacted revision :field:`AssetEntryOp.redact` is created and takes
+    on the content of the most recent unredacted revision. Subsequent revisions
+    of the target do not have redaction revisions created for them.
+
+    If the asset is already deleted, the target revision is redacted but a new
+    revision is not created.
+
+    A user can only redact a revision they created even if they have full write
+    access."
+
+struct AssetRevisionRedactArg
+    entry_id String
+    rev_id String
+
+struct AssetRevisionRedactResult
+    revision AssetRevision
+        "Updated target revision that's been newly redacted."
+    entry AssetEntry?
+        "Set to new version of entry which is created if entry was not deleted
+        to begin with (i.e. new redact revision was created)."
+
+union AssetRevisionRedactError
+    bad_entry_id
+    no_permission
+    bad_rev_id
+    already_redacted
+    bad_asset_kind
+        "Folders cannot be redacted."
+    bad_rev_op
+        "Only log pushes and blob edits (excluding the first revision) can be
+        redacted."
+    chain_too_long
+        "The redaction requires examining too many revisions in the chain. No
+        changes were made."
 
 # --
 
