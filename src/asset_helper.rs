@@ -105,6 +105,26 @@ fn is_glob_char(c: char) -> bool {
     matches!(c, '*' | '?' | '[' | ']' | '{' | '}')
 }
 
+// --
+
+/// Returns the `relpath` from a shared asset: `/s/<members>/<relpath>`
+///
+/// None if not a shared asset.
+pub fn get_shared_asset_relpath(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/s/")?;
+    // Find the first '/' after the participants segment
+    let slash_idx = rest.find('/')?;
+    let suffix = &rest[slash_idx + 1..];
+    Some(suffix)
+}
+
+/// Returns true if the asset is in a user's public asset pool.
+pub fn is_in_public_asset_pool(path: &str) -> bool {
+    path.starts_with("/") && !path.starts_with("/s/")
+}
+
+// --
+
 /// Constructs the publicly accessible URL for an asset.
 pub fn get_public_asset_url(asset_name: &str) -> Option<String> {
     let (username, asset_path) = if asset_name.starts_with("/")

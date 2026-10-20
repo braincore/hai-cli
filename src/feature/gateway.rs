@@ -1,6 +1,7 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -32,8 +33,19 @@ use crate::{
     io::{Io, Out},
 };
 
+// --
+
+//
+// Cookie helpers
+//
+
 pub const HAI_TOKEN_COOKIE_NAME: &str = "hai_token";
 
+/// Encodes a name into a cookie-name-safe string.
+///
+/// Necessary b/c cookie names must be US-ASCII and missing special chars like
+/// front slash.
+///
 /// Useful for encoding asset names in cookie names.
 fn encode_cookie_name(name: &str) -> String {
     URL_SAFE_NO_PAD.encode(name.as_bytes())
@@ -46,6 +58,12 @@ fn encode_cookie_name_suffix(asset_app_name: &str, username: Option<&str>) -> St
     }
 }
 
+/// Use this for generating auth cookies!
+///
+/// IMPORTANT: All `localhost:*` sites share the same cookies. So, it's
+/// critical that all cookies are HTTP_ONLY and that they're namespaced at the
+/// cookie-name level to avoid collisions (worse, assumption of another app's
+/// permissions).
 fn auth_cookie_name(service_name: &str, username: Option<&str>, port: u16) -> String {
     format!(
         "{}_{}_{}",
@@ -55,25 +73,122 @@ fn auth_cookie_name(service_name: &str, username: Option<&str>, port: u16) -> St
     )
 }
 
+// --
+
 pub type ClientId = u64;
 pub type Client = UnboundedSender<Message>;
 pub type Clients = Arc<Mutex<std::collections::HashMap<ClientId, Client>>>;
 
-pub type Perms = Arc<Mutex<Vec<Perm>>>;
+pub type PermCtxs = Arc<Mutex<Vec<PermCtx>>>;
 
-// Map of perm_request_id -> (csrf_token, expiry time, requested_perms)
-pub type PermRequestMap = Arc<Mutex<HashMap<String, (String, std::time::Instant, Vec<Perm>)>>>;
+// --
+
+//
+// Perm-gate types
+//
+
+/// A pending permission request created by gateway's `repl/perm/request`.
+/// The request is referenced by the perm-gate's `perm_gate/request/submit`.
+#[derive(Debug, Clone)]
+pub struct PendingPermRequest {
+    pub expiry: std::time::Instant,
+    pub perms: Vec<Perm>,
+}
+
+/// Map of perm_request_id -> pending request
+pub type PermRequestMap = Arc<Mutex<HashMap<String, PendingPermRequest>>>;
+
+/// TTL for pending permission requests.
+const PERM_REQUEST_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Asset-apps can request to open another asset-app using the gateway route
+/// `/repl/open_with`. We store these pending requests in the following struct
+/// (keyed by token) and check the request when the user's browser accesses the
+/// perm-gate's `/open`. This prevents other web apps from opening asset-apps.
+#[derive(Debug, Clone)]
+pub struct PendingAssetAppOpen {
+    pub asset_app: String,
+    pub asset: Option<String>,
+    pub expiry: std::time::Instant,
+}
+
+// Map of asset_app_open_token -> pending open
+pub type AssetAppOpenTokenMap = Arc<Mutex<HashMap<String, PendingAssetAppOpen>>>;
+
+const ASSET_APP_OPEN_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const MAX_ASSET_APP_OPEN_TOKENS: usize = 1000;
+
+/// Hard-coded service name of the perm-gate asset-app.
+pub const PERM_GATE_SERVICE_NAME: &str = "/hai/app/perm-gate";
+const PERM_GATE_ASSET_PREFIX: &str = "/hai/app/perm-gate/";
+
+/// Single-file build of the perm-gate for running it fully locally.
+const PERM_GATE_EMBEDDED_HTML: &[u8] = include_bytes!("perm_gate_embedded.html");
+
+// --
+
+/// Where the perm-gate asset-app is served from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermGateSource {
+    /// Served from `/hai/app/perm-gate/` in the asset store.
+    AssetStore,
+    /// Served from the single-file build embedded in the binary.
+    Embedded,
+}
+
+impl PermGateSource {
+    /// Set `HAI_PERM_GATE_SOURCE=embedded` to use the embedded build.
+    /// Defaults to the asset store.
+    pub fn from_env() -> Self {
+        match std::env::var("HAI_PERM_GATE_SOURCE").as_deref() {
+            Ok("embedded") => PermGateSource::Embedded,
+            _ => PermGateSource::AssetStore,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            PermGateSource::AssetStore => "asset-store",
+            PermGateSource::Embedded => "embedded",
+        }
+    }
+}
+
+/// State of the asset-app gateway that a perm-gate gateway administers.
+pub struct PermGateCtx {
+    pub repl_remote: crate::repl_remote::ReplRemote,
+    pub target_service_name: String,
+    pub target_perm_ctxs: PermCtxs,
+    pub target_perm_request_map: PermRequestMap,
+    pub target_clients: Clients,
+    pub source: PermGateSource,
+}
+
+/// IMPORTANT: The mode is determined solely by how the gateway was launched.
+pub enum GatewayMode {
+    /// Regular asset-app gateway.
+    App,
+    /// Perm-gate gateway: serves only the perm-gate asset-app, exposes
+    /// `/open` and the `perm-gate/*` websocket routes.
+    PermGate(PermGateCtx),
+}
+
+// --
+
+//
+// Asset-app Permissions
+//
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssetPerm {
-    read: bool,
-    write: bool,
+    pub read: bool,
+    pub write: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssetPrefixPerm {
-    create: bool,
-    list: bool,
+    pub create: bool,
+    pub list: bool,
 }
 
 /// A key detail about `Perm` is that it's a coarse permission scheme for what
@@ -176,32 +291,34 @@ impl Perm {
 
             // Public paths
             (Perm::PublicAsset, AccessRequest::ReadByName { name: req_name }) => {
-                is_public_path(req_name)
+                asset_helper::is_in_public_asset_pool(req_name)
             }
             (Perm::PublicAsset, AccessRequest::WriteByName { name: req_name }) => {
                 // Allow an attempt to write to a public path knowing that the
                 // API will reject it unless the owner has given explicit
                 // permission otherwise.
-                is_public_path(req_name)
+                asset_helper::is_in_public_asset_pool(req_name)
             }
 
             // --- Shared asset name: match the suffix after /s/<participants>/ ---
             (
                 Perm::SharedAssetName { name, perm },
                 AccessRequest::ReadByName { name: req_name },
-            ) => shared_path_suffix(req_name).map_or(false, |suffix| suffix == name && perm.read),
+            ) => asset_helper::get_shared_asset_relpath(req_name)
+                .map_or(false, |suffix| suffix == name && perm.read),
             (
                 Perm::SharedAssetName { name, perm },
                 AccessRequest::WriteByName { name: req_name },
-            ) => shared_path_suffix(req_name).map_or(false, |suffix| suffix == name && perm.write),
+            ) => asset_helper::get_shared_asset_relpath(req_name)
+                .map_or(false, |suffix| suffix == name && perm.write),
 
             // --- Shared asset prefix: match the suffix after /s/<participants>/ ---
             (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
-                shared_path_suffix(name)
+                asset_helper::get_shared_asset_relpath(name)
                     .map_or(false, |suffix| suffix.starts_with(prefix) && perm.read)
             }
             (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
-                shared_path_suffix(name)
+                asset_helper::get_shared_asset_relpath(name)
                     .map_or(false, |suffix| suffix.starts_with(prefix) && perm.write)
             }
             (
@@ -211,7 +328,7 @@ impl Perm {
                     ..
                 },
                 AccessRequest::ListPrefix { prefix: req_prefix },
-            ) => shared_path_suffix(req_prefix).map_or(false, |suffix| {
+            ) => asset_helper::get_shared_asset_relpath(req_prefix).map_or(false, |suffix| {
                 suffix.starts_with(prefix) && prefix_perm.list
             }),
 
@@ -237,23 +354,12 @@ impl Perm {
     }
 }
 
-/// Extract the path portion after `/s/<participants>/` from a shared path.
-/// Returns Some(suffix) if the path matches `/s/<participants>/...`, None otherwise.
-fn shared_path_suffix(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix("/s/")?;
-    // Find the first '/' after the participants segment
-    let slash_idx = rest.find('/')?;
-    let suffix = &rest[slash_idx + 1..];
-    Some(suffix)
-}
-
-fn is_public_path(path: &str) -> bool {
-    path.starts_with("/") && !path.starts_with("/s/")
-}
-
 /// Check if any permission in the list grants the requested access
-pub fn check_access(perms: &[Perm], request: &AccessRequest<'_>) -> Result<(), PermCheckError> {
-    if perms.iter().any(|p| p.grants(request)) {
+pub fn check_access(
+    perm_ctxs: &[PermCtx],
+    request: &AccessRequest<'_>,
+) -> Result<(), PermCheckError> {
+    if perm_ctxs.iter().any(|p| p.perm.grants(request)) {
         Ok(())
     } else {
         Err(PermCheckError::Unauthorized)
@@ -262,11 +368,11 @@ pub fn check_access(perms: &[Perm], request: &AccessRequest<'_>) -> Result<(), P
 
 /// Async version that takes the Arc<Mutex<...>> directly
 pub async fn check_access_async(
-    perms: &Perms,
+    perm_ctxs: &PermCtxs,
     request: &AccessRequest<'_>,
 ) -> Result<(), PermCheckError> {
-    let perms = perms.lock().await;
-    check_access(&perms, request)
+    let perm_ctxs = perm_ctxs.lock().await;
+    check_access(&perm_ctxs, request)
 }
 
 /// What kind of access is being requested
@@ -295,6 +401,26 @@ pub enum PermCheckError {
 
 // --
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PermCtx {
+    perm: Perm,
+    lifetime: PermLifetime,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum PermLifetime {
+    Default,
+    UntilRevoked,
+    ThisSession,
+}
+
+// --
+
+//
+// Kernel types and handles
+//
+
 pub type KernelId = String;
 
 pub struct KernelHandle {
@@ -310,7 +436,11 @@ pub struct KernelHandle {
 
 pub type KernelMap = Arc<Mutex<HashMap<KernelId, KernelHandle>>>;
 
-// -- Minimal HTTP parsing/response helpers --
+// --
+
+//
+// HTTP Request Parsing
+//
 
 struct HttpRequest {
     method: String,
@@ -524,6 +654,12 @@ impl HttpRequest {
     }
 }
 
+// --
+
+//
+// HTTP Response Helpers
+//
+
 /// URL is prettier if / and + are not percent-encoded. They're common in asset
 /// names in fragments.
 fn encode_asset_fragment(asset_name: &str) -> String {
@@ -531,13 +667,6 @@ fn encode_asset_fragment(asset_name: &str) -> String {
         .to_string()
         .replace("%2F", "/")
         .replace("%2B", "+")
-}
-
-/// URL is prettier if / is not percent-encoded.
-fn encode_asset_query_param(asset_name: &str) -> String {
-    urlencoding::encode(asset_name)
-        .to_string()
-        .replace("%2F", "/")
 }
 
 struct HttpResponse {
@@ -722,21 +851,9 @@ impl HttpResponse {
         stream.flush().await?;
         Ok(())
     }
-
-    fn json_status(status: u16, body: &str) -> Self {
-        Self {
-            status,
-            status_text: match status {
-                401 => "Unauthorized",
-                _ => "Error",
-            },
-            content_type: "application/json".to_string(),
-            body: body.as_bytes().to_vec(),
-            set_cookie: None,
-            additional_headers: Vec::new(),
-        }
-    }
 }
+
+// --
 
 pub struct ViteProxy {
     pub host: String,
@@ -745,7 +862,14 @@ pub struct ViteProxy {
 
 pub const GATEWAY_BASE_PORT: u16 = 1339;
 
-/// Launches a gateway server (websocket + http).
+/// Launches a gateway server.
+///
+/// The gateway server is a bit more complex than a single server. Two separate
+/// listeners are launched on differenrt ports each capable of responding to
+/// HTTP and websocket requests independently. The first listener serves as the
+/// primary gateway serving the asset-app. The second listener serves as a
+/// permission-gate and handles requests specifically for changing an app's
+/// permissions.
 ///
 /// # Arguments
 ///
@@ -804,14 +928,15 @@ pub async fn launch_gateway(
         local_addr.port()
     );
     infoln!(io, "Token: {}", token);
+    let perm_gate_source = PermGateSource::from_env();
     infoln!(
         io,
-        "Permissions server on http://localhost:{}",
-        perm_addr.port()
+        "Perm-gate on http://localhost:{} (source: {})",
+        perm_addr.port(),
+        perm_gate_source.as_str()
     );
 
     let clients: Clients = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let clients_clone = clients.clone();
 
     let maybe_slash = if service_name.ends_with("/") { "" } else { "/" };
     let app_folder_prefix = if service_name.starts_with("/") {
@@ -821,45 +946,76 @@ pub async fn launch_gateway(
     };
 
     let default_perms = vec![
-        Perm::PublicAsset,
-        Perm::AssetName {
-            name: service_name.to_string(),
-            perm: {
-                AssetPerm {
+        // Default access to all public assets.
+        PermCtx {
+            perm: Perm::PublicAsset,
+            lifetime: PermLifetime::Default,
+        },
+        // Default access to the asset-app for cases where the app is a single
+        // asset rather than a folder.
+        PermCtx {
+            perm: Perm::AssetName {
+                name: service_name.to_string(),
+                perm: {
+                    AssetPerm {
+                        read: true,
+                        write: true,
+                    }
+                },
+            },
+            lifetime: PermLifetime::Default,
+        },
+        // Default access to the asset-app's folder. NOTE: The asset-app may be
+        // in a location without write access. The gateway allows the write
+        // attempt which the API may reject.
+        PermCtx {
+            perm: Perm::AssetPrefix {
+                prefix: format!("{}{}", service_name, maybe_slash),
+                perm: AssetPerm {
                     read: true,
                     write: true,
-                }
+                },
+                prefix_perm: AssetPrefixPerm {
+                    create: true,
+                    list: true,
+                },
             },
+            lifetime: PermLifetime::Default,
         },
-        Perm::AssetPrefix {
-            prefix: format!("{}{}", service_name, maybe_slash),
-            perm: AssetPerm {
-                read: true,
-                write: true,
+        // Default r/w access to an app folder in private assets so that all
+        // apps have a baseline place to store configs.
+        PermCtx {
+            perm: Perm::AssetPrefix {
+                prefix: app_folder_prefix,
+                perm: AssetPerm {
+                    read: true,
+                    write: true,
+                },
+                prefix_perm: AssetPrefixPerm {
+                    create: true,
+                    list: true,
+                },
             },
-            prefix_perm: AssetPrefixPerm {
-                create: true,
-                list: true,
-            },
-        },
-        Perm::AssetPrefix {
-            prefix: app_folder_prefix,
-            perm: AssetPerm {
-                read: true,
-                write: true,
-            },
-            prefix_perm: AssetPrefixPerm {
-                create: true,
-                list: true,
-            },
+            lifetime: PermLifetime::Default,
         },
     ];
 
     let perms_nolock = if let Some(username) = username {
         let mut loaded_perms =
-            crate::db::load_gateway_perms(&*db.lock().await, username, service_name);
+            crate::db::load_gateway_perms(&*db.lock().await, username, service_name)
+                .into_iter()
+                .map(|perm| PermCtx {
+                    perm,
+                    lifetime: PermLifetime::UntilRevoked,
+                })
+                .collect::<Vec<_>>();
         for default_perm in default_perms {
-            if !loaded_perms.contains(&default_perm) {
+            if loaded_perms
+                .iter()
+                .filter(|p| p.perm == default_perm.perm)
+                .count()
+                == 0
+            {
                 loaded_perms.push(default_perm.clone());
             }
         }
@@ -867,171 +1023,165 @@ pub async fn launch_gateway(
     } else {
         default_perms
     };
-    let perms: Perms = Arc::new(Mutex::new(perms_nolock));
-
-    let perms_clone = perms.clone();
-    let perms_clone2 = perms.clone();
+    let perm_ctxs: PermCtxs = Arc::new(Mutex::new(perms_nolock));
 
     let cancel_token = CancellationToken::new();
-    let cancel_child1 = cancel_token.child_token();
-    let cancel_child2 = cancel_token.child_token();
 
     let perm_request_map: PermRequestMap = Arc::new(Mutex::new(HashMap::new()));
-    let perm_request_map_clone = perm_request_map.clone();
-
-    let kernel_map: KernelMap = Arc::new(Mutex::new(HashMap::new()));
-    let kernel_map_clone = kernel_map.clone();
-
-    let io_clone = io.clone();
-    let config_path_override_clone = config_path_override.map(|s| s.to_string());
-    let db_clone = db.clone();
-    let local_addr_clone = local_addr.clone();
-    let token_clone = token.clone();
-    let asset_keyring_clone = asset_keyring.clone();
-    let asset_blob_cache_cloned = asset_blob_cache.clone();
-    let api_client_clone = api_client.clone();
+    let asset_app_open_tokens: AssetAppOpenTokenMap = Arc::new(Mutex::new(HashMap::new()));
     let username_owned = username.map(|s| s.to_string());
-    let service_name_clone = service_name.to_string();
-    let update_asset_tx_clone = update_asset_tx.clone();
-    let next_client_id = Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let config_path_override_owned = config_path_override.map(|s| s.to_string());
 
-    let cookie_set = Arc::new(AtomicBool::new(false));
+    // Primary gateway: serves the asset-app.
+    spawn_accept_loop(
+        listener,
+        cancel_token.child_token(),
+        ListenerCtx {
+            io: io.clone(),
+            config_path_override: config_path_override_owned.clone(),
+            db: db.clone(),
+            local_addr,
+            perm_gate_addr: perm_addr,
+            token: token.clone(),
+            asset_blob_cache: asset_blob_cache.clone(),
+            asset_keyring: asset_keyring.clone(),
+            api_client: api_client.clone(),
+            clients: clients.clone(),
+            perm_ctxs: perm_ctxs.clone(),
+            perm_request_map: perm_request_map.clone(),
+            kernel_map: Arc::new(Mutex::new(HashMap::new())),
+            username: username_owned.clone(),
+            service_name: service_name.to_string(),
+            update_asset_tx: update_asset_tx.clone(),
+            next_client_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            cookie_set: Arc::new(AtomicBool::new(false)),
+            vite_proxy: Arc::new(vite_proxy),
+            mode: Arc::new(GatewayMode::App),
+            asset_app_open_tokens: asset_app_open_tokens.clone(),
+        },
+    );
 
-    let vite_proxy = Arc::new(vite_proxy);
+    // The perm-gate: a second gateway on a separate origin (port) that serves
+    // the perm-gate asset-app. It's distinct from the primary gateway in two
+    // ways: 1. It has extra privileges to manage the asset-app's perms; 2. It
+    // serves the `perm-gate` asset-app.
+    spawn_accept_loop(
+        perm_listener,
+        cancel_token.child_token(),
+        ListenerCtx {
+            io: io.clone(),
+            config_path_override: config_path_override_owned,
+            db: db.clone(),
+            local_addr: perm_addr,
+            perm_gate_addr: perm_addr,
+            token: generate_token(),
+            asset_blob_cache: asset_blob_cache.clone(),
+            asset_keyring: asset_keyring.clone(),
+            api_client: api_client.clone(),
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            perm_ctxs: Arc::new(Mutex::new(perm_gate_default_perms())),
+            // The perm-gate cannot request perms for itself
+            perm_request_map: Arc::new(Mutex::new(HashMap::new())),
+            kernel_map: Arc::new(Mutex::new(HashMap::new())),
+            username: username_owned,
+            service_name: PERM_GATE_SERVICE_NAME.to_string(),
+            update_asset_tx: update_asset_tx.clone(),
+            next_client_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            cookie_set: Arc::new(AtomicBool::new(false)),
+            vite_proxy: Arc::new(None),
+            mode: Arc::new(GatewayMode::PermGate(PermGateCtx {
+                repl_remote,
+                target_service_name: service_name.to_string(),
+                target_perm_ctxs: perm_ctxs.clone(),
+                target_perm_request_map: perm_request_map.clone(),
+                target_clients: clients.clone(),
+                source: perm_gate_source,
+            })),
+            asset_app_open_tokens: asset_app_open_tokens.clone(),
+        },
+    );
 
+    Ok((local_addr, perm_addr, clients, cancel_token, token))
+}
+
+#[derive(Clone)]
+struct ListenerCtx {
+    io: Io,
+    config_path_override: Option<String>,
+    db: Arc<Mutex<rusqlite::Connection>>,
+    local_addr: SocketAddr,
+    perm_gate_addr: SocketAddr,
+    token: String,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: HaiClient,
+    clients: Clients,
+    perm_ctxs: PermCtxs,
+    perm_request_map: PermRequestMap,
+    kernel_map: KernelMap,
+    username: Option<String>,
+    service_name: String,
+    update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
+    next_client_id: Arc<std::sync::atomic::AtomicU64>,
+    cookie_set: Arc<AtomicBool>,
+    vite_proxy: Arc<Option<ViteProxy>>,
+    mode: Arc<GatewayMode>,
+    asset_app_open_tokens: AssetAppOpenTokenMap,
+}
+
+fn spawn_accept_loop(listener: TcpListener, cancel: CancellationToken, ctx: ListenerCtx) {
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                _ = cancel_child1.cancelled() => {
-                    let mut clients_guard = clients_clone.lock().await;
-                    for (_id, client) in clients_guard.drain() {
-                        drop(client);
-                    }
+                _ = cancel.cancelled() => {
+                    ctx.clients.lock().await.clear();
                     break;
                 }
                 accept_result = listener.accept() => {
                     let (stream, peer_addr) = match accept_result {
                         Ok(pair) => pair,
                         Err(e) => {
-                            errorln!(io_clone, "Accept error: {:?}", e);
+                            errorln!(ctx.io, "Accept error: {:?}", e);
                             continue;
                         }
                     };
-
+                    // All connections are going through loopback so it's
+                    // likely unnecessary to disable Nagle's alg (buffering
+                    // when TCP ack is delayed), but do it anyway.
                     let _ = stream.set_nodelay(true);
-
-                    let io_clone_inner = io_clone.clone();
-                    let config_path_override_inner = config_path_override_clone.clone();
-                    let db_clone_inner = db_clone.clone();
-                    let local_addr_clone_inner = local_addr_clone.clone();
-                    let token_clone_inner = token_clone.clone();
-                    let api_client_clone_inner = api_client_clone.clone();
-                    let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
-                    let asset_keyring_inner = asset_keyring_clone.clone();
-                    let clients_inner = clients_clone.clone();
-                    let perms_inner = perms_clone.clone();
-                    let perm_request_map_inner = perm_request_map_clone.clone();
-                    let kernel_map_inner = kernel_map_clone.clone();
-                    let username_inner = username_owned.clone();
-                    let service_name_inner = service_name_clone.clone();
-                    let update_asset_tx_inner = update_asset_tx_clone.clone();
-                    let next_client_id_inner = next_client_id.clone();
-                    let cookie_set_inner = cookie_set.clone();
-                    let vite_proxy_inner = vite_proxy.clone();
-
+                    let ctx = ctx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
-                            &io_clone_inner,
-                            config_path_override_inner.as_deref(),
-                            db_clone_inner,
+                            &ctx.io,
+                            ctx.config_path_override.as_deref(),
+                            ctx.db.clone(),
                             stream,
-                            local_addr_clone_inner,
-                            perm_addr,
-                            &token_clone_inner,
-                            asset_blob_cache_inner,
-                            asset_keyring_inner,
-                            api_client_clone_inner,
-                            clients_inner,
-                            perms_inner,
-                            perm_request_map_inner,
-                            kernel_map_inner,
-                            username_inner.as_deref(),
-                            &service_name_inner,
-                            update_asset_tx_inner,
-                            next_client_id_inner,
-                            cookie_set_inner,
-                            vite_proxy_inner,
+                            ctx.local_addr,
+                            ctx.perm_gate_addr,
+                            &ctx.token,
+                            ctx.asset_blob_cache.clone(),
+                            ctx.asset_keyring.clone(),
+                            ctx.api_client.clone(),
+                            ctx.clients.clone(),
+                            ctx.perm_ctxs.clone(),
+                            ctx.perm_request_map.clone(),
+                            ctx.kernel_map.clone(),
+                            ctx.username.as_deref(),
+                            &ctx.service_name,
+                            ctx.update_asset_tx.clone(),
+                            ctx.next_client_id.clone(),
+                            ctx.cookie_set.clone(),
+                            ctx.vite_proxy.clone(),
+                            ctx.mode.clone(),
+                            ctx.asset_app_open_tokens.clone(),
                         ).await {
-                            errorln!(io_clone_inner, "Connection error from {}: {:?}", peer_addr, e);
+                            errorln!(ctx.io, "Connection error from {}: {:?}", peer_addr, e);
                         }
                     });
                 }
             }
         }
     });
-
-    let io_clone = io.clone();
-    let repl_remote_clone = repl_remote.clone();
-    let db_clone = db.clone();
-    let asset_keyring_clone = asset_keyring.clone();
-    let asset_blob_cache_cloned = asset_blob_cache.clone();
-    let api_client_clone = api_client.clone();
-    let clients_clone = clients.clone();
-    let perm_request_map_clone = perm_request_map.clone();
-
-    let username_clone = username.map(|u| u.to_string()).clone();
-    let service_name_clone = service_name.to_string();
-
-    // Permissions server task
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = cancel_child2.cancelled() => break,
-                accept_result = perm_listener.accept() => {
-                    let (stream, _peer_addr) = match accept_result {
-                        Ok(pair) => pair,
-                        Err(e) => {
-                            errorln!(io_clone, "Perm server accept error: {:?}", e);
-                            continue;
-                        }
-                    };
-                    let _ = stream.set_nodelay(true);
-
-                    let repl_remote_inner = repl_remote_clone.clone();
-                    let io_clone_inner = io_clone.clone();
-                    let db_inner = db_clone.clone();
-                    let api_client_clone_inner = api_client_clone.clone();
-                    let asset_blob_cache_inner = asset_blob_cache_cloned.clone();
-                    let asset_keyring_inner = asset_keyring_clone.clone();
-                    let clients_inner = clients_clone.clone();
-                    let perms_inner = perms_clone2.clone();
-                    let perm_request_map_inner = perm_request_map_clone.clone();
-                    let username_inner = username_clone.clone();
-                    let service_name_inner = service_name_clone.clone();
-
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_perm_http_connection(
-                            repl_remote_inner,
-                            db_inner,
-                            asset_blob_cache_inner,
-                            asset_keyring_inner,
-                            &api_client_clone_inner,
-                            clients_inner,
-                            stream,
-                            perms_inner,
-                            perm_request_map_inner,
-                            username_inner.as_deref(),
-                            &service_name_inner,
-                        ).await {
-                            errorln!(io_clone_inner, "Perm connection error: {:?}", e);
-                        }
-                    });
-                }
-            }
-        }
-    });
-
-    Ok((local_addr, perm_addr, clients, cancel_token, token))
 }
 
 // Handles both HTTP and WebSocket connections, dispatching to the appropriate
@@ -1048,7 +1198,7 @@ async fn handle_connection(
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
     clients: Clients,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
     kernel_map: KernelMap,
     username: Option<&str>,
@@ -1057,12 +1207,12 @@ async fn handle_connection(
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
     vite_proxy: Arc<Option<ViteProxy>>,
+    mode: Arc<GatewayMode>,
+    asset_app_open_tokens: AssetAppOpenTokenMap,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Peek at the first bytes to read the HTTP request line and headers
-    // without consuming them permanently
+    // Peek at the first bytes (do not consume) to read the HTTP request line
+    // and headers without consuming them permanently
     let mut peek_buf = vec![0u8; 4096];
-
-    // Use peek to look at data without consuming it
     let n = stream.peek(&mut peek_buf).await?;
     if n == 0 {
         return Ok(());
@@ -1070,7 +1220,8 @@ async fn handle_connection(
 
     let peek_str = String::from_utf8_lossy(&peek_buf[..n]);
 
-    // Check if this is a WebSocket upgrade request
+    // Check if this is a WebSocket upgrade request. Crude method, verified
+    // works with with wscat & chrome, but may need a proper parser eventually.
     let is_websocket = peek_str.contains("Upgrade: websocket")
         || peek_str.contains("Upgrade: Websocket")
         || peek_str.contains("upgrade: websocket");
@@ -1096,7 +1247,7 @@ async fn handle_connection(
             asset_blob_cache,
             asset_keyring,
             clients,
-            perms,
+            perm_ctxs,
             perm_request_map,
             kernel_map,
             username,
@@ -1104,6 +1255,8 @@ async fn handle_connection(
             update_asset_tx,
             next_client_id,
             cookie_set,
+            &mode,
+            &asset_app_open_tokens,
         )
         .await
     } else {
@@ -1116,12 +1269,14 @@ async fn handle_connection(
             api_client,
             asset_blob_cache,
             asset_keyring,
-            perms,
+            perm_ctxs,
             username,
             service_name,
             update_asset_tx,
             cookie_set,
             vite_proxy,
+            &mode,
+            &asset_app_open_tokens,
         )
         .await
     }
@@ -1173,7 +1328,7 @@ async fn handle_websocket_connection(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     clients: Clients,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
     kernel_map: KernelMap,
     username: Option<&str>,
@@ -1181,6 +1336,8 @@ async fn handle_websocket_connection(
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     next_client_id: Arc<std::sync::atomic::AtomicU64>,
     cookie_set: Arc<AtomicBool>,
+    mode: &GatewayMode,
+    asset_app_open_tokens: &AssetAppOpenTokenMap,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cookie_name = auth_cookie_name(service_name, username, local_addr.port());
 
@@ -1338,11 +1495,13 @@ async fn handle_websocket_connection(
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
                             &api_client,
-                            perms.clone(),
+                            perm_ctxs.clone(),
                             perm_request_map.clone(),
                             kernel_map.clone(),
                             username.as_deref(),
                             update_asset_tx.clone(),
+                            mode,
+                            asset_app_open_tokens,
                             &mut ws_sink,
                             &msg).await;
                     }
@@ -1414,12 +1573,14 @@ async fn handle_http_connection(
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
     vite_proxy: Arc<Option<ViteProxy>>,
+    mode: &GatewayMode,
+    asset_app_open_tokens: &AssetAppOpenTokenMap,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf_reader = BufReader::new(&mut stream);
 
@@ -1438,12 +1599,14 @@ async fn handle_http_connection(
         asset_blob_cache,
         asset_keyring,
         &api_client,
-        perms,
+        perm_ctxs,
         username,
         service_name,
         update_asset_tx,
         cookie_set,
         vite_proxy,
+        mode,
+        asset_app_open_tokens,
     )
     .await;
 
@@ -1462,12 +1625,14 @@ async fn handle_http_request(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     username: Option<&str>,
     service_name: &str,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     cookie_set: Arc<AtomicBool>,
     vite_proxy: Arc<Option<ViteProxy>>,
+    mode: &GatewayMode,
+    asset_app_open_tokens: &AssetAppOpenTokenMap,
 ) -> HttpResponse {
     // Check if origin is allowed for CORS
     let origin = request.header("Origin");
@@ -1496,6 +1661,16 @@ async fn handle_http_request(
         && !is_allowed_host(local_addr, host)
     {
         return HttpResponse::forbidden();
+    }
+
+    // Perm-gate: `/open` is navigated to from other asset-apps, so it's
+    // authorized by its own open-token rather than the gateway auth token.
+    if let GatewayMode::PermGate(pg_ctx) = mode
+        && request.path == "/open"
+    {
+        return with_perm_gate_security_headers(
+            handle_perm_gate_open(request, pg_ctx, asset_app_open_tokens).await,
+        );
     }
 
     // Check token from multiple sources: cookie, bearer token, query param
@@ -1539,7 +1714,7 @@ async fn handle_http_request(
 
     // /~/ is the prefix for a user's private asset pool.
     let path = {
-        let p = request.path.trim_start_matches("/~/");
+        let p = request.path.strip_prefix("/~/").unwrap_or(&request.path);
         let mut end = p.len();
         if let Some(i) = p.find('?') {
             end = std::cmp::min(end, i);
@@ -1572,64 +1747,83 @@ async fn handle_http_request(
         Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
     };
 
-    let mut response = match request.method.as_str() {
-        "GET" => {
-            if is_push {
-                return HttpResponse::bad_request("push parameter is not valid for GET requests");
-            }
-            handle_get(
+    let mut response = if let GatewayMode::PermGate(pg_ctx) = mode {
+        with_perm_gate_security_headers(
+            handle_perm_gate_http(
                 io,
-                &request,
+                request,
+                pg_ctx,
                 service_name,
-                &asset_name,
-                rev_id.as_deref(),
-                metadata_ref,
                 asset_blob_cache,
                 asset_keyring,
                 api_client,
-                perms,
+                perm_ctxs,
                 username,
-                vite_proxy,
             )
-            .await
-        }
-        "PUT" => {
-            if metadata_ref {
+            .await,
+        )
+    } else {
+        match request.method.as_str() {
+            "GET" => {
                 if is_push {
                     return HttpResponse::bad_request(
-                        "push parameter is not valid when metadata=1",
+                        "push parameter is not valid for GET requests",
                     );
                 }
-                handle_put_metadata(
-                    &io.out,
-                    &asset_name,
-                    &request.body,
-                    asset_blob_cache,
-                    asset_keyring,
-                    api_client.clone(),
-                    perms,
-                    username,
-                )
-                .await
-            } else {
-                handle_put(
+                handle_get(
                     io,
+                    &request,
+                    service_name,
                     &asset_name,
                     rev_id.as_deref(),
-                    conflict_policy.as_deref(),
-                    &request.body,
-                    is_push,
+                    metadata_ref,
                     asset_blob_cache,
                     asset_keyring,
-                    api_client.clone(),
-                    perms,
+                    api_client,
+                    perm_ctxs,
                     username,
-                    update_asset_tx,
+                    vite_proxy,
                 )
                 .await
             }
+            "PUT" => {
+                if metadata_ref {
+                    if is_push {
+                        return HttpResponse::bad_request(
+                            "push parameter is not valid when metadata=1",
+                        );
+                    }
+                    handle_put_metadata(
+                        &io.out,
+                        &asset_name,
+                        &request.body,
+                        asset_blob_cache,
+                        asset_keyring,
+                        api_client.clone(),
+                        perm_ctxs,
+                        username,
+                    )
+                    .await
+                } else {
+                    handle_put(
+                        io,
+                        &asset_name,
+                        rev_id.as_deref(),
+                        conflict_policy.as_deref(),
+                        &request.body,
+                        is_push,
+                        asset_blob_cache,
+                        asset_keyring,
+                        api_client.clone(),
+                        perm_ctxs,
+                        username,
+                        update_asset_tx,
+                    )
+                    .await
+                }
+            }
+            _ => HttpResponse::bad_request("Only GET, PUT, and OPTIONS supported"),
         }
-        _ => HttpResponse::bad_request("Only GET, PUT, and OPTIONS supported"),
     };
 
     // Add CORS headers to actual response if origin is allowed
@@ -1688,7 +1882,7 @@ async fn handle_get(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     username: Option<&str>,
     vite_proxy: Arc<Option<ViteProxy>>,
 ) -> HttpResponse {
@@ -1709,7 +1903,7 @@ async fn handle_get(
     match asset_app_has_gateway_perm_for_asset_access_request(
         &api_client,
         asset_name,
-        &perms,
+        &perm_ctxs,
         false,
     )
     .await
@@ -1914,7 +2108,12 @@ async fn handle_get(
     // `sandbox` set so that scripts cannot be run. As added protection, we
     // default disposition to attachment and tell the browser to not guess the
     // content type.
-    if asset_name.starts_with(service_name) {
+    let app_prefix = service_name.trim_end_matches('/');
+    let is_app_asset = asset_name == app_prefix
+        || asset_name
+            .strip_prefix(app_prefix)
+            .is_some_and(|rest| rest.starts_with('/'));
+    if is_app_asset {
         resp
     } else {
         let resp = resp
@@ -2055,7 +2254,7 @@ async fn handle_put(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
 ) -> HttpResponse {
@@ -2104,8 +2303,13 @@ async fn handle_put(
         )
     };
 
-    match asset_app_has_gateway_perm_for_asset_access_request(&api_client, asset_name, &perms, true)
-        .await
+    match asset_app_has_gateway_perm_for_asset_access_request(
+        &api_client,
+        asset_name,
+        &perm_ctxs,
+        true,
+    )
+    .await
     {
         Ok(has_perm) => {
             if !has_perm {
@@ -2240,11 +2444,16 @@ async fn handle_put_metadata(
     _asset_blob_cache: Arc<AssetBlobCache>,
     _asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     _username: Option<&str>,
 ) -> HttpResponse {
-    match asset_app_has_gateway_perm_for_asset_access_request(&api_client, asset_name, &perms, true)
-        .await
+    match asset_app_has_gateway_perm_for_asset_access_request(
+        &api_client,
+        asset_name,
+        &perm_ctxs,
+        true,
+    )
+    .await
     {
         Ok(has_perm) => {
             if !has_perm {
@@ -2314,7 +2523,7 @@ async fn handle_put_metadata(
 pub async fn asset_app_has_gateway_perm_for_asset_access_request(
     api_client: &HaiClient,
     asset_name: &str,
-    perms: &Perms,
+    perm_ctxs: &PermCtxs,
     write: bool,
 ) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
     // Quick exit: Try to check access by the `asset_name` given to see if we
@@ -2329,7 +2538,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_access_request(
                 entry_id: asset_name,
             }
         };
-        if check_access_async(&perms, &access_req).await.is_ok() {
+        if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
             return Ok(true);
         }
     } else {
@@ -2338,7 +2547,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_access_request(
         } else {
             AccessRequest::ReadByName { name: asset_name }
         };
-        if check_access_async(&perms, &access_req).await.is_ok() {
+        if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
             return Ok(true);
         }
     }
@@ -2357,7 +2566,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_access_request(
             name: &perm_granting_asset_entry.name,
         }
     };
-    if check_access_async(&perms, &access_req_by_name)
+    if check_access_async(&perm_ctxs, &access_req_by_name)
         .await
         .is_ok()
     {
@@ -2372,7 +2581,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_access_request(
             entry_id: &perm_granting_asset_entry.entry_id,
         }
     };
-    if check_access_async(&perms, &access_req_by_entry_id)
+    if check_access_async(&perm_ctxs, &access_req_by_entry_id)
         .await
         .is_ok()
     {
@@ -2392,14 +2601,14 @@ pub async fn asset_app_has_gateway_perm_for_asset_access_request(
 pub async fn asset_app_has_gateway_perm_for_asset_list_prefix_request(
     api_client: &HaiClient,
     asset_prefix: &str,
-    perms: &Perms,
+    perm_ctxs: &PermCtxs,
 ) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
     // Quick exit: Try to check access by the `asset_prefix` given to see if we
     // can avoid any extra queries.
     let access_req = AccessRequest::ListPrefix {
         prefix: asset_prefix,
     };
-    if check_access_async(&perms, &access_req).await.is_ok() {
+    if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
         return Ok(true);
     }
 
@@ -2411,7 +2620,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_list_prefix_request(
         let access_req_by_name = AccessRequest::ReadByName {
             name: &perm_granting_asset_entry.name,
         };
-        if check_access_async(&perms, &access_req_by_name)
+        if check_access_async(&perm_ctxs, &access_req_by_name)
             .await
             .is_ok()
         {
@@ -2420,7 +2629,7 @@ pub async fn asset_app_has_gateway_perm_for_asset_list_prefix_request(
         let access_req_by_entry_id = AccessRequest::ReadByEntryId {
             entry_id: &perm_granting_asset_entry.entry_id,
         };
-        if check_access_async(&perms, &access_req_by_entry_id)
+        if check_access_async(&perm_ctxs, &access_req_by_entry_id)
             .await
             .is_ok()
         {
@@ -2826,11 +3035,13 @@ async fn handle_client_message(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
-    perms: Perms,
+    perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
     kernel_map: KernelMap,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
+    mode: &GatewayMode,
+    asset_app_open_tokens: &AssetAppOpenTokenMap,
     ws_sink: &mut futures_util::stream::SplitSink<
         tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         Message,
@@ -2848,10 +3059,34 @@ async fn handle_client_message(
 
     let ClientMessageRequest { mid, route, arg } = client_msg;
 
+    if route.starts_with("perm_gate/") {
+        match mode {
+            GatewayMode::PermGate(pg) => {
+                handle_perm_gate_message(
+                    db,
+                    asset_blob_cache,
+                    asset_keyring,
+                    api_client,
+                    username,
+                    pg,
+                    ws_sink,
+                    mid,
+                    &route,
+                    &arg,
+                )
+                .await;
+            }
+            GatewayMode::App => {
+                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+            }
+        }
+        return;
+    }
+
     match route.as_str() {
         "repl/kernel/spawn" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perms, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -2952,7 +3187,7 @@ async fn handle_client_message(
         }
         "repl/kernel/teardown" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perms, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -2990,7 +3225,7 @@ async fn handle_client_message(
         }
         "repl/kernel/list" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perms, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -3066,7 +3301,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &share_arg.asset_name,
-                &perms,
+                &perm_ctxs,
                 true,
             )
             .await
@@ -3230,7 +3465,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &unshare_arg.asset_name,
-                &perms,
+                &perm_ctxs,
                 true,
             )
             .await
@@ -3362,7 +3597,7 @@ async fn handle_client_message(
         }
         "repl/prompt" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perms, &AccessRequest::LlmPrompt).await
+                check_access_async(&perm_ctxs, &AccessRequest::LlmPrompt).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -3551,11 +3786,12 @@ async fn handle_client_message(
                 .await;
         }
         "repl/perm/get" => {
-            let perms_guard = perms.lock().await;
+            let perm_ctxs_guard = perm_ctxs.lock().await;
 
             // Check if any existing permissions require keyring access.
-            let perm_requires_keyring: bool =
-                perms_guard.iter().any(|perm| perm.requires_keyring());
+            let perm_requires_keyring: bool = perm_ctxs_guard
+                .iter()
+                .any(|perm| perm.perm.requires_keyring());
 
             let keyring_need_unlock = perm_requires_keyring
                 && does_keyring_need_unlock(
@@ -3568,7 +3804,7 @@ async fn handle_client_message(
                 .is_some();
 
             let perm_get_result = ReplPermGetResult {
-                perms: perms_guard.clone(),
+                perms: perm_ctxs_guard.iter().map(|p| p.perm.clone()).collect(),
                 keyring_need_unlock,
             };
             let resp: ClientMessageResponse<ReplPermGetResult, ()> = ClientMessageResponse::Ok {
@@ -3582,6 +3818,10 @@ async fn handle_client_message(
                 .await;
         }
         "repl/perm/request" => {
+            if matches!(mode, GatewayMode::PermGate(_)) {
+                send_bad_request_error(ws_sink, "Route not available to the perm-gate").await;
+                return;
+            }
             // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
             let perm_req_arg: ReplPermRequestArg = match serde_json::from_str(&arg.to_string()) {
                 Ok(arg) => arg,
@@ -3595,25 +3835,20 @@ async fn handle_client_message(
                 }
             };
 
-            // Generate request_id
-            let request_id: String = generate_random_string(10);
-
-            // Generate CSRF token
-            let csrf_token = generate_token();
-
-            // Store with 5-minute expiry
+            // Unguessable, one-shot, time-limited. Binds the perm-gate's
+            // approval to this specific request.
+            let request_id = generate_token();
             {
                 let mut perm_requests = perm_request_map.lock().await;
-                // Prevent memory leak: clear expired tokens
+                // Prevent memory leak: clear expired requests
                 let now = std::time::Instant::now();
-                perm_requests.retain(|_, (_, expiry, _)| now < *expiry);
+                perm_requests.retain(|_, req| now < req.expiry);
                 perm_requests.insert(
                     request_id.clone(),
-                    (
-                        csrf_token.clone(),
-                        now + std::time::Duration::from_secs(300),
-                        perm_req_arg.perms.clone(),
-                    ),
+                    PendingPermRequest {
+                        expiry: now + PERM_REQUEST_TTL,
+                        perms: perm_req_arg.perms.clone(),
+                    },
                 );
             }
 
@@ -3632,29 +3867,23 @@ async fn handle_client_message(
                 .await
                 .is_some();
 
-            let perms_guard = perms.lock().await;
+            let perm_ctxs_guard = perm_ctxs.lock().await;
             let new_requested_perms = perm_req_arg
                 .perms
                 .iter()
-                .filter(|req_perm| !perms_guard.contains(req_perm))
+                .filter(|req_perm| !perm_ctxs_guard.iter().any(|p| &p.perm == *req_perm))
+                .cloned()
                 .collect::<Vec<_>>();
 
             let perm_req_result = ReplPermRequestResult {
-                existing_perms: perms_guard.clone(),
-                requested_perms: new_requested_perms.iter().map(|p| (*p).clone()).collect(),
+                existing_perms: perm_ctxs_guard.iter().map(|p| p.perm.clone()).collect(),
+                requested_perms: new_requested_perms,
                 keyring_need_unlock,
                 request_id: request_id.clone(),
-                url: format!("http://{}/request/{}", perm_addr, request_id),
+                url: perm_gate_request_url(perm_addr, &request_id),
             };
-            let resp: ClientMessageResponse<ReplPermRequestResult, ()> =
-                ClientMessageResponse::Ok {
-                    mid,
-                    result: perm_req_result,
-                    more: false,
-                };
-            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
-            let _ = ws_sink
-                .send(Message::Text(Utf8Bytes::from(&json_string)))
+            drop(perm_ctxs_guard);
+            send_response::<ReplPermRequestResult, ()>(ws_sink, mid, Ok(perm_req_result), false)
                 .await;
         }
         "repl/open_with" => {
@@ -3670,32 +3899,53 @@ async fn handle_client_message(
                     return;
                 }
             };
+            // The asset-app name is interpolated into a REPL command.
+            if !is_valid_open_with_asset_app(&open_with_arg.asset_app) {
+                send_bad_request_error(ws_sink, "Invalid asset_app").await;
+                return;
+            }
 
-            let base_url = format!(
-                "http://{}/open?asset_app={}",
-                perm_addr,
-                encode_asset_query_param(&open_with_arg.asset_app),
-            );
-            let perm_req_result = if let Some(asset_name) = open_with_arg.asset {
-                ReplOpenWithResult {
-                    url: format!(
-                        "{}&asset={}",
-                        base_url,
-                        encode_asset_query_param(&asset_name)
-                    ),
+            // Issue (or refresh) a token bound to exactly this target. Reused
+            // for identical targets so apps that render many links don't grow
+            // the map unboundedly.
+            let open_token = {
+                let mut tokens = asset_app_open_tokens.lock().await;
+                let now = std::time::Instant::now();
+                tokens.retain(|_, o| now < o.expiry);
+                let existing = tokens.iter_mut().find(|(_, o)| {
+                    o.asset_app == open_with_arg.asset_app && o.asset == open_with_arg.asset
+                });
+                if let Some((token, pending_open)) = existing {
+                    pending_open.expiry = now + ASSET_APP_OPEN_TOKEN_TTL;
+                    Some(token.clone())
+                } else if tokens.len() >= MAX_ASSET_APP_OPEN_TOKENS {
+                    None
+                } else {
+                    let token = generate_token();
+                    tokens.insert(
+                        token.clone(),
+                        PendingAssetAppOpen {
+                            asset_app: open_with_arg.asset_app.clone(),
+                            asset: open_with_arg.asset.clone(),
+                            expiry: now + ASSET_APP_OPEN_TOKEN_TTL,
+                        },
+                    );
+                    Some(token)
                 }
-            } else {
-                ReplOpenWithResult { url: base_url }
             };
-            let resp: ClientMessageResponse<ReplOpenWithResult, ()> = ClientMessageResponse::Ok {
-                mid,
-                result: perm_req_result,
-                more: false,
+            let Some(open_token) = open_token else {
+                send_bad_gateway_error(ws_sink, mid, "Too many outstanding open_with links").await;
+                return;
             };
-            let json_string = serde_json::to_string(&resp).expect("Failed to serialize response");
-            let _ = ws_sink
-                .send(Message::Text(Utf8Bytes::from(&json_string)))
-                .await;
+
+            let result = ReplOpenWithResult {
+                url: format!(
+                    "http://localhost:{}/open?token={}",
+                    perm_addr.port(),
+                    open_token
+                ),
+            };
+            send_response::<ReplOpenWithResult, ()>(ws_sink, mid, Ok(result), false).await;
         }
         "repl/crypt/sign" => {
             let Some(username) = username else {
@@ -3903,7 +4153,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &asset_arg.name,
-                &perms,
+                &perm_ctxs,
                 false,
             )
             .await
@@ -3956,7 +4206,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_list_prefix_request(
                 &api_client,
                 list_arg.prefix.as_deref().unwrap_or(""),
-                &perms,
+                &perm_ctxs,
             )
             .await
             {
@@ -4046,7 +4296,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_list_prefix_request(
                 &api_client,
                 search_arg.asset_pool_path.as_deref().unwrap_or(""),
-                &perms,
+                &perm_ctxs,
             )
             .await
             {
@@ -4098,7 +4348,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &move_arg.source_name,
-                &perms,
+                &perm_ctxs,
                 false,
             )
             .await
@@ -4117,7 +4367,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &move_arg.target_name,
-                &perms,
+                &perm_ctxs,
                 true,
             )
             .await
@@ -4170,7 +4420,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &remove_arg.name,
-                &perms,
+                &perm_ctxs,
                 true,
             )
             .await
@@ -4234,7 +4484,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
-                &perms,
+                &perm_ctxs,
                 false,
             )
             .await
@@ -4326,7 +4576,7 @@ async fn handle_client_message(
             match &rev_get_arg.entry_ref {
                 asset::EntryRef::Name(name) => {
                     if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perms, &AccessRequest::ReadByName { name }).await
+                        check_access_async(&perm_ctxs, &AccessRequest::ReadByName { name }).await
                     {
                         send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                         return;
@@ -4334,7 +4584,7 @@ async fn handle_client_message(
                 }
                 asset::EntryRef::EntryId(entry_id) => {
                     if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perms,
+                        &perm_ctxs,
                         &AccessRequest::ReadByEntryId { entry_id: entry_id },
                     )
                     .await
@@ -4387,7 +4637,7 @@ async fn handle_client_message(
             match asset_app_has_gateway_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
-                &perms,
+                &perm_ctxs,
                 true,
             )
             .await
@@ -4495,7 +4745,7 @@ async fn handle_client_message(
                     }
                 };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &AccessRequest::WriteByName {
                     name: &folder_create_arg.name,
                 },
@@ -4597,7 +4847,7 @@ async fn handle_client_message(
                     }
                 };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &AccessRequest::WriteByName {
                     name: &collapse_arg.prefix,
                 },
@@ -4641,7 +4891,7 @@ async fn handle_client_message(
                     }
                 };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &AccessRequest::WriteByName {
                     name: &expand_arg.prefix,
                 },
@@ -4685,7 +4935,7 @@ async fn handle_client_message(
                     }
                 };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &&AccessRequest::ListPrefix {
                     prefix: &list_arg.clone().prefix.unwrap_or("".to_string()),
                 },
@@ -4730,7 +4980,7 @@ async fn handle_client_message(
                 }
             };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &AccessRequest::WriteByName {
                     name: &asset_arg.name,
                 },
@@ -4765,7 +5015,7 @@ async fn handle_client_message(
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
-                    None
+                    return;
                 }
             };
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -4812,7 +5062,7 @@ async fn handle_client_message(
                 }
             };
             if let Err(PermCheckError::Unauthorized) = check_access_async(
-                &perms,
+                &perm_ctxs,
                 &AccessRequest::WriteByName {
                     name: &asset_arg.name,
                 },
@@ -4847,7 +5097,7 @@ async fn handle_client_message(
                         }
                     }
                     send_bad_request_error(ws_sink, "Decryption key error").await;
-                    None
+                    return;
                 }
             };
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -4896,7 +5146,7 @@ async fn handle_client_message(
             match acl_arg.entry_ref {
                 asset::EntryRef::Name(ref name) => {
                     if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perms, &AccessRequest::WriteByName { name }).await
+                        check_access_async(&perm_ctxs, &AccessRequest::WriteByName { name }).await
                     {
                         send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                         return;
@@ -4904,7 +5154,7 @@ async fn handle_client_message(
                 }
                 asset::EntryRef::EntryId(ref entry_id) => {
                     if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perms,
+                        &perm_ctxs,
                         &AccessRequest::WriteByEntryId { entry_id: entry_id },
                     )
                     .await
@@ -4956,7 +5206,7 @@ async fn handle_client_message(
             match acl_get_effective_arg.entry_ref {
                 asset::EntryRef::Name(ref name) => {
                     if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perms, &AccessRequest::ReadByName { name }).await
+                        check_access_async(&perm_ctxs, &AccessRequest::ReadByName { name }).await
                     {
                         send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                         return;
@@ -4964,7 +5214,7 @@ async fn handle_client_message(
                 }
                 asset::EntryRef::EntryId(ref entry_id) => {
                     if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perms,
+                        &perm_ctxs,
                         &AccessRequest::ReadByEntryId { entry_id: entry_id },
                     )
                     .await
@@ -5008,736 +5258,657 @@ async fn handle_client_message(
     }
 }
 
-// -- Permissions server
+// -- Perm-gate
 
-async fn handle_perm_http_connection(
-    repl_remote: crate::repl_remote::ReplRemote,
+type WsSink = futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    Message,
+>;
+
+fn parse_arg<T: DeserializeOwned>(arg: &serde_json::Value) -> Option<T> {
+    // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
+    serde_json::from_str(&arg.to_string()).ok()
+}
+
+/// Read-only access to the whole asset tree (minus the usual `.keys/`,
+/// `vault/`, `.sys/hai.toml` exclusions), plus `Everything`.
+///
+/// NOTE: `Everything` is redundant with (and broader than) the read-only perm.
+/// It's a stopgap for kernel access until a dedicated kernel perm exists, at
+/// which point `Everything` should be dropped.
+fn perm_gate_default_perms() -> Vec<PermCtx> {
+    vec![
+        PermCtx {
+            perm: Perm::AssetPrefix {
+                prefix: String::new(),
+                perm: AssetPerm {
+                    read: true,
+                    write: false,
+                },
+                prefix_perm: AssetPrefixPerm {
+                    create: false,
+                    list: true,
+                },
+            },
+            lifetime: PermLifetime::Default,
+        },
+        PermCtx {
+            perm: Perm::Everything,
+            lifetime: PermLifetime::Default,
+        },
+    ]
+}
+
+fn perm_gate_request_url(perm_gate_addr: &SocketAddr, request_id: &str) -> String {
+    format!(
+        "http://localhost:{}{}#request_id={}",
+        perm_gate_addr.port(),
+        PERM_GATE_ASSET_PREFIX,
+        request_id
+    )
+}
+
+fn with_perm_gate_security_headers(resp: HttpResponse) -> HttpResponse {
+    resp
+        // Clickjacking: a requesting app must not be able to frame the
+        // perm-gate and trick the user into clicking "Grant".
+        .with_header("Content-Security-Policy", "frame-ancestors 'none'")
+        .with_header("X-Frame-Options", "DENY")
+        // Sever the opener so the requesting app keeps no window handle.
+        .with_header("Cross-Origin-Opener-Policy", "same-origin")
+        .with_header("Referrer-Policy", "no-referrer")
+}
+
+fn is_valid_open_with_asset_app(asset_app: &str) -> bool {
+    !asset_app.is_empty()
+        && !asset_app
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+}
+
+async fn notify_perm_updated(clients: &Clients) {
+    let json = r#"{".tag":"ok","mid":-1,"route":"client/perm/updated","arg":null}"#;
+    for tx in clients.lock().await.values() {
+        let _ = tx.send(Message::Text(Utf8Bytes::from_static(json)));
+    }
+}
+
+async fn get_pending_perm_request(
+    perm_request_map: &PermRequestMap,
+    request_id: &str,
+) -> Option<PendingPermRequest> {
+    let map = perm_request_map.lock().await;
+    map.get(request_id)
+        .filter(|req| std::time::Instant::now() < req.expiry)
+        .cloned()
+}
+
+/// Serves the perm-gate asset-app.
+///
+/// Only GETs under `/hai/app/perm-gate/` are served. Everything else is 404.
+async fn handle_perm_gate_http(
+    io: &Io,
+    request: &HttpRequest,
+    pg_ctx: &PermGateCtx,
+    service_name: &str,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    api_client: &HaiClient,
+    perm_ctxs: PermCtxs,
+    username: Option<&str>,
+) -> HttpResponse {
+    if request.method != "GET" {
+        return HttpResponse::bad_request("Only GET supported");
+    }
+    let decoded = match urlencoding::decode(&request.path) {
+        Ok(p) => p.into_owned(),
+        Err(_) => return HttpResponse::bad_request("Invalid URL encoding"),
+    };
+    // Foward to slash version
+    if decoded == PERM_GATE_SERVICE_NAME {
+        return HttpResponse::redirect_temp(PERM_GATE_ASSET_PREFIX);
+    }
+    // If not the perm-gate asset-app -> 404 error.
+    let Some(rest) = decoded.strip_prefix(PERM_GATE_ASSET_PREFIX) else {
+        return HttpResponse::not_found();
+    };
+    // Reject all non-standard notation (including our own) in the asset-app
+    // path.
+    if rest.contains(':') || rest.contains('@') || rest.split('/').any(|seg| seg == "..") {
+        return HttpResponse::not_found();
+    }
+    match pg_ctx.source {
+        PermGateSource::Embedded => {
+            if rest.is_empty() || rest == "index.html" {
+                HttpResponse::ok(PERM_GATE_EMBEDDED_HTML.to_vec(), "text/html; charset=utf-8")
+            } else {
+                HttpResponse::not_found()
+            }
+        }
+        PermGateSource::AssetStore => {
+            handle_get(
+                io,
+                request,
+                service_name,
+                &decoded,
+                None,
+                false,
+                asset_blob_cache,
+                asset_keyring,
+                api_client,
+                perm_ctxs,
+                username,
+                Arc::new(None),
+            )
+            .await
+        }
+    }
+}
+
+/// Dedicated perm-gate handler for `/open?token=<token>`
+///
+/// The purpose of this handler is to allow asset-app A to open asset-app B
+/// with a clean separation of permissions (no inheritance) which requires
+/// launching a completely separate gateway.
+///
+/// The token originates from the standard gateway's `repl/open_with` route.
+/// The token ensures that web apps cannot launch arbitrary asset-apps.
+async fn handle_perm_gate_open(
+    request: &HttpRequest,
+    pg_ctx: &PermGateCtx,
+    asset_app_open_tokens: &AssetAppOpenTokenMap,
+) -> HttpResponse {
+    let sec_fetch_mode = request.header("Sec-Fetch-Mode").unwrap_or_default();
+    if request.header("Origin").is_some()
+        || (sec_fetch_mode != "navigate" && !sec_fetch_mode.is_empty())
+    {
+        // Only top-level navigations. Prevents JS fetch() from following the
+        // redirect.
+        return HttpResponse::unauthorized();
+    }
+    let Some(token) = request.query_param("token") else {
+        return HttpResponse::bad_request("Missing 'token' query parameter");
+    };
+    let pending_open = {
+        let tokens = asset_app_open_tokens.lock().await;
+        tokens
+            .get(token)
+            .filter(|o| std::time::Instant::now() < o.expiry)
+            .cloned()
+    };
+    let Some(pending_open) = pending_open else {
+        return HttpResponse::forbidden();
+    };
+
+    let repl_remote = pg_ctx.repl_remote.clone();
+    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+    repl_remote
+        .push_cmd(crate::session::CmdInput {
+            input: format!("/asset-app.no_open {}", pending_open.asset_app),
+            source: session::CmdSource::Gateway,
+            reply_channel: Some(reply_tx),
+        })
+        .await;
+    repl_remote.signal_break();
+    match reply_rx.recv().await {
+        Some(CmdInputReply::Gateway(Some((url, _addr, _perm_addr)))) => {
+            match pending_open.asset.as_deref() {
+                Some(asset_name) => {
+                    let sep = if url.contains('#') { '&' } else { '#' };
+                    HttpResponse::redirect_temp(&format!(
+                        "{}{}asset={}",
+                        url,
+                        sep,
+                        encode_asset_fragment(asset_name)
+                    ))
+                }
+                None => HttpResponse::redirect_temp(&url),
+            }
+        }
+        Some(CmdInputReply::Gateway(None)) => {
+            HttpResponse::internal_error("Failed to start asset app")
+        }
+        None => HttpResponse::internal_error("Failed to get response from REPL"),
+    }
+}
+
+// --
+
+//
+// Perm-gate websocket routes
+//
+
+//
+// route: perm_gate/request/get
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestGetArg {
+    request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestGetResult {
+    service_name: String,
+    existing_perm_ctxs: Vec<PermCtx>,
+    /// Requested perms not already granted.
+    requested_perms: Vec<Perm>,
+    keyring_need_unlock: bool,
+    expires_in_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum PermGateRequestGetError {
+    NotFound,
+}
+
+//
+// route: perm_gate/request/submit
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestSubmitArg {
+    request_id: String,
+    grant: Vec<PermCtx>,
+    #[serde(default)]
+    keyring_password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestSubmitResult {
+    new_perm_ctxs: Vec<PermCtx>,
+    all_perm_ctxs: Vec<PermCtx>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum PermGateRequestSubmitError {
+    NotFound,
+    BadLifetime,
+    KeyringPasswordRequired,
+    KeyringPasswordIncorrect,
+}
+
+//
+// route: perm_gate/request/deny
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestDenyArg {
+    request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGateRequestDenyResult {
+    /// True if the request existed (and was removed).
+    ok: bool,
+}
+
+//
+// route: perm_gate/perm/list
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGatePermListResult {
+    service_name: String,
+    all_perm_ctxs: Vec<PermCtx>,
+    keyring_need_unlock: bool,
+}
+
+//
+// route: perm_gate/perm/revoke
+//
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGatePermRevokeArg {
+    perms: Vec<Perm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PermGatePermRevokeResult {
+    revoked: Vec<Perm>,
+    all_perm_ctxs: Vec<PermCtx>,
+}
+
+async fn handle_perm_gate_message(
     db: Arc<Mutex<rusqlite::Connection>>,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
-    clients: Clients,
-    mut stream: tokio::net::TcpStream,
-    perms: Perms,
-    perm_request_map: PermRequestMap,
     username: Option<&str>,
-    service_name: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf_reader = BufReader::new(&mut stream);
+    pg_ctx: &PermGateCtx,
+    ws_sink: &mut WsSink,
+    mid: u64,
+    route: &str,
+    arg: &serde_json::Value,
+) {
+    match route {
+        "perm_gate/request/get" => {
+            let Some(arg) = parse_arg::<PermGateRequestGetArg>(arg) else {
+                send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                return;
+            };
+            let Some(pending) =
+                get_pending_perm_request(&pg_ctx.target_perm_request_map, &arg.request_id).await
+            else {
+                send_response::<PermGateRequestGetResult, _>(
+                    ws_sink,
+                    mid,
+                    Err(RequestError::Route(PermGateRequestGetError::NotFound)),
+                    false,
+                )
+                .await;
+                return;
+            };
+            let keyring_need_unlock = pending.perms.iter().any(|p| p.requires_keyring())
+                && does_keyring_need_unlock(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client,
+                    username,
+                )
+                .await
+                .is_some();
+            let existing_perm_ctxs = pg_ctx.target_perm_ctxs.lock().await.clone();
+            let requested_perms = pending
+                .perms
+                .iter()
+                .filter(|p| {
+                    !existing_perm_ctxs
+                        .iter()
+                        .any(|perm_ctx| perm_ctx.perm == **p)
+                })
+                .cloned()
+                .collect();
+            let result = PermGateRequestGetResult {
+                service_name: pg_ctx.target_service_name.clone(),
+                existing_perm_ctxs: existing_perm_ctxs,
+                requested_perms,
+                keyring_need_unlock,
+                expires_in_secs: pending
+                    .expiry
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_secs(),
+            };
+            send_response::<_, PermGateRequestGetError>(ws_sink, mid, Ok(result), false).await;
+        }
+        "perm_gate/request/submit" => {
+            let Some(arg) = parse_arg::<PermGateRequestSubmitArg>(arg) else {
+                send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                return;
+            };
+            fn submit_err(
+                e: PermGateRequestSubmitError,
+            ) -> Result<PermGateRequestSubmitResult, RequestError<PermGateRequestSubmitError>>
+            {
+                Err(RequestError::Route(e))
+            }
+            let Some(pending) =
+                get_pending_perm_request(&pg_ctx.target_perm_request_map, &arg.request_id).await
+            else {
+                send_response(
+                    ws_sink,
+                    mid,
+                    submit_err(PermGateRequestSubmitError::NotFound),
+                    false,
+                )
+                .await;
+                return;
+            };
 
-    let request = match HttpRequest::parse(&mut buf_reader, "localhost").await {
-        Some(req) => req,
-        None => return Ok(()),
-    };
+            // Check for bad lifetime (default)
+            if arg
+                .grant
+                .iter()
+                .any(|perm_ctx| perm_ctx.lifetime == PermLifetime::Default)
+            {
+                send_response(
+                    ws_sink,
+                    mid,
+                    submit_err(PermGateRequestSubmitError::BadLifetime),
+                    false,
+                )
+                .await;
+                return;
+            }
 
-    let response = match request.method.as_str() {
-        "GET" => {
-            if request.path == "/open" {
-                let origin = request.header("Origin");
-                let sec_fetch_mode = request
-                    .header("Sec-Fetch-Mode")
-                    .unwrap_or_default()
-                    .to_string();
-                let invalid_origin = origin.is_some();
-                let invalid_sec_fetch_mode = sec_fetch_mode != "navigate" && sec_fetch_mode != "";
-                if invalid_origin || invalid_sec_fetch_mode {
-                    // Prevent JS fetch() from following redirect to stop
-                    // permission escalation. From what I've observed, opening
-                    // a new tab and issuing a GET request does not send an
-                    // Origin.
-                    HttpResponse::unauthorized()
-                } else if let Some(asset_app_name) = request.query_param("asset_app") {
-                    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
-                    repl_remote
-                        .push_cmd(crate::session::CmdInput {
-                            input: format!("/asset-app.no_open {}", asset_app_name),
-                            source: session::CmdSource::Gateway,
-                            reply_channel: Some(reply_tx),
-                        })
-                        .await;
-                    repl_remote.signal_break();
-                    match reply_rx.recv().await {
-                        Some(CmdInputReply::Gateway(gateway_res)) => {
-                            if let Some((url, _addr, _perm_addr)) = gateway_res {
-                                if let Some(asset_name) = request.query_param("asset") {
-                                    if url.contains("#") {
-                                        HttpResponse::redirect_temp(&format!(
-                                            "{}&asset={}",
-                                            url,
-                                            encode_asset_fragment(&asset_name)
-                                        ))
-                                    } else {
-                                        HttpResponse::redirect_temp(&format!(
-                                            "{}#asset={}",
-                                            url,
-                                            encode_asset_fragment(&asset_name)
-                                        ))
-                                    }
-                                } else {
-                                    HttpResponse::redirect_temp(&url)
-                                }
-                            } else {
-                                HttpResponse::internal_error("Failed to start asset app")
-                            }
-                        }
-                        _ => HttpResponse::internal_error("Failed to get response from REPL"),
-                    }
-                } else {
-                    HttpResponse::bad_request("Missing 'asset_app' query parameter")
+            let any_granted_requires_keyring = arg
+                .grant
+                .iter()
+                .any(|perm_ctx| perm_ctx.perm.requires_keyring());
+            let existing_requires_keyring = pg_ctx
+                .target_perm_ctxs
+                .lock()
+                .await
+                .iter()
+                .any(|perm_ctx| perm_ctx.perm.requires_keyring());
+            let keyring_need_unlock = if !any_granted_requires_keyring && !existing_requires_keyring
+            {
+                None
+            } else {
+                does_keyring_need_unlock(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client,
+                    username,
+                )
+                .await
+            };
+
+            if let Some((enc_key_info, verifying_key_info)) = keyring_need_unlock {
+                let password = arg.keyring_password.as_deref().unwrap_or("");
+                if password.is_empty() {
+                    send_response(
+                        ws_sink,
+                        mid,
+                        submit_err(PermGateRequestSubmitError::KeyringPasswordRequired),
+                        false,
+                    )
+                    .await;
+                    return;
                 }
-            } else if request.path.starts_with("/request/") {
-                let request_id = &request.path["/request/".len()..];
-                let perm_request_map_unlocked = perm_request_map.lock().await;
-                if let Some((csrf_token, _expiry, requested_perms)) =
-                    perm_request_map_unlocked.get(request_id).cloned()
-                {
-                    drop(perm_request_map_unlocked);
-
-                    // Build existing permissions section (collapsed by default, shown below requested)
-                    let existing_perms = perms.lock().await;
-                    let existing_count = existing_perms.len();
-                    let existing_section = if existing_perms.is_empty() {
-                        r#"<details class="existing">
-                    <summary class="existing-summary">
-                        <span class="existing-summary-label">Existing permissions</span>
-                        <span class="existing-count">0</span>
-                    </summary>
-                    <div class="existing-body"><div class="existing-empty">None granted yet.</div></div>
-                    </details>"#.to_string()
-                    } else {
-                        let mut items = String::new();
-                        for perm in existing_perms.iter() {
-                            let (icon, label, detail) = format_perm_toggle(perm);
-                            items.push_str(&format!(
-                                r#"<div class="existing-item"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}</div><div class="perm-detail">{detail}</div></div></div>"#,
-                            ));
-                        }
-                        format!(
-                            r#"<details class="existing">
-                    <summary class="existing-summary">
-                        <span class="existing-summary-label">Existing permissions</span>
-                        <span class="existing-count">{existing_count}</span>
-                        <span class="existing-chevron">▾</span>
-                    </summary>
-                    <div class="existing-body">{items}</div>
-                    </details>"#,
-                        )
-                    };
-
-                    let mut perm_toggles = String::new();
-                    for (i, perm) in requested_perms.iter().enumerate() {
-                        if existing_perms.contains(perm) {
-                            continue;
-                        }
-                        let (icon, label, detail) = format_perm_toggle(perm);
-                        let data_json = serde_json::to_string(perm).unwrap_or_default();
-                        let data_attr = html_escape(&data_json);
-                        perm_toggles.push_str(&format!(
-                            r#"<label class="perm" for="p{i}">
-<div class="perm-info"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}</div><div class="perm-detail">{detail}</div></div></div>
-<div class="toggle"><input type="checkbox" id="p{i}" name="perm_{i}" data-perm="{data_attr}" checked><span class="track"><span class="knob"></span></span></div>
-</label>"#,
-                        ));
-                    }
-
-                    drop(existing_perms);
-
-                    // Determine if keyring unlock is needed
-                    let perm_requires_keyring: bool =
-                        requested_perms.iter().any(|perm| perm.requires_keyring());
-
-                    let keyring_need_unlock = perm_requires_keyring
-                        && does_keyring_need_unlock(
+                let decrypt_unlocked = asset_keyring
+                    .lock()
+                    .await
+                    .unlock_decrypt_key(
+                        asset_blob_cache.clone(),
+                        api_client,
+                        &enc_key_info.recipient_key_id_parts(),
+                        password,
+                    )
+                    .await
+                    .is_ok();
+                // NOTE: Unexpected for decryption key & signing key to differ.
+                let signing_unlocked = decrypt_unlocked
+                    && asset_keyring
+                        .lock()
+                        .await
+                        .unlock_signing_key(
                             asset_blob_cache.clone(),
-                            asset_keyring.clone(),
                             api_client,
-                            username,
+                            &verifying_key_info.recipient_key_id_parts(),
+                            password,
                         )
                         .await
-                        .is_some();
-
-                    // Build keyring section
-                    let keyring_section = if keyring_need_unlock {
-                        r#"<div class="keyring-section">
-    <div class="section-label">Keyring unlock required</div>
-    <div class="keyring-info"><p>Some requested permissions require access to encrypted data. Enter your keyring password to unlock.</p></div>
-    <div class="keyring-error" id="keyring-error" style="display:none;"><span class="error-icon">✕</span><span id="keyring-error-msg"></span></div>
-    <div class="keyring-input-wrap">
-        <label class="keyring-label" for="keyring_password">🔒 Keyring password</label>
-        <input type="password" id="keyring_password" class="keyring-input" placeholder="Enter your keyring password" autocomplete="off">
-    </div>
-</div>"#.to_string()
-                    } else {
-                        String::new()
-                    };
-
-                    let keyring_need_unlock_js = if keyring_need_unlock { "true" } else { "false" };
-
-                    HttpResponse::ok(
-                        format!(
-                            r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Permissions — {service_name_escaped}</title>
-<style>
-:root {{ --bg: #1a1a1e; --surface: #26262b; --surface2: #2f2f35; --border: #38383f; --text: #e4e4e8; --text2: #9a9aa0; --accent: #6c8cff; --accent-hover: #5a7af0; --green: #3dd68c; --green-bg: #2a3a30; --red: #ff6b6b; --red-bg: #3a2a2a; --red-border: #5a3333; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }}
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 24px 16px; min-height: 100vh; }}
-.container {{ max-width: 460px; margin: 0 auto; }}
-.header {{ margin-bottom: 36px; }}
-.header h1 {{ font-size: 18px; font-weight: 600; margin-bottom: 4px; }}
-.header .app-name {{ color: var(--accent); }}
-.header p {{ font-size: 13px; color: var(--text2); }}
-.section-label {{ font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin-bottom: 8px; }}
-.perm {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; transition: background 0.15s; }}
-.perm:hover {{ background: var(--surface2); }}
-.perm-info {{ display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }}
-.perm-icon {{ font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; }}
-.perm-label {{ font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.perm-detail {{ font-size: 11px; color: var(--text2); font-family: var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.perm-detail code {{ background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-size: 11px; font-family: var(--mono); }}
-.toggle {{ position: relative; flex-shrink: 0; }}
-.toggle input {{ position: absolute; opacity: 0; pointer-events: none; }}
-.track {{ display: block; width: 44px; height: 26px; background: #48484f; border-radius: 13px; position: relative; transition: background 0.2s; }}
-.knob {{ position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; background: #fff; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
-.toggle input:checked + .track {{ background: var(--green); }}
-.toggle input:checked + .track .knob {{ transform: translateX(18px); }}
-.btn {{ display: block; width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; margin-top: 32px; }}
-.btn:hover {{ background: var(--accent-hover); }}
-.btn:active {{ transform: scale(0.98); }}
-.existing {{ margin-top: 32px; margin-bottom: 0; }}
-.existing-item {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; opacity: 0.65; }}
-.existing-empty {{ font-size: 13px; color: var(--text2); padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }}
-.existing-summary {{ display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; list-style: none; user-select: none; transition: background 0.15s; }}
-.existing-summary:hover {{ background: var(--surface2); }}
-.existing-summary::-webkit-details-marker {{ display: none; }}
-.existing-summary-label {{ font-size: 13px; font-weight: 500; flex: 1; }}
-.existing-count {{ font-size: 11px; font-weight: 600; background: var(--surface2); color: var(--text2); padding: 2px 8px; border-radius: 10px; min-width: 20px; text-align: center; }}
-.existing-chevron {{ font-size: 20px; color: var(--text2); transition: transform 0.2s; }}
-details[open] .existing-chevron {{ transform: rotate(180deg); }}
-.existing-body {{ margin-top: 6px; }}
-.existing-body .existing-item {{ opacity: 0.65; }}
-.remember {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-top: 16px; cursor: pointer; transition: background 0.15s; }}
-.remember:hover {{ background: var(--surface2); }}
-.remember-info {{ display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }}
-.remember-label {{ font-size: 13px; font-weight: 500; }}
-.remember-detail {{ font-size: 11px; color: var(--text2); }}
-.keyring-section {{ margin-bottom: 36px; }}
-.keyring-info p {{ font-size: 13px; color: var(--text2); margin-bottom: 12px; }}
-.keyring-input-wrap {{ position: relative; }}
-.keyring-label {{ display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: var(--text2); }}
-.keyring-input {{ display: block; width: 100%; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-size: 14px; font-family: var(--mono); outline: none; transition: border-color 0.15s; }}
-.keyring-input:focus {{ border-color: var(--accent); }}
-.keyring-input.has-error {{ border-color: var(--red); }}
-.keyring-error {{ display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--red-bg); border: 1px solid var(--red-border); border-radius: 10px; margin-bottom: 10px; font-size: 13px; color: var(--red); }}
-.error-icon {{ font-size: 14px; font-weight: 700; flex-shrink: 0; }}
-</style>
-</head>
-<body>
-<div class="container">
-    <div class="header">
-        <h1><span class="app-name">{service_name_escaped}</span> is requesting permissions</h1>
-        <p>Toggle off anything you don't want to grant.</p>
-    </div>
-    <form id="f">
-        <input type="hidden" name="csrf_token" value="{csrf_token_escaped}">
-        {keyring_section}
-        <div class="requested">
-            <div class="section-label">Requested</div>
-            {perm_toggles}
-        </div>
-        <label class="remember" for="remember">
-            <div class="remember-info">
-                <div class="remember-label">Long-term access</div>
-                <div class="remember-detail">Remember these permissions for future sessions</div>
-            </div>
-            <div class="toggle">
-                <input type="checkbox" id="remember" checked>
-                <span class="track"><span class="knob"></span></span>
-            </div>
-        </label>
-        {existing_section}
-        <button class="btn" type="submit">Grant selected</button>
-    </form>
-</div>
-<script>
-const KEYRING_NEEDED = {keyring_need_unlock_js};
-
-function showKeyringError(msg) {{
-    const errEl = document.getElementById('keyring-error');
-    const errMsg = document.getElementById('keyring-error-msg');
-    const pwInput = document.getElementById('keyring_password');
-    if (errEl && errMsg && pwInput) {{
-        errMsg.textContent = msg;
-        errEl.style.display = 'flex';
-        pwInput.classList.add('has-error');
-        pwInput.focus();
-        pwInput.select();
-    }}
-}}
-
-function clearKeyringError() {{
-    const errEl = document.getElementById('keyring-error');
-    const pwInput = document.getElementById('keyring_password');
-    if (errEl) errEl.style.display = 'none';
-    if (pwInput) pwInput.classList.remove('has-error');
-}}
-
-if (KEYRING_NEEDED) {{
-    document.getElementById('keyring_password').addEventListener('input', clearKeyringError);
-}}
-
-document.getElementById('f').onsubmit = e => {{
-    e.preventDefault();
-    const btn = e.target.querySelector('button');
-
-    let keyring_password = null;
-    if (KEYRING_NEEDED) {{
-        const pwInput = document.getElementById('keyring_password');
-        keyring_password = pwInput.value;
-        if (!keyring_password) {{
-            showKeyringError('Please enter your keyring password.');
-            return;
-        }}
-    }}
-
-    btn.disabled = true;
-    btn.textContent = 'Granting\u2026';
-    clearKeyringError();
-
-    const grant = [];
-    document.querySelectorAll('input[type=checkbox][data-perm]').forEach(c => {{
-        if (c.checked) grant.push(JSON.parse(c.dataset.perm));
-    }});
-    const remember = document.getElementById('remember').checked;
-    const body = {{
-        csrf_token: document.querySelector('input[name=csrf_token]').value,
-        request_id: "{request_id_escaped}",
-        grant,
-        remember
-    }};
-    if (keyring_password !== null) {{
-        body.keyring_password = keyring_password;
-    }}
-    fetch('/submit', {{
-        method: 'POST',
-        headers: {{ 'Content-Type': 'application/json' }},
-        body: JSON.stringify(body)
-    }}).then(r => {{
-        if (r.ok) return r.text().then(t => {{ document.open(); document.write(t); document.close(); }});
-        if (r.status === 401) {{
-            return r.json().then(j => {{
-                btn.disabled = false;
-                btn.textContent = 'Grant selected';
-                showKeyringError(j.message || 'Incorrect keyring password. Please try again.');
-            }}).catch(() => {{
-                btn.disabled = false;
-                btn.textContent = 'Grant selected';
-                showKeyringError('Incorrect keyring password. Please try again.');
-            }});
-        }}
-        btn.disabled = false;
-        btn.textContent = 'Grant selected';
-        alert('Failed (' + r.status + ')');
-    }}).catch(() => {{
-        btn.disabled = false;
-        btn.textContent = 'Grant selected';
-        alert('Network error');
-    }});
-}};
-</script>
-</body>
-</html>"#,
-                            service_name_escaped = html_escape(service_name),
-                            csrf_token_escaped = html_escape(&csrf_token),
-                            perm_toggles = perm_toggles,
-                            request_id_escaped = html_escape(request_id),
-                            existing_section = existing_section,
-                            keyring_section = keyring_section,
-                            keyring_need_unlock_js = keyring_need_unlock_js,
-                        )
-                        .into(),
-                        "text/html",
+                        .is_ok();
+                if !signing_unlocked {
+                    send_response(
+                        ws_sink,
+                        mid,
+                        submit_err(PermGateRequestSubmitError::KeyringPasswordIncorrect),
+                        false,
                     )
-                } else {
-                    HttpResponse::not_found()
+                    .await;
+                    return;
                 }
-            } else {
-                HttpResponse::not_found()
             }
+
+            // One-shot: consume the request. Guards against double-submits
+            // racing past the earlier lookup.
+            if pg_ctx
+                .target_perm_request_map
+                .lock()
+                .await
+                .remove(&arg.request_id)
+                .is_none()
+            {
+                send_response(
+                    ws_sink,
+                    mid,
+                    submit_err(PermGateRequestSubmitError::NotFound),
+                    false,
+                )
+                .await;
+                return;
+            }
+
+            let mut perm_ctxs_guard = pg_ctx.target_perm_ctxs.lock().await;
+            let mut new_perm_ctxs: Vec<PermCtx> = Vec::new();
+            let mut new_until_revoked_perms = Vec::new();
+            for granted_perm_ctx in arg.grant {
+                if perm_ctxs_guard.iter().any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
+                    || new_perm_ctxs.iter().any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
+                    // Only perms that were actually requested can be granted.
+                    || !pending.perms.contains(&granted_perm_ctx.perm)
+                {
+                    continue;
+                }
+                perm_ctxs_guard.push(granted_perm_ctx.clone());
+                if granted_perm_ctx.lifetime == PermLifetime::UntilRevoked {
+                    new_until_revoked_perms.push(granted_perm_ctx.perm.clone());
+                }
+                new_perm_ctxs.push(granted_perm_ctx);
+            }
+            let all_perm_ctxs = perm_ctxs_guard.clone();
+            drop(perm_ctxs_guard);
+
+            if let Some(username) = username
+                && !new_until_revoked_perms.is_empty()
+            {
+                let _ = crate::db::merge_gateway_perms(
+                    &mut *db.lock().await,
+                    username,
+                    &pg_ctx.target_service_name,
+                    &new_until_revoked_perms,
+                );
+            }
+
+            if !new_perm_ctxs.is_empty() {
+                notify_perm_updated(&pg_ctx.target_clients).await;
+            }
+
+            send_response::<_, PermGateRequestSubmitError>(
+                ws_sink,
+                mid,
+                Ok(PermGateRequestSubmitResult {
+                    new_perm_ctxs,
+                    all_perm_ctxs,
+                }),
+                false,
+            )
+            .await;
         }
-        "POST" => {
-            if request.path == "/submit" {
-                if let Ok(perm_req) = serde_json::from_slice::<PermRequestSubmit>(&request.body) {
-                    let mut perm_request_map_unlocked = perm_request_map.lock().await;
-                    if let Some((csrf_token, expiry, perms_requested)) =
-                        perm_request_map_unlocked.get(&perm_req.request_id).cloned()
-                    {
-                        let now = std::time::Instant::now();
-                        if perm_req.csrf_token == csrf_token && now < expiry {
-                            // Check if any granted perms require keyring
-                            let any_granted_requires_keyring =
-                                perm_req.grant.iter().any(|perm| perm.requires_keyring());
+        "perm_gate/request/deny" => {
+            let Some(arg) = parse_arg::<PermGateRequestDenyArg>(arg) else {
+                send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                return;
+            };
+            let ok = pg_ctx
+                .target_perm_request_map
+                .lock()
+                .await
+                .remove(&arg.request_id)
+                .is_some();
+            send_response::<_, ()>(ws_sink, mid, Ok(PermGateRequestDenyResult { ok }), false).await;
+        }
+        "perm_gate/perm/list" => {
+            let perm_ctxs = pg_ctx.target_perm_ctxs.lock().await.clone();
+            let keyring_need_unlock = perm_ctxs
+                .iter()
+                .any(|perm_ctx| perm_ctx.perm.requires_keyring())
+                && does_keyring_need_unlock(
+                    asset_blob_cache.clone(),
+                    asset_keyring.clone(),
+                    api_client,
+                    username,
+                )
+                .await
+                .is_some();
+            send_response::<_, ()>(
+                ws_sink,
+                mid,
+                Ok(PermGatePermListResult {
+                    service_name: pg_ctx.target_service_name.clone(),
+                    all_perm_ctxs: perm_ctxs,
+                    keyring_need_unlock,
+                }),
+                false,
+            )
+            .await;
+        }
+        "perm_gate/perm/revoke" => {
+            let Some(arg) = parse_arg::<PermGatePermRevokeArg>(arg) else {
+                send_bad_request_error(ws_sink, &format!("Invalid argument for {route}")).await;
+                return;
+            };
+            let mut revoked = Vec::new();
+            let mut perm_ctxs_guard = pg_ctx.target_perm_ctxs.lock().await;
+            perm_ctxs_guard.retain(|perm_ctx| {
+                if arg.perms.contains(&perm_ctx.perm) {
+                    revoked.push(perm_ctx.perm.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            let all_perm_ctxs = perm_ctxs_guard.clone();
+            drop(perm_ctxs_guard);
 
-                            let perms_guard = perms.lock().await;
-                            // Check if any existing permissions require keyring access.
-                            let existing_perm_requires_keyring: bool =
-                                perms_guard.iter().any(|perm| perm.requires_keyring());
-                            drop(perms_guard);
-
-                            let keyring_need_unlock = if !any_granted_requires_keyring
-                                && !existing_perm_requires_keyring
-                            {
-                                None
-                            } else {
-                                does_keyring_need_unlock(
-                                    asset_blob_cache.clone(),
-                                    asset_keyring.clone(),
-                                    api_client,
-                                    username,
-                                )
-                                .await
-                            };
-
-                            // If keyring unlock is needed, validate the password
-                            if let Some((enc_key_info, verifying_key_info)) = keyring_need_unlock {
-                                let password = perm_req.keyring_password.as_deref().unwrap_or("");
-                                if password.is_empty() {
-                                    drop(perm_request_map_unlocked);
-                                    let resp = HttpResponse::json_status(
-                                        401,
-                                        r#"{"message":"Keyring password is required to grant these permissions."}"#,
-                                    );
-                                    resp.write_to(&mut stream).await?;
-                                    return Ok(());
-                                }
-
-                                let unlock_success = asset_keyring
-                                    .lock()
-                                    .await
-                                    .unlock_decrypt_key(
-                                        asset_blob_cache.clone(),
-                                        api_client,
-                                        &enc_key_info.recipient_key_id_parts(),
-                                        password,
-                                    )
-                                    .await
-                                    .is_ok();
-
-                                if !unlock_success {
-                                    // Password incorrect
-                                    drop(perm_request_map_unlocked);
-                                    let resp = HttpResponse::json_status(
-                                        401,
-                                        r#"{"message":"Incorrect keyring password. Please try again."}"#,
-                                    );
-                                    resp.write_to(&mut stream).await?;
-                                    return Ok(());
-                                }
-
-                                let unlock_success = asset_keyring
-                                    .lock()
-                                    .await
-                                    .unlock_signing_key(
-                                        asset_blob_cache.clone(),
-                                        api_client,
-                                        &verifying_key_info.recipient_key_id_parts(),
-                                        password,
-                                    )
-                                    .await
-                                    .is_ok();
-
-                                // NOTE: Unexpected for decryption key & signing key to differ.
-                                if !unlock_success {
-                                    // Password incorrect
-                                    drop(perm_request_map_unlocked);
-                                    let resp = HttpResponse::json_status(
-                                        401,
-                                        r#"{"message":"Incorrect keyring password (signing key). Please try again."}"#,
-                                    );
-                                    resp.write_to(&mut stream).await?;
-                                    return Ok(());
-                                }
-                            }
-
-                            // Keyring is unlocked (or wasn't needed)
-                            perm_request_map_unlocked.remove(&perm_req.request_id);
-                            drop(perm_request_map_unlocked);
-
-                            let mut perms_unlocked = perms.lock().await;
-                            let mut newly_granted = Vec::new();
-                            for granted_perm in perm_req.grant.iter() {
-                                if perms_unlocked.contains(granted_perm) {
-                                    continue;
-                                }
-                                if perms_requested.contains(granted_perm) {
-                                    perms_unlocked.push(granted_perm.clone());
-                                    newly_granted.push(granted_perm.clone());
-                                }
-                            }
-
-                            if let Some(username) = username
-                                && perm_req.remember
-                                && !newly_granted.is_empty()
-                            {
-                                let _ = crate::db::merge_gateway_perms(
-                                    &mut *db.lock().await,
-                                    username,
-                                    service_name,
-                                    &newly_granted,
-                                );
-                            }
-
-                            let remember_active = perm_req.remember;
-
-                            let mut all_rows = String::new();
-                            for perm in perms_unlocked.iter() {
-                                let is_new = newly_granted.contains(perm);
-                                let (icon, label, detail) = format_perm_toggle(perm);
-                                let new_badge = if is_new {
-                                    r#" <span class="badge">new</span>"#
-                                } else {
-                                    ""
-                                };
-                                all_rows.push_str(&format!(
-                                    r#"<div class="perm-row{}"><span class="perm-icon">{icon}</span><div><div class="perm-label">{label}{new_badge}</div><div class="perm-detail">{detail}</div></div></div>"#,
-                                    if is_new { " new-row" } else { "" },
-                                ));
-                            }
-                            drop(perms_unlocked);
-
-                            if !newly_granted.is_empty() {
-                                let clients_unlocked = clients.lock().await;
-                                for (_client_id, tx) in clients_unlocked.iter() {
-                                    let json_string = format!(
-                                        r#"{{".tag":"ok","mid":{},"route":"client/perm/updated","arg":null}}"#,
-                                        -1,
-                                    );
-                                    let _ = tx.send(Message::Text(Utf8Bytes::from(&json_string)));
-                                }
-                            }
-
-                            if all_rows.is_empty() {
-                                all_rows = r#"<div class="perm-row"><div class="perm-label" style="color:var(--text2);">No permissions granted.</div></div>"#.to_string();
-                            }
-
-                            let granted_count = newly_granted.len();
-                            let subtitle = if granted_count == 0 {
-                                "No new permissions were granted.".to_string()
-                            } else {
-                                let persist_note = if remember_active {
-                                    " These will be remembered for future sessions."
-                                } else {
-                                    " These apply to this session only."
-                                };
-                                format!(
-                                    "{} permission{} granted.{}",
-                                    granted_count,
-                                    if granted_count == 1 { "" } else { "s" },
-                                    persist_note,
-                                )
-                            };
-
-                            HttpResponse::ok(
-                                format!(
-                                    r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Permissions Granted</title>
-<style>
-:root {{ --bg: #1a1a1e; --surface: #26262b; --surface2: #2f2f35; --border: #38383f; --text: #e4e4e8; --text2: #9a9aa0; --green: #3dd68c; --green-dim: #2a3a30; --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace; }}
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 24px 16px; min-height: 100vh; }}
-.container {{ max-width: 460px; margin: 0 auto; }}
-.done-icon {{ font-size: 36px; margin-bottom: 12px; }}
-.header h1 {{ font-size: 18px; font-weight: 600; margin-bottom: 4px; }}
-.header p {{ font-size: 13px; color: var(--text2); margin-bottom: 20px; }}
-.section-label {{ font-size: 16px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin-bottom: 8px; }}
-.perm-row {{ display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; }}
-.new-row {{ border-color: var(--green); background: var(--green-dim); }}
-.perm-icon {{ font-size: 18px; flex-shrink: 0; width: 28px; text-align: center; }}
-.perm-label {{ font-size: 13px; font-weight: 500; }}
-.perm-detail {{ font-size: 11px; color: var(--text2); font-family: var(--mono); margin-top: 2px; }}
-.perm-detail code {{ background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-size: 11px; font-family: var(--mono); }}
-.badge {{ display: inline-block; font-size: 10px; font-weight: 600; background: var(--green); color: #1a1a1e; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.03em; }}
-.close-msg {{ margin-top: 20px; text-align: center; font-size: 12px; color: var(--text2); }}
-.persist-note {{ display: flex; align-items: center; gap: 8px; margin-top: 14px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; font-size: 12px; color: var(--text2); }}
-.persist-note .pi {{ font-size: 16px; flex-shrink: 0; }}
-</style>
-</head>
-<body>
-<div class="container">
-    <div class="header">
-        <div class="done-icon">✓</div>
-        <h1>Done</h1>
-        <p>{subtitle}</p>
-    </div>
-    <div class="section-label">All granted permissions</div>
-    {all_rows}
-    {persist_section}
-    <p class="close-msg">You can close this tab.</p>
-</div>
-</body>
-</html>"#,
-                                    subtitle = html_escape(&subtitle),
-                                    all_rows = all_rows,
-                                    persist_section = if remember_active && granted_count > 0 {
-                                        r#"<div class="persist-note"><span class="pi">💾</span>Long-term access enabled — permissions saved for future sessions.</div>"#
-                                    } else if granted_count > 0 {
-                                        r#"<div class="persist-note"><span class="pi">⏳</span>Session only — permissions will reset when the app restarts.</div>"#
-                                    } else {
-                                        ""
-                                    },
-                                )
-                                .into(),
-                                "text/html",
-                            )
-                        } else {
-                            HttpResponse::forbidden()
-                        }
-                    } else {
-                        HttpResponse::forbidden()
+            // Revoking also forgets.
+            if let Some(username) = username {
+                let mut conn = db.lock().await;
+                let remembered =
+                    crate::db::load_gateway_perms(&conn, username, &pg_ctx.target_service_name);
+                let remaining: Vec<Perm> = remembered
+                    .iter()
+                    .filter(|p| !arg.perms.contains(p))
+                    .cloned()
+                    .collect();
+                if remaining.len() != remembered.len() {
+                    let _ = crate::db::clear_gateway_perms(
+                        &conn,
+                        username,
+                        &pg_ctx.target_service_name,
+                    );
+                    if !remaining.is_empty() {
+                        let _ = crate::db::merge_gateway_perms(
+                            &mut conn,
+                            username,
+                            &pg_ctx.target_service_name,
+                            &remaining,
+                        );
                     }
-                } else {
-                    HttpResponse::bad_request("Invalid JSON")
                 }
-            } else {
-                HttpResponse::not_found()
             }
-        }
-        _ => HttpResponse::bad_request("Only GET and POST supported"),
-    };
 
-    response.write_to(&mut stream).await?;
+            if !revoked.is_empty() {
+                notify_perm_updated(&pg_ctx.target_clients).await;
+            }
 
-    Ok(())
-}
-
-fn format_perm_toggle(
-    perm: &Perm,
-) -> (
-    // icon
-    &'static str,
-    // label
-    String,
-    // description (html)
-    String,
-) {
-    match perm {
-        Perm::AssetName { name, perm: ap } => {
-            let flags = perm_flags(ap.read, ap.write, false, false);
-            (
-                "📄",
-                format!("Asset by name"),
-                format!("<code>{}</code> — {}", html_escape(name), flags),
+            send_response::<_, ()>(
+                ws_sink,
+                mid,
+                Ok(PermGatePermRevokeResult {
+                    revoked,
+                    all_perm_ctxs,
+                }),
+                false,
             )
+            .await;
         }
-        Perm::AssetEntryId { entry_id, perm: ap } => {
-            let flags = perm_flags(ap.read, ap.write, false, false);
-            (
-                "📄",
-                format!("Asset by ID"),
-                format!("<code>{}</code> — {}", html_escape(entry_id), flags),
-            )
-        }
-        Perm::AssetPrefix {
-            prefix,
-            perm: ap,
-            prefix_perm,
-        } if prefix == "" => {
-            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
-            ("📁", format!("All private assets"), format!("{}", flags))
-        }
-        Perm::AssetPrefix {
-            prefix,
-            perm: ap,
-            prefix_perm,
-        } => {
-            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
-            (
-                "📁",
-                format!("Asset prefix"),
-                format!("<code>{}</code> — {}", html_escape(prefix), flags),
-            )
-        }
-        Perm::PublicAsset => (
-            "📄",
-            format!("Public assets"),
-            format!("<code>/*</code> not including <code>/s/*</code>"),
-        ),
-        Perm::SharedAssetName { name, perm: ap } => {
-            let flags = perm_flags(ap.read, ap.write, false, false);
-            (
-                "📄",
-                format!("Shared asset by name"),
-                format!("<code>/s/*/{}</code> — {}", html_escape(name), flags),
-            )
-        }
-        Perm::SharedAssetPrefix {
-            prefix,
-            perm: ap,
-            prefix_perm,
-        } => {
-            let flags = perm_flags(ap.read, ap.write, prefix_perm.create, prefix_perm.list);
-            (
-                "📁",
-                format!("Shared asset prefix"),
-                format!("<code>/s/*/{}</code> — {}", html_escape(prefix), flags),
-            )
-        }
-        Perm::LlmPrompt => (
-            "💬",
-            format!("LLM Prompting"),
-            "Converse without tools or system-level permissions".to_string(),
-        ),
-        Perm::Everything => (
-            "🌍",
-            format!("Everything"),
-            "Full access to all resources and actions".to_string(),
-        ),
+        _ => send_bad_request_error(ws_sink, "Unknown route").await,
     }
-}
-
-fn perm_flags(read: bool, write: bool, create: bool, list: bool) -> String {
-    let mut flags = Vec::new();
-    if read {
-        flags.push("read");
-    }
-    if write {
-        flags.push("write");
-    }
-    if create {
-        flags.push("create");
-    }
-    if list {
-        flags.push("list");
-    }
-    if flags.is_empty() {
-        "none".to_string()
-    } else {
-        flags.join(", ")
-    }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermRequestSubmit {
-    request_id: String,
-    csrf_token: String,
-    grant: Vec<Perm>,
-    remember: bool,
-    keyring_password: Option<String>,
 }
 
 /// If keyring needs unlocking, returns key-info for encryption and signing
