@@ -6,7 +6,7 @@ route put(TaskPutArg, Void, TaskPutError)
 struct TaskPutArg 
     task_fqn String(min_length=3, max_length=64)
         "Task's fully-qualified name"
-    config String(min_length=1, max_length=65536)
+    config String(min_length=1, max_length=100000)
         "TOML file describing task"
 
 union TaskPutError
