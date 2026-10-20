@@ -4383,16 +4383,25 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            if let Err(PermCheckError::Unauthorized) = check_access_async(
+            let asset_name_for_perm_check = format!(":{}", redact_get_arg.entry_id);
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &asset_name_for_perm_check,
                 &perms,
-                &AccessRequest::WriteByEntryId {
-                    entry_id: &redact_get_arg.entry_id,
-                },
+                true,
             )
             .await
             {
-                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                return;
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
             }
             match api_client.asset_revision_redact(redact_get_arg).await {
                 Ok(res) => {
