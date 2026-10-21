@@ -93,6 +93,7 @@ pub type PermCtxs = Arc<Mutex<Vec<PermCtx>>>;
 pub struct PendingPermRequest {
     pub expiry: std::time::Instant,
     pub perms: Vec<Perm>,
+    pub choosers: Vec<Chooser>,
 }
 
 /// Map of perm_request_id -> pending request
@@ -413,6 +414,35 @@ pub enum PermLifetime {
     Default,
     UntilRevoked,
     ThisSession,
+}
+
+// --
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum Chooser {
+    Asset {
+        by_entry_id: bool,
+        max_count: Option<u32>,
+        perm: AssetPerm,
+        /// UI hint for the perm-gate's picker. Not enforced by the gateway.
+        filter: ChooserAssetFilter,
+    },
+    /// If `by_entry_id`, the folder is granted via `Perm::AssetEntryId` (just
+    /// like a blob) and `prefix_perm` is unused. Otherwise, it's granted via
+    /// `Perm::AssetPrefix`.
+    AssetFolder {
+        by_entry_id: bool,
+        perm: AssetPerm,
+        prefix_perm: AssetPrefixPerm,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+pub enum ChooserAssetFilter {
+    All,
+    Images,
 }
 
 // --
@@ -2788,6 +2818,8 @@ pub struct ReplPermGetResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplPermRequestArg {
     perms: Vec<Perm>,
+    #[serde(default)]
+    choosers: Vec<Chooser>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3848,14 +3880,17 @@ async fn handle_client_message(
                     PendingPermRequest {
                         expiry: now + PERM_REQUEST_TTL,
                         perms: perm_req_arg.perms.clone(),
+                        choosers: perm_req_arg.choosers.clone(),
                     },
                 );
             }
 
-            let perm_requires_keyring: bool = perm_req_arg
-                .perms
-                .iter()
-                .any(|perm| perm.requires_keyring());
+            // Every chooser yields asset/prefix perms which require the keyring.
+            let perm_requires_keyring: bool = !perm_req_arg.choosers.is_empty()
+                || perm_req_arg
+                    .perms
+                    .iter()
+                    .any(|perm| perm.requires_keyring());
 
             let keyring_need_unlock = perm_requires_keyring
                 && does_keyring_need_unlock(
@@ -5258,7 +5293,11 @@ async fn handle_client_message(
     }
 }
 
-// -- Perm-gate
+// --
+
+//
+// Perm-gate
+//
 
 type WsSink = futures_util::stream::SplitSink<
     tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
@@ -5269,6 +5308,8 @@ fn parse_arg<T: DeserializeOwned>(arg: &serde_json::Value) -> Option<T> {
     // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
     serde_json::from_str(&arg.to_string()).ok()
 }
+
+// --
 
 /// Read-only access to the whole asset tree (minus the usual `.keys/`,
 /// `vault/`, `.sys/hai.toml` exclusions), plus `Everything`.
@@ -5326,10 +5367,18 @@ fn is_valid_open_with_asset_app(asset_app: &str) -> bool {
             .any(|c| c.is_whitespace() || c.is_control())
 }
 
-async fn notify_perm_updated(clients: &Clients) {
-    let json = r#"{".tag":"ok","mid":-1,"route":"client/perm/updated","arg":null}"#;
+async fn notify_perm_updated(clients: &Clients, new_perms: &[Perm]) {
+    let json = serde_json::json!({
+        ".tag": "ok",
+        "mid": -1,
+        "route": "client/perm/updated",
+        "arg": {
+            "new_perms": new_perms,
+        },
+    })
+    .to_string();
     for tx in clients.lock().await.values() {
-        let _ = tx.send(Message::Text(Utf8Bytes::from_static(json)));
+        let _ = tx.send(Message::Text(Utf8Bytes::from(json.clone())));
     }
 }
 
@@ -5493,6 +5542,7 @@ struct PermGateRequestGetResult {
     existing_perm_ctxs: Vec<PermCtx>,
     /// Requested perms not already granted.
     requested_perms: Vec<Perm>,
+    choosers: Vec<Chooser>,
     keyring_need_unlock: bool,
     expires_in_secs: u64,
 }
@@ -5511,6 +5561,8 @@ enum PermGateRequestGetError {
 struct PermGateRequestSubmitArg {
     request_id: String,
     grant: Vec<PermCtx>,
+    #[serde(default)]
+    grant_chooser: Vec<Vec<PermCtx>>,
     #[serde(default)]
     keyring_password: Option<String>,
 }
@@ -5601,7 +5653,8 @@ async fn handle_perm_gate_message(
                 .await;
                 return;
             };
-            let keyring_need_unlock = pending.perms.iter().any(|p| p.requires_keyring())
+            let keyring_need_unlock = (!pending.choosers.is_empty()
+                || pending.perms.iter().any(|p| p.requires_keyring()))
                 && does_keyring_need_unlock(
                     asset_blob_cache.clone(),
                     asset_keyring.clone(),
@@ -5625,6 +5678,7 @@ async fn handle_perm_gate_message(
                 service_name: pg_ctx.target_service_name.clone(),
                 existing_perm_ctxs: existing_perm_ctxs,
                 requested_perms,
+                choosers: pending.choosers.clone(),
                 keyring_need_unlock,
                 expires_in_secs: pending
                     .expiry
@@ -5661,6 +5715,7 @@ async fn handle_perm_gate_message(
             if arg
                 .grant
                 .iter()
+                .chain(arg.grant_chooser.iter().flatten())
                 .any(|perm_ctx| perm_ctx.lifetime == PermLifetime::Default)
             {
                 send_response(
@@ -5676,6 +5731,7 @@ async fn handle_perm_gate_message(
             let any_granted_requires_keyring = arg
                 .grant
                 .iter()
+                .chain(arg.grant_chooser.iter().flatten())
                 .any(|perm_ctx| perm_ctx.perm.requires_keyring());
             let existing_requires_keyring = pg_ctx
                 .target_perm_ctxs
@@ -5766,20 +5822,58 @@ async fn handle_perm_gate_message(
             let mut perm_ctxs_guard = pg_ctx.target_perm_ctxs.lock().await;
             let mut new_perm_ctxs: Vec<PermCtx> = Vec::new();
             let mut new_until_revoked_perms = Vec::new();
-            for granted_perm_ctx in arg.grant {
-                if perm_ctxs_guard.iter().any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
-                    || new_perm_ctxs.iter().any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
-                    // Only perms that were actually requested can be granted.
-                    || !pending.perms.contains(&granted_perm_ctx.perm)
+            let mut add_grant = |granted_perm_ctx: PermCtx| {
+                if perm_ctxs_guard
+                    .iter()
+                    .any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
+                    || new_perm_ctxs
+                        .iter()
+                        .any(|perm_ctx| perm_ctx.perm == granted_perm_ctx.perm)
                 {
-                    continue;
+                    return;
                 }
                 perm_ctxs_guard.push(granted_perm_ctx.clone());
                 if granted_perm_ctx.lifetime == PermLifetime::UntilRevoked {
                     new_until_revoked_perms.push(granted_perm_ctx.perm.clone());
                 }
                 new_perm_ctxs.push(granted_perm_ctx);
+            };
+
+            // Explicitly requested perms: only perms that were actually
+            // requested can be granted.
+            for granted_perm_ctx in arg.grant {
+                if pending.perms.contains(&granted_perm_ctx.perm) {
+                    add_grant(granted_perm_ctx);
+                }
             }
+
+            // Chooser grants: `grant_chooser[i]` holds the user's picks for
+            // `pending.choosers[i]`. If a pick is incompatible with its
+            // chooser, it's igored (as are out-of-range indices).
+            for (chooser_idx, chooser_grants) in arg.grant_chooser.into_iter().enumerate() {
+                let Some(chooser) = pending.choosers.get(chooser_idx) else {
+                    continue;
+                };
+                let max_count = match chooser {
+                    Chooser::Asset { max_count, .. } => max_count.map(|c| c as usize),
+                    Chooser::AssetFolder { .. } => None,
+                };
+                let mut accepted = 0usize;
+                for granted_perm_ctx in chooser_grants {
+                    if max_count.is_some_and(|max| accepted >= max) {
+                        break;
+                    }
+                    let Some(perm) = chooser_grant_to_perm(chooser, &granted_perm_ctx.perm) else {
+                        continue;
+                    };
+                    accepted += 1;
+                    add_grant(PermCtx {
+                        perm,
+                        lifetime: granted_perm_ctx.lifetime,
+                    });
+                }
+            }
+
             let all_perm_ctxs = perm_ctxs_guard.clone();
             drop(perm_ctxs_guard);
 
@@ -5795,7 +5889,14 @@ async fn handle_perm_gate_message(
             }
 
             if !new_perm_ctxs.is_empty() {
-                notify_perm_updated(&pg_ctx.target_clients).await;
+                notify_perm_updated(
+                    &pg_ctx.target_clients,
+                    &new_perm_ctxs
+                        .iter()
+                        .map(|perm_ctx| perm_ctx.perm.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .await;
             }
 
             send_response::<_, PermGateRequestSubmitError>(
@@ -5893,7 +5994,7 @@ async fn handle_perm_gate_message(
             }
 
             if !revoked.is_empty() {
-                notify_perm_updated(&pg_ctx.target_clients).await;
+                notify_perm_updated(&pg_ctx.target_clients, &[]).await;
             }
 
             send_response::<_, ()>(
@@ -5910,6 +6011,8 @@ async fn handle_perm_gate_message(
         _ => send_bad_request_error(ws_sink, "Unknown route").await,
     }
 }
+
+// --
 
 /// If keyring needs unlocking, returns key-info for encryption and signing
 /// keys.
@@ -5976,6 +6079,121 @@ async fn does_keyring_need_unlock(
         }
     } else {
         None
+    }
+}
+
+// --
+
+// --
+
+//
+// Chooser grant validation
+//
+
+/// True if `granted` does not exceed `requested`.
+fn asset_perm_within(granted: &AssetPerm, requested: &AssetPerm) -> bool {
+    (!granted.read || requested.read) && (!granted.write || requested.write)
+}
+
+/// True if `granted` does not exceed `requested`.
+fn asset_prefix_perm_within(granted: &AssetPrefixPerm, requested: &AssetPrefixPerm) -> bool {
+    (!granted.create || requested.create) && (!granted.list || requested.list)
+}
+
+/// Assets that a chooser must never hand out, mirroring the exclusions that
+/// `Perm::AssetPrefix` applies.
+fn is_protected_asset_name(name: &str) -> bool {
+    name.starts_with(".keys/") || name.starts_with("vault/") || name.starts_with(".sys/hai.toml")
+}
+
+/// Validates and normalizes an entry-id grant against the requested perm.
+fn chooser_entry_id_grant(entry_id: &str, perm: &AssetPerm, requested: &AssetPerm) -> Option<Perm> {
+    // Canonical form does not use leading `:`
+    let entry_id = entry_id.strip_prefix(':').unwrap_or(entry_id);
+    if entry_id.is_empty()
+        || entry_id.contains(':')
+        || (!perm.read && !perm.write)
+        || !asset_perm_within(perm, requested)
+    {
+        return None;
+    }
+    Some(Perm::AssetEntryId {
+        entry_id: entry_id.to_string(),
+        perm: perm.clone(),
+    })
+}
+
+/// Checks whether a perm granted via the perm-gate for `chooser` is compatible
+/// with what the chooser requested.
+///
+/// Returns the (normalized) perm to grant, or `None` if the grant must be
+/// ignored.
+///
+/// NOTE: `ChooserAssetFilter` is intentionally not enforced. It's a UI hint
+/// for the perm-gate's picker.
+fn chooser_grant_to_perm(chooser: &Chooser, granted: &Perm) -> Option<Perm> {
+    match (chooser, granted) {
+        (
+            Chooser::Asset {
+                by_entry_id: false,
+                perm: requested,
+                ..
+            },
+            Perm::AssetName { name, perm },
+        ) => {
+            if name.is_empty()
+                || name.starts_with(':')
+                || name.ends_with('/')
+                || is_protected_asset_name(name)
+                || (!perm.read && !perm.write)
+                || !asset_perm_within(perm, requested)
+            {
+                return None;
+            }
+            Some(granted.clone())
+        }
+        // Assets and folders chosen by entry_id are both granted as
+        // `AssetEntryId`. WARN: Giving access to a folder via entry_id may
+        // have some untested limitations.
+        (
+            Chooser::Asset {
+                by_entry_id: true,
+                perm: requested,
+                ..
+            }
+            | Chooser::AssetFolder {
+                by_entry_id: true,
+                perm: requested,
+                ..
+            },
+            Perm::AssetEntryId { entry_id, perm },
+        ) => chooser_entry_id_grant(entry_id, perm, requested),
+        (
+            Chooser::AssetFolder {
+                by_entry_id: false,
+                perm: requested,
+                prefix_perm: requested_prefix_perm,
+            },
+            Perm::AssetPrefix {
+                prefix,
+                perm,
+                prefix_perm,
+            },
+        ) => {
+            // Reject whole-pool prefixes ("" = all private assets, "/" = all
+            // public assets).
+            if !prefix.ends_with('/')
+                || prefix == "/"
+                || prefix.starts_with(':')
+                || is_protected_asset_name(prefix)
+                || !asset_perm_within(perm, requested)
+                || !asset_prefix_perm_within(prefix_perm, requested_prefix_perm)
+            {
+                return None;
+            }
+            Some(granted.clone())
+        }
+        _ => None,
     }
 }
 
