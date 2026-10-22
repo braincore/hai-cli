@@ -5653,8 +5653,13 @@ async fn handle_perm_gate_message(
                 .await;
                 return;
             };
+
+            let existing_perm_ctxs = pg_ctx.target_perm_ctxs.lock().await.clone();
             let keyring_need_unlock = (!pending.choosers.is_empty()
-                || pending.perms.iter().any(|p| p.requires_keyring()))
+                || pending.perms.iter().any(|p| p.requires_keyring())
+                || existing_perm_ctxs
+                    .iter()
+                    .any(|perm_ctx| perm_ctx.perm.requires_keyring()))
                 && does_keyring_need_unlock(
                     asset_blob_cache.clone(),
                     asset_keyring.clone(),
@@ -5663,7 +5668,6 @@ async fn handle_perm_gate_message(
                 )
                 .await
                 .is_some();
-            let existing_perm_ctxs = pg_ctx.target_perm_ctxs.lock().await.clone();
             let requested_perms = pending
                 .perms
                 .iter()
@@ -5752,56 +5756,59 @@ async fn handle_perm_gate_message(
                 .await
             };
 
-            if let Some((enc_key_info, verifying_key_info)) = keyring_need_unlock {
-                let password = arg.keyring_password.as_deref().unwrap_or("");
-                if password.is_empty() {
-                    send_response(
-                        ws_sink,
-                        mid,
-                        submit_err(PermGateRequestSubmitError::KeyringPasswordRequired),
-                        false,
-                    )
-                    .await;
-                    return;
-                }
-                let decrypt_unlocked = asset_keyring
-                    .lock()
-                    .await
-                    .unlock_decrypt_key(
-                        asset_blob_cache.clone(),
-                        api_client,
-                        &enc_key_info.recipient_key_id_parts(),
-                        password,
-                    )
-                    .await
-                    .is_ok();
-                // NOTE: Unexpected for decryption key & signing key to differ.
-                let signing_unlocked = decrypt_unlocked
-                    && asset_keyring
+            let keyring_unlocked =
+                if let Some((enc_key_info, verifying_key_info)) = keyring_need_unlock {
+                    let password = arg.keyring_password.as_deref().unwrap_or("");
+                    if password.is_empty() {
+                        send_response(
+                            ws_sink,
+                            mid,
+                            submit_err(PermGateRequestSubmitError::KeyringPasswordRequired),
+                            false,
+                        )
+                        .await;
+                        return;
+                    }
+                    let decrypt_unlocked = asset_keyring
                         .lock()
                         .await
-                        .unlock_signing_key(
+                        .unlock_decrypt_key(
                             asset_blob_cache.clone(),
                             api_client,
-                            &verifying_key_info.recipient_key_id_parts(),
+                            &enc_key_info.recipient_key_id_parts(),
                             password,
                         )
                         .await
                         .is_ok();
-                if !signing_unlocked {
-                    send_response(
-                        ws_sink,
-                        mid,
-                        submit_err(PermGateRequestSubmitError::KeyringPasswordIncorrect),
-                        false,
-                    )
-                    .await;
-                    return;
-                }
-            }
+                    // NOTE: Unexpected for decryption key & signing key to differ.
+                    let signing_unlocked = decrypt_unlocked
+                        && asset_keyring
+                            .lock()
+                            .await
+                            .unlock_signing_key(
+                                asset_blob_cache.clone(),
+                                api_client,
+                                &verifying_key_info.recipient_key_id_parts(),
+                                password,
+                            )
+                            .await
+                            .is_ok();
+                    if !signing_unlocked {
+                        send_response(
+                            ws_sink,
+                            mid,
+                            submit_err(PermGateRequestSubmitError::KeyringPasswordIncorrect),
+                            false,
+                        )
+                        .await;
+                        return;
+                    }
+                    true
+                } else {
+                    false
+                };
 
-            // One-shot: consume the request. Guards against double-submits
-            // racing past the earlier lookup.
+            // Consume the request to prevent re-use (double submission)
             if pg_ctx
                 .target_perm_request_map
                 .lock()
@@ -5888,7 +5895,7 @@ async fn handle_perm_gate_message(
                 );
             }
 
-            if !new_perm_ctxs.is_empty() {
+            if !new_perm_ctxs.is_empty() || keyring_unlocked {
                 notify_perm_updated(
                     &pg_ctx.target_clients,
                     &new_perm_ctxs
