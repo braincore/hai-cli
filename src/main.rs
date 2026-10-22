@@ -2368,6 +2368,8 @@ pub async fn prompt_ai(
                 })
                 .collect::<Vec<_>>();
 
+            let max_tokens = config::get_ai_model_max_output_tokens(&session.ai);
+
             anthropic::send_to_anthropic(
                 out,
                 api_url.as_deref(),
@@ -2381,6 +2383,7 @@ pub async fn prompt_ai(
                 session.prompt_cache,
                 session.ai_temperature,
                 temperature_deprecated,
+                max_tokens,
                 msg_history,
                 &tool_schemas,
                 force_tool_api_name,

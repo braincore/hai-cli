@@ -171,6 +171,7 @@ pub async fn send_to_anthropic(
     use_automatic_caching: bool,
     temperature: Option<f32>,
     temperature_deprecated: bool,
+    max_tokens: Option<u32>,
     history: &[chat::Message],
     tool_schemas: &[Value],
     force_tool_api_name: Option<String>,
@@ -233,7 +234,6 @@ pub async fn send_to_anthropic(
     };
     let mut request_body = if tool_schemas.is_empty() {
         json!({
-            "max_tokens": 64000,
             "model": model,
             "temperature": temperature,
             "messages": messages,
@@ -241,7 +241,6 @@ pub async fn send_to_anthropic(
         })
     } else {
         json!({
-            "max_tokens": 64000,
             "model": model,
             "temperature": temperature,
             "messages": messages,
@@ -306,6 +305,9 @@ pub async fn send_to_anthropic(
                     },
                 }),
             );
+        }
+        if let Some(max_tokens) = max_tokens {
+            request_obj.insert("max_tokens".to_string(), json!(max_tokens));
         }
     }
     remove_nulls(&mut request_body);

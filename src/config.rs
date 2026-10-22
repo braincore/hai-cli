@@ -2243,6 +2243,107 @@ pub fn get_ai_model_capability(ai_model: &AiModel) -> AiModelCapability {
     }
 }
 
+/// Maximum number of output tokens (`max_tokens` / `max_output_tokens` /
+/// `max_completion_tokens`) to request for a model.
+///
+/// Returns `None` when setting a max isn't applicable (local LLMs).
+pub fn get_ai_model_max_output_tokens(ai_model: &AiModel) -> Option<u32> {
+    let n = match ai_model {
+        AiModel::Anthropic(model) => match model {
+            AnthropicModel::Haiku35 | AnthropicModel::Sonnet35 => 8_192,
+            AnthropicModel::Opus4(_) | AnthropicModel::Opus41(_) => 32_000,
+            AnthropicModel::Sonnet37(_)
+            | AnthropicModel::Sonnet4(_)
+            | AnthropicModel::Sonnet45(_)
+            | AnthropicModel::Opus45(_) => 64_000,
+            AnthropicModel::Fable51(_)
+            | AnthropicModel::Haiku55(_)
+            | AnthropicModel::Sonnet46(_)
+            | AnthropicModel::Sonnet5(_)
+            | AnthropicModel::Sonnet55(_)
+            | AnthropicModel::Opus46(_)
+            | AnthropicModel::Opus47(_)
+            | AnthropicModel::Opus48(_)
+            | AnthropicModel::Opus5(_)
+            | AnthropicModel::Opus55(_) => 128_000,
+            AnthropicModel::Other(_) => match model.version() {
+                Some(v) if v < ModelVersion::new(5, 0) => 32_000,
+                _ => 64_000,
+            },
+        },
+        AiModel::DeepSeek(model) => match model {
+            DeepSeekModel::DeepSeekV4Pro(_) | DeepSeekModel::DeepSeekV41Flash(_) => 384_000,
+            DeepSeekModel::Other(_) => 384_000,
+        },
+        AiModel::Google(model) => match model {
+            GoogleModel::Gemini15Flash
+            | GoogleModel::Gemini15Flash8B
+            | GoogleModel::Gemini15Pro
+            | GoogleModel::Gemini20Flash => 8_192,
+            GoogleModel::Gemini25Flash
+            | GoogleModel::Gemini25Pro
+            | GoogleModel::Gemini3Pro(_)
+            | GoogleModel::Gemini3Flash(_)
+            | GoogleModel::Gemini31FlashLite(_)
+            | GoogleModel::Gemini31Pro(_)
+            | GoogleModel::Gemini35Flash(_)
+            | GoogleModel::Gemini35FlashLite(_)
+            | GoogleModel::Gemini36Flash(_)
+            | GoogleModel::Gemini37Flash(_)
+            | GoogleModel::Gemini38Flash(_) => 65_536,
+            GoogleModel::Other(_) => match model.version() {
+                Some(v) if v >= ModelVersion::new(2, 5) => 65_536,
+                _ => 8_192,
+            },
+        },
+        AiModel::LlamaCpp(_) => return None,
+        AiModel::Ollama(_) => return None,
+        AiModel::OpenAi(model) => match model {
+            OpenAiModel::ChatGpt4o | OpenAiModel::Gpt4o | OpenAiModel::Gpt4oMini => 16_384,
+            OpenAiModel::Gpt41 | OpenAiModel::Gpt41Mini | OpenAiModel::Gpt41Nano => 32_768,
+            OpenAiModel::O1Mini => 65_536,
+            OpenAiModel::O1 | OpenAiModel::O3 | OpenAiModel::O3Mini | OpenAiModel::O4Mini => {
+                100_000
+            }
+            OpenAiModel::Gpt5Chat | OpenAiModel::Gpt51Chat | OpenAiModel::Gpt52Chat => 16_384,
+            OpenAiModel::Gpt5(_)
+            | OpenAiModel::Gpt5Mini(_)
+            | OpenAiModel::Gpt5Nano(_)
+            | OpenAiModel::Gpt51(_)
+            | OpenAiModel::Gpt52(_) => 128_000,
+            OpenAiModel::Gpt53Chat => 16_384,
+            OpenAiModel::Gpt54(_)
+            | OpenAiModel::Gpt54Mini(_)
+            | OpenAiModel::Gpt54Nano(_)
+            | OpenAiModel::Gpt55(_)
+            | OpenAiModel::Gpt56Sol(_)
+            | OpenAiModel::Gpt56Terra(_)
+            | OpenAiModel::Gpt56Luna(_)
+            | OpenAiModel::Gpt6Astra(_)
+            | OpenAiModel::Gpt6Sol(_)
+            | OpenAiModel::Gpt6Luna(_)
+            | OpenAiModel::Gpt61Sol(_) => 128_000,
+            OpenAiModel::Other(name) => match model.version() {
+                Some(v) if v >= ModelVersion::new(5, 0) && !name.contains("chat") => 128_000,
+                Some(v) if v >= ModelVersion::new(4, 1) => 16_384,
+                _ => 4_096,
+            },
+        },
+        AiModel::Void(_) => return None,
+        AiModel::Xai(model) => match model {
+            // No official limits
+            XaiModel::Grok3
+            | XaiModel::Grok3Fast
+            | XaiModel::Grok3Mini
+            | XaiModel::Grok3MiniFast
+            | XaiModel::Grok4
+            | XaiModel::Grok46 => 128_000,
+            XaiModel::Other(_) => 128_000,
+        },
+    };
+    Some(n)
+}
+
 /// Whether the model can be used via the hai-ai-router
 pub fn is_ai_model_supported_by_hai_router(ai_model: &AiModel) -> bool {
     match ai_model {
