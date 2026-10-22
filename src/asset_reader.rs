@@ -72,7 +72,10 @@ pub async fn get_asset(
     if let Some(data_url) = asset_entry.asset.url.as_ref()
         && let Some(hash) = asset_entry.asset.hash.as_ref()
     {
-        let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
+        let data_contents = match asset_blob_cache
+            .get_or_download_limited(data_url, hash, api_client.limiter())
+            .await
+        {
             Ok(contents) => contents,
             Err(err) => match err {
                 DownloadAssetError::DataFetchFailed(failure) => {
@@ -110,7 +113,10 @@ pub async fn get_asset_using_cache(
     if let Some(data_url) = asset_entry.asset.url.as_ref()
         && let Some(hash) = asset_entry.asset.hash.as_ref()
     {
-        let data_contents = match asset_blob_cache.get_or_download(data_url, hash).await {
+        let data_contents = match asset_blob_cache
+            .get_or_download_limited(data_url, hash, api_client.limiter())
+            .await
+        {
             Ok(contents) => contents,
             Err(err) => match err {
                 DownloadAssetError::DataFetchFailed(failure) => {
@@ -176,7 +182,10 @@ pub async fn get_asset_and_metadata(
     let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
         && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
     {
-        match asset_blob_cache.get_or_download(data_url, hash).await {
+        match asset_blob_cache
+            .get_or_download_limited(data_url, hash, api_client.limiter())
+            .await
+        {
             Ok(contents) => contents,
             Err(err) => match err {
                 DownloadAssetError::DataFetchFailed(failure) => {
@@ -198,7 +207,7 @@ pub async fn get_asset_and_metadata(
     {
         Some(
             match asset_blob_cache
-                .get_or_download(metadata_url, metadata_hash)
+                .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
                 .await
             {
                 Ok(contents) => contents,
@@ -349,7 +358,10 @@ pub async fn get_asset_and_metadata_revision(
     let data_contents = if let Some(data_url) = revision_get_res.revision.asset.url.as_ref()
         && let Some(hash) = revision_get_res.revision.asset.hash.as_ref()
     {
-        match asset_blob_cache.get_or_download(data_url, hash).await {
+        match asset_blob_cache
+            .get_or_download_limited(data_url, hash, api_client.limiter())
+            .await
+        {
             Ok(contents) => Some(contents),
             Err(err) => match err {
                 DownloadAssetError::DataFetchFailed(failure) => {
@@ -375,7 +387,7 @@ pub async fn get_asset_and_metadata_revision(
         if content_encrypted.is_some() || !only_fetch_metadata_if_necessary {
             Some(
                 match asset_blob_cache
-                    .get_or_download(metadata_url, metadata_hash)
+                    .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
                     .await
                 {
                     Ok(contents) => contents,
@@ -423,7 +435,7 @@ pub async fn get_only_asset_metadata(
     {
         Some(
             match asset_blob_cache
-                .get_or_download(metadata_url, metadata_hash)
+                .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
                 .await
             {
                 Ok(contents) => contents,

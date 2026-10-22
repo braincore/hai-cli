@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
+use crate::api::limiter::ApiLimiter;
 use crate::asset_reader;
 
 pub struct AssetBlobCache {
@@ -64,13 +65,28 @@ impl AssetBlobCache {
         url: &str,
         hash: &str,
     ) -> Result<Vec<u8>, DownloadAssetError> {
+        self.get_or_download_limited(url, hash, None).await
+    }
+
+    /// Like `get_or_download`, but on a cache miss the download waits on
+    /// `limiter` (if set). Cache hits are never throttled.
+    pub async fn get_or_download_limited(
+        &self,
+        url: &str,
+        hash: &str,
+        limiter: Option<&ApiLimiter>,
+    ) -> Result<Vec<u8>, DownloadAssetError> {
         if !is_valid_hash(hash) {
             return Err(DownloadAssetError::HashMismatch);
         }
 
         // Fast path: cache disabled, just download
         if self.disable_cache {
-            return download_and_verify(url, hash).await;
+            let data = download_asset_limited(url, limiter).await?;
+            if !verify_sha256_in_memory(hash, &data) {
+                return Err(DownloadAssetError::HashMismatch);
+            }
+            return Ok(data);
         }
 
         // 1. Optimistic cache hit: no locks
@@ -98,7 +114,7 @@ impl AssetBlobCache {
         }
 
         // 4. Hash locked: do the download and caching
-        let data = download_asset(url).await?;
+        let data = download_asset_limited(url, limiter).await?;
         if !verify_sha256_in_memory(hash, &data) {
             return Err(DownloadAssetError::HashMismatch);
         }
@@ -422,15 +438,6 @@ impl AssetBlobCache {
 
 // --
 
-async fn download_and_verify(url: &str, hash: &str) -> Result<Vec<u8>, DownloadAssetError> {
-    let data = download_asset(url).await?;
-    if !verify_sha256_in_memory(hash, &data) {
-        tracing::warn!("error: hash mismatch for {}", url);
-        return Err(DownloadAssetError::HashMismatch);
-    }
-    Ok(data)
-}
-
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -532,6 +539,26 @@ impl ::std::fmt::Debug for DownloadAssetError {
             }
         }
     }
+}
+
+/// Downloads an asset to memory, throttled by `limiter` if set.
+async fn download_asset_limited(
+    url: &str,
+    limiter: Option<&ApiLimiter>,
+) -> Result<Vec<u8>, DownloadAssetError> {
+    let Some(limiter) = limiter else {
+        return download_asset(url).await;
+    };
+    let _permit = limiter.acquire().await.map_err(|_| {
+        DownloadAssetError::DataFetchFailed(asset_reader::DataFetchFailure::RateLimited)
+    })?;
+    let res = download_asset(url).await;
+    if let Err(DownloadAssetError::DataFetchFailed(asset_reader::DataFetchFailure::RateLimited)) =
+        &res
+    {
+        limiter.on_rate_limited();
+    }
+    res
 }
 
 /// Downloads an asset to memory.

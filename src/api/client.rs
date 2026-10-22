@@ -5,7 +5,9 @@ use reqwest::{
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
+use std::sync::Arc;
 
+use super::limiter::ApiLimiter;
 use super::types::{account, asset, bot, messaging, task, web};
 
 #[derive(Debug, Clone)]
@@ -13,6 +15,8 @@ pub struct HaiClient {
     base_url: String,
     client: Client,
     token: Option<String>,
+    /// If set, every API request waits on this limiter (gateway traffic).
+    limiter: Option<Arc<ApiLimiter>>,
 }
 
 #[derive(Debug)]
@@ -51,7 +55,19 @@ impl HaiClient {
             base_url: base_url.to_string(),
             client: Client::new(),
             token: None,
+            limiter: None,
         }
+    }
+
+    /// Returns a clone of this client whose requests are throttled by `limiter`.
+    pub fn with_limiter(&self, limiter: Arc<ApiLimiter>) -> Self {
+        let mut c = self.clone();
+        c.limiter = Some(limiter);
+        c
+    }
+
+    pub fn limiter(&self) -> Option<&ApiLimiter> {
+        self.limiter.as_deref()
     }
 
     /// Generic API request function for HaiClient
@@ -87,8 +103,23 @@ impl HaiClient {
             );
         }
 
+        // Throttle (if configured). The permit is held until the response body
+        // has been read, i.e. the end of this function.
+        let _permit = match self.limiter.as_deref() {
+            Some(limiter) => Some(limiter.acquire().await.map_err(|_| {
+                RequestError::RateLimit("Gateway request queue congested: try again later".into())
+            })?),
+            None => None,
+        };
+
         // Send the request
         let response = request.send().await.map_err(RequestError::Http)?; // Map `reqwest::Error` to `RequestError::HttpError`
+
+        if response.status().as_u16() == 429
+            && let Some(limiter) = self.limiter.as_deref()
+        {
+            limiter.on_rate_limited();
+        }
 
         // Determine what to do based on the HTTP status code
         if response.status().is_success() {

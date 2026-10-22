@@ -927,6 +927,12 @@ pub async fn launch_gateway(
     service_name: &str,
     vite_proxy: Option<ViteProxy>,
 ) -> std::io::Result<(SocketAddr, SocketAddr, Clients, CancellationToken, String)> {
+    // Set process-wide API limiter to limit gateway traffic (HTTP & websocket
+    // routes) to the API. Otherwise, asset-apps have a tendency to overwhelm
+    // the API with requests and trigger 429s which they don't handle
+    // gracefully.
+    let api_client = api_client.with_limiter(crate::api::limiter::gateway_limiter());
+
     // Generate a random authentication token
     let token = auth_token.map_or_else(generate_token, |t| t.to_string());
 
