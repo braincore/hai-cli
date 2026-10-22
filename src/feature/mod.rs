@@ -9,6 +9,8 @@ pub mod haibot;
 pub mod haivar;
 pub mod html_tool;
 pub mod kernel;
+#[cfg(all(target_os = "macos", hai_se))]
+pub mod macos_se;
 pub mod mcp;
 pub mod model_pricing;
 pub mod queue_listen;

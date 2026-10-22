@@ -19,6 +19,30 @@ use crate::io::Io;
 
 const KEYRING_SERVICE: &str = "hai-asset-keys";
 
+/// Where key passwords are remembered between sessions.
+enum PasswordStore {
+    /// Not persisted: user is prompted once per session.
+    None,
+    /// OS keyring (Linux, Windows, and macOS when Secure Enclave is
+    /// unavailable).
+    OsKeyring,
+    /// macOS: passwords sealed to a Secure Enclave key gated by Touch ID.
+    /// // Also uses system password as fallback.
+    #[cfg(all(target_os = "macos", hai_se))]
+    SecureEnclave(crate::feature::macos_se::SeVault),
+}
+
+impl PasswordStore {
+    fn name(&self) -> &'static str {
+        match self {
+            PasswordStore::None => "none",
+            PasswordStore::OsKeyring => "os-keyring",
+            #[cfg(all(target_os = "macos", hai_se))]
+            PasswordStore::SecureEnclave(_) => "secure-enclave",
+        }
+    }
+}
+
 /// Unlocked private keys for decrypting per-file AES keys
 pub struct AssetKeyring {
     /// Map of rec_key_id -> decrypted private key (X25519 secret)
@@ -27,11 +51,17 @@ pub struct AssetKeyring {
     /// Map of rec_key_id -> decrypted private key (ED25519 secret)
     unlocked_signing_keys: HashMap<String, SigningKey>,
 
+    /// Passwords entered or retrieved this session.
+    /// Since a user's encryption and signing keys typically share the same
+    /// password (unless rotated), rather than prompting separately for each
+    /// key, we try each stored password to ideally prompt only once.
+    session_passwords: Vec<Zeroizing<String>>,
+
     /// Timestamp for auto-lock after idle timeout
     last_used: std::time::Instant,
 
-    /// Whether OS keyring is available
-    keyring_available: bool,
+    /// Where passwords are stored between sessions
+    store: PasswordStore,
 }
 
 impl fmt::Debug for AssetKeyring {
@@ -45,14 +75,44 @@ impl fmt::Debug for AssetKeyring {
                 "unlocked_signing_keys",
                 &format!("<{} keys redacted>", self.unlocked_signing_keys.len()),
             )
+            .field(
+                "session_passwords",
+                &format!("<{} redacted>", self.session_passwords.len()),
+            )
             .field("last_used", &self.last_used)
-            .field("keyring_available", &self.keyring_available)
+            .field("store", &self.store.name())
             .finish()
     }
 }
 
 impl AssetKeyring {
     pub fn new(enable_os_keyring: bool) -> Self {
+        let store = if enable_os_keyring {
+            Self::select_store()
+        } else {
+            PasswordStore::None
+        };
+        tracing::debug!("asset keyring password store: {}", store.name());
+        Self {
+            unlocked_decrypt_keys: HashMap::new(),
+            unlocked_signing_keys: HashMap::new(),
+            session_passwords: Vec::new(),
+            last_used: std::time::Instant::now(),
+            store,
+        }
+    }
+
+    fn select_store() -> PasswordStore {
+        #[cfg(all(target_os = "macos", hai_se))]
+        {
+            let dir = crate::config::get_config_folder_path()
+                .join("keys")
+                .join("se");
+            if let Some(vault) = crate::feature::macos_se::SeVault::open(dir) {
+                return PasswordStore::SecureEnclave(vault);
+            }
+        }
+
         // Try to replace the default store with one that can use secret-
         // service and keyutils (headless) on Linux.
         #[cfg(target_os = "linux")]
@@ -60,12 +120,10 @@ impl AssetKeyring {
             keyring::set_default_credential_builder(Box::new(backend));
         }
 
-        // Test if keyring is available by attempting a dummy operation
-        Self {
-            unlocked_decrypt_keys: HashMap::new(),
-            unlocked_signing_keys: HashMap::new(),
-            last_used: std::time::Instant::now(),
-            keyring_available: enable_os_keyring && Self::test_keyring_availability(),
+        if Self::test_keyring_availability() {
+            PasswordStore::OsKeyring
+        } else {
+            PasswordStore::None
         }
     }
 
@@ -90,67 +148,187 @@ impl AssetKeyring {
         }
     }
 
-    /// Store password in OS keyring
-    fn store_password_in_keyring(&self, rec_key_id: &str, password: &str) {
-        if !self.keyring_available {
-            return;
-        }
-
-        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
-            Ok(entry) => {
-                if let Err(e) = entry.set_password(password) {
-                    tracing::debug!("error: failed to store password in keyring: {}", e);
+    /// Store password in the persistent store
+    fn store_password(&self, rec_key_id: &str, password: &str) {
+        match &self.store {
+            PasswordStore::None => {}
+            PasswordStore::OsKeyring => match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
+                Ok(entry) => {
+                    if let Err(e) = entry.set_password(password) {
+                        tracing::debug!("error: failed to store password in keyring: {}", e);
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::debug!("error: failed to create keyring entry: {}", e);
+                Err(e) => {
+                    tracing::debug!("error: failed to create keyring entry: {}", e);
+                }
+            },
+            #[cfg(all(target_os = "macos", hai_se))]
+            PasswordStore::SecureEnclave(vault) => {
+                if let Err(e) = vault.store(rec_key_id, password) {
+                    tracing::debug!("error: failed to seal password: {}", e);
+                }
             }
         }
     }
 
-    /// Retrieve password from OS keyring
-    fn get_password_from_keyring(&self, rec_key_id: &str) -> Option<Zeroizing<String>> {
-        if !self.keyring_available {
-            return None;
-        }
-
-        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
-            Ok(entry) => match entry.get_password() {
-                Ok(password) => Some(Zeroizing::new(password)),
-                Err(keyring::Error::NoEntry) => None,
+    /// Retrieve password from the persistent store
+    fn get_stored_password(&self, rec_key_id: &str) -> Option<Zeroizing<String>> {
+        match &self.store {
+            PasswordStore::None => None,
+            PasswordStore::OsKeyring => match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
+                Ok(entry) => match entry.get_password() {
+                    Ok(password) => Some(Zeroizing::new(password)),
+                    Err(keyring::Error::NoEntry) => None,
+                    Err(e) => {
+                        tracing::error!("error: failed to retrieve password from keyring: {}", e);
+                        None
+                    }
+                },
                 Err(e) => {
-                    tracing::error!("error: failed to retrieve password from keyring: {}", e);
+                    tracing::error!("error: failed to access keyring entry: {}", e);
                     None
                 }
             },
-            Err(e) => {
-                tracing::error!("error: failed to access keyring entry: {}", e);
-                None
-            }
+            #[cfg(all(target_os = "macos", hai_se))]
+            PasswordStore::SecureEnclave(vault) => match vault.get(rec_key_id) {
+                Ok(pw) => pw,
+                Err(e) => {
+                    // Cancelled / failed Touch ID: fall back to the password
+                    // prompt. The sealed entry is kept for next time.
+                    tracing::debug!("secure enclave unlock for {} failed: {}", rec_key_id, e);
+                    None
+                }
+            },
         }
     }
 
-    /// Delete password from OS keyring
-    fn delete_password_from_keyring(&self, rec_key_id: &str) {
-        if !self.keyring_available {
-            return;
+    /// Whether the persistent store has an entry, without prompting.
+    fn has_stored_password(&self, rec_key_id: &str) -> Option<bool> {
+        match &self.store {
+            PasswordStore::None => Some(false),
+            PasswordStore::OsKeyring => None, // unknown without reading
+            #[cfg(all(target_os = "macos", hai_se))]
+            PasswordStore::SecureEnclave(vault) => Some(vault.contains(rec_key_id)),
         }
+    }
 
-        match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
-            Ok(entry) => {
-                if let Err(e) = entry.delete_credential() {
-                    if !matches!(e, keyring::Error::NoEntry) {
-                        tracing::debug!("error: failed to delete password from keyring: {}", e);
+    /// Delete password from the persistent store
+    fn delete_stored_password(&self, rec_key_id: &str) {
+        match &self.store {
+            PasswordStore::None => {}
+            PasswordStore::OsKeyring => match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
+                Ok(entry) => {
+                    if let Err(e) = entry.delete_credential() {
+                        if !matches!(e, keyring::Error::NoEntry) {
+                            tracing::debug!("error: failed to delete password from keyring: {}", e);
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                tracing::debug!("error: failed to access keyring entry for deletion: {}", e);
-            }
+                Err(e) => {
+                    tracing::debug!("error: failed to access keyring entry for deletion: {}", e);
+                }
+            },
+            #[cfg(all(target_os = "macos", hai_se))]
+            PasswordStore::SecureEnclave(vault) => vault.delete(rec_key_id),
         }
     }
 
-    /// Unlock a specific decryption key by ID
+    fn remember_session_password(&mut self, password: &str) {
+        if !self
+            .session_passwords
+            .iter()
+            .any(|p| p.as_str() == password)
+        {
+            self.session_passwords
+                .push(Zeroizing::new(password.to_string()));
+        }
+    }
+
+    /// Try to unprotect a key using passwords we already know: first the
+    /// persistent store, then passwords entered earlier this session.
+    fn try_known_passwords<T>(
+        &mut self,
+        rec_key_id: &str,
+        unprotect: impl Fn(&[u8]) -> Result<T, crypt::CryptoError>,
+    ) -> Option<T> {
+        if let Some(stored) = self.get_stored_password(rec_key_id) {
+            match unprotect(stored.as_bytes()) {
+                Ok(secret) => {
+                    self.remember_session_password(&stored);
+                    return Some(secret);
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "error: stored password for {} is invalid, removing it",
+                        rec_key_id
+                    );
+                    self.delete_stored_password(rec_key_id);
+                }
+            }
+        }
+        let found = self
+            .session_passwords
+            .iter()
+            .find_map(|pw| unprotect(pw.as_bytes()).ok().map(|s| (s, pw.clone())));
+        if let Some((secret, pw)) = found {
+            self.store_password(rec_key_id, &pw);
+            return Some(secret);
+        }
+        None
+    }
+
+    /// Accept a password supplied by the user, persisting it on success.
+    fn accept_password<T>(
+        &mut self,
+        rec_key_id: &str,
+        password: &str,
+        unprotect: impl Fn(&[u8]) -> Result<T, crypt::CryptoError>,
+    ) -> Result<T, asset_crypt::AssetKeyMaterialDecryptionError> {
+        let secret = unprotect(password.as_bytes()).map_err(|e| {
+            asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
+        })?;
+        self.store_password(rec_key_id, password);
+        self.remember_session_password(password);
+        Ok(secret)
+    }
+
+    fn prompt_password(
+        io: &Io,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> Result<Zeroizing<String>, asset_crypt::AssetKeyMaterialDecryptionError> {
+        let password = io
+            .query(&crate::io::Query::secret_line(&format!(
+                "Unlock key {}:",
+                rec_key_id_parts.key_id
+            )))
+            .into_option()
+            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
+        Ok(Zeroizing::new(password))
+    }
+
+    async fn fetch_decrypt_key(
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> Result<crypt::EncryptedEncryptionKey, asset_crypt::AssetKeyMaterialDecryptionError> {
+        asset_crypt::get_encrypted_decryption_key(asset_blob_cache, api_client, rec_key_id_parts)
+            .await
+            .map_err(asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError)?
+            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey)
+    }
+
+    async fn fetch_signing_key(
+        asset_blob_cache: Arc<AssetBlobCache>,
+        api_client: &HaiClient,
+        rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
+    ) -> Result<crypt::EncryptedSigningKey, asset_crypt::AssetKeyMaterialDecryptionError> {
+        asset_crypt::get_encrypted_signing_key(asset_blob_cache, api_client, rec_key_id_parts)
+            .await
+            .map_err(asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError)?
+            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey)
+    }
+
+    /// Unlock a specific decryption key by ID using a known password.
     pub async fn unlock_decrypt_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
@@ -158,61 +336,20 @@ impl AssetKeyring {
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
         password: &str,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
-        // Fetch the encrypted private key
-        let dec_key = asset_crypt::get_encrypted_decryption_key(
-            asset_blob_cache,
-            api_client,
-            &rec_key_id_parts,
-        )
-        .await
-        .map_err(|e| {
-            asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-        })?;
-        let dec_key = if let Some(dec_key) = dec_key {
-            dec_key
-        } else {
-            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
-        };
-
+        let dec_key =
+            Self::fetch_decrypt_key(asset_blob_cache, api_client, rec_key_id_parts).await?;
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        // Try to get password from OS keyring first
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            // Verify the stored password works
-            match crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()) {
-                Ok(secret) => {
-                    // Stored password works!
-                    self.unlocked_decrypt_keys
-                        .insert(rec_key_id.to_string(), secret);
-                    self.last_used = std::time::Instant::now();
-                    return Ok(());
-                }
-                Err(_) => {
-                    // Stored password is invalid, remove it and prompt for new one
-                    tracing::debug!(
-                        "error: stored password for {} is invalid, prompting for new password",
-                        rec_key_id
-                    );
-                    self.delete_password_from_keyring(&rec_key_id);
-                }
-            }
-        }
-
-        // Decrypt and store the private key
-        let secret =
-            crypt::unprotect_encryption_key(&dec_key, password.as_bytes()).map_err(|e| {
-                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-            })?;
-
-        // Store password in OS keyring for future use
-        self.store_password_in_keyring(&rec_key_id, &password);
-
+        let unprotect = |pw: &[u8]| crypt::unprotect_encryption_key(&dec_key, pw);
+        let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
+            Some(secret) => secret,
+            None => self.accept_password(&rec_key_id, password, unprotect)?,
+        };
         self.unlocked_decrypt_keys.insert(rec_key_id, secret);
         self.last_used = std::time::Instant::now();
-
         Ok(())
     }
 
-    /// Unlock a specific decryption key by ID
+    /// Unlock a specific decryption key by ID, prompting if needed.
     pub async fn unlock_decrypt_key_with_prompt(
         &mut self,
         io: &Io,
@@ -220,71 +357,25 @@ impl AssetKeyring {
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
-        // Fetch the encrypted private key
-        let dec_key = asset_crypt::get_encrypted_decryption_key(
-            asset_blob_cache,
-            api_client,
-            &rec_key_id_parts,
-        )
-        .await
-        .map_err(|e| {
-            asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-        })?;
-        let dec_key = if let Some(dec_key) = dec_key {
-            dec_key
-        } else {
-            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
-        };
-
+        let dec_key =
+            Self::fetch_decrypt_key(asset_blob_cache, api_client, rec_key_id_parts).await?;
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        // Try to get password from OS keyring first
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            // Verify the stored password works
-            match crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()) {
-                Ok(secret) => {
-                    // Stored password works!
-                    self.unlocked_decrypt_keys
-                        .insert(rec_key_id.to_string(), secret);
-                    self.last_used = std::time::Instant::now();
-                    return Ok(());
-                }
-                Err(_) => {
-                    // Stored password is invalid, remove it and prompt for new one
-                    tracing::debug!(
-                        "error: stored password for {} is invalid, prompting for new password",
-                        rec_key_id
-                    );
-                    self.delete_password_from_keyring(&rec_key_id);
-                }
+        let unprotect = |pw: &[u8]| crypt::unprotect_encryption_key(&dec_key, pw);
+        let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
+            Some(secret) => secret,
+            None => {
+                let password = Self::prompt_password(io, rec_key_id_parts)?;
+                self.accept_password(&rec_key_id, &password, unprotect)?
             }
-        }
-
-        // Prompt for password if we don't have a valid stored one
-        let password = io
-            .query(&crate::io::Query::secret_line(&format!(
-                "Unlock key {}:",
-                rec_key_id_parts.key_id
-            )))
-            .into_option()
-            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
-        let password = Zeroizing::new(password);
-
-        // Decrypt and store the private key
-        let secret =
-            crypt::unprotect_encryption_key(&dec_key, password.as_bytes()).map_err(|e| {
-                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-            })?;
-
-        // Store password in OS keyring for future use
-        self.store_password_in_keyring(&rec_key_id, &password);
-
+        };
         self.unlocked_decrypt_keys.insert(rec_key_id, secret);
         self.last_used = std::time::Instant::now();
-
         Ok(())
     }
 
-    /// Tests whether password already available to unlock decryption key.
+    /// Tests whether the decryption key can be unlocked without typing a
+    /// password. If so, the key is unlocked as a side effect (on macOS this
+    /// may show a Touch ID prompt).
     pub async fn can_unlock_decrypt_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
@@ -292,31 +383,33 @@ impl AssetKeyring {
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> bool {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        if self.unlocked_decrypt_keys.get(&rec_key_id).is_some() {
+        if self.unlocked_decrypt_keys.contains_key(&rec_key_id) {
             return true;
         }
-
-        // Fetch the encrypted private key
-        let dec_key = match asset_crypt::get_encrypted_decryption_key(
-            asset_blob_cache,
-            api_client,
-            &rec_key_id_parts,
-        )
-        .await
+        if self.session_passwords.is_empty() && self.has_stored_password(&rec_key_id) == Some(false)
         {
-            Ok(Some(key)) => key,
-            _ => return false,
+            return false;
+        }
+        let Ok(dec_key) =
+            Self::fetch_decrypt_key(asset_blob_cache, api_client, rec_key_id_parts).await
+        else {
+            return false;
         };
-
-        // Try using a stored password to decrypt the key
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            crypt::unprotect_encryption_key(&dec_key, stored_password.as_bytes()).is_ok()
-        } else {
-            false
+        match self.try_known_passwords(&rec_key_id, |pw| {
+            crypt::unprotect_encryption_key(&dec_key, pw)
+        }) {
+            Some(secret) => {
+                self.unlocked_decrypt_keys.insert(rec_key_id, secret);
+                self.last_used = std::time::Instant::now();
+                true
+            }
+            None => false,
         }
     }
 
-    /// Tests whether password already available to unlock signing key.
+    /// Tests whether the signing key can be unlocked without typing a
+    /// password. If so, the key is unlocked as a side effect (on macOS this
+    /// may show a Touch ID prompt).
     pub async fn can_unlock_signing_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
@@ -324,31 +417,31 @@ impl AssetKeyring {
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> bool {
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        if self.unlocked_signing_keys.get(&rec_key_id).is_some() {
+        if self.unlocked_signing_keys.contains_key(&rec_key_id) {
             return true;
         }
-
-        // Fetch the encrypted signing key
-        let signing_key = match asset_crypt::get_encrypted_signing_key(
-            asset_blob_cache,
-            api_client,
-            rec_key_id_parts,
-        )
-        .await
+        if self.session_passwords.is_empty() && self.has_stored_password(&rec_key_id) == Some(false)
         {
-            Ok(Some(key)) => key,
-            _ => return false,
+            return false;
+        }
+        let Ok(signing_key) =
+            Self::fetch_signing_key(asset_blob_cache, api_client, rec_key_id_parts).await
+        else {
+            return false;
         };
-
-        // Try using a stored password to decrypt the key
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            crypt::unprotect_signing_key(&signing_key, stored_password.as_bytes()).is_ok()
-        } else {
-            false
+        match self.try_known_passwords(&rec_key_id, |pw| {
+            crypt::unprotect_signing_key(&signing_key, pw)
+        }) {
+            Some(secret) => {
+                self.unlocked_signing_keys.insert(rec_key_id, secret);
+                self.last_used = std::time::Instant::now();
+                true
+            }
+            None => false,
         }
     }
 
-    /// Unlock a specific signing key by ID
+    /// Unlock a specific signing key by ID using a known password.
     pub async fn unlock_signing_key(
         &mut self,
         asset_blob_cache: Arc<AssetBlobCache>,
@@ -356,58 +449,20 @@ impl AssetKeyring {
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
         password: &str,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
-        // Fetch the encrypted private key
         let signing_key =
-            asset_crypt::get_encrypted_signing_key(asset_blob_cache, api_client, rec_key_id_parts)
-                .await
-                .map_err(|e| {
-                    asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-                })?;
-        let signing_key = if let Some(signing_key) = signing_key {
-            signing_key
-        } else {
-            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
-        };
-
+            Self::fetch_signing_key(asset_blob_cache, api_client, rec_key_id_parts).await?;
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        // Try to get password from OS keyring first
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            // Verify the stored password works
-            match crypt::unprotect_signing_key(&signing_key, stored_password.as_bytes()) {
-                Ok(secret) => {
-                    // Stored password works!
-                    self.unlocked_signing_keys
-                        .insert(rec_key_id.to_string(), secret);
-                    self.last_used = std::time::Instant::now();
-                    return Ok(());
-                }
-                Err(_) => {
-                    // Stored password is invalid, remove it
-                    tracing::debug!(
-                        "error: stored password for {} is invalid, prompting for new password",
-                        rec_key_id
-                    );
-                    self.delete_password_from_keyring(&rec_key_id);
-                }
-            }
-        }
-
-        // Decrypt and store the private key
-        let secret =
-            crypt::unprotect_signing_key(&signing_key, password.as_bytes()).map_err(|e| {
-                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-            })?;
-
-        // Store password in OS keyring for future use
-        self.store_password_in_keyring(&rec_key_id, password);
-
+        let unprotect = |pw: &[u8]| crypt::unprotect_signing_key(&signing_key, pw);
+        let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
+            Some(secret) => secret,
+            None => self.accept_password(&rec_key_id, password, unprotect)?,
+        };
         self.unlocked_signing_keys.insert(rec_key_id, secret);
         self.last_used = std::time::Instant::now();
-
         Ok(())
     }
 
-    /// Unlock a specific signing key by ID
+    /// Unlock a specific signing key by ID, prompting if needed.
     pub async fn unlock_signing_key_with_prompt(
         &mut self,
         io: &Io,
@@ -415,64 +470,19 @@ impl AssetKeyring {
         api_client: &HaiClient,
         rec_key_id_parts: &asset_crypt::RecipientKeyIdParts,
     ) -> Result<(), asset_crypt::AssetKeyMaterialDecryptionError> {
-        // Fetch the encrypted private key
         let signing_key =
-            asset_crypt::get_encrypted_signing_key(asset_blob_cache, api_client, rec_key_id_parts)
-                .await
-                .map_err(|e| {
-                    asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-                })?;
-        let signing_key = if let Some(signing_key) = signing_key {
-            signing_key
-        } else {
-            return Err(asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey);
-        };
-
+            Self::fetch_signing_key(asset_blob_cache, api_client, rec_key_id_parts).await?;
         let rec_key_id = rec_key_id_parts.recipient_key_id();
-        // Try to get password from OS keyring first
-        if let Some(stored_password) = self.get_password_from_keyring(&rec_key_id) {
-            // Verify the stored password works
-            match crypt::unprotect_signing_key(&signing_key, stored_password.as_bytes()) {
-                Ok(secret) => {
-                    // Stored password works!
-                    self.unlocked_signing_keys
-                        .insert(rec_key_id.to_string(), secret);
-                    self.last_used = std::time::Instant::now();
-                    return Ok(());
-                }
-                Err(_) => {
-                    // Stored password is invalid, remove it and prompt for new one
-                    tracing::debug!(
-                        "error: stored password for {} is invalid, prompting for new password",
-                        rec_key_id
-                    );
-                    self.delete_password_from_keyring(&rec_key_id);
-                }
+        let unprotect = |pw: &[u8]| crypt::unprotect_signing_key(&signing_key, pw);
+        let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
+            Some(secret) => secret,
+            None => {
+                let password = Self::prompt_password(io, rec_key_id_parts)?;
+                self.accept_password(&rec_key_id, &password, unprotect)?
             }
-        }
-
-        // Prompt for password if we don't have a valid stored one
-        let password = io
-            .query(&crate::io::Query::secret_line(&format!(
-                "Unlock key {}:",
-                rec_key_id_parts.key_id
-            )))
-            .into_option()
-            .ok_or(asset_crypt::AssetKeyMaterialDecryptionError::PasswordCancelled)?;
-        let password = Zeroizing::new(password);
-
-        // Decrypt and store the private key
-        let secret =
-            crypt::unprotect_signing_key(&signing_key, password.as_bytes()).map_err(|e| {
-                asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(e.to_string())
-            })?;
-
-        // Store password in OS keyring for future use
-        self.store_password_in_keyring(&rec_key_id, &password);
-
+        };
         self.unlocked_signing_keys.insert(rec_key_id, secret);
         self.last_used = std::time::Instant::now();
-
         Ok(())
     }
 
@@ -522,36 +532,48 @@ impl AssetKeyring {
         self.unlocked_signing_keys.remove(rec_key_id);
     }
 
-    /// Lock all keys from memory (keeps keyring entries)
+    /// Lock all keys from memory (keeps keyring entries). The next unlock
+    /// requires re-authentication (e.g. Touch ID).
     pub fn lock_all(&mut self) {
         self.unlocked_decrypt_keys.clear();
         self.unlocked_signing_keys.clear();
+        self.session_passwords.clear();
+        #[cfg(all(target_os = "macos", hai_se))]
+        if matches!(self.store, PasswordStore::SecureEnclave(_)) {
+            crate::feature::macos_se::reset_auth();
+        }
     }
 
     /// Lock and forget a specific key (removes from memory AND keyring)
     pub fn forget_decrypt_key(&mut self, rec_key_id: &str) {
         self.unlocked_decrypt_keys.remove(rec_key_id);
-        self.delete_password_from_keyring(rec_key_id);
+        self.session_passwords.clear();
+        self.delete_stored_password(rec_key_id);
     }
 
     /// Lock and forget a specific key (removes from memory AND keyring)
     pub fn forget_signing_key(&mut self, rec_key_id: &str) {
         self.unlocked_signing_keys.remove(rec_key_id);
-        self.delete_password_from_keyring(rec_key_id);
+        self.session_passwords.clear();
+        self.delete_stored_password(rec_key_id);
     }
 
     /// Lock and forget all keys (removes from memory AND keyring)
     pub fn forget_all(&mut self) {
-        let keys: Vec<String> = self.unlocked_decrypt_keys.keys().cloned().collect();
+        let keys: Vec<String> = self
+            .unlocked_decrypt_keys
+            .keys()
+            .chain(self.unlocked_signing_keys.keys())
+            .cloned()
+            .collect();
         for key_id in keys {
-            self.delete_password_from_keyring(&key_id);
+            self.delete_stored_password(&key_id);
         }
-        self.unlocked_decrypt_keys.clear();
-        let keys: Vec<String> = self.unlocked_signing_keys.keys().cloned().collect();
-        for key_id in keys {
-            self.delete_password_from_keyring(&key_id);
+        #[cfg(all(target_os = "macos", hai_se))]
+        if let PasswordStore::SecureEnclave(vault) = &self.store {
+            vault.wipe();
         }
-        self.unlocked_signing_keys.clear();
+        self.lock_all();
     }
 
     /// Check if idle timeout exceeded
@@ -564,9 +586,9 @@ impl AssetKeyring {
         }
     }
 
-    /// Check if OS keyring is available
+    /// Check if a persistent password store is available
     pub fn is_keyring_available(&self) -> bool {
-        self.keyring_available
+        !matches!(self.store, PasswordStore::None)
     }
 }
 
@@ -642,6 +664,12 @@ mod tests {
         let keyring = AssetKeyring::new(true);
         // Just verify it doesn't panic
         assert!(keyring.is_keyring_available());
+    }
+
+    #[test]
+    fn test_keyring_disabled() {
+        let keyring = AssetKeyring::new(false);
+        assert!(!keyring.is_keyring_available());
     }
 
     #[test]

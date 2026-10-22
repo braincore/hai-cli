@@ -38,7 +38,8 @@ package_target() {
     echo "Building for $target (macos-$arch)..."
     
     # Build for target
-    cargo build --release --target "$target" || return 1
+    # Fail the build if Secure Enclave (Touch ID) support can't be compiled.
+    HAI_REQUIRE_SE=1 cargo build --release --target "$target" || return 1
     
     # Create the package name
     local package_name="${CRATE_NAME}-${VERSION}-macos-${arch}"

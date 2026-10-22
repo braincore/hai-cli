@@ -1085,7 +1085,7 @@ pub fn read_config_as_string_create_if_missing(
 # may be of interest to the privacy conscious.
 #check_for_updates = true
 
-# Whether to use the OS keyring for storing asset encryption passwords (default: true)
+# Whether to remember asset encryption passwords between sessions (default: true)
 #use_os_keyring = true
 
 # Asset blob cache size in bytes (default: 1GB, 0 = disabled)
