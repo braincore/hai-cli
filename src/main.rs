@@ -880,6 +880,7 @@ async fn repl(
                 session.agentic,
                 reported_usage,
                 cost,
+                &session.repl_break_signal,
             ) {
                 Answer::Text(buffer) => session::CmdInput {
                     input: buffer,

@@ -259,6 +259,7 @@ impl Io {
         agentic: bool,
         reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
         cost: Option<f64>,
+        break_signal: &std::sync::atomic::AtomicBool,
     ) -> Answer {
         self.input.lock().unwrap().next_repl(
             index,
@@ -271,6 +272,7 @@ impl Io {
             agentic,
             reported_usage,
             cost,
+            break_signal,
         )
     }
 
@@ -490,6 +492,7 @@ pub trait Input: Send {
         _agentic: bool,
         _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
         _cost: Option<f64>,
+        _break_signal: &std::sync::atomic::AtomicBool,
     ) -> Answer {
         self.ask(&Query::line("").with_record_message(false))
     }
@@ -1785,6 +1788,7 @@ impl Input for NoopInput {
         _agentic: bool,
         _reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
         _cost: Option<f64>,
+        _break_signal: &std::sync::atomic::AtomicBool,
     ) -> Answer {
         Answer::Eof
     }

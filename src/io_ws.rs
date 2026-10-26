@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::RecvTimeoutError;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -210,6 +211,7 @@ impl Input for WsInput {
         agentic: bool,
         reported_usage: Option<crate::ai_provider::usage::TokenUsage>,
         cost: Option<f64>,
+        break_signal: &std::sync::atomic::AtomicBool,
     ) -> Answer {
         let (reply, rx) = std::sync::mpsc::channel();
         let use_hai_router = match use_hai_router {
@@ -236,7 +238,30 @@ impl Input for WsInput {
         {
             return Answer::Eof;
         }
-        rx.recv().unwrap_or(Answer::Eof)
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(answer) => return answer,
+                Err(RecvTimeoutError::Disconnected) => return Answer::Eof,
+                Err(RecvTimeoutError::Timeout) => {
+                    if break_signal.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+                        if self
+                            .cmd_tx
+                            .send(WsCmd::CancelReplLine { ack: ack_tx })
+                            .is_err()
+                        {
+                            return Answer::Eof;
+                        }
+                        let _ = ack_rx.recv();
+                        // An Eval may have arrived before the actor handled the cancel.
+                        // If so, it's already in rx, so return it. Otherwise the reply
+                        // sender was dropped, so return Cancelled, and main.rs
+                        // `continue`s and picks up the injected cmd.
+                        return rx.try_recv().unwrap_or(Answer::Cancelled);
+                    }
+                }
+            }
+        }
     }
 
     fn drives_repl(&self) -> bool {
@@ -530,6 +555,11 @@ pub enum WsCmd {
         account: Option<crate::db::Account>,
         starred_shortcuts: Vec<String>,
         is_first_user_input: bool,
+    },
+
+    /// Break out of the current REPL line input.
+    CancelReplLine {
+        ack: std::sync::mpsc::Sender<()>,
     },
 }
 
@@ -857,6 +887,11 @@ impl WsActor {
                 self.account = account;
                 self.starred_shortcuts = starred_shortcuts;
                 self.is_first_user_input = is_first_user_input;
+            }
+            WsCmd::CancelReplLine { ack } => {
+                // Drop pending prompt
+                self.pending_client_repl = None;
+                let _ = ack.send(());
             }
         }
     }
