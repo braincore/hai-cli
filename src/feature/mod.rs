@@ -30,9 +30,28 @@ pub mod queue_listen;
 /// time.
 fn self_invocation() -> (String, Vec<String>, bool) {
     // For dev: check if running under `cargo`, which sets the `CARGO` env var.
-    if let Ok(cargo) = std::env::var("CARGO") {
-        // Silence build output
-        let mut args = vec!["run".to_string(), "-q".to_string()];
+    // Beware that `CARGO` may have been inherited from a parent process and
+    // the current binary may not actually be from `cargo run`.
+
+    // Path of Cargo.toml
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Check if current-exe is from target/ of project
+    let is_cargo_build_output =
+        std::env::current_exe().is_ok_and(|exe| exe.starts_with(manifest_dir.join("target")));
+    if let Ok(cargo) = std::env::var("CARGO")
+        && is_cargo_build_output
+    {
+        // Silence build output.
+        let mut args = vec![
+            "run".to_string(),
+            "-q".to_string(),
+            // Explicit manifest to be independent of cwd.
+            "--manifest-path".to_string(),
+            manifest_dir
+                .join("Cargo.toml")
+                .to_string_lossy()
+                .to_string(),
+        ];
 
         // Preserve package name if in a workspace
         if let Ok(pkg) = std::env::var("CARGO_PKG_NAME") {
