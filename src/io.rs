@@ -187,7 +187,9 @@ macro_rules! record_errln {
 #[derive(Clone)]
 pub struct Io {
     pub out: Out,
-    pub input: Arc<Mutex<dyn Input>>,
+    /// Unlike `Out` fields, not wrapped in a mutex. Backends do their own
+    /// locking to allow concurrent input requests.
+    pub input: Arc<dyn Input>,
 }
 
 impl Io {
@@ -199,7 +201,7 @@ impl Io {
     {
         Io {
             out: Out::new(out_backend),
-            input: Arc::new(Mutex::new(in_backend)),
+            input: Arc::new(in_backend),
         }
     }
 
@@ -224,7 +226,7 @@ impl Io {
     /// True if input is unavailable: every `query`/`next_repl` returns
     /// `Answer::Eof` immediately.
     pub fn is_input_noop(&self) -> bool {
-        self.input.lock().unwrap().is_noop()
+        self.input.is_noop()
     }
 
     pub fn terminal_capability(&self) -> TerminalCapability {
@@ -261,7 +263,7 @@ impl Io {
         cost: Option<f64>,
         break_signal: &std::sync::atomic::AtomicBool,
     ) -> Answer {
-        self.input.lock().unwrap().next_repl(
+        self.input.next_repl(
             index,
             model,
             use_hai_router,
@@ -278,7 +280,7 @@ impl Io {
 
     /// True if the input backend drives the REPL, i.e. it produces REPL input.
     pub fn drives_repl(&self) -> bool {
-        self.input.lock().unwrap().drives_repl()
+        self.input.drives_repl()
     }
 
     pub fn update_config(
@@ -288,7 +290,7 @@ impl Io {
         starred_shortcuts: &Vec<String>,
         is_first_user_input: bool,
     ) {
-        self.input.lock().unwrap().update_config(
+        self.input.update_config(
             cmd_registry,
             account,
             starred_shortcuts,
@@ -298,7 +300,7 @@ impl Io {
 
     /// Query the user for the answer to a question
     pub fn query(&self, q: &Query) -> Answer {
-        let answer = self.input.lock().unwrap().ask(q);
+        let answer = self.input.ask(q);
         if q.record_message || q.record_answer {
             let mut s = String::new();
             if q.record_message {
@@ -471,17 +473,25 @@ impl Io {
 
 // --
 
-pub trait Input: Send {
+/// `Io` shares a single backend across threads without an outer lock so that
+/// independent input requests (e.g. a query from the gateway while the REPL
+/// waits in `next_repl`) don't block each other.
+///
+/// The difficult case is that asset-crypt unlocking can happen almost anywhere
+/// in the code which requires input i/o.
+///
+/// Backends (e.g. terminal) are responsible for using their own mutex.
+pub trait Input: Send + Sync {
     /// Block until the user answers `prompt`, or the input source
     /// signals cancel/eof.
-    fn ask(&mut self, query: &Query) -> Answer;
+    fn ask(&self, query: &Query) -> Answer;
 
     /// Block until the client submits the next REPL cell/line.
     ///
     /// Only applicable if the input backend drives the REPL.
     /// Stdio input does not (reedline does); web backends do.
     fn next_repl(
-        &mut self,
+        &self,
         _index: u32,
         _model: String,
         _use_hai_router: session::HaiRouterState,
@@ -1772,12 +1782,12 @@ impl NoopInput {
 }
 
 impl Input for NoopInput {
-    fn ask(&mut self, _q: &Query) -> Answer {
+    fn ask(&self, _q: &Query) -> Answer {
         Answer::Eof
     }
 
     fn next_repl(
-        &mut self,
+        &self,
         _index: u32,
         _model: String,
         _use_hai_router: session::HaiRouterState,
@@ -1969,29 +1979,31 @@ impl Query {
 
 /// Reads from the real terminal. Owns the reedline/rpassword mechanics.
 pub struct StdinInput {
-    /// Reused across queries so history/edit-mode state persists within a
-    /// session. reedline is created lazily on first non-secret query.
-    reedline: Option<Reedline>,
+    /// Guards terminal input so only one query can read stdin at a time.
+    ///
+    /// Holds the reedline instance to re-use across queries for persistence.
+    /// Created lazily on first non-secret query to avoid start up cost.
+    tty: Mutex<Option<Reedline>>,
 }
 
 impl StdinInput {
     pub fn new() -> Self {
-        StdinInput { reedline: None }
+        StdinInput {
+            tty: Mutex::new(None),
+        }
     }
 
-    fn line_editor(&mut self) -> &mut Reedline {
-        self.reedline.get_or_insert_with(|| {
-            Reedline::create()
-                .use_bracketed_paste(true)
-                .with_edit_mode(Box::new(Vi::new(
-                    default_vi_insert_keybindings(),
-                    default_vi_normal_keybindings(),
-                )))
-                .with_ansi_colors(true)
-        })
+    fn new_line_editor() -> Reedline {
+        Reedline::create()
+            .use_bracketed_paste(true)
+            .with_edit_mode(Box::new(Vi::new(
+                default_vi_insert_keybindings(),
+                default_vi_normal_keybindings(),
+            )))
+            .with_ansi_colors(true)
     }
 
-    fn ask_secret(&mut self, q: &Query) -> Answer {
+    fn ask_secret(q: &Query) -> Answer {
         // Same banner you had before.
         print!("{} {} ", "  SECRET  ".black().on_white(), q.message);
         if std::io::stdout().flush().is_err() {
@@ -2006,9 +2018,9 @@ impl StdinInput {
         }
     }
 
-    fn ask_line(&mut self, q: &Query) -> Answer {
+    fn ask_line(reedline: &mut Reedline, q: &Query) -> Answer {
         let qp = line_editor::QuestionPrompt::new(&q.message);
-        match self.line_editor().read_line(&qp) {
+        match reedline.read_line(&qp) {
             Ok(Signal::Success(answer)) => Answer::Text(answer),
             Ok(Signal::CtrlC) => Answer::Cancelled,
             Ok(Signal::CtrlD) => Answer::Eof,
@@ -2026,12 +2038,15 @@ impl Default for StdinInput {
 }
 
 impl Input for StdinInput {
-    fn ask(&mut self, q: &Query) -> Answer {
+    fn ask(&self, q: &Query) -> Answer {
+        // Hold the tty lock so two prompts never read stdin concurrently.
+        let mut tty = self.tty.lock().unwrap_or_else(|e| e.into_inner());
         if q.secret {
-            self.ask_secret(q)
+            Self::ask_secret(q)
         } else {
             // Same handling for confirm and line queries
-            self.ask_line(q)
+            let reedline = tty.get_or_insert_with(Self::new_line_editor);
+            Self::ask_line(reedline, q)
         }
     }
 

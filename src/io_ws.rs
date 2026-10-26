@@ -177,7 +177,7 @@ impl Input for WsInput {
     /// # Returns
     ///
     /// `Answer::Eof` if client disconnected.
-    fn ask(&mut self, q: &Query) -> Answer {
+    fn ask(&self, q: &Query) -> Answer {
         let (reply, rx) = std::sync::mpsc::channel();
         if self
             .cmd_tx
@@ -200,7 +200,7 @@ impl Input for WsInput {
     ///
     /// `Answer::Eof` if client disconnected.
     fn next_repl(
-        &mut self,
+        &self,
         index: u32,
         model: String,
         use_hai_router: crate::session::HaiRouterState,
