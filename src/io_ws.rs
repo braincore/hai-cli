@@ -95,6 +95,14 @@ impl Output for WsOutput {
         rx
     }
 
+    fn push_open_url(&mut self, url: &str) -> Result<(), String> {
+        self.cmd_tx
+            .send(WsCmd::OpenUrl {
+                url: url.to_string(),
+            })
+            .map_err(|_| "websocket actor is gone".to_string())
+    }
+
     fn push_section_begin(&mut self, id: SectionId, kind: SectionKind) {
         self.send(WsCmd::SectionBegin { id, kind });
     }
@@ -289,6 +297,10 @@ pub enum ServerMsg {
         /// Whether the client should respond with `ClientMsg::ApplyResult`.
         expects_result: bool,
     },
+    /// Ask the client to open a URL (new tab, system browser, ...).
+    OpenUrl {
+        url: String,
+    },
 
     SectionBegin {
         id: SectionId,
@@ -465,6 +477,9 @@ pub enum WsCmd {
         fn_arg: String,
         /// `None` if no result is expected.
         reply: Option<std::sync::mpsc::Sender<String>>,
+    },
+    OpenUrl {
+        url: String,
     },
     SectionBegin {
         id: SectionId,
@@ -741,6 +756,7 @@ impl WsActor {
                     expects_result,
                 })
             }
+            WsCmd::OpenUrl { url } => self.emit_or_buffer(ServerMsg::OpenUrl { url }),
             WsCmd::SectionBegin { id, kind } => self.on_section_begin(id, kind),
             WsCmd::SectionEnd { id } => self.on_section_end(id),
             WsCmd::Query { q, reply } => {

@@ -1807,6 +1807,7 @@ async fn repl(
                                 }
                             } else if matches!(toolbox_tool_policy.tool, tool::Tool::Html) {
                                 match feature::html_tool::execute_html_tool(
+                                    &io,
                                     &mut session,
                                     is_task_mode_step,
                                     arg,

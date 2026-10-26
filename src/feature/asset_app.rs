@@ -49,7 +49,7 @@ pub async fn start_app_and_launch_browser(
             outln!(io, "Reusing existing gateway. Asset app URL: {}", final_url);
             if !skip_browser_launch {
                 outln!(io, "Opening asset app in browser");
-                if let Err(e) = open::that_detached(&final_url) {
+                if let Err(e) = io.open_url(&final_url) {
                     errorln!(io, "failed to open asset app in browser: {}", e);
                 }
             }
@@ -77,7 +77,7 @@ pub async fn start_app_and_launch_browser(
             outln!(io, "Asset app URL: {}", final_url);
         } else {
             outln!(io, "Opening asset app in browser: {}", final_url);
-            if let Err(e) = open::that_detached(&final_url) {
+            if let Err(e) = io.open_url(&final_url) {
                 errorln!(io, "failed to open asset app in browser: {}", e);
             }
         }

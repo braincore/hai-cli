@@ -11,7 +11,10 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_util::sync::CancellationToken;
 
+use crate::io::Io;
+
 pub async fn execute_html_tool(
+    io: &Io,
     session: &mut crate::session::SessionState,
     is_task_mode_step: bool,
     input: &str,
@@ -24,7 +27,7 @@ pub async fn execute_html_tool(
         let (hot_reload_addr, clients, cancel_token) = hot_reload_websocket_server().await?;
         let temp_file_path = match create_empty_temp_file() {
             Ok((temp_file, temp_file_path)) => {
-                start_browser(temp_file_path.to_str().unwrap())
+                start_browser(io, temp_file_path.to_str().unwrap())
                     .map_err(|e| format!("error: failed to open browser: {}", e))?;
                 session.html_output = Some((
                     temp_file,
@@ -94,11 +97,9 @@ fn create_empty_temp_file() -> Result<(tempfile::NamedTempFile, PathBuf), String
     Ok((temp_file, temp_file_path))
 }
 
-fn start_browser(temp_file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Windows: Necessary for browser to open a file that's already open for
-    // writing by this process. Also, requires `shellexecute-on-windows`
-    // feature for `open` crate.
-    Ok(open::that_detached(temp_file_path)?)
+fn start_browser(io: &Io, temp_file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let file_url = format!("file://{}", temp_file_path);
+    Ok(io.open_url(&file_url)?)
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

@@ -406,6 +406,11 @@ impl Io {
         self.out.apply(fn_name, fn_arg, expect_result)
     }
 
+    /// Open a URL via the backend (OS handler locally, client over websocket).
+    pub fn open_url(&self, url: &str) -> Result<(), String> {
+        self.out.open_url(url)
+    }
+
     pub fn section_begin(&self, kind: SectionKind) -> SectionGuard<'_> {
         self.out.section_begin(kind)
     }
@@ -629,6 +634,21 @@ pub trait Output: Send {
         None
     }
 
+    /// Open a URL (new tab, system browser, ...).
+    ///
+    /// It is never muted and never replayed.
+    ///
+    /// Default behavior: open with the local OS handler.
+    ///
+    /// When overridden: Backends fronting a remote client (websocket) override
+    /// this to delegate to the client.
+    fn push_open_url(&mut self, url: &str) -> Result<(), String> {
+        // Windows: Necessary for browser to open a file that's already open
+        // for writing by this proc. Also, requires `shellexecute-on-windows`
+        // feature for `open` crate.
+        open::that_detached(url).map_err(|e| e.to_string())
+    }
+
     /// Beginning of a section.
     ///
     /// Can be ignored by unsophisticated backends.
@@ -820,6 +840,9 @@ pub enum Rec {
     ApplyResult {
         apply_id: ApplyId,
         result: Result<String, ApplyError>,
+    },
+    OpenUrl {
+        url: String,
     },
     Input {
         text: String,
@@ -1076,6 +1099,15 @@ impl Out {
         result.map(|r| Some(r))
     }
 
+    /// Open a URL. Like `apply`, muting is ignored since this is an action
+    /// rather than output.
+    pub fn open_url(&self, url: &str) -> Result<(), String> {
+        self.record(Rec::OpenUrl {
+            url: url.to_string(),
+        });
+        self.backend.lock().unwrap().push_open_url(url)
+    }
+
     //
     // Sections
     //
@@ -1246,6 +1278,11 @@ impl Out {
                             s.push_str(&format!("error: {}", e));
                         }
                     }
+                    s.push('\n');
+                }
+                Rec::OpenUrl { url } => {
+                    s.push_str("open_url: ");
+                    s.push_str(url);
                     s.push('\n');
                 }
                 Rec::Input { text, .. } => {
@@ -1683,6 +1720,11 @@ impl Output for NoopOutput {
     }
     fn push_section_begin(&mut self, _id: SectionId, _kind: SectionKind) {}
     fn push_section_end(&mut self, _id: SectionId) {}
+
+    fn push_open_url(&mut self, _url: &str) -> Result<(), String> {
+        // NOTE: Unclear if this is the desired behavior
+        Err("no interactive output to open url".to_string())
+    }
 
     fn push_terminal_transient(&mut self, _s: &str) -> bool {
         false
