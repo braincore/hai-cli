@@ -995,19 +995,19 @@ mod tests {
         let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1, &out);
-        assert_eq!(acc_res.printed_text_chunk, "- mango\n- pear\n");
-        assert_eq!(acc_res.unmasked_printed_text_chunk, "- mango\n- pear\n");
+        assert_eq!(acc_res.printed_text_chunk, "{0} mango\n{1} pear\n");
+        assert_eq!(acc_res.unmasked_printed_text_chunk, "{0} mango\n{1} pear\n");
         assert_eq!(acc_res.remaining, Some("".to_string()));
-        assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
-        assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
+        assert_eq!(accumulator.printed_text, "{0} mango\n{1} pear\n");
+        assert_eq!(accumulator.unmasked_printed_text, "{0} mango\n{1} pear\n");
 
         // Test with masks
         let masked_strings = vec!["ear".to_string()];
         let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = r#"["mango", "pear"]"#;
         let acc_res = accumulator.acc(input1, &out);
-        assert_eq!(accumulator.printed_text, "- mango\n- p***\n");
-        assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
+        assert_eq!(accumulator.printed_text, "{0} mango\n{1} p***\n");
+        assert_eq!(accumulator.unmasked_printed_text, "{0} mango\n{1} pear\n");
         assert_eq!(acc_res.remaining, Some("".to_string()));
     }
 
@@ -1018,8 +1018,8 @@ mod tests {
         let mut accumulator = JsonArrayAccumulator::new(masked_strings, None);
         let input1 = "[    \n   \"mango\"     , \n     \"pear\"      ]    ";
         accumulator.acc(input1, &out);
-        assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
-        assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
+        assert_eq!(accumulator.printed_text, "{0} mango\n{1} pear\n");
+        assert_eq!(accumulator.unmasked_printed_text, "{0} mango\n{1} pear\n");
     }
 
     #[test]
@@ -1039,8 +1039,8 @@ mod tests {
         accumulator.acc(input4, &out);
         accumulator.acc(input5, &out);
         let acc_res = accumulator.acc(input6, &out);
-        assert_eq!(accumulator.printed_text, "- mango\n- pear\n");
-        assert_eq!(accumulator.unmasked_printed_text, "- mango\n- pear\n");
+        assert_eq!(accumulator.printed_text, "{0} mango\n{1} pear\n");
+        assert_eq!(accumulator.unmasked_printed_text, "{0} mango\n{1} pear\n");
         assert_eq!(acc_res.remaining, Some("  , ".to_string()));
     }
 
@@ -1114,7 +1114,7 @@ mod tests {
         accumulator.acc(input1, &out);
         accumulator.acc(input2, &out);
 
-        assert_eq!(accumulator.printed_text, "- Hello World!\n");
+        assert_eq!(accumulator.printed_text, "{0} Hello World!\n");
     }
 
     #[test]

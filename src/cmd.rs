@@ -2191,7 +2191,7 @@ mod tests {
         }
 
         // Test one argument
-        let input = "/ask-human(secret=true) agree?";
+        let input = "/ask-human.secret agree?";
         let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
@@ -2207,7 +2207,7 @@ mod tests {
         }
 
         // Test two arguments
-        let input = "/ask-human(secret=true,cache=true) agree?";
+        let input = "/ask-human.secret.cache agree?";
         let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
@@ -2223,7 +2223,7 @@ mod tests {
         }
 
         // Test two arguments separated by space
-        let input = "/ask-human(secret=true, cache=true) agree?";
+        let input = "/ask-human.secret.cache agree?";
         let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
@@ -2494,7 +2494,7 @@ mod tests {
 
     #[test]
     fn test_tool_command_with_option() {
-        let input = "!fn-py(cache=true) double a number";
+        let input = "!fn-py.cache double a number";
         let cmd = parse_user_input(&Registry::new(), input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {

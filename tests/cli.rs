@@ -50,7 +50,7 @@ fn test_tool_mode() {
     default_cmd()
         .arg("!sh")
         .assert()
-        .stdout(contains("Entering tool mode"));
+        .stdout(contains("Adding !sh to toolbox."));
 }
 
 #[test]
