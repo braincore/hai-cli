@@ -1072,8 +1072,6 @@ impl Out {
         self.backend.lock().unwrap().push_code_reset();
     }
 
-    /// Muted is not relevant to apply() since it's not producing output
-    /// directly.
     pub fn apply(
         &self,
         fn_name: &str,
@@ -1109,6 +1107,25 @@ impl Out {
             apply_id,
             result: result.clone(),
         });
+        if !self.muted() {
+            match &result {
+                Ok(r) => {
+                    self.backend.lock().unwrap().push_out(&r);
+                }
+                Err(ApplyError::Timeout) => {
+                    self.backend
+                        .lock()
+                        .unwrap()
+                        .push_alert(NoticeLevel::Danger, "timeout");
+                }
+                Err(ApplyError::Disconnected) => {
+                    self.backend
+                        .lock()
+                        .unwrap()
+                        .push_alert(NoticeLevel::Danger, "disconnected");
+                }
+            };
+        }
         result.map(|r| Some(r))
     }
 

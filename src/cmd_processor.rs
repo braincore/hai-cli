@@ -6367,7 +6367,7 @@ pub async fn process_cmd(
                                 let fn_name = fn_name[2..].to_string();
                                 let fn_arg = serde_json::to_string(&arg_json)
                                     .expect("failed to re-serialize");
-                                // Output captured into transcript
+                                // apply() prints and adds to transcript.
                                 let _ = io.apply(&fn_name, &fn_arg, fn_result_schema.is_some());
                             }
                         }
