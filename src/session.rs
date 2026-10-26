@@ -246,9 +246,9 @@ pub struct SessionState {
     >,
     /// Add new message if conversation has a day transition
     pub add_msg_on_new_day: bool,
-    /// (Temp file for HTML output, is task step?, socket address for
-    /// websocket server, connected clients, cancellation token to shutdown
-    /// server)
+    /// (Temp file for HTML output, is task step?, socket address of the
+    /// server that serves the file over http and its hot-reload websocket,
+    /// connected hot-reload clients, cancellation token to shutdown server)
     pub html_output: Option<(
         tempfile::NamedTempFile,
         bool,

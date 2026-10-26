@@ -191,13 +191,13 @@ The script should print important values to stdout."#
         }
         Tool::Html => json!({
             "name": tool_name,
-            "description": format!("Generate HTML <body> tag (including embedded javascript/css) to implement the prompt.\nSystem = {}", system),
+            "description": format!("Generate a complete, self-contained HTML document to implement the prompt.\nSystem = {}", system),
             schema_key_name: {
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
-                        "description": "HTML <body></body> tag that will be injected. It can include embedded javascript and CSS.",
+                        "description": "Complete HTML document include <!DOCTYPE>, <META charset>, and <title>. It can include embedded javascript and CSS.",
                     },
                 },
                 "required": ["input"],
