@@ -21,6 +21,7 @@ const KERNEL_READY_PREFIX: &str = "HAI_KERNEL_READY ";
 pub struct KernelReady {
     pub port: u16,
     pub token: String,
+    pub version: String,
 }
 
 /// Use this on REPL start up to make it a kernel process.
@@ -61,6 +62,7 @@ pub async fn run_kernel(
         let ready = serde_json::to_string(&KernelReady {
             port,
             token: token.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
         })
         .expect("serialize readiness");
         // Guarantee readiness goes to stdout (avoid our io machinery).
