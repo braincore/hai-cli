@@ -2241,6 +2241,7 @@ dependencies = [
  "crossterm 0.28.1",
  "ctrlc",
  "dirs",
+ "dom_query",
  "dom_smoothie",
  "ed25519-dalek 2.2.0",
  "filetime",

@@ -39,6 +39,7 @@ cron = "0.16.0"
 crossterm = "0.28.1"
 ctrlc = "3.4.5"
 dirs = "5.0.1"
+dom_query = "0.17.0"
 dom_smoothie = "0.10.0"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "zeroize"] }
 filetime = "0.2.26"

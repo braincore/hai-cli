@@ -22,7 +22,7 @@ use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
-use crate::feature::kernel;
+use crate::feature::{kernel, opengraph};
 use crate::session::{self, CmdInputReply};
 use crate::{
     asset_async_writer, asset_helper, asset_reader,
@@ -2853,6 +2853,18 @@ pub struct ReplOpenWithResult {
 // --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchOgTagsArg {
+    url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchOgTagsResult {
+    tags: Vec<opengraph::OgTag>,
+}
+
+// --
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplCryptSignArg {
     message: String, // b64
 }
@@ -3987,6 +3999,33 @@ async fn handle_client_message(
                 ),
             };
             send_response::<ReplOpenWithResult, ()>(ws_sink, mid, Ok(result), false).await;
+        }
+        "repl/fetch_og_tags" => {
+            let fetch_arg: FetchOgTagsArg = match serde_json::from_value(arg.clone()) {
+                Ok(arg) => arg,
+                Err(_e) => {
+                    send_bad_request_error(
+                        ws_sink,
+                        &format!("Invalid argument for {}", route.as_str()),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            match opengraph::fetch_og_tags(&fetch_arg.url).await {
+                Ok(tags) => {
+                    send_response::<FetchOgTagsResult, ()>(
+                        ws_sink,
+                        mid,
+                        Ok(FetchOgTagsResult { tags }),
+                        false,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    send_bad_gateway_error(ws_sink, mid, &e).await;
+                }
+            }
         }
         "repl/crypt/sign" => {
             let Some(username) = username else {
