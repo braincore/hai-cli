@@ -533,11 +533,19 @@ pub async fn resume_chat_from_db_or_asset(
         let _section_guard = match log_entry.message.role {
             chat::MessageRole::User => {
                 if log_entry.result_of.is_none() {
-                    Some(io.section_begin(SectionKind::UserMsg {
-                        index: i as u32,
-                        ts: log_entry.ts.clone(),
-                        visible: log_entry.visible,
-                    }))
+                    if log_entry.retention_policy.0 {
+                        cur_task_subindex += 1;
+                        Some(io.section_begin(SectionKind::Step {
+                            sub_index: cur_task_subindex - 1,
+                            name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
+                        }))
+                    } else {
+                        Some(io.section_begin(SectionKind::UserMsg {
+                            index: i as u32,
+                            ts: log_entry.ts.clone(),
+                            visible: log_entry.visible,
+                        }))
+                    }
                 } else {
                     Some(io.section_begin(SectionKind::UserOutput {
                         index: i as u32,
@@ -752,11 +760,19 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
         let _section_guard = match log_entry.message.role {
             chat::MessageRole::User => {
                 if log_entry.result_of.is_none() {
-                    Some(io.section_begin(SectionKind::UserMsg {
-                        index: i as u32,
-                        ts: log_entry.ts.clone(),
-                        visible: log_entry.visible,
-                    }))
+                    if log_entry.retention_policy.0 {
+                        cur_task_subindex += 1;
+                        Some(io.section_begin(SectionKind::Step {
+                            sub_index: cur_task_subindex - 1,
+                            name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
+                        }))
+                    } else {
+                        Some(io.section_begin(SectionKind::UserMsg {
+                            index: i as u32,
+                            ts: log_entry.ts.clone(),
+                            visible: log_entry.visible,
+                        }))
+                    }
                 } else {
                     Some(io.section_begin(SectionKind::UserOutput {
                         index: i as u32,
@@ -779,15 +795,6 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
                 }),
             ),
             _ => None,
-        };
-        let _section_guard_step = if log_entry.retention_policy.0 && log_entry.result_of.is_none() {
-            cur_task_subindex += 1;
-            Some(io.section_begin(SectionKind::Step {
-                sub_index: cur_task_subindex - 1,
-                name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
-            }))
-        } else {
-            None
         };
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
             if let chat::MessageContent::Text { text } = &log_entry.message.content[0] {
