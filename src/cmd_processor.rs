@@ -6884,13 +6884,11 @@ pub async fn process_cmd(
                 match db::list_accounts(&*db.lock().await) {
                     Ok(usernames) => {
                         if !usernames.is_empty() {
-                            let was_recording = io.record_off();
                             outln!(io);
                             outln!(io, "Available accounts (Try /account <username>):");
                             for username in usernames {
                                 outln!(io, "- {}", username);
                             }
-                            io.record_set(was_recording);
                         }
                     }
                     Err(_) => {
@@ -7245,7 +7243,9 @@ pub async fn process_cmd(
             if let Some(cur_account) = &session.account {
                 let target_username = username.as_ref().unwrap_or(&cur_account.username);
                 let _ = db::remove_account(&*db.lock().await, target_username);
-                session::account_nobody_setup_session(session, db).await;
+                if target_username == &cur_account.username {
+                    session::account_nobody_setup_session(session, db).await;
+                }
             } else {
                 // no-op since not logged-in
             }
