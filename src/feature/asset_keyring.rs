@@ -558,6 +558,37 @@ impl AssetKeyring {
         self.delete_stored_password(rec_key_id);
     }
 
+    /// Forget all keys belonging to a user.
+    ///
+    /// Removes keys from memory and persistent store.
+    ///
+    /// Limitation: OS keyrings can't be enumerated so it relies on keys
+    /// unlocked in memory.
+    pub fn forget_user(&mut self, username: &str) {
+        let prefix =
+            asset_crypt::KeyRecipient::User(username.to_string()).recipient_key_id_prefix();
+        let keys: Vec<String> = self
+            .unlocked_decrypt_keys
+            .keys()
+            .chain(self.unlocked_signing_keys.keys())
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key_id in &keys {
+            self.delete_stored_password(key_id);
+        }
+        #[cfg(all(target_os = "macos", hai_se))]
+        if let PasswordStore::SecureEnclave(vault) = &self.store {
+            vault.delete_prefix(&prefix);
+        }
+        self.unlocked_decrypt_keys
+            .retain(|k, _| !k.starts_with(&prefix));
+        self.unlocked_signing_keys
+            .retain(|k, _| !k.starts_with(&prefix));
+        // Session passwords aren't tagged by user so clear them all.
+        self.session_passwords.clear();
+    }
+
     /// Lock and forget all keys (removes from memory AND keyring)
     pub fn forget_all(&mut self) {
         let keys: Vec<String> = self

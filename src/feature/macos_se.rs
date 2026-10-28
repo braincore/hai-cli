@@ -278,6 +278,31 @@ impl SeVault {
     pub fn delete(&self, id: &str) {
         let _ = fs::remove_file(self.entry_path(id));
     }
+
+    /// Delete every sealed entry whose id starts with `prefix`. Entry file
+    /// names are hex-encoded ids, so this never needs to unseal (no prompt).
+    /// The enclave key itself is kept.
+    pub fn delete_prefix(&self, prefix: &str) {
+        let Ok(rd) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let path = e.path();
+            let Some(stem) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".sealed"))
+            else {
+                continue;
+            };
+            let Ok(id) = hex::decode(stem) else {
+                continue;
+            };
+            if id.starts_with(prefix.as_bytes()) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

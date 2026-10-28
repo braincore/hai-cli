@@ -359,11 +359,21 @@ pub fn switch_to_nobody_account(
 }
 
 pub fn remove_account(conn: &rusqlite::Connection, username: &str) -> rusqlite::Result<()> {
-    // Delete the account with the matching username
-    conn.execute(
-        "DELETE FROM account WHERE username = ?1",
-        rusqlite::params![username],
-    )?;
+    // Remove the account and all per-user data atomically.
+    let tx = conn.unchecked_transaction()?;
+    for table in [
+        "account",
+        "misc",
+        "task_step_cache",
+        "gateway_perms",
+        "asset_store",
+    ] {
+        tx.execute(
+            &format!("DELETE FROM {} WHERE username = ?1", table),
+            rusqlite::params![username],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

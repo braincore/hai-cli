@@ -5588,7 +5588,7 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetCryptLock(cmd::AssetCryptLockCmd { enc_key_id }) => {
-            let _username = if let Some(account) = session.account.as_ref() {
+            let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
@@ -5597,7 +5597,13 @@ pub async fn process_cmd(
 
             let mut asset_keyring_locked = session.asset_keyring.lock().await;
             if let Some(enc_key_id) = enc_key_id {
-                asset_keyring_locked.forget_decrypt_key(&enc_key_id);
+                let rec_key_id = asset_crypt::RecipientKeyIdParts {
+                    recipient: asset_crypt::KeyRecipient::User(username),
+                    key_id: enc_key_id.to_string(),
+                    key_type: asset_crypt::KeyType::Encryption,
+                }
+                .recipient_key_id();
+                asset_keyring_locked.forget_decrypt_key(&rec_key_id);
             } else {
                 asset_keyring_locked.forget_all();
             }
@@ -7242,6 +7248,11 @@ pub async fn process_cmd(
         cmd::Cmd::AccountLogout(cmd::AccountLogoutCmd { username }) => {
             if let Some(cur_account) = &session.account {
                 let target_username = username.as_ref().unwrap_or(&cur_account.username);
+                session
+                    .asset_keyring
+                    .lock()
+                    .await
+                    .forget_user(target_username);
                 let _ = db::remove_account(&*db.lock().await, target_username);
                 if target_username == &cur_account.username {
                     session::account_nobody_setup_session(session, db).await;
