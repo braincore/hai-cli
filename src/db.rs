@@ -2,7 +2,7 @@ pub use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use crate::{chat, config};
+use crate::{chat, config, session};
 
 fn default_now() -> chrono::DateTime<chrono::Local> {
     chrono::Local::now()
@@ -19,6 +19,11 @@ pub struct LogEntry {
     /// If bool true, log_entry from task-mode step.
     pub retention_policy: (bool, LogEntryRetentionPolicy),
     pub model: Option<String>,
+    /// Applicable to a subset of `user` role messages. Specifically, messages
+    /// that were interpreted as commands: not, for example, resources loaded
+    /// as user messages. Answers what generated the `user` cmd message / where
+    /// it was sourced from.
+    pub cmd_source: Option<session::CmdSource>,
     #[serde(default = "default_true")]
     pub visible: bool,
     /// The `uuid` of an earlier entry that produced this entry as a result.

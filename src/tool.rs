@@ -331,7 +331,9 @@ pub fn execute_hai_repl_tool(
                     .enumerate()
                     .map(|(index, cmd)| session::CmdInput {
                         input: cmd,
-                        source: session::CmdSource::HaiTool(index as u32),
+                        source: session::CmdSource::HaiTool {
+                            step_id: index as u32,
+                        },
                         reply_channel: None,
                     })
                     .collect(),

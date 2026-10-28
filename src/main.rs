@@ -210,13 +210,13 @@ async fn main() -> process::ExitCode {
                                 std::io::stdin().read_to_string(&mut stdin_buffer).unwrap();
                                 session::CmdInput {
                                     input: format!("/prep {}", stdin_buffer),
-                                    source: session::CmdSource::HaiBye(idx as u32),
+                                    source: session::CmdSource::HaiBye { step_id: idx as u32 },
                                     reply_channel: None,
                                 }
                             } else {
                                 session::CmdInput {
                                     input: prompt,
-                                    source: session::CmdSource::HaiBye(idx as u32),
+                                    source: session::CmdSource::HaiBye { step_id: idx as u32 },
                                     reply_channel: None,
                                 }
                             }
@@ -288,12 +288,8 @@ async fn main() -> process::ExitCode {
         };
         (
             ReplMode::Normal,
-            vec![session::CmdInput {
-                input: account_login_cmd,
-                // Use Internal to avoid printing command
-                source: session::CmdSource::Internal(false),
-                reply_channel: None,
-            }],
+            // internal() doesn't print the command
+            vec![session::CmdInput::internal(account_login_cmd)],
             true,
             false,
             false,
@@ -307,11 +303,10 @@ async fn main() -> process::ExitCode {
         let set_key_cmd = if local { "/set-key.local" } else { "/set-key" };
         (
             ReplMode::Normal,
-            vec![session::CmdInput {
-                input: format!("{} {} {}", set_key_cmd, provider, key),
-                source: session::CmdSource::Internal(false),
-                reply_channel: None,
-            }],
+            vec![session::CmdInput::internal(format!(
+                "{} {} {}",
+                set_key_cmd, provider, key
+            ))],
             true,
             false,
             false,
@@ -759,7 +754,10 @@ async fn repl(
                     cost,
                 );
             }
-            if let session::CmdSource::TaskStep(task_fqn, _, step_id) = &cmd_info.source {
+            if let session::CmdSource::Task {
+                task_fqn, step_id, ..
+            } = &cmd_info.source
+            {
                 if *step_id > 0 {
                     outln!(io);
                 }
@@ -772,7 +770,7 @@ async fn repl(
                     &cmd_info.input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::HaiTool(sub_index) = &cmd_info.source {
+            } else if let session::CmdSource::HaiTool { step_id } = &cmd_info.source {
                 // Intention here is to avoid double-printing large code blocks
                 // being written by `/asset-write` or `/file-write`.
                 let display_input = if (cmd_info.input.starts_with("/asset")
@@ -790,20 +788,20 @@ async fn repl(
                     io,
                     &session.cmd_registry,
                     "!hai-tool",
-                    *sub_index as u32,
+                    *step_id,
                     &display_input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::HaiBye(sub_index) = &cmd_info.source {
+            } else if let session::CmdSource::HaiBye { step_id } = &cmd_info.source {
                 print_step(
                     io,
                     &session.cmd_registry,
                     "bye",
-                    *sub_index as u32,
+                    *step_id,
                     &cmd_info.input,
                     &masked_strings,
                 );
-            } else if let session::CmdSource::Internal(print_cmd) = &cmd_info.source {
+            } else if let session::CmdSource::Internal { print_cmd } = &cmd_info.source {
                 if *print_cmd {
                     print_internal_cmd_input(
                         io,
@@ -1005,6 +1003,7 @@ async fn repl(
                         &mut session,
                         bpe_tokenizer,
                         (false, db::LogEntryRetentionPolicy::None),
+                        Some(cmd_input.source.clone()),
                         true,
                     );
                     errorln!(io, "{}", e);
@@ -1064,6 +1063,7 @@ async fn repl(
                         &mut session,
                         bpe_tokenizer,
                         (is_task_mode_step, db::LogEntryRetentionPolicy::None),
+                        None,
                         true,
                         None,
                     );
@@ -1147,6 +1147,7 @@ async fn repl(
                             &mut session,
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
+                            Some(cmd_input.source.clone()),
                             true,
                             None,
                         )
@@ -1157,6 +1158,7 @@ async fn repl(
                             &mut session,
                             bpe_tokenizer,
                             (is_task_mode_step, cmd_result.retention_policy),
+                            Some(cmd_input.source.clone()),
                             true,
                         )
                     };
@@ -1170,7 +1172,8 @@ async fn repl(
                                 &mut session,
                                 bpe_tokenizer,
                                 (is_task_mode_step, cmd_result.retention_policy),
-                                cmd_result.history_entries_visibile,
+                                None,
+                                cmd_result.history_entries_visible,
                                 parent_entry_uuid.clone(),
                             );
                         }
@@ -1181,7 +1184,8 @@ async fn repl(
                                 (is_task_mode_step, cmd_result.retention_policy),
                                 hq,
                                 dim,
-                                cmd_result.history_entries_visibile,
+                                None,
+                                cmd_result.history_entries_visible,
                                 parent_entry_uuid.clone(),
                             );
                         }
@@ -1281,6 +1285,7 @@ async fn repl(
             tokens,
             retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
             model: None,
+            cmd_source: Some(cmd_input.source.clone()),
             visible: true,
             result_of: None,
             reported_usage: None,
@@ -1521,6 +1526,7 @@ async fn repl(
                 tokens,
                 retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                 model: Some(config::ai_model_to_string(&session.ai)),
+                cmd_source: None,
                 visible: true,
                 result_of: None,
                 reported_usage,
@@ -1608,6 +1614,7 @@ async fn repl(
                                     db::LogEntryRetentionPolicy::None,
                                 ),
                                 model: None,
+                                cmd_source: None,
                                 visible: true,
                                 result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
                                 reported_usage: None,
@@ -1844,6 +1851,7 @@ async fn repl(
                                 db::LogEntryRetentionPolicy::None,
                             ),
                             model: None,
+                            cmd_source: None,
                             visible: true,
                             result_of: tool_id_to_entry_uuid_map.get(tool_id).cloned(),
                             reported_usage: None,
@@ -1890,6 +1898,7 @@ async fn repl(
                     tokens,
                     retention_policy: (is_task_mode_step, db::LogEntryRetentionPolicy::None),
                     model: None,
+                    cmd_source: Some(session::CmdSource::Agentic),
                     visible: true,
                     result_of: None,
                     reported_usage: None,
@@ -1917,11 +1926,7 @@ async fn repl(
 /// REPL loop.
 fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
     if matches!(session.repl_mode, ReplMode::Task(..)) {
-        Some(session::CmdInput {
-            input: "/task-end".to_string(),
-            source: session::CmdSource::Internal(true),
-            reply_channel: None,
-        })
+        Some(session::CmdInput::internal_printed("/task-end".to_string()))
     } else {
         outln!(io, "バイバイ！");
         None

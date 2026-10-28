@@ -5539,7 +5539,7 @@ async fn handle_perm_gate_open(
     repl_remote
         .push_cmd(crate::session::CmdInput {
             input: format!("/asset-app.no_open {}", pending_open.asset_app),
-            source: session::CmdSource::Gateway,
+            source: session::CmdSource::Internal { print_cmd: false },
             reply_channel: Some(reply_tx),
         })
         .await;

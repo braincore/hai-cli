@@ -493,26 +493,9 @@ pub async fn resume_chat_from_db_or_asset(
     io.code_reset();
 
     let full_cmd_registry = crate::cmd_registry::Registry::new();
-    let mut cur_task_name = None;
-    let mut cur_task_subindex = 0;
 
     // Print out conversation to help user regain context
     for (i, log_entry) in session.history.iter_mut().enumerate() {
-        if matches!(log_entry.message.role, chat::MessageRole::User) {
-            for content in &log_entry.message.content {
-                if let chat::MessageContent::Text { text } = content {
-                    match cmd::parse_user_input(&full_cmd_registry, &text) {
-                        Ok(cmd::Cmd::Task(task_cmd)) => {
-                            cur_task_name = Some(task_cmd.task_ref.to_string());
-                            cur_task_subindex = 0;
-                        }
-                        Ok(_) => {}
-                        Err(_) => {}
-                    }
-                    break;
-                }
-            }
-        }
         let role_name = match log_entry.message.role {
             chat::MessageRole::Assistant => "assistant",
             chat::MessageRole::User => "user",
@@ -533,18 +516,50 @@ pub async fn resume_chat_from_db_or_asset(
         let _section_guard = match log_entry.message.role {
             chat::MessageRole::User => {
                 if log_entry.result_of.is_none() {
-                    if log_entry.retention_policy.0 {
-                        cur_task_subindex += 1;
-                        Some(io.section_begin(SectionKind::Step {
-                            sub_index: cur_task_subindex - 1,
-                            name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
-                        }))
-                    } else {
-                        Some(io.section_begin(SectionKind::UserMsg {
-                            index: i as u32,
-                            ts: log_entry.ts.clone(),
-                            visible: log_entry.visible,
-                        }))
+                    match log_entry.cmd_source.as_ref() {
+                        Some(session::CmdSource::HaiTool { step_id }) => {
+                            Some(io.section_begin(SectionKind::Step {
+                                sub_index: *step_id,
+                                name: "!hai-tool".to_string(),
+                            }))
+                        }
+                        Some(session::CmdSource::HaiBye { step_id }) => {
+                            Some(io.section_begin(SectionKind::Step {
+                                sub_index: *step_id,
+                                name: "bye".to_string(),
+                            }))
+                        }
+                        Some(session::CmdSource::Task {
+                            step_id, task_fqn, ..
+                        }) => Some(io.section_begin(SectionKind::Step {
+                            sub_index: *step_id,
+                            name: task_fqn.clone(),
+                        })),
+                        Some(session::CmdSource::User | session::CmdSource::Agentic) => {
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: log_entry.visible,
+                            }))
+                        }
+                        Some(session::CmdSource::Internal { print_cmd }) => {
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: *print_cmd,
+                            }))
+                        }
+                        Some(session::CmdSource::Unknown) | None => {
+                            // Backwards compat: Fallback for old logs that did
+                            // not specify `cmd_source`.
+                            // Forward compat: Fallback for unknown sources
+                            // that can at least be assumed to be user msgs.
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: log_entry.visible,
+                            }))
+                        }
                     }
                 } else {
                     Some(io.section_begin(SectionKind::UserOutput {
@@ -568,15 +583,6 @@ pub async fn resume_chat_from_db_or_asset(
                 }),
             ),
             _ => None,
-        };
-        let _section_guard_step = if log_entry.retention_policy.0 && log_entry.result_of.is_none() {
-            cur_task_subindex += 1;
-            Some(io.section_begin(SectionKind::Step {
-                sub_index: cur_task_subindex - 1,
-                name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
-            }))
-        } else {
-            None
         };
 
         if log_entry.retention_policy.1 == db::LogEntryRetentionPolicy::ConversationLoad {
@@ -724,22 +730,7 @@ pub async fn resume_chat_from_db_or_asset(
 /// attempt to fetch any attachments
 pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
     let full_cmd_registry = crate::cmd_registry::Registry::new();
-    let mut cur_task_name = None;
-    let mut cur_task_subindex = 0;
     for (i, log_entry) in history.iter().enumerate() {
-        if matches!(log_entry.message.role, chat::MessageRole::User) {
-            for content in &log_entry.message.content {
-                if let chat::MessageContent::Text { text } = content {
-                    if let Ok(parse_res) = crate::cmd_parse::parse(&full_cmd_registry, &text) {
-                        if parse_res.spec.name == "task" {
-                            cur_task_name = Some(parse_res.arg(0).to_string());
-                            cur_task_subindex = 0;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
         let role_name = match log_entry.message.role {
             chat::MessageRole::Assistant => "assistant",
             chat::MessageRole::User => "user",
@@ -760,18 +751,50 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
         let _section_guard = match log_entry.message.role {
             chat::MessageRole::User => {
                 if log_entry.result_of.is_none() {
-                    if log_entry.retention_policy.0 {
-                        cur_task_subindex += 1;
-                        Some(io.section_begin(SectionKind::Step {
-                            sub_index: cur_task_subindex - 1,
-                            name: cur_task_name.clone().unwrap_or("unknown_task".to_string()),
-                        }))
-                    } else {
-                        Some(io.section_begin(SectionKind::UserMsg {
-                            index: i as u32,
-                            ts: log_entry.ts.clone(),
-                            visible: log_entry.visible,
-                        }))
+                    match log_entry.cmd_source.as_ref() {
+                        Some(session::CmdSource::HaiTool { step_id }) => {
+                            Some(io.section_begin(SectionKind::Step {
+                                sub_index: *step_id,
+                                name: "!hai-tool".to_string(),
+                            }))
+                        }
+                        Some(session::CmdSource::HaiBye { step_id }) => {
+                            Some(io.section_begin(SectionKind::Step {
+                                sub_index: *step_id,
+                                name: "bye".to_string(),
+                            }))
+                        }
+                        Some(session::CmdSource::Task {
+                            step_id, task_fqn, ..
+                        }) => Some(io.section_begin(SectionKind::Step {
+                            sub_index: *step_id,
+                            name: task_fqn.clone(),
+                        })),
+                        Some(session::CmdSource::User | session::CmdSource::Agentic) => {
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: log_entry.visible,
+                            }))
+                        }
+                        Some(session::CmdSource::Internal { print_cmd }) => {
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: *print_cmd,
+                            }))
+                        }
+                        Some(session::CmdSource::Unknown) | None => {
+                            // Backwards compat: Fallback for old logs that did
+                            // not specify `cmd_source`.
+                            // Forward compat: Fallback for unknown sources
+                            // that can at least be assumed to be user msgs.
+                            Some(io.section_begin(SectionKind::UserMsg {
+                                index: i as u32,
+                                ts: log_entry.ts,
+                                visible: log_entry.visible,
+                            }))
+                        }
                     }
                 } else {
                     Some(io.section_begin(SectionKind::UserOutput {

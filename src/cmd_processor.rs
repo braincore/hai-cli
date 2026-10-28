@@ -45,7 +45,7 @@ pub struct ProcessCmdResult {
     pub discard_cmd_and_output: bool,
     pub retention_policy: LogEntryRetentionPolicy,
     pub history_entries: Vec<HistoryEntry>,
-    pub history_entries_visibile: bool,
+    pub history_entries_visible: bool,
     /// New commands are added to the front of the cmd queue
     pub new_cmds: Vec<session::CmdInput>,
     pub new_cmds_cascade_error: bool,
@@ -73,7 +73,7 @@ impl ProcessCmdResult {
         discard_cmd_and_output: bool,
         retention_policy: LogEntryRetentionPolicy,
         history_entries: Vec<HistoryEntry>,
-        history_entries_visibile: bool,
+        history_entries_visible: bool,
         new_cmds: Vec<session::CmdInput>,
         new_cmds_cascade_error: bool,
         new_temp_files: Vec<tempfile::NamedTempFile>,
@@ -89,7 +89,7 @@ impl ProcessCmdResult {
             discard_cmd_and_output,
             retention_policy,
             history_entries,
-            history_entries_visibile,
+            history_entries_visible,
             new_cmds,
             new_cmds_cascade_error,
             new_temp_files,
@@ -182,8 +182,8 @@ impl ProcessCmdResult {
     }
 
     /// Set the visibility of the history entries.
-    pub fn with_history_entries_visibile(mut self, history_entries_visibile: bool) -> Self {
-        self.history_entries_visibile = history_entries_visibile;
+    pub fn with_history_entries_visible(mut self, history_entries_visible: bool) -> Self {
+        self.history_entries_visible = history_entries_visible;
         self
     }
 
@@ -1070,6 +1070,7 @@ pub async fn process_cmd(
                         db::LogEntryRetentionPolicy::ConversationPin,
                     ),
                     model: None,
+                    cmd_source: Some(cmd_input.source.clone()),
                     visible: true,
                     result_of: None,
                     reported_usage: None,
@@ -1424,7 +1425,7 @@ pub async fn process_cmd(
                 ProcessCmdResult::loop_next()
                     .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
                     .with_history_entries(history_entries)
-                    .with_history_entries_visibile(matches!(cmd, cmd::Cmd::FileCat(_)))
+                    .with_history_entries_visible(matches!(cmd, cmd::Cmd::FileCat(_)))
             }
         }
         cmd::Cmd::FileWrite(cmd::FileWriteCmd { path, contents }) => {
@@ -1708,16 +1709,8 @@ pub async fn process_cmd(
             if matches!(session.repl_mode, ReplMode::Task(..)) {
                 // If already in task mode, clear the existing session state and start fresh.
                 new_cmds.extend(vec![
-                    session::CmdInput {
-                        input: "/task-end".to_string(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
-                    session::CmdInput {
-                        input: cmd_input.input.clone(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
+                    session::CmdInput::internal("/task-end".to_string()),
+                    session::CmdInput::internal(cmd_input.input.clone()),
                 ]);
             } else if let Some((_, haitask)) = get_haitask_from_task_ref(
                 io,
@@ -1862,11 +1855,11 @@ pub async fn process_cmd(
                 for (index, step) in haitask.steps.into_iter().enumerate() {
                     new_cmds.push(session::CmdInput {
                         input: step.clone(),
-                        source: session::CmdSource::TaskStep(
-                            haitask.name.clone(),
-                            key.clone(),
-                            index as u32,
-                        ),
+                        source: session::CmdSource::Task {
+                            step_id: index as u32,
+                            task_fqn: haitask.name.clone(),
+                            task_key: key.clone(),
+                        },
                         reply_channel: None,
                     });
                 }
@@ -1887,11 +1880,11 @@ pub async fn process_cmd(
                 for (index, step) in haitask.steps.into_iter().enumerate() {
                     new_cmds.push(session::CmdInput {
                         input: step.clone(),
-                        source: session::CmdSource::TaskStep(
-                            haitask.name.clone(),
-                            key.clone(),
-                            index as u32,
-                        ),
+                        source: session::CmdSource::Task {
+                            step_id: index as u32,
+                            task_fqn: haitask.name.clone(),
+                            task_key: key.clone(),
+                        },
                         reply_channel: None,
                     });
                 }
@@ -2637,14 +2630,14 @@ pub async fn process_cmd(
                 let desc_option = if desc { ".desc" } else { "" };
                 let full_option = if full { ".full" } else { "" };
                 let hidden_option = if hidden { ".hidden" } else { "" };
-                session.cmd_queue.lock().await.push_cmd(session::CmdInput {
-                    input: format!(
+                session
+                    .cmd_queue
+                    .lock()
+                    .await
+                    .push_cmd(session::CmdInput::internal(format!(
                         "/asset-list{}{}{} {}/",
                         desc_option, full_option, hidden_option, prefix
-                    ),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                });
+                    )));
                 return ProcessCmdResult::loop_next();
             }
 
@@ -3194,7 +3187,7 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
                 .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
                 .with_history_entries(history_entries)
-                .with_history_entries_visibile(matches!(cmd, cmd::Cmd::AssetCat(_)))
+                .with_history_entries_visible(matches!(cmd, cmd::Cmd::AssetCat(_)))
         }
         cmd::Cmd::AssetWrite(cmd::AssetWriteCmd {
             asset_name,
@@ -4851,16 +4844,14 @@ pub async fn process_cmd(
             };
             ProcessCmdResult::loop_next()
                 .with_new_cmds(vec![
-                    session::CmdInput {
-                        input: format!("/asset-crypt-grant '{}' {}", asset_name, recipient),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
-                    session::CmdInput {
-                        input: format!("/asset-acl-set '{}' {} {}", asset_name, principal, ace,),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    },
+                    session::CmdInput::internal(format!(
+                        "/asset-crypt-grant '{}' {}",
+                        asset_name, recipient
+                    )),
+                    session::CmdInput::internal(format!(
+                        "/asset-acl-set '{}' {} {}",
+                        asset_name, principal, ace,
+                    )),
                 ])
                 .with_new_cmds_cascade_error(true)
         }
@@ -4874,19 +4865,11 @@ pub async fn process_cmd(
                 format!("user:{}", recipient)
             };
             ProcessCmdResult::loop_next().with_new_cmds(vec![
-                session::CmdInput {
-                    input: format!("/asset-crypt-revoke '{}' {}", asset_name, recipient),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
-                session::CmdInput {
-                    input: format!(
+                session::CmdInput::internal(format!("/asset-crypt-revoke '{}' {}", asset_name, recipient)),
+                session::CmdInput::internal(format!(
                         "/asset-acl-set '{}' {} inherit:read-data inherit:read-revisions inherit:write-data inherit:push-data",
                         asset_name, principal
-                    ),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
+                    )),
             ]).with_new_cmds_cascade_error(true)
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
@@ -5907,11 +5890,14 @@ pub async fn process_cmd(
                 )
                 .await;
             } else {
-                session.cmd_queue.lock().await.push_cmd(session::CmdInput {
-                    input: format!("/asset.no_create {}", asset_name),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                });
+                session
+                    .cmd_queue
+                    .lock()
+                    .await
+                    .push_cmd(session::CmdInput::internal(format!(
+                        "/asset.no_create {}",
+                        asset_name
+                    )));
             }
             ProcessCmdResult::loop_next()
         }
@@ -6013,11 +5999,14 @@ pub async fn process_cmd(
                     match answer.trim().parse::<usize>() {
                         Ok(i) if i < asset_list_res.entries.len() => {
                             let asset_name = &asset_list_res.entries[i].name;
-                            session.cmd_queue.lock().await.push_cmd(session::CmdInput {
-                                input: format!("/chat-resume {}", asset_name),
-                                source: session::CmdSource::Internal(false),
-                                reply_channel: None,
-                            });
+                            session
+                                .cmd_queue
+                                .lock()
+                                .await
+                                .push_cmd(session::CmdInput::internal(format!(
+                                    "/chat-resume {}",
+                                    asset_name
+                                )));
                             break;
                         }
                         _ => {
@@ -6551,11 +6540,8 @@ pub async fn process_cmd(
             );
             outln!(io);
 
-            ProcessCmdResult::loop_next().with_new_cmds(vec![session::CmdInput {
-                input: "/bot-probe".to_string(),
-                source: session::CmdSource::Internal(false),
-                reply_channel: None,
-            }])
+            ProcessCmdResult::loop_next()
+                .with_new_cmds(vec![session::CmdInput::internal("/bot-probe".to_string())])
         }
         cmd::Cmd::BotGetActive => {
             let _username = if let Some(account) = &session.account {
@@ -7041,37 +7027,21 @@ pub async fn process_cmd(
                         username: res.username,
                         token: res.token,
                     });
-                    new_cmds.push(session::CmdInput {
-                        input: "/prep.info Setting up your **inbox**".to_string(),
-                        source: session::CmdSource::Internal(true),
-                        reply_channel: None,
-                    });
-                    new_cmds.push(session::CmdInput {
-                        input: "/inbox-setup".to_string(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    });
-                    new_cmds.push(session::CmdInput {
-                        input: "/prep.info Setting up your data **encryption key**\nUnlike your account password, we **CANNOT** help you if you forget this password.".to_string(),
-                        source: session::CmdSource::Internal(true),
-                        reply_channel: None,
-                    });
-                    new_cmds.push(session::CmdInput {
-                        input: "/asset-crypt-setup".to_string(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    });
+                    new_cmds.push(session::CmdInput::internal_printed(
+                        "/prep.info Setting up your **inbox**".to_string(),
+                    ));
+                    new_cmds.push(session::CmdInput::internal("/inbox-setup".to_string()));
+                    new_cmds.push(session::CmdInput::internal_printed("/prep.info Setting up your data **encryption key**\nUnlike your account password, we **CANNOT** help you if you forget this password.".to_string()));
+                    new_cmds.push(session::CmdInput::internal(
+                        "/asset-crypt-setup".to_string(),
+                    ));
                     // Do this silently. If it fails, that's okay.
-                    new_cmds.push(session::CmdInput {
-                        input: "/asset-folder-new .sys".to_string(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    });
-                    new_cmds.push(session::CmdInput {
-                        input: "/asset-folder-new .app".to_string(),
-                        source: session::CmdSource::Internal(false),
-                        reply_channel: None,
-                    });
+                    new_cmds.push(session::CmdInput::internal(
+                        "/asset-folder-new .sys".to_string(),
+                    ));
+                    new_cmds.push(session::CmdInput::internal(
+                        "/asset-folder-new .app".to_string(),
+                    ));
                 }
                 Err(e) => {
                     errorln!(io, "error: {}", e);
@@ -7222,27 +7192,16 @@ pub async fn process_cmd(
                 }
             };
             ProcessCmdResult::loop_next().with_new_cmds(vec![
-                session::CmdInput {
-                    input: "/asset-push //inbox\n{}".to_string(),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
-                session::CmdInput {
-                    input: "/asset-acl-set //inbox everyone deny:read-data".to_string(),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
-                session::CmdInput {
-                    input: "/asset-acl-set //inbox everyone allow:push-data".to_string(),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
-                session::CmdInput {
-                    input: "/asset-md-set-key //inbox content_type \"application/json\""
-                        .to_string(),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                },
+                session::CmdInput::internal("/asset-push //inbox\n{}".to_string()),
+                session::CmdInput::internal(
+                    "/asset-acl-set //inbox everyone deny:read-data".to_string(),
+                ),
+                session::CmdInput::internal(
+                    "/asset-acl-set //inbox everyone allow:push-data".to_string(),
+                ),
+                session::CmdInput::internal(
+                    "/asset-md-set-key //inbox content_type \"application/json\"".to_string(),
+                ),
             ])
         }
         cmd::Cmd::AccountLogout(cmd::AccountLogoutCmd { username }) => {
