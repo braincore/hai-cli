@@ -322,8 +322,6 @@ fn file_completer(path_prefix: &str, dir_only: bool) -> Vec<Suggestion> {
 
     tracing::debug!(?dir_to_search, ?scan_full_dir, "file_completer");
 
-    let dir_to_search_string = dir_to_search.clone().to_string_lossy().into_owned();
-
     // Collect matching files and directories
     let mut completions = Vec::new();
     if let Ok(entries) = fs::read_dir(dir_to_search) {
@@ -364,12 +362,20 @@ fn file_completer(path_prefix: &str, dir_only: bool) -> Vec<Suggestion> {
 
                 let display_value = abbreviated_path + if is_dir { "/" } else { "" };
 
+                // Show only the final component in the menu
+                let display_override = if display_value.trim_end_matches('/').contains('/') {
+                    Some(format!(
+                        "{}{}",
+                        file_name_str,
+                        if is_dir { "/" } else { "" }
+                    ))
+                } else {
+                    None
+                };
+
                 completions.push(Suggestion {
-                    value: display_value.clone(),
-                    display_override: compute_display_override_for_path(
-                        &dir_to_search_string,
-                        &display_value,
-                    ),
+                    value: display_value,
+                    display_override,
                     description: None,
                     style: None,
                     extra: None,
