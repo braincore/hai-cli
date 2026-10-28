@@ -2581,19 +2581,6 @@ add it to the toolbox.
     Entry::Cmd(
         cmd(
             Slash,
-            Cow::Borrowed("queue-pop"),
-            Cow::Borrowed("utils"),
-            Cow::Borrowed(&[
-            arg("queue-name", Text, Required),
-            ]),
-            Doc::new("Pop an item from the listen queue"),
-        )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
-    ),
-    Entry::Cmd(
-        cmd(
-            Slash,
             Cow::Borrowed("image-uri"),
             Cow::Borrowed("utils"),
             Cow::Borrowed(&[arg("data-uri", Text, Required)]),

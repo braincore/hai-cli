@@ -7530,30 +7530,6 @@ pub async fn process_cmd(
             }
             ProcessCmdResult::loop_next()
         }
-        cmd::Cmd::QueuePop(cmd::QueuePopCmd { queue_name }) => {
-            let cmds = db::listen_queue_pop(
-                &mut *db.lock().await,
-                queue_name.as_ref().unwrap_or(&"".to_string()),
-            )
-            .expect("failed to pop from queue");
-            if let Some(cmds) = cmds {
-                let mut new_cmds = vec![session::CmdInput {
-                    input: "/new".to_string(),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                }];
-                for (index, cmd) in cmds.iter().enumerate() {
-                    new_cmds.push(session::CmdInput {
-                        input: cmd.clone(),
-                        source: session::CmdSource::ListenQueue(queue_name.clone(), index as u32),
-                        reply_channel: None,
-                    });
-                }
-                ProcessCmdResult::loop_next().with_new_cmds(new_cmds)
-            } else {
-                ProcessCmdResult::loop_next()
-            }
-        }
         cmd::Cmd::ToolboxAdd(toolbox_add_cmd) => {
             let tool_stem_cmd = tool::tool_to_stem_cmd(&toolbox_add_cmd.tool);
             let tool_bang_cmd =

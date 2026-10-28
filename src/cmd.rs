@@ -258,8 +258,6 @@ pub enum Cmd {
     Cost,
     /// Web search
     WebSearch(WebSearchCmd),
-    /// Pop a message from the listen queue
-    QueuePop(QueuePopCmd),
     /// Load an image from a base64 data-uri into the conversation
     ImageUri(ImageUriCmd),
     /// Reprint conversation history (undocumented)
@@ -1113,11 +1111,6 @@ pub struct WebSearchCmd {
     pub pm: bool,
     pub py: bool,
     pub range: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct QueuePopCmd {
-    pub queue_name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1979,9 +1972,6 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
                 "" => None,
                 s => Some(s == "on"),
             },
-        }),
-        "queue-pop" => Cmd::QueuePop(QueuePopCmd {
-            queue_name: r.opt_take(0),
         }),
         "image-uri" => Cmd::ImageUri(ImageUriCmd {
             data_uri: r.take(0),

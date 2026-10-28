@@ -14,7 +14,6 @@ pub mod macos_se;
 pub mod mcp;
 pub mod model_pricing;
 pub mod opengraph;
-pub mod queue_listen;
 
 /// Returns the command and args needed to re-invoke this program.
 ///

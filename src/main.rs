@@ -139,16 +139,6 @@ enum CliSubcommand {
         #[arg(short = 'p', long = "print-all")]
         print_all: bool,
     },
-    /// Setup websocket listener for API-based commands
-    Listen {
-        /// The address to listen on (default: 127.0.0.1:1338)
-        #[arg(short = 'a', long = "address", default_value = "127.0.0.1:1338")]
-        address: String,
-
-        /// The origin allowed to send messages
-        #[arg(short = 'w', long = "whitelisted-origin")]
-        whitelisted_origin: Option<String>,
-    },
     /// Bot management commands
     Bot {
         #[command(subcommand)]
@@ -197,199 +187,53 @@ async fn main() -> process::ExitCode {
     // this signal handler intercepts ctrl+c which no-ops for this process. The
     // child tool subprocess receives the SIGINT.
     let mut ctrlc_handler = ctrlc_handler::CtrlcHandler::new();
-    if let Some(CliSubcommand::Listen {
-        address,
-        whitelisted_origin,
-    }) = args.subcommand
+    let (repl_mode, init_cmds, exit_when_done, force_yes, mute_all_but_final) = if let Some(
+        CliSubcommand::Bye {
+            cmds,
+            yes,
+            print_all,
+        },
+    ) =
+        args.subcommand
     {
-        crate::feature::queue_listen::listen(&address, whitelisted_origin).await;
-        process::ExitCode::from(0)
-    } else {
-        let (repl_mode, init_cmds, exit_when_done, force_yes, mute_all_but_final) = if let Some(
-            CliSubcommand::Bye {
-                cmds,
-                yes,
-                print_all,
-            },
-        ) =
-            args.subcommand
-        {
-            (
-                    ReplMode::Normal,
-                    cmds.into_iter()
-                        .enumerate()
-                        .map(|(idx, prompt)| {
-                            if prompt == "-" {
-                                if atty::is(atty::Stream::Stdin) {
-                                        eprintln!("No input detected on stdin. Did you forget to pipe or redirect a file?");
-                                        std::process::exit(1);
-                                    }
-                                    let mut stdin_buffer = String::new();
-                                    std::io::stdin().read_to_string(&mut stdin_buffer).unwrap();
-                                    session::CmdInput {
-                                        input: format!("/prep {}", stdin_buffer),
-                                        source: session::CmdSource::HaiBye(idx as u32),
-                                        reply_channel: None,
-                                    }
-                                } else {
-                                    session::CmdInput {
-                                        input: prompt,
-                                        source: session::CmdSource::HaiBye(idx as u32),
-                                        reply_channel: None,
-                                    }
+        (
+                ReplMode::Normal,
+                cmds.into_iter()
+                    .enumerate()
+                    .map(|(idx, prompt)| {
+                        if prompt == "-" {
+                            if atty::is(atty::Stream::Stdin) {
+                                    eprintln!("No input detected on stdin. Did you forget to pipe or redirect a file?");
+                                    std::process::exit(1);
                                 }
-                        })
-                        .collect(),
-                    true,
-                    yes,
-                    !print_all,
-                )
-        } else if let Some(CliSubcommand::Bot { command }) = args.subcommand {
-            let db = match db::open_db() {
-                Ok(db) => Arc::new(Mutex::new(db)),
-                Err(e) => {
-                    eprintln!("error: failed to open database: {}", e);
-                    return process::ExitCode::from(1);
-                }
-            };
-            let force_username = args
-                .username
-                .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
-            let account = if let Some(force_username) = force_username {
-                if force_username == "_" {
-                    None
-                } else {
-                    match db::get_account_by_username(&*db.lock().await, &force_username) {
-                        Ok(Some(account)) => Some(account),
-                        Ok(None) => {
-                            eprintln!(
-                                "error: `{}` is unavailable (try /account-login)",
-                                force_username
-                            );
-                            return process::ExitCode::from(1);
-                        }
-                        Err(e) => {
-                            eprintln!("error: failed to get account: {}", e);
-                            return process::ExitCode::from(1);
-                        }
-                    }
-                }
-            } else {
-                match db::get_active_account(&*db.lock().await) {
-                    Ok(account) => account,
-                    Err(e) => {
-                        eprintln!("error: failed to get active account: {}", e);
-                        return process::ExitCode::from(1);
-                    }
-                }
-            };
-            let out = Out::stdio();
-            match command {
-                BotSubcommand::Start { daemon } => {
-                    let _ = crate::feature::haibot::start_bot(&out, account, daemon).await;
-                    return process::ExitCode::from(0);
-                }
-                BotSubcommand::Stop => {
-                    let _ = crate::feature::haibot::stop_bot(&out).await;
-                    return process::ExitCode::from(0);
-                }
-                BotSubcommand::Status => {
-                    let _ = crate::feature::haibot::bot_status(&out).await;
-                    return process::ExitCode::from(0);
-                }
-            }
-        } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
-            let account_login_cmd = if let Some(password) = password {
-                format!("/account-login {} {}", username, password)
-            } else {
-                format!("/account-login {}", username)
-            };
-            (
-                ReplMode::Normal,
-                vec![session::CmdInput {
-                    input: account_login_cmd,
-                    // Use Internal to avoid printing command
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                }],
+                                let mut stdin_buffer = String::new();
+                                std::io::stdin().read_to_string(&mut stdin_buffer).unwrap();
+                                session::CmdInput {
+                                    input: format!("/prep {}", stdin_buffer),
+                                    source: session::CmdSource::HaiBye(idx as u32),
+                                    reply_channel: None,
+                                }
+                            } else {
+                                session::CmdInput {
+                                    input: prompt,
+                                    source: session::CmdSource::HaiBye(idx as u32),
+                                    reply_channel: None,
+                                }
+                            }
+                    })
+                    .collect(),
                 true,
-                false,
-                false,
+                yes,
+                !print_all,
             )
-        } else if let Some(CliSubcommand::SetKey {
-            provider,
-            key,
-            local,
-        }) = args.subcommand
-        {
-            let set_key_cmd = if local { "/set-key.local" } else { "/set-key" };
-            (
-                ReplMode::Normal,
-                vec![session::CmdInput {
-                    input: format!("{} {} {}", set_key_cmd, provider, key),
-                    source: session::CmdSource::Internal(false),
-                    reply_channel: None,
-                }],
-                true,
-                false,
-                false,
-            )
-        } else if let Some(CliSubcommand::Task {
-            task_ref,
-            trust,
-            key,
-        }) = args.subcommand
-        {
-            // When specified via the command-line, a relative file path may
-            // not be prefixed with "./" which will then be incorrectly treated
-            // as a task-fqn. To catch this, prefix "./" if the name has a dot
-            // (due to a .toml extension) which an fqn cannot have.
-            let fixed_task_ref = if !task_ref.starts_with("/")
-                && !task_ref.starts_with("./")
-                && !task_ref.starts_with("~")
-                && task_ref.contains(".")
-            {
-                format!("./{}", task_ref)
-            } else {
-                task_ref
-            };
-            let mut options = vec![];
-            if trust {
-                options.push("trust".to_string());
-            }
-            if let Some(key) = key {
-                options.push(format!("key=\"{key}\""));
-            }
-            let task_cmd = if options.is_empty() {
-                format!("/task {}", fixed_task_ref)
-            } else {
-                format!("/task.{} {}", options.join("."), fixed_task_ref)
-            };
-            (
-                ReplMode::Normal,
-                vec![session::CmdInput {
-                    input: task_cmd,
-                    source: session::CmdSource::User,
-                    reply_channel: None,
-                }],
-                false,
-                false,
-                false,
-            )
-        } else {
-            (ReplMode::Normal, vec![], false, false, false)
-        };
-        let db_conn = match db::open_db() {
-            Ok(db) => db,
+    } else if let Some(CliSubcommand::Bot { command }) = args.subcommand {
+        let db = match db::open_db() {
+            Ok(db) => Arc::new(Mutex::new(db)),
             Err(e) => {
-                eprintln!("error: {e}");
+                eprintln!("error: failed to open database: {}", e);
                 return process::ExitCode::from(1);
             }
         };
-        let db = Arc::new(Mutex::new(db_conn));
-
-        // Prioritize command-line specified username/model over env var. Env
-        // var will always be specified when `hai` shells out to `hai`.
         let force_username = args
             .username
             .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
@@ -407,74 +251,211 @@ async fn main() -> process::ExitCode {
                         return process::ExitCode::from(1);
                     }
                     Err(e) => {
-                        eprintln!("error: {e}");
+                        eprintln!("error: failed to get account: {}", e);
                         return process::ExitCode::from(1);
                     }
                 }
             }
         } else {
             match db::get_active_account(&*db.lock().await) {
+                Ok(account) => account,
+                Err(e) => {
+                    eprintln!("error: failed to get active account: {}", e);
+                    return process::ExitCode::from(1);
+                }
+            }
+        };
+        let out = Out::stdio();
+        match command {
+            BotSubcommand::Start { daemon } => {
+                let _ = crate::feature::haibot::start_bot(&out, account, daemon).await;
+                return process::ExitCode::from(0);
+            }
+            BotSubcommand::Stop => {
+                let _ = crate::feature::haibot::stop_bot(&out).await;
+                return process::ExitCode::from(0);
+            }
+            BotSubcommand::Status => {
+                let _ = crate::feature::haibot::bot_status(&out).await;
+                return process::ExitCode::from(0);
+            }
+        }
+    } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
+        let account_login_cmd = if let Some(password) = password {
+            format!("/account-login {} {}", username, password)
+        } else {
+            format!("/account-login {}", username)
+        };
+        (
+            ReplMode::Normal,
+            vec![session::CmdInput {
+                input: account_login_cmd,
+                // Use Internal to avoid printing command
+                source: session::CmdSource::Internal(false),
+                reply_channel: None,
+            }],
+            true,
+            false,
+            false,
+        )
+    } else if let Some(CliSubcommand::SetKey {
+        provider,
+        key,
+        local,
+    }) = args.subcommand
+    {
+        let set_key_cmd = if local { "/set-key.local" } else { "/set-key" };
+        (
+            ReplMode::Normal,
+            vec![session::CmdInput {
+                input: format!("{} {} {}", set_key_cmd, provider, key),
+                source: session::CmdSource::Internal(false),
+                reply_channel: None,
+            }],
+            true,
+            false,
+            false,
+        )
+    } else if let Some(CliSubcommand::Task {
+        task_ref,
+        trust,
+        key,
+    }) = args.subcommand
+    {
+        // When specified via the command-line, a relative file path may
+        // not be prefixed with "./" which will then be incorrectly treated
+        // as a task-fqn. To catch this, prefix "./" if the name has a dot
+        // (due to a .toml extension) which an fqn cannot have.
+        let fixed_task_ref = if !task_ref.starts_with("/")
+            && !task_ref.starts_with("./")
+            && !task_ref.starts_with("~")
+            && task_ref.contains(".")
+        {
+            format!("./{}", task_ref)
+        } else {
+            task_ref
+        };
+        let mut options = vec![];
+        if trust {
+            options.push("trust".to_string());
+        }
+        if let Some(key) = key {
+            options.push(format!("key=\"{key}\""));
+        }
+        let task_cmd = if options.is_empty() {
+            format!("/task {}", fixed_task_ref)
+        } else {
+            format!("/task.{} {}", options.join("."), fixed_task_ref)
+        };
+        (
+            ReplMode::Normal,
+            vec![session::CmdInput {
+                input: task_cmd,
+                source: session::CmdSource::User,
+                reply_channel: None,
+            }],
+            false,
+            false,
+            false,
+        )
+    } else {
+        (ReplMode::Normal, vec![], false, false, false)
+    };
+    let db_conn = match db::open_db() {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return process::ExitCode::from(1);
+        }
+    };
+    let db = Arc::new(Mutex::new(db_conn));
+
+    // Prioritize command-line specified username/model over env var. Env
+    // var will always be specified when `hai` shells out to `hai`.
+    let force_username = args
+        .username
+        .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
+    let account = if let Some(force_username) = force_username {
+        if force_username == "_" {
+            None
+        } else {
+            match db::get_account_by_username(&*db.lock().await, &force_username) {
                 Ok(Some(account)) => Some(account),
-                Ok(None) => None,
+                Ok(None) => {
+                    eprintln!(
+                        "error: `{}` is unavailable (try /account-login)",
+                        force_username
+                    );
+                    return process::ExitCode::from(1);
+                }
                 Err(e) => {
                     eprintln!("error: {e}");
                     return process::ExitCode::from(1);
                 }
             }
-        };
-
-        let force_model_str = args
-            .model
-            .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
-        let force_ai_model = if let Some(force_model_str) = force_model_str {
-            if let Some(ai_model) = config::ai_model_from_string(&force_model_str) {
-                Some(ai_model)
-            } else {
-                eprintln!("error: unknown model {}", force_model_str);
-                return process::ExitCode::from(1);
-            }
-        } else {
-            None
-        };
-
-        let (io, actor_handle) = if args.kernel {
-            crate::feature::kernel::run_kernel(ctrlc_handler.clone())
-                .await
-                .map(|(io, actor_handle)| (io, Some(actor_handle)))
-                .expect("Failed to start kernel")
-        } else {
-            (Io::stdio(), None)
-        };
-
-        let repl_res = repl(
-            db,
-            &io,
-            config_path_override.as_deref(),
-            args.debug,
-            args.incognito,
-            account,
-            force_ai_model,
-            &mut ctrlc_handler,
-            repl_mode,
-            init_cmds,
-            exit_when_done,
-            force_yes,
-            mute_all_but_final,
-            args.kernel,
-        )
-        .await;
-
-        drop(io);
-        if let Some(actor_handle) = actor_handle {
-            let _ = actor_handle.await;
         }
-
-        match repl_res {
-            Ok(exit_code) => process::ExitCode::from(exit_code),
+    } else {
+        match db::get_active_account(&*db.lock().await) {
+            Ok(Some(account)) => Some(account),
+            Ok(None) => None,
             Err(e) => {
                 eprintln!("error: {e}");
-                process::ExitCode::from(1)
+                return process::ExitCode::from(1);
             }
+        }
+    };
+
+    let force_model_str = args
+        .model
+        .or(std::env::var("HAI_MODEL").ok().filter(|s| !s.is_empty()));
+    let force_ai_model = if let Some(force_model_str) = force_model_str {
+        if let Some(ai_model) = config::ai_model_from_string(&force_model_str) {
+            Some(ai_model)
+        } else {
+            eprintln!("error: unknown model {}", force_model_str);
+            return process::ExitCode::from(1);
+        }
+    } else {
+        None
+    };
+
+    let (io, actor_handle) = if args.kernel {
+        crate::feature::kernel::run_kernel(ctrlc_handler.clone())
+            .await
+            .map(|(io, actor_handle)| (io, Some(actor_handle)))
+            .expect("Failed to start kernel")
+    } else {
+        (Io::stdio(), None)
+    };
+
+    let repl_res = repl(
+        db,
+        &io,
+        config_path_override.as_deref(),
+        args.debug,
+        args.incognito,
+        account,
+        force_ai_model,
+        &mut ctrlc_handler,
+        repl_mode,
+        init_cmds,
+        exit_when_done,
+        force_yes,
+        mute_all_but_final,
+        args.kernel,
+    )
+    .await;
+
+    drop(io);
+    if let Some(actor_handle) = actor_handle {
+        let _ = actor_handle.await;
+    }
+
+    match repl_res {
+        Ok(exit_code) => process::ExitCode::from(exit_code),
+        Err(e) => {
+            eprintln!("error: {e}");
+            process::ExitCode::from(1)
         }
     }
 }
@@ -788,21 +769,6 @@ async fn repl(
                     &session.cmd_registry,
                     &task_fqn,
                     *step_id,
-                    &cmd_info.input,
-                    &masked_strings,
-                );
-            } else if let session::CmdSource::ListenQueue(queue_name, sub_index) = &cmd_info.source
-            {
-                let step_name = if let Some(queue_name) = queue_name {
-                    &format!("queue/{}", queue_name)
-                } else {
-                    "queue"
-                };
-                print_step(
-                    io,
-                    &session.cmd_registry,
-                    step_name,
-                    *sub_index as u32,
                     &cmd_info.input,
                     &masked_strings,
                 );
