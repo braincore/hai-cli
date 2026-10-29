@@ -3149,7 +3149,7 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args, using_cargo) = crate::feature::self_invocation();
+            let (exe, mut args, using_cargo) = crate::feature::self_invocation(username);
             if let Some(model) = spawn_arg.model {
                 args.push("-m".into());
                 args.push(model);
@@ -3664,7 +3664,7 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args, _using_cargo) = crate::feature::self_invocation();
+            let (exe, mut args, _using_cargo) = crate::feature::self_invocation(username);
             if let Some(model) = repl_arg.model {
                 args.push("-m".to_string());
                 args.push(model);

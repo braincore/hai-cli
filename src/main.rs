@@ -68,8 +68,8 @@ struct Cli {
     incognito: bool, // Defaults to false
 
     /// Use specific account ignoring the last active one
-    #[arg(short = 'u', long = "username")]
-    username: Option<String>,
+    #[arg(short = 'u', long = "user")]
+    user: Option<String>,
 
     /// Use specific AI model
     #[arg(short = 'm', long = "model")]
@@ -235,7 +235,7 @@ async fn main() -> process::ExitCode {
             }
         };
         let force_username = args
-            .username
+            .user
             .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
         let account = if let Some(force_username) = force_username {
             if force_username == "_" {
@@ -368,7 +368,7 @@ async fn main() -> process::ExitCode {
     // Prioritize command-line specified username/model over env var. Env
     // var will always be specified when `hai` shells out to `hai`.
     let force_username = args
-        .username
+        .user
         .or(std::env::var("HAI_USER").ok().filter(|s| !s.is_empty()));
     let account = if let Some(force_username) = force_username {
         if force_username == "_" {

@@ -20,6 +20,7 @@ pub mod opengraph;
 /// - Re-invokes using `cargo run` if it was running under cargo.
 /// - Re-invokes with the debug flag if it was present in the current
 ///   invocation.
+/// - Adds the `--user` flag to ensure the same account is used.
 ///
 /// # Returns
 ///
@@ -28,10 +29,16 @@ pub mod opengraph;
 /// The `using cargo?` boolean is useful for adjusting usage in development
 /// mode, e.g. longer timeout when waiting for invocation due to compilation
 /// time.
-fn self_invocation() -> (String, Vec<String>, bool) {
+fn self_invocation(account_user: Option<&str>) -> (String, Vec<String>, bool) {
     // For dev: check if running under `cargo`, which sets the `CARGO` env var.
     // Beware that `CARGO` may have been inherited from a parent process and
     // the current binary may not actually be from `cargo run`.
+
+    let user_flag = if let Some(user) = account_user {
+        vec!["--user".to_string(), user.to_string()]
+    } else {
+        vec!["--user".to_string(), "_".to_string()]
+    };
 
     // Path of Cargo.toml
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -67,7 +74,11 @@ fn self_invocation() -> (String, Vec<String>, bool) {
             args.push(flag);
         }
 
-        (cargo, args, true)
+        (
+            cargo,
+            args.into_iter().chain(user_flag.into_iter()).collect(),
+            true,
+        )
     } else {
         // Production/non-dev: use the current executable
         let exe = std::env::current_exe()
@@ -75,7 +86,14 @@ fn self_invocation() -> (String, Vec<String>, bool) {
             .to_string_lossy()
             .to_string();
 
-        (exe, debug_flag().into_iter().collect(), false)
+        (
+            exe,
+            debug_flag()
+                .into_iter()
+                .chain(user_flag.into_iter())
+                .collect(),
+            false,
+        )
     }
 }
 

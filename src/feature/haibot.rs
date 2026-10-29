@@ -629,7 +629,14 @@ pub async fn run_bot_loop(
 
     // Run the scheduler (which will also spawn asset change listeners)
     let api_client_for_scheduler = api_client.clone();
-    run_scheduler(out, job_groups, schedule_notify, api_client_for_scheduler).await
+    run_scheduler(
+        out,
+        account.map(|a| a.username),
+        job_groups,
+        schedule_notify,
+        api_client_for_scheduler,
+    )
+    .await
 }
 
 /// Fetching the list of jobs is equivalent to listing all assets at a given
@@ -1125,6 +1132,7 @@ struct AssetWatcherState {
 
 async fn run_scheduler(
     out: &Out,
+    account_user: Option<String>,
     job_groups: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
     api_client: crate::api::client::HaiClient,
@@ -1152,7 +1160,13 @@ async fn run_scheduler(
         check_daemon_health(&mut daemons).await;
 
         // Reconcile asset watchers
-        reconcile_asset_watchers(&scheduled_jobs, &mut asset_watchers, &api_client).await;
+        reconcile_asset_watchers(
+            &scheduled_jobs,
+            &mut asset_watchers,
+            &api_client,
+            account_user.clone(),
+        )
+        .await;
 
         // Update next_runs for any new/changed jobs
         update_next_runs(&scheduled_jobs, &mut next_runs);
@@ -1166,6 +1180,7 @@ async fn run_scheduler(
                 // Time to run this job
                 if let Some(job) = scheduled_jobs.iter().find(|j| job_key_for(j) == job_key) {
                     execute_job(
+                        account_user.clone(),
                         &job_key,
                         job.description.as_deref(),
                         job.task.as_deref(),
@@ -1250,6 +1265,7 @@ async fn reconcile_asset_watchers(
     jobs: &[ScheduledJob],
     watchers: &mut HashMap<String, AssetWatcherState>,
     api_client: &crate::api::client::HaiClient,
+    account_user: Option<String>,
 ) {
     // Find all asset change jobs
     let asset_change_jobs: HashMap<String, &ScheduledJob> = jobs
@@ -1288,6 +1304,7 @@ async fn reconcile_asset_watchers(
 
                 match spawn_asset_watcher(
                     api_client.clone(),
+                    account_user.clone(),
                     job_key.clone(),
                     asset_name.clone(),
                     job.task.clone(),
@@ -1311,6 +1328,7 @@ async fn reconcile_asset_watchers(
 /// Spawn an asset watcher that listens for changes to a specific asset
 async fn spawn_asset_watcher(
     api_client: crate::api::client::HaiClient,
+    account_user: Option<String>,
     job_key: String,
     asset_name: String,
     task: Option<String>,
@@ -1341,6 +1359,7 @@ async fn spawn_asset_watcher(
     let handle = tokio::spawn(async move {
         asset_watcher_loop(
             api_client,
+            account_user,
             job_key,
             asset_name,
             task,
@@ -1357,6 +1376,7 @@ async fn spawn_asset_watcher(
 /// The main loop for watching an asset for changes
 async fn asset_watcher_loop(
     api_client: crate::api::client::HaiClient,
+    account_user: Option<String>,
     job_key: String,
     asset_name: String,
     task: Option<String>,
@@ -1480,6 +1500,7 @@ async fn asset_watcher_loop(
 
                                 // Execute the job with the asset revision
                                 execute_job(
+                                    account_user.clone(),
                                     &job_key,
                                     description.as_deref(),
                                     task.as_deref(),
@@ -1991,6 +2012,7 @@ fn last_day_of_month(year: i32, month: u32) -> u32 {
 //
 
 async fn execute_job(
+    account_user: Option<String>,
     job_key: &str,
     description: Option<&str>,
     task: Option<&str>,
@@ -1999,7 +2021,8 @@ async fn execute_job(
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
-    let (program, mut args, _using_cargo) = crate::feature::self_invocation();
+    let (program, mut args, _using_cargo) =
+        crate::feature::self_invocation(account_user.as_deref());
 
     args.push("bye".to_string());
 
