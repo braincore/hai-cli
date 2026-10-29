@@ -358,7 +358,7 @@ pub async fn save_chat_as_asset(
             {
                 "handler": {
                     "type": "asset_app",
-                    "asset_name": "/hai/app/chatlog"
+                    "asset_name": "/hai/app/hc"
                 }
             }
         ])),
