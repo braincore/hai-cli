@@ -1516,6 +1516,12 @@ pub async fn process_cmd(
             raw,
             show_line_numbers,
             image_hq,
+        })
+        | cmd::Cmd::HttpCat(cmd::HttpCatCmd {
+            url,
+            raw,
+            show_line_numbers,
+            image_hq,
         }) => {
             let http_response = match reqwest::Client::new()
                 .get(&url)
@@ -1566,21 +1572,21 @@ pub async fn process_cmd(
                         return ProcessCmdResult::loop_next();
                     };
 
-                    let token_count = session::calc_image_tokens(&session.ai, image_hq, img_dim);
-                    history_entries.push(HistoryEntry::UserImage(
-                        img_png_b64.clone(),
-                        image_hq,
-                        img_dim,
-                    ));
                     let was_recording = io.record_off();
-                    io.display("image/png", &img_png_b64);
-                    outln!(
-                        io,
-                        "Loaded: {} ({} tokens)",
-                        url,
-                        token_count.to_formatted_string(&Locale::en)
-                    );
+                    if matches!(cmd, cmd::Cmd::HttpCat(_)) {
+                        io.display("image/png", &img_png_b64);
+                    } else {
+                        let token_count =
+                            session::calc_image_tokens(&session.ai, image_hq, img_dim);
+                        outln!(
+                            io,
+                            "Loaded: {} ({} tokens)",
+                            url,
+                            token_count.to_formatted_string(&Locale::en)
+                        );
+                    }
                     io.record_set(was_recording);
+                    history_entries.push(HistoryEntry::UserImage(img_png_b64, image_hq, img_dim));
                 }
                 Some("application/pdf") => {
                     let pdf_bytes = if let Ok(pdf_bytes) = http_response.bytes().await {
@@ -1603,16 +1609,20 @@ pub async fn process_cmd(
                                 None,
                                 false,
                             );
-                            let token_count = bpe_tokenizer
-                                .encode_with_special_tokens(&pdf_contents_with_delimeters)
-                                .len() as u32;
                             let was_recording = io.record_off();
-                            outln!(
-                                io,
-                                "Loaded: {} ({} tokens)",
-                                &url,
-                                token_count.to_formatted_string(&Locale::en)
-                            );
+                            if matches!(cmd, cmd::Cmd::HttpCat(_)) {
+                                outln!(io, "{}", pdf_as_markdown);
+                            } else {
+                                let token_count = bpe_tokenizer
+                                    .encode_with_special_tokens(&pdf_contents_with_delimeters)
+                                    .len() as u32;
+                                outln!(
+                                    io,
+                                    "Loaded: {} ({} tokens)",
+                                    &url,
+                                    token_count.to_formatted_string(&Locale::en)
+                                );
+                            }
                             io.record_set(was_recording);
                             history_entries
                                 .push(HistoryEntry::UserText(pdf_contents_with_delimeters));
@@ -1673,19 +1683,21 @@ pub async fn process_cmd(
 
                     let url_contents_with_delimiters =
                         add_content_delimiters("URL", &contents, &url, None, show_line_numbers);
-
-                    let token_count = bpe_tokenizer
-                        .encode_with_special_tokens(&url_contents_with_delimiters)
-                        .len() as u32;
-
                     let was_recording = io.record_off();
-                    outln!(
-                        io,
-                        "Loaded ({}): {} ({} tokens)",
-                        format,
-                        title.unwrap_or(url.clone()),
-                        token_count.to_formatted_string(&Locale::en)
-                    );
+                    if matches!(cmd, cmd::Cmd::HttpCat(_)) {
+                        outln!(io, "{}", contents);
+                    } else {
+                        let token_count = bpe_tokenizer
+                            .encode_with_special_tokens(&url_contents_with_delimiters)
+                            .len() as u32;
+                        outln!(
+                            io,
+                            "Loaded ({}): {} ({} tokens)",
+                            format,
+                            title.unwrap_or(url.clone()),
+                            token_count.to_formatted_string(&Locale::en)
+                        );
+                    }
                     io.record_set(was_recording);
 
                     history_entries
@@ -1695,6 +1707,7 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
                 .with_retention_policy(LogEntryRetentionPolicy::ConversationLoad)
                 .with_history_entries(history_entries)
+                .with_history_entries_visible(matches!(cmd, cmd::Cmd::HttpCat(_)))
         }
         cmd::Cmd::Task(cmd::TaskCmd {
             task_ref,

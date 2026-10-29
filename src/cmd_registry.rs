@@ -1125,6 +1125,22 @@ pub static REGISTRY: &[Entry] = &[
         ])
         .with_traits(Traits::NONE.net()),
     ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("http-cat"),
+            Cow::Borrowed("http"),
+            Cow::Borrowed(&[arg("url", Url, Required)]),
+            Doc::new("Load a URL into the conversation and print its contents")
+                .more("Supports text, html, PNG/JPG images, and PDFs"),
+        )
+        .with_opts(&[
+            OPT_N,
+            flag("raw", "Return raw content rather than extracting markdown"),
+            OPT_HQ,
+        ])
+        .with_traits(Traits::NONE.net()),
+    ),
     //
     // Exec
     //

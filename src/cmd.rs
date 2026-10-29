@@ -51,6 +51,8 @@ pub enum Cmd {
     FilePatch(FilePatchCmd),
     /// Load URL into conversation
     HttpGet(HttpGetCmd),
+    /// Load URL into conversation and print its contents
+    HttpCat(HttpCatCmd),
     /// Add pinned message to conversation
     Pin(PinCmd),
     /// Add a message without triggering an AI response
@@ -402,6 +404,18 @@ pub struct FilePatchCmd {
 
 #[derive(Clone, Debug)]
 pub struct HttpGetCmd {
+    /// URL to load from
+    pub url: String,
+    /// Do not extract article and convert HTML to markdown
+    pub raw: bool,
+    /// Whether to include line numbers
+    pub show_line_numbers: bool,
+    /// If it's an image, whether to load the high-resolution version
+    pub image_hq: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct HttpCatCmd {
     /// URL to load from
     pub url: String,
     /// Do not extract article and convert HTML to markdown
@@ -1552,6 +1566,12 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         // HTTP
         //
         "http-get" => Cmd::HttpGet(HttpGetCmd {
+            url: r.take(0),
+            raw: r.opts.bool("raw"),
+            show_line_numbers: r.opts.bool("n"),
+            image_hq: r.opts.bool("hq"),
+        }),
+        "http-cat" => Cmd::HttpCat(HttpCatCmd {
             url: r.take(0),
             raw: r.opts.bool("raw"),
             show_line_numbers: r.opts.bool("n"),
