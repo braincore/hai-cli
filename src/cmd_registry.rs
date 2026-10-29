@@ -1934,41 +1934,6 @@ add it to the toolbox.
     Entry::Cmd(
         cmd(
             Slash,
-            Cow::Borrowed("asset-folder-collapse"),
-            Cow::Borrowed("asset"),
-            Cow::Borrowed(&[arg("path", AssetPrefix, Required)]),
-            Doc::new(
-                "[Deprecated] Collapse a folder so it appears as a single entry when listing its parent",
-            ),
-        )
-        .for_audience(Audience::LlmOnly)
-        .with_traits(Traits::NONE.net()),
-    ),
-    Entry::Cmd(
-        cmd(
-            Slash,
-            Cow::Borrowed("asset-folder-expand"),
-            Cow::Borrowed("asset"),
-            Cow::Borrowed(&[arg("path", AssetPrefix, Required)]),
-            Doc::new("[Deprecated] Expand a previously collapsed folder"),
-        )
-        .for_audience(Audience::LlmOnly)
-        .with_traits(Traits::NONE.net()),
-    ),
-    Entry::Cmd(
-        cmd(
-            Slash,
-            Cow::Borrowed("asset-folder-list"),
-            Cow::Borrowed("asset"),
-            Cow::Borrowed(&[arg("path", AssetPrefix, Optional)]),
-            Doc::new("[Deprecated] List collapsed folders, optionally filtered by a path prefix"),
-        )
-        .for_audience(Audience::LlmOnly)
-        .with_traits(Traits::NONE.net()),
-    ),
-    Entry::Cmd(
-        cmd(
-            Slash,
             Cow::Borrowed("asset-pools"),
             Cow::Borrowed("asset"),
             Cow::Borrowed(&[]),

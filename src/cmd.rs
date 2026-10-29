@@ -174,12 +174,6 @@ pub enum Cmd {
     AssetMdDelKey(AssetMdDelKeyCmd),
     /// New asset folder
     AssetFolderNew(AssetFolderNewCmd),
-    /// Collapse asset folder
-    AssetFolderCollapse(AssetFolderCollapseCmd),
-    /// Expand asset folder
-    AssetFolderExpand(AssetFolderExpandCmd),
-    /// List asset folder
-    AssetFolderList(AssetFolderListCmd),
     /// Grant user ability to decrypt asset
     AssetCryptGrant(AssetCryptGrantCmd),
     /// Remove user's decryption key from an asset
@@ -918,24 +912,6 @@ pub struct AssetMdDelKeyCmd {
 pub struct AssetFolderNewCmd {
     /// Name of the folder asset
     pub name: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssetFolderCollapseCmd {
-    /// Folder prefix to collapse
-    pub prefix: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssetFolderExpandCmd {
-    /// Folder prefix to expand
-    pub prefix: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct AssetFolderListCmd {
-    /// Prefix of folders to list
-    pub prefix: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1806,13 +1782,6 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
             key: r.take(1),
         }),
         "asset-folder-new" => Cmd::AssetFolderNew(AssetFolderNewCmd { name: r.take(0) }),
-        "asset-folder-collapse" => {
-            Cmd::AssetFolderCollapse(AssetFolderCollapseCmd { prefix: r.take(0) })
-        }
-        "asset-folder-expand" => Cmd::AssetFolderExpand(AssetFolderExpandCmd { prefix: r.take(0) }),
-        "asset-folder-list" => Cmd::AssetFolderList(AssetFolderListCmd {
-            prefix: r.opt_take(0),
-        }),
         "asset-pools" => Cmd::AssetPools,
         "asset-pool-new" => Cmd::AssetPoolNew(AssetPoolNewCmd {
             usernames: r.take_rest(0),
