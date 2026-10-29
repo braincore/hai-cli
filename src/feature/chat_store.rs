@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::io::{Io, SectionKind};
 use crate::{
     api, asset_async_writer, asset_cache::AssetBlobCache, asset_reader, chat, config,
-    ctrlc_handler, db, feature::asset_crypt, io::Out, session,
+    ctrlc_handler, db, feature::asset_crypt, session,
 };
 use crate::{errorln, flush, infoln, out, outln};
 
@@ -324,7 +324,7 @@ pub async fn save_chat_as_asset(
             );
             flush!(io);
             prompt_ai_simple(
-                &io.out,
+                &io,
                 &format!(
                     r#"Generate a short title for the included chat log.
     Do not quote it.
@@ -984,7 +984,7 @@ pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &
 // --
 
 async fn prompt_ai_simple(
-    out: &Out,
+    io: &Io,
     prompt: &str,
     session: &mut session::SessionState,
     cfg: &config::Config,
@@ -1000,7 +1000,7 @@ async fn prompt_ai_simple(
         tool_calls: None,
     }];
     let (responses, _usage) = crate::prompt_ai(
-        &out,
+        &io,
         &msg_history,
         &Vec::new(),
         session,

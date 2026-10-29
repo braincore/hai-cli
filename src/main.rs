@@ -739,8 +739,12 @@ async fn repl(
                     None
                 };
                 let (toolbox_as_strings, toolbox_tokens) =
-                    get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone())
-                        .await;
+                    get_toolbox_strings_and_tool_schema_input_tokens(
+                        &io,
+                        &session,
+                        tokenizer.clone(),
+                    )
+                    .await;
                 io.repl_status(
                     index,
                     llm_model_name,
@@ -826,7 +830,8 @@ async fn repl(
                 None
             };
             let (toolbox_as_strings, toolbox_tokens) =
-                get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+                get_toolbox_strings_and_tool_schema_input_tokens(&io, &session, tokenizer.clone())
+                    .await;
             io.update_config(
                 &session.cmd_registry,
                 &account,
@@ -880,7 +885,8 @@ async fn repl(
                 editor_prompt.set_task_mode(None);
             }
             let (toolbox_tools, tool_mode_tokens) =
-                get_toolbox_strings_and_tool_schema_input_tokens(&session, tokenizer.clone()).await;
+                get_toolbox_strings_and_tool_schema_input_tokens(&io, &session, tokenizer.clone())
+                    .await;
             editor_prompt.set_toolbox(toolbox_tools);
             editor_prompt.set_input_tokens(
                 session.input_tokens + session.input_loaded_tokens + tool_mode_tokens,
@@ -1370,7 +1376,7 @@ async fn repl(
                         }
                         (
                             prompt_ai(
-                                &io.out,
+                                &io,
                                 &msg_history,
                                 &masked_strings,
                                 &mut session,
@@ -1386,7 +1392,7 @@ async fn repl(
                 } else {
                     (
                         prompt_ai(
-                            &io.out,
+                            &io,
                             &msg_history,
                             &masked_strings,
                             &mut session,
@@ -2051,6 +2057,7 @@ fn print_internal_cmd_input(
 // --
 
 async fn get_toolbox_strings_and_tool_schema_input_tokens(
+    io: &Io,
     session: &SessionState,
     tokenizer: Arc<Mutex<Option<tiktoken_rs::CoreBPE>>>,
 ) -> (Vec<String>, u32) {
@@ -2078,6 +2085,7 @@ async fn get_toolbox_strings_and_tool_schema_input_tokens(
             "parameters"
         };
         let tool_schema = tool_schema::get_tool_schema(
+            &io,
             &session.cmd_registry,
             &session.fn_json_defs,
             &twp.tool,
@@ -2145,7 +2153,7 @@ fn preprocess_cmd(out: &Out, cmd: cmd::Cmd, haivars: &HashMap<String, String>) -
 // --
 
 pub async fn prompt_ai(
-    out: &Out,
+    io: &Io,
     msg_history: &[chat::Message],
     masked_strings: &Vec<String>,
     session: &mut SessionState,
@@ -2160,7 +2168,7 @@ pub async fn prompt_ai(
     let api_base_url = get_api_base_url();
     let mut used_hai_router = false;
 
-    let _section_guard = out.section_begin(SectionKind::AssistantMsg {
+    let _section_guard = io.section_begin(SectionKind::AssistantMsg {
         index: session.history.len() as u32,
         model: Some(config::ai_model_to_string(&session.ai)),
     });
@@ -2181,7 +2189,7 @@ pub async fn prompt_ai(
                     let api_key = if let Some(ref account) = session.account {
                         account.token.clone()
                     } else {
-                        errorln!(out, "you must be logged-in to use the hai-router");
+                        errorln!(io, "you must be logged-in to use the hai-router");
                         return (vec![], None);
                     };
                     let provider_header = match session.ai {
@@ -2190,7 +2198,7 @@ pub async fn prompt_ai(
                         config::AiModel::DeepSeek(_) => "deepseek".to_string(),
                         config::AiModel::Xai(_) => "xai".to_string(),
                         _ => {
-                            errorln!(out, "unexpected provider");
+                            errorln!(io, "unexpected provider");
                             return (vec![], None);
                         }
                     };
@@ -2225,7 +2233,7 @@ pub async fn prompt_ai(
                             None,
                         ),
                         _ => {
-                            errln!(out, "error: unexpected provider");
+                            errln!(io, "error: unexpected provider");
                             return (vec![], None);
                         }
                     }
@@ -2237,6 +2245,7 @@ pub async fn prompt_ai(
                 .iter()
                 .map(|twp| {
                     tool_schema::get_tool_schema(
+                        &io,
                         &session.cmd_registry,
                         &session.fn_json_defs,
                         &twp.tool,
@@ -2253,7 +2262,7 @@ pub async fn prompt_ai(
 
             if config::openai_use_responses_api(&session.ai) {
                 openai_responses::send_to_openai(
-                    out,
+                    &io.out,
                     base_url,
                     &api_key,
                     provider_header,
@@ -2273,7 +2282,7 @@ pub async fn prompt_ai(
                 .await
             } else {
                 openai::send_to_openai(
-                    out,
+                    &io.out,
                     base_url,
                     &api_key,
                     provider_header,
@@ -2299,7 +2308,7 @@ pub async fn prompt_ai(
                     let api_key = if let Some(ref account) = session.account {
                         account.token.clone()
                     } else {
-                        errln!(out, "error: you must be logged-in to use the hai-router");
+                        errln!(io, "error: you must be logged-in to use the hai-router");
                         return (vec![], None);
                     };
                     used_hai_router = true;
@@ -2330,6 +2339,7 @@ pub async fn prompt_ai(
                 .iter()
                 .map(|twp| {
                     tool_schema::get_tool_schema(
+                        &io,
                         &session.cmd_registry,
                         &session.fn_json_defs,
                         &twp.tool,
@@ -2344,7 +2354,7 @@ pub async fn prompt_ai(
             let max_tokens = config::get_ai_model_max_output_tokens(&session.ai);
 
             anthropic::send_to_anthropic(
-                out,
+                &io.out,
                 api_url.as_deref(),
                 &api_key,
                 provider_header,
@@ -2373,6 +2383,7 @@ pub async fn prompt_ai(
                 .iter()
                 .map(|twp| {
                     tool_schema::get_tool_schema(
+                        &io,
                         &session.cmd_registry,
                         &session.fn_json_defs,
                         &twp.tool,
@@ -2384,7 +2395,7 @@ pub async fn prompt_ai(
                 })
                 .collect::<Vec<_>>();
             ollama::send_to_ollama(
-                out,
+                &io.out,
                 cfg.ollama
                     .as_ref()
                     .and_then(|ollama| ollama.base_url.as_deref()),
@@ -2400,7 +2411,7 @@ pub async fn prompt_ai(
         }
         config::AiModel::Void(_) => {
             void::send_to_void(
-                out,
+                &io.out,
                 config::get_ai_model_provider_name(&session.ai),
                 masked_strings,
             )
@@ -2415,13 +2426,13 @@ pub async fn prompt_ai(
             (provider_response.responses, provider_response.usage)
         }
         Err(e) => {
-            errln!(out, "error: ai provider: {}", e);
+            errln!(io, "error: ai provider: {}", e);
             if used_hai_router
                 && e.to_string()
                     .to_ascii_lowercase()
                     .contains("402 payment required")
             {
-                errln!(out, "error: account needs funds, disabling hai-router");
+                errln!(io, "error: account needs funds, disabling hai-router");
                 session::hai_router_set(session, false);
             }
             (vec![], None)

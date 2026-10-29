@@ -785,6 +785,16 @@ is a stable reference even if the asset is moved or renamed. Reference it in
 any command that takes an asset name by prefixing it with `:`, e.g.
 `/asset-read :<ID>` or `/asset-md-get :<ID>`.";
 
+pub const HAI_SCHEME_DOC: &str = "\
+If the io-backend is a websocket, you can make asset references
+in markdown into links with the following link format using a custom protocol:
+`hai:<asset_name>` or `hai:<asset_name>@<asset_app_name>`.
+
+For example:
+- hai:/<username>/a/b/c (public asset)
+- hai:a/b/c (private asset)
+- hai:a/b@/hai/app/ab (open a/b with app /hai/app/ab)";
+
 pub const OPTION_SYNTAX: &str = "\
 Option syntax:
 
@@ -2102,6 +2112,7 @@ add it to the toolbox.
     ),
     note(ATTACHMENTS_DOC, &[Anchor::Family("asset")]),
     note(ASSET_ID_DOC, &[Anchor::Family("asset")]),
+    note(HAI_SCHEME_DOC, &[Anchor::Family("asset")]),
     //
     // Chats
     //

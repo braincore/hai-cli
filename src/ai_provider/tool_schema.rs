@@ -15,6 +15,7 @@ use crate::{
 /// - strict: (Anthropic-specific) Forces generation to follow grammar
 ///   resulting in strict adherence to the schema.
 pub fn get_tool_schema(
+    io: &crate::io::Io,
     cmd_registry: &cmd_registry::Registry,
     fn_json_defs: &std::collections::HashMap<String, (Value, Option<Value>, Option<String>, bool)>,
     tool: &Tool,
@@ -25,7 +26,17 @@ pub fn get_tool_schema(
 ) -> Value {
     let tool_name = get_tool_name_for_api(tool);
     let system = config::get_machine_os_arch();
-
+    let io_backend = if io.is_terminal() {
+        if io.can_cursor() {
+            "terminal (color, interactive)"
+        } else {
+            "terminal (color, no cursor)"
+        }
+    } else if io.drives_repl() {
+        "websocket"
+    } else {
+        "pipe"
+    };
     let mut schema = match tool {
         Tool::CopyToClipboard => json!({
             "name": tool_name,
@@ -266,7 +277,7 @@ The script should print important values to stdout."#
                 cmd_registry::render_llm(&cmd_registry, &cmd_registry::Filter::llm());
             json!({
                     "name": tool_name,
-                    "description": r#"
+                    "description": format!(r#"
 Executes a series of hai-repl-commands.
 
 Do not call this tool twice in one go, just use multiple elements in `cmds`.
@@ -284,7 +295,10 @@ command is executed.
 If you don't have enough information to complete the prompt asked of you,
 consider PROMPTING YOURSELF by including a `!hai <revised prompt>` in the list
 of `cmds`.
-"#,
+
+System = {}
+io-backend = {}
+"#, system, io_backend),
                     schema_key_name: {
                         "type": "object",
                         "properties": {
