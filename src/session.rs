@@ -398,10 +398,10 @@ impl SessionState {
             default_tool: default_tool.clone(),
             use_hai_router: HaiRouterState::Off,
             agentic,
-            // Prompt-cache is disabled by default because it can increase
-            // costs for human-paced conversations. The user is expected to
-            // enable it manually.
-            prompt_cache: false,
+            // If model is agentic by default, enable prompt cache as well.
+            // While this can increase costs for human-paced conversations that
+            // expire the cache, those tend to use far fewer tokens overall.
+            prompt_cache: agentic,
             temp_files: vec![],
             ai_defined_fns: HashMap::new(),
             fn_json_defs: HashMap::new(),

@@ -484,7 +484,10 @@ pub async fn resume_chat_from_db_or_asset(
     for entry in session.history.iter().rev() {
         if let Some(model_str) = &entry.model {
             if let Some(ai_model) = config::ai_model_from_string(model_str) {
+                let selected_ai_model_default_agentic = config::model_default_agentic(&ai_model);
                 session.ai = ai_model;
+                session.agentic = selected_ai_model_default_agentic;
+                session.prompt_cache = selected_ai_model_default_agentic;
                 break;
             }
         }

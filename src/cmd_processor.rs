@@ -380,7 +380,8 @@ pub async fn process_cmd(
                                 "Activating agentic mode because {} is agentic by default",
                                 model_name
                             );
-                            session.agentic = selected_ai_model_default_agentic;
+                            session.agentic = true;
+                            session.prompt_cache = true;
                         } else if session.agentic && !selected_ai_model_default_agentic {
                             warnln!(
                                 io,
