@@ -2549,7 +2549,7 @@ async fn handle_put_metadata(
 
 /// Checks permission to access an asset across multiple dimensions.
 ///
-/// 1. entry_id
+/// 1. entry_id (with : prefix)
 /// 2. asset_name
 /// 3. resolving attachment to asset_name / entry_id
 ///
@@ -4653,28 +4653,30 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            match &rev_get_arg.entry_ref {
-                asset::EntryRef::Name(name) => {
-                    if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perm_ctxs, &AccessRequest::ReadByName { name }).await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
-                asset::EntryRef::EntryId(entry_id) => {
-                    if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perm_ctxs,
-                        &AccessRequest::ReadByEntryId { entry_id: entry_id },
-                    )
-                    .await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
+            let asset_name_for_perm_check = match &rev_get_arg.entry_ref {
+                asset::EntryRef::Name(name) => name.clone(),
+                asset::EntryRef::EntryId(entry_id) => format!(":{}", entry_id),
                 _ => {
                     send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                    return;
+                }
+            };
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &asset_name_for_perm_check,
+                &perm_ctxs,
+                false,
+            )
+            .await
+            {
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
                     return;
                 }
             }
@@ -4824,16 +4826,24 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            if let Err(PermCheckError::Unauthorized) = check_access_async(
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &folder_create_arg.name,
                 &perm_ctxs,
-                &AccessRequest::WriteByName {
-                    name: &folder_create_arg.name,
-                },
+                true,
             )
             .await
             {
-                send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                return;
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
             }
             // Determine AKM before creating the folder so that we don't use
             // its existence as evidence of the AKM choice.
@@ -5059,31 +5069,34 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match acl_arg.entry_ref {
-                asset::EntryRef::Name(ref name) => {
-                    if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perm_ctxs, &AccessRequest::WriteByName { name }).await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
-                asset::EntryRef::EntryId(ref entry_id) => {
-                    if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perm_ctxs,
-                        &AccessRequest::WriteByEntryId { entry_id: entry_id },
-                    )
-                    .await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
+            let asset_name_for_perm_check = match &acl_arg.entry_ref {
+                asset::EntryRef::Name(name) => name.clone(),
+                asset::EntryRef::EntryId(entry_id) => format!(":{}", entry_id.to_string()),
                 _ => {
                     send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                     return;
                 }
+            };
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &asset_name_for_perm_check,
+                &perm_ctxs,
+                true,
+            )
+            .await
+            {
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
             }
+
             match api_client.asset_entry_acl_set(acl_arg).await {
                 Ok(res) => {
                     let resp_ok: ClientMessageResponse<
@@ -5119,31 +5132,34 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            match acl_get_effective_arg.entry_ref {
-                asset::EntryRef::Name(ref name) => {
-                    if let Err(PermCheckError::Unauthorized) =
-                        check_access_async(&perm_ctxs, &AccessRequest::ReadByName { name }).await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
-                asset::EntryRef::EntryId(ref entry_id) => {
-                    if let Err(PermCheckError::Unauthorized) = check_access_async(
-                        &perm_ctxs,
-                        &AccessRequest::ReadByEntryId { entry_id: entry_id },
-                    )
-                    .await
-                    {
-                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
-                        return;
-                    }
-                }
+            let asset_name_for_perm_check = match &acl_get_effective_arg.entry_ref {
+                asset::EntryRef::Name(name) => name.clone(),
+                asset::EntryRef::EntryId(entry_id) => format!(":{}", entry_id.to_string()),
                 _ => {
                     send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                     return;
                 }
+            };
+            match asset_app_has_gateway_perm_for_asset_access_request(
+                &api_client,
+                &asset_name_for_perm_check,
+                &perm_ctxs,
+                false,
+            )
+            .await
+            {
+                Ok(has_perm) => {
+                    if !has_perm {
+                        send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
+                        return;
+                    }
+                }
+                Err((_asset_name, e)) => {
+                    send_error_response(ws_sink, mid, e).await;
+                    return;
+                }
             }
+
             match api_client
                 .asset_entry_acl_get_effective(acl_get_effective_arg)
                 .await
