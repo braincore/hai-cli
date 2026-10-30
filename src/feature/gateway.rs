@@ -1900,7 +1900,7 @@ fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
             .with_header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
             .with_header(
                 "Access-Control-Allow-Headers",
-                "Content-Type, Authorization",
+                "Content-Type, Authorization, Range, If-Range",
             )
             .with_header("Access-Control-Allow-Credentials", "true")
             .with_header("Access-Control-Max-Age", "86400"),
@@ -2130,7 +2130,7 @@ async fn handle_get(
         return HttpResponse::no_content();
     };
 
-    let resp = HttpResponse::ok(decrypted_contents, &content_type);
+    let resp = apply_range_request(request, decrypted_contents, &content_type);
 
     // IMPORTANT SECURITY NOTE
     // A worrisome attack vector is the user clicking on a link to another app.
@@ -2160,6 +2160,127 @@ async fn handle_get(
         } else {
             resp.with_header("Content-Disposition", "attachment")
         }
+    }
+}
+
+/// Response to a range request header.
+#[derive(Debug, PartialEq, Eq)]
+enum ByteRange {
+    /// 200 OK: Serve the full body (no/ignored/unsupported range)
+    Full,
+    /// 206 Partial Content: Serve byte range inclusive
+    Partial { start: u64, end: u64 },
+    /// 416 Range Not Satisfiable
+    Unsatisfiable,
+}
+
+/// Parses a `Range` header.
+fn parse_byte_range(header: &str, len: u64) -> ByteRange {
+    let header = header.trim();
+    let Some((unit, spec)) = header.split_once('=') else {
+        return ByteRange::Full;
+    };
+    if !unit.trim().eq_ignore_ascii_case("bytes") {
+        return ByteRange::Full;
+    }
+    let spec = spec.trim();
+    if spec.contains(',') {
+        return ByteRange::Full;
+    }
+    let Some((first, last)) = spec.split_once('-') else {
+        return ByteRange::Full;
+    };
+    let (first, last) = (first.trim(), last.trim());
+
+    if first.is_empty() {
+        // Suffix range: last N bytes
+        let Ok(suffix_len) = last.parse::<u64>() else {
+            return ByteRange::Full;
+        };
+        if suffix_len == 0 || len == 0 {
+            return ByteRange::Unsatisfiable;
+        }
+        return ByteRange::Partial {
+            start: len.saturating_sub(suffix_len),
+            end: len - 1,
+        };
+    }
+
+    let Ok(start) = first.parse::<u64>() else {
+        return ByteRange::Full;
+    };
+    let end = if last.is_empty() {
+        None
+    } else {
+        match last.parse::<u64>() {
+            Ok(end) if end >= start => Some(end),
+            // last < first is invalid syntax
+            _ => return ByteRange::Full,
+        }
+    };
+    if start >= len {
+        return ByteRange::Unsatisfiable;
+    }
+    ByteRange::Partial {
+        start,
+        end: end.map_or(len - 1, |e| e.min(len - 1)),
+    }
+}
+
+/// Builds a 200/206/416 response for `body` based on the request's range
+/// header.
+///
+/// NOTE: Since supporting range requests requires the full contents to be
+/// downloaded, it's not a performance improvement. It's a convenience for
+/// clients, especially media players that expect to skip around using range.
+///
+/// # Arguments
+/// - `body` is the decrypted contents.
+fn apply_range_request(
+    request: &HttpRequest,
+    mut body: Vec<u8>,
+    content_type: &str,
+) -> HttpResponse {
+    let total_len = body.len() as u64;
+
+    // Gateway doesn't support ETag/Last-Modified yet so `If-Range` cannot
+    // work.
+    let range = match request.header("Range") {
+        Some(h) if request.header("If-Range").is_none() => parse_byte_range(h, total_len),
+        _ => ByteRange::Full,
+    };
+
+    match range {
+        ByteRange::Full => {
+            HttpResponse::ok(body, content_type).with_header("Accept-Ranges", "bytes")
+        }
+        ByteRange::Partial { start, end } => {
+            body.truncate((end + 1) as usize);
+            body.drain(..start as usize);
+            let mut resp = HttpResponse::ok(body, content_type)
+                .with_header("Accept-Ranges", "bytes")
+                .with_header(
+                    "Content-Range",
+                    &format!("bytes {}-{}/{}", start, end, total_len),
+                );
+            resp.status = 206;
+            resp.status_text = "Partial Content";
+            resp
+        }
+        ByteRange::Unsatisfiable => HttpResponse {
+            status: 416,
+            status_text: "Range Not Satisfiable",
+            content_type: "text/plain".into(),
+            body: Vec::new(),
+            set_cookie: None,
+            additional_headers: vec![
+                ("Accept-Ranges".to_string(), "bytes".to_string()),
+                (
+                    "Content-Range".to_string(),
+                    format!("bytes */{}", total_len),
+                ),
+            ],
+        },
     }
 }
 
