@@ -5130,13 +5130,17 @@ fn is_valid_open_with_asset_app(asset_app: &str) -> bool {
             .any(|c| c.is_whitespace() || c.is_control())
 }
 
-async fn notify_perm_updated(clients: &Clients, new_perms: &[Perm]) {
+async fn notify_perm_updated(clients: &Clients, new_perms: &[Perm], chooser_perms: &[Vec<Perm>]) {
     let json = serde_json::json!({
         ".tag": "ok",
         "mid": -1,
         "route": "client/perm/updated",
         "arg": {
             "new_perms": new_perms,
+            // `chooser_perms[i]` holds perms resolved from the user's picks
+            // for chooser `i` (from request). It includes perms that were
+            // already granted, and therefore missing from `new_perms`.
+            "chooser_perms": chooser_perms,
         },
     })
     .to_string();
@@ -5592,6 +5596,7 @@ async fn handle_perm_gate_message(
             let mut perm_ctxs_guard = pg_ctx.target_perm_ctxs.lock().await;
             let mut new_perm_ctxs: Vec<PermCtx> = Vec::new();
             let mut new_until_revoked_perms = Vec::new();
+            let mut chooser_perms: Vec<Vec<Perm>> = vec![Vec::new(); pending.choosers.len()];
             let mut add_grant = |granted_perm_ctx: PermCtx| {
                 if perm_ctxs_guard
                     .iter()
@@ -5619,7 +5624,7 @@ async fn handle_perm_gate_message(
 
             // Chooser grants: `grant_chooser[i]` holds the user's picks for
             // `pending.choosers[i]`. If a pick is incompatible with its
-            // chooser, it's igored (as are out-of-range indices).
+            // chooser, it's ignored (as are out-of-range indices).
             for (chooser_idx, chooser_grants) in arg.grant_chooser.into_iter().enumerate() {
                 let Some(chooser) = pending.choosers.get(chooser_idx) else {
                     continue;
@@ -5637,6 +5642,12 @@ async fn handle_perm_gate_message(
                         continue;
                     };
                     accepted += 1;
+                    // Record the pick even if it's redundant with an existing
+                    // perm so we can report what was chosen.
+                    let picks = &mut chooser_perms[chooser_idx];
+                    if !picks.contains(&perm) {
+                        picks.push(perm.clone());
+                    }
                     add_grant(PermCtx {
                         perm,
                         lifetime: granted_perm_ctx.lifetime,
@@ -5658,13 +5669,15 @@ async fn handle_perm_gate_message(
                 );
             }
 
-            if !new_perm_ctxs.is_empty() || keyring_unlocked {
+            let any_chooser_picks = chooser_perms.iter().any(|picks| !picks.is_empty());
+            if !new_perm_ctxs.is_empty() || keyring_unlocked || any_chooser_picks {
                 notify_perm_updated(
                     &pg_ctx.target_clients,
                     &new_perm_ctxs
                         .iter()
                         .map(|perm_ctx| perm_ctx.perm.clone())
                         .collect::<Vec<_>>(),
+                    &chooser_perms,
                 )
                 .await;
             }
@@ -5764,7 +5777,7 @@ async fn handle_perm_gate_message(
             }
 
             if !revoked.is_empty() {
-                notify_perm_updated(&pg_ctx.target_clients, &[]).await;
+                notify_perm_updated(&pg_ctx.target_clients, &[], &[]).await;
             }
 
             send_response::<_, ()>(
