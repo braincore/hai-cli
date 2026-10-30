@@ -486,7 +486,7 @@ const TAG_LEN: usize = 16;
 /// | 1 MiB      | 20 KiB           | 0.002%     |
 /// | 4 MiB      | 5 KiB            | 0.0005%    |
 /// | 16 MiB     | 1.25 KiB         | 0.0001%    |
-const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1 MiB
+pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1 MiB
 
 #[derive(Clone, Debug)]
 pub struct EncryptedContent {
@@ -2058,6 +2058,45 @@ pub fn parse_recovery_file(contents: &str) -> Result<Vec<RecoveryEncryptedKeys>,
         .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
         .map(|line| RecoveryEncryptedKeys::from_base64(line))
         .collect()
+}
+
+// --
+
+/// Header size of the chunked format: base nonce + chunk_size (u32).
+const CONTENT_HEADER_LEN: usize = NONCE_LEN + 4;
+
+/// Per-chunk overhead: length prefix (u32) + AES-GCM tag.
+const CHUNK_OVERHEAD: usize = 4 + TAG_LEN;
+
+/// Returns the plaintext size of chunk-encrypted content, given its total
+/// encrypted size (header included) and the chunk size used to encrypt it.
+///
+/// Returns `None` if `encrypted_size` can't come from a valid encryption
+/// with this `chunk_size`.
+pub fn plaintext_size_from_encrypted_size(encrypted_size: u64, chunk_size: u32) -> Option<u64> {
+    if chunk_size == 0 {
+        return None;
+    }
+    let body = encrypted_size.checked_sub(CONTENT_HEADER_LEN as u64)?;
+    let chunk_size = chunk_size as u64;
+    let full_chunk_enc = chunk_size + CHUNK_OVERHEAD as u64;
+
+    let full_chunks = body / full_chunk_enc;
+    let rem = body % full_chunk_enc;
+
+    let last_chunk_pt = if rem == 0 {
+        0
+    } else if rem > CHUNK_OVERHEAD as u64 {
+        // Partial last chunk
+        rem - CHUNK_OVERHEAD as u64
+    } else {
+        // Insufficient bytes to be a chunk
+        return None;
+    };
+
+    full_chunks
+        .checked_mul(chunk_size)?
+        .checked_add(last_chunk_pt)
 }
 
 // --

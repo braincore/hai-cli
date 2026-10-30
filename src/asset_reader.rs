@@ -316,6 +316,74 @@ pub async fn get_asset_and_metadata_revision(
     rev_id: Option<&str>,
     only_fetch_metadata_if_necessary: bool,
 ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, AssetRevision), GetRevisionError> {
+    let revision = get_asset_revision(api_client, asset_name, rev_id).await?;
+
+    let data_contents = if let Some(data_url) = revision.asset.url.as_ref()
+        && let Some(hash) = revision.asset.hash.as_ref()
+    {
+        match asset_blob_cache
+            .get_or_download_limited(data_url, hash, api_client.limiter())
+            .await
+        {
+            Ok(contents) => Some(contents),
+            Err(err) => match err {
+                DownloadAssetError::DataFetchFailed(failure) => {
+                    return Err(GetRevisionError::DataFetchFailed(failure));
+                }
+                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                    return Err(GetRevisionError::DataFetchFailed(
+                        DataFetchFailure::Unexpected,
+                    ));
+                }
+            },
+        }
+    } else {
+        None
+    };
+    let metadata_contents = if let Some(AssetMetadataInfo {
+        url: Some(metadata_url),
+        hash: Some(metadata_hash),
+        content_encrypted,
+        ..
+    }) = revision.metadata.as_ref()
+    {
+        if content_encrypted.is_some() || !only_fetch_metadata_if_necessary {
+            Some(
+                match asset_blob_cache
+                    .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
+                    .await
+                {
+                    Ok(contents) => contents,
+                    Err(err) => match err {
+                        DownloadAssetError::DataFetchFailed(failure) => {
+                            return Err(GetRevisionError::DataFetchFailed(failure));
+                        }
+                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                            return Err(GetRevisionError::DataFetchFailed(
+                                DataFetchFailure::Unexpected,
+                            ));
+                        }
+                    },
+                },
+            )
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok((data_contents, metadata_contents, revision))
+}
+
+/// Fetches only the revision entry (no asset data or metadata contents are
+/// downloaded).
+///
+/// Returns `GetRevisionError::Deleted` if the revision is a deletion.
+pub async fn get_asset_revision(
+    api_client: &HaiClient,
+    asset_name: &str,
+    rev_id: Option<&str>,
+) -> Result<AssetRevision, GetRevisionError> {
     let revision_get_res = match api_client
         .asset_revision_get(AssetRevisionGetArg {
             entry_ref: EntryRef::Name(asset_name.to_string()),
@@ -354,62 +422,7 @@ pub async fn get_asset_and_metadata_revision(
     ) {
         return Err(GetRevisionError::Deleted);
     }
-
-    let data_contents = if let Some(data_url) = revision_get_res.revision.asset.url.as_ref()
-        && let Some(hash) = revision_get_res.revision.asset.hash.as_ref()
-    {
-        match asset_blob_cache
-            .get_or_download_limited(data_url, hash, api_client.limiter())
-            .await
-        {
-            Ok(contents) => Some(contents),
-            Err(err) => match err {
-                DownloadAssetError::DataFetchFailed(failure) => {
-                    return Err(GetRevisionError::DataFetchFailed(failure));
-                }
-                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                    return Err(GetRevisionError::DataFetchFailed(
-                        DataFetchFailure::Unexpected,
-                    ));
-                }
-            },
-        }
-    } else {
-        None
-    };
-    let metadata_contents = if let Some(AssetMetadataInfo {
-        url: Some(metadata_url),
-        hash: Some(metadata_hash),
-        content_encrypted,
-        ..
-    }) = revision_get_res.revision.metadata.as_ref()
-    {
-        if content_encrypted.is_some() || !only_fetch_metadata_if_necessary {
-            Some(
-                match asset_blob_cache
-                    .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
-                    .await
-                {
-                    Ok(contents) => contents,
-                    Err(err) => match err {
-                        DownloadAssetError::DataFetchFailed(failure) => {
-                            return Err(GetRevisionError::DataFetchFailed(failure));
-                        }
-                        DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                            return Err(GetRevisionError::DataFetchFailed(
-                                DataFetchFailure::Unexpected,
-                            ));
-                        }
-                    },
-                },
-            )
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    Ok((data_contents, metadata_contents, revision_get_res.revision))
+    Ok(revision_get_res.revision)
 }
 
 // --

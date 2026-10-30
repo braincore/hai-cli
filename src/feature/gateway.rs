@@ -855,6 +855,26 @@ impl HttpResponse {
         )
     }
 
+    fn has_content_length_header(&self) -> bool {
+        self.additional_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+    }
+
+    /// Converts into a response for a HEAD request.
+    ///
+    /// If a body was set, it's dropped. This isn't relevant for asset fetching
+    /// since the body is never fetched (perf optimization). But, for error
+    /// responses, there is a body as well as for vite proxying.
+    fn into_head(mut self) -> Self {
+        if !self.has_content_length_header() {
+            let len = self.body.len();
+            self = self.with_header("Content-Length", &len.to_string());
+        }
+        self.body = Vec::new();
+        self
+    }
+
     async fn write_to(self, stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
         let cookie_header = match &self.set_cookie {
             Some(cookie) => format!("Set-Cookie: {}\r\n", cookie),
@@ -867,12 +887,28 @@ impl HttpResponse {
             .map(|(name, value)| format!("{}: {}\r\n", name, value))
             .collect();
 
+        // An explicit Content-Length is only valid for responses to HEAD that
+        // do not return a body. NOTE: Some responses to HEAD do have a body
+        // set but it should not have Content-Length set and body will be
+        // dropped.
+        let content_length_header = if self.has_content_length_header() {
+            if !self.body.is_empty() {
+                return Err(std::io::Error::other(format!(
+                    "explicit Content-Length set on response with {}-byte body",
+                    self.body.len()
+                )));
+            }
+            String::new()
+        } else {
+            format!("Content-Length: {}\r\n", self.body.len())
+        };
+
         let response = format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}{}Connection: close\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\n{}{}{}Connection: close\r\n\r\n",
             self.status,
             self.status_text,
             self.content_type,
-            self.body.len(),
+            content_length_header,
             cookie_header,
             additional_headers,
         );
@@ -1646,6 +1682,11 @@ async fn handle_http_connection(
     )
     .await;
 
+    let response = if request.method == "HEAD" {
+        response.into_head()
+    } else {
+        response
+    };
     response.write_to(&mut stream).await?;
 
     Ok(())
@@ -1800,10 +1841,10 @@ async fn handle_http_request(
         )
     } else {
         match request.method.as_str() {
-            "GET" => {
+            "GET" | "HEAD" => {
                 if is_push {
                     return HttpResponse::bad_request(
-                        "push parameter is not valid for GET requests",
+                        "push parameter is not valid for GET/HEAD requests",
                     );
                 }
                 handle_get(
@@ -1819,6 +1860,7 @@ async fn handle_http_request(
                     perm_ctxs,
                     username,
                     vite_proxy,
+                    request.method == "HEAD",
                 )
                 .await
             }
@@ -1858,7 +1900,7 @@ async fn handle_http_request(
                     .await
                 }
             }
-            _ => HttpResponse::bad_request("Only GET, PUT, and OPTIONS supported"),
+            _ => HttpResponse::bad_request("Only GET, HEAD, PUT, and OPTIONS supported"),
         }
     };
 
@@ -1883,6 +1925,33 @@ async fn handle_http_request(
     response
 }
 
+/// Like `asset_reader::get_asset_and_metadata_revision`, but if `head_only` is
+/// set, only the revision entry is fetched: no asset data or metadata contents
+/// are downloaded.
+async fn get_asset_and_metadata_revision_with_head_optimization(
+    head_only: bool,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    asset_name: &str,
+    rev_id: Option<&str>,
+    only_fetch_metadata_if_necessary: bool,
+) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, asset::AssetRevision), GetRevisionError> {
+    if head_only {
+        asset_reader::get_asset_revision(api_client, asset_name, rev_id)
+            .await
+            .map(|rev| (None, None, rev))
+    } else {
+        asset_reader::get_asset_and_metadata_revision(
+            asset_blob_cache,
+            api_client,
+            asset_name,
+            rev_id,
+            only_fetch_metadata_if_necessary,
+        )
+        .await
+    }
+}
+
 /// Check if the origin is allowed for CORS
 fn is_allowed_origin(local_addr: &SocketAddr, origin: &str) -> bool {
     origin == format!("http://localhost:{}", local_addr.port())
@@ -1897,7 +1966,7 @@ fn build_cors_preflight_response(allowed_origin: Option<&str>) -> HttpResponse {
     match allowed_origin {
         Some(origin) => HttpResponse::no_content()
             .with_header("Access-Control-Allow-Origin", origin)
-            .with_header("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
+            .with_header("Access-Control-Allow-Methods", "GET, HEAD, PUT, OPTIONS")
             .with_header(
                 "Access-Control-Allow-Headers",
                 "Content-Type, Authorization, Range, If-Range",
@@ -1921,6 +1990,7 @@ async fn handle_get(
     perm_ctxs: PermCtxs,
     username: Option<&str>,
     vite_proxy: Arc<Option<ViteProxy>>,
+    head_only: bool,
 ) -> HttpResponse {
     // In dev-mode, proxy GET requests whose asset path matches the configured
     // prefix to the vite dev server rather than serving them from the asset
@@ -1986,7 +2056,8 @@ async fn handle_get(
                     format!("{}/{}", base_name, filename)
                 };
 
-                match asset_reader::get_asset_and_metadata_revision(
+                match get_asset_and_metadata_revision_with_head_optimization(
+                    head_only,
                     asset_blob_cache.clone(),
                     api_client,
                     &fallback_name,
@@ -2009,7 +2080,8 @@ async fn handle_get(
             }
         } else {
             // Try exact asset first
-            match asset_reader::get_asset_and_metadata_revision(
+            match get_asset_and_metadata_revision_with_head_optimization(
+                head_only,
                 asset_blob_cache.clone(),
                 api_client,
                 asset_name,
@@ -2037,7 +2109,8 @@ async fn handle_get(
                     for filename in default_filenames {
                         let fallback_name = format!("{}/{}", asset_name, filename);
 
-                        match asset_reader::get_asset_and_metadata_revision(
+                        match get_asset_and_metadata_revision_with_head_optimization(
+                            head_only,
                             asset_blob_cache.clone(),
                             api_client,
                             &fallback_name,
@@ -2092,45 +2165,103 @@ async fn handle_get(
         }
     };
 
-    let (decrypted_contents, content_type) = if return_metadata {
-        if let Some(md_contents) = md_contents {
-            (md_contents, "application/json".to_string())
-        } else {
-            return HttpResponse::not_found();
-        }
-    } else if let Some(data_contents) = data_contents {
-        match asset_crypt::maybe_decrypt_asset_contents(
-            io,
-            asset_blob_cache.clone(),
-            asset_keyring.clone(),
-            api_client,
-            username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
-            &data_contents,
-            md_contents.as_deref(),
-        )
-        .await
-        {
-            Ok(decrypted_asset_contents) => {
-                let asset_content_type = asset_revision
+    let (resp, content_type) = if head_only {
+        // HEAD: compute the size from the revision entry alone without
+        // downloading the asset data or metadata contents.
+        let (total_len, content_type) = if return_metadata {
+            match asset_revision.metadata.as_ref() {
+                Some(md) if md.url.is_some() && md.hash.is_some() => {
+                    (md.size, "application/json".to_string())
+                }
+                _ => return HttpResponse::not_found(),
+            }
+        } else if asset_revision.asset.url.is_some() && asset_revision.asset.hash.is_some() {
+            let is_encrypted = asset_revision
+                .metadata
+                .as_ref()
+                .is_some_and(|md| md.content_encrypted.is_some());
+            let total_len = if is_encrypted {
+                match crate::crypt::plaintext_size_from_encrypted_size(
+                    asset_revision.asset.size,
+                    crate::crypt::DEFAULT_CHUNK_SIZE as u32,
+                ) {
+                    Some(n) => n,
+                    None => {
+                        // NOTE: Since this can be intentionally triggered by
+                        // the user, perhaps we should fallback to a GET?
+                        tracing::error!(
+                            "error: invalid encrypted size {} for {}",
+                            asset_revision.asset.size,
+                            resolved_name
+                        );
+                        return HttpResponse::internal_error(
+                            "Failed to determine decrypted asset size",
+                        );
+                    }
+                }
+            } else {
+                asset_revision.asset.size
+            };
+            let content_type = crate::asset_helper::best_guess_content_type(
+                &resolved_name,
+                asset_revision
                     .metadata
-                    .and_then(|md| md.content_type.clone());
-                let content_type = crate::asset_helper::best_guess_content_type(
-                    &resolved_name,
-                    asset_content_type.as_deref(),
-                    &decrypted_asset_contents,
-                );
-                (decrypted_asset_contents, content_type)
-            }
-            Err(e) => {
-                tracing::error!("error: failed to decrypt: {}", e);
-                return HttpResponse::internal_error("Failed to decrypt asset");
-            }
-        }
+                    .as_ref()
+                    .and_then(|md| md.content_type.as_deref()),
+                &[],
+            );
+            (total_len, content_type)
+        } else {
+            return HttpResponse::no_content();
+        };
+        (
+            build_range_response(request, total_len, &content_type, None),
+            content_type,
+        )
     } else {
-        return HttpResponse::no_content();
-    };
+        let (decrypted_contents, content_type) = if return_metadata {
+            if let Some(md_contents) = md_contents {
+                (md_contents, "application/json".to_string())
+            } else {
+                return HttpResponse::not_found();
+            }
+        } else if let Some(data_contents) = data_contents {
+            match asset_crypt::maybe_decrypt_asset_contents(
+                io,
+                asset_blob_cache.clone(),
+                asset_keyring.clone(),
+                api_client,
+                username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
+                &data_contents,
+                md_contents.as_deref(),
+            )
+            .await
+            {
+                Ok(decrypted_asset_contents) => {
+                    let asset_content_type = asset_revision
+                        .metadata
+                        .and_then(|md| md.content_type.clone());
+                    let content_type = crate::asset_helper::best_guess_content_type(
+                        &resolved_name,
+                        asset_content_type.as_deref(),
+                        &decrypted_asset_contents,
+                    );
+                    (decrypted_asset_contents, content_type)
+                }
+                Err(e) => {
+                    tracing::error!("error: failed to decrypt: {}", e);
+                    return HttpResponse::internal_error("Failed to decrypt asset");
+                }
+            }
+        } else {
+            return HttpResponse::no_content();
+        };
 
-    let resp = apply_range_request(request, decrypted_contents, &content_type);
+        (
+            apply_range_request(request, decrypted_contents, &content_type),
+            content_type,
+        )
+    };
 
     // IMPORTANT SECURITY NOTE
     // A worrisome attack vector is the user clicking on a link to another app.
@@ -2236,13 +2367,22 @@ fn parse_byte_range(header: &str, len: u64) -> ByteRange {
 ///
 /// # Arguments
 /// - `body` is the decrypted contents.
-fn apply_range_request(
-    request: &HttpRequest,
-    mut body: Vec<u8>,
-    content_type: &str,
-) -> HttpResponse {
+fn apply_range_request(request: &HttpRequest, body: Vec<u8>, content_type: &str) -> HttpResponse {
     let total_len = body.len() as u64;
+    build_range_response(request, total_len, content_type, Some(body))
+}
 
+/// Builds a 200/206/416 response based on the request's range header for
+/// content that is `total_len` bytes.
+///
+/// If `body` is None (HEAD requests), the response body is empty but an
+/// explicit Content-Length is set to what the GET response would return.
+fn build_range_response(
+    request: &HttpRequest,
+    total_len: u64,
+    content_type: &str,
+    body: Option<Vec<u8>>,
+) -> HttpResponse {
     // Gateway doesn't support ETag/Last-Modified yet so `If-Range` cannot
     // work.
     let range = match request.header("Range") {
@@ -2251,18 +2391,26 @@ fn apply_range_request(
     };
 
     match range {
-        ByteRange::Full => {
-            HttpResponse::ok(body, content_type).with_header("Accept-Ranges", "bytes")
+        ByteRange::Full => match body {
+            Some(body) => HttpResponse::ok(body, content_type),
+            None => HttpResponse::ok(Vec::new(), content_type)
+                .with_header("Content-Length", &total_len.to_string()),
         }
+        .with_header("Accept-Ranges", "bytes"),
         ByteRange::Partial { start, end } => {
-            body.truncate((end + 1) as usize);
-            body.drain(..start as usize);
-            let mut resp = HttpResponse::ok(body, content_type)
-                .with_header("Accept-Ranges", "bytes")
-                .with_header(
-                    "Content-Range",
-                    &format!("bytes {}-{}/{}", start, end, total_len),
-                );
+            let resp = match body {
+                Some(mut body) => {
+                    body.truncate((end + 1) as usize);
+                    body.drain(..start as usize);
+                    HttpResponse::ok(body, content_type)
+                }
+                None => HttpResponse::ok(Vec::new(), content_type)
+                    .with_header("Content-Length", &(end - start + 1).to_string()),
+            };
+            let mut resp = resp.with_header("Accept-Ranges", "bytes").with_header(
+                "Content-Range",
+                &format!("bytes {}-{}/{}", start, end, total_len),
+            );
             resp.status = 206;
             resp.status_text = "Partial Content";
             resp
@@ -5336,6 +5484,7 @@ async fn handle_perm_gate_http(
                 perm_ctxs,
                 username,
                 Arc::new(None),
+                false,
             )
             .await
         }
