@@ -565,6 +565,9 @@ pub struct AssetEntry {
     /// user's quota is based on the sum of all revisions. Access-restricted assets have a size of
     /// 0.
     pub total_size: u64,
+    /// Prettier name for display only. For attachments, converts the prefix `:<parent_entry_id>:`
+    /// to `<anchor_name>:[...:]` so the name is readable.
+    pub display_name: Option<String>,
     pub metadata: Option<AssetMetadataInfo>,
     /// Set if any fields in this entry were redacted due to access restrictions. Entries with
     /// redactions should not be cached, and missing or zero values may reflect restricted access
@@ -588,9 +591,15 @@ impl AssetEntry {
             op,
             asset,
             total_size,
+            display_name: None,
             metadata: None,
             redactions: None,
         }
+    }
+
+    pub fn with_display_name(mut self, value: String) -> Self {
+        self.display_name = Some(value);
+        self
     }
 
     pub fn with_metadata(mut self, value: AssetMetadataInfo) -> Self {
@@ -611,6 +620,7 @@ const ASSET_ENTRY_FIELDS: &[&str] = &[
     "op",
     "asset",
     "total_size",
+    "display_name",
     "metadata",
     "redactions",
 ];
@@ -631,6 +641,7 @@ impl AssetEntry {
         let mut field_op = None;
         let mut field_asset = None;
         let mut field_total_size = None;
+        let mut field_display_name = None;
         let mut field_metadata = None;
         let mut field_redactions = None;
         let mut nothing = true;
@@ -673,6 +684,12 @@ impl AssetEntry {
                     }
                     field_total_size = Some(map.next_value()?);
                 }
+                "display_name" => {
+                    if field_display_name.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("display_name"));
+                    }
+                    field_display_name = Some(map.next_value()?);
+                }
                 "metadata" => {
                     if field_metadata.is_some() {
                         return Err(::serde::de::Error::duplicate_field("metadata"));
@@ -703,6 +720,7 @@ impl AssetEntry {
             asset: field_asset.ok_or_else(|| ::serde::de::Error::missing_field("asset"))?,
             total_size: field_total_size
                 .ok_or_else(|| ::serde::de::Error::missing_field("total_size"))?,
+            display_name: field_display_name.and_then(Option::flatten),
             metadata: field_metadata.and_then(Option::flatten),
             redactions: field_redactions.and_then(Option::flatten),
         };
@@ -720,6 +738,9 @@ impl AssetEntry {
         s.serialize_field("op", &self.op)?;
         s.serialize_field("asset", &self.asset)?;
         s.serialize_field("total_size", &self.total_size)?;
+        if let Some(val) = &self.display_name {
+            s.serialize_field("display_name", val)?;
+        }
         if let Some(val) = &self.metadata {
             s.serialize_field("metadata", val)?;
         }
@@ -752,7 +773,7 @@ impl ::serde::ser::Serialize for AssetEntry {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntry", 8)?;
+        let mut s = serializer.serialize_struct("AssetEntry", 9)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -1848,6 +1869,9 @@ pub struct AssetEntryIterResult {
     pub has_more: bool,
     /// DEPRECATED. In lexicographic (byte-order) sorting.
     pub collapsed_prefixes: Vec<String>,
+    /// Prettier prefix for display only. For attachment prefixes, converts `:<parent_entry_id>:` to
+    /// `<anchor_name>:[...:]`, the same way as `AssetEntry.display_name`.
+    pub display_prefix: Option<String>,
 }
 
 impl AssetEntryIterResult {
@@ -1862,12 +1886,23 @@ impl AssetEntryIterResult {
             cursor,
             has_more,
             collapsed_prefixes,
+            display_prefix: None,
         }
+    }
+
+    pub fn with_display_prefix(mut self, value: String) -> Self {
+        self.display_prefix = Some(value);
+        self
     }
 }
 
-const ASSET_ENTRY_ITER_RESULT_FIELDS: &[&str] =
-    &["entries", "cursor", "has_more", "collapsed_prefixes"];
+const ASSET_ENTRY_ITER_RESULT_FIELDS: &[&str] = &[
+    "entries",
+    "cursor",
+    "has_more",
+    "collapsed_prefixes",
+    "display_prefix",
+];
 impl AssetEntryIterResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
         map: V,
@@ -1883,6 +1918,7 @@ impl AssetEntryIterResult {
         let mut field_cursor = None;
         let mut field_has_more = None;
         let mut field_collapsed_prefixes = None;
+        let mut field_display_prefix = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -1911,6 +1947,12 @@ impl AssetEntryIterResult {
                     }
                     field_collapsed_prefixes = Some(map.next_value()?);
                 }
+                "display_prefix" => {
+                    if field_display_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("display_prefix"));
+                    }
+                    field_display_prefix = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -1927,6 +1969,7 @@ impl AssetEntryIterResult {
                 .ok_or_else(|| ::serde::de::Error::missing_field("has_more"))?,
             collapsed_prefixes: field_collapsed_prefixes
                 .ok_or_else(|| ::serde::de::Error::missing_field("collapsed_prefixes"))?,
+            display_prefix: field_display_prefix.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -1940,6 +1983,9 @@ impl AssetEntryIterResult {
         s.serialize_field("cursor", &self.cursor)?;
         s.serialize_field("has_more", &self.has_more)?;
         s.serialize_field("collapsed_prefixes", &self.collapsed_prefixes)?;
+        if let Some(val) = &self.display_prefix {
+            s.serialize_field("display_prefix", val)?;
+        }
         Ok(())
     }
 }
@@ -1970,7 +2016,7 @@ impl ::serde::ser::Serialize for AssetEntryIterResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryIterResult", 4)?;
+        let mut s = serializer.serialize_struct("AssetEntryIterResult", 5)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }
@@ -2374,6 +2420,9 @@ pub struct AssetEntryListResult {
     pub collapsed_prefixes: Vec<String>,
     /// Sorted by depth, shallowest first.
     pub parent_folders: Vec<AssetEntry>,
+    /// Prettier prefix for display only. For attachment prefixes, converts `:<parent_entry_id>:` to
+    /// `<anchor_name>:[...:]`, the same way as `AssetEntry.display_name`.
+    pub display_prefix: Option<String>,
 }
 
 impl AssetEntryListResult {
@@ -2390,7 +2439,13 @@ impl AssetEntryListResult {
             has_more,
             collapsed_prefixes,
             parent_folders,
+            display_prefix: None,
         }
+    }
+
+    pub fn with_display_prefix(mut self, value: String) -> Self {
+        self.display_prefix = Some(value);
+        self
     }
 }
 
@@ -2400,6 +2455,7 @@ const ASSET_ENTRY_LIST_RESULT_FIELDS: &[&str] = &[
     "has_more",
     "collapsed_prefixes",
     "parent_folders",
+    "display_prefix",
 ];
 impl AssetEntryListResult {
     pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
@@ -2417,6 +2473,7 @@ impl AssetEntryListResult {
         let mut field_has_more = None;
         let mut field_collapsed_prefixes = None;
         let mut field_parent_folders = None;
+        let mut field_display_prefix = None;
         let mut nothing = true;
         while let Some(key) = map.next_key::<&str>()? {
             nothing = false;
@@ -2451,6 +2508,12 @@ impl AssetEntryListResult {
                     }
                     field_parent_folders = Some(map.next_value()?);
                 }
+                "display_prefix" => {
+                    if field_display_prefix.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("display_prefix"));
+                    }
+                    field_display_prefix = Some(map.next_value()?);
+                }
                 _ => {
                     // unknown field allowed and ignored
                     map.next_value::<::serde_json::Value>()?;
@@ -2469,6 +2532,7 @@ impl AssetEntryListResult {
                 .ok_or_else(|| ::serde::de::Error::missing_field("collapsed_prefixes"))?,
             parent_folders: field_parent_folders
                 .ok_or_else(|| ::serde::de::Error::missing_field("parent_folders"))?,
+            display_prefix: field_display_prefix.and_then(Option::flatten),
         };
         Ok(Some(result))
     }
@@ -2483,6 +2547,9 @@ impl AssetEntryListResult {
         s.serialize_field("has_more", &self.has_more)?;
         s.serialize_field("collapsed_prefixes", &self.collapsed_prefixes)?;
         s.serialize_field("parent_folders", &self.parent_folders)?;
+        if let Some(val) = &self.display_prefix {
+            s.serialize_field("display_prefix", val)?;
+        }
         Ok(())
     }
 }
@@ -2513,7 +2580,7 @@ impl ::serde::ser::Serialize for AssetEntryListResult {
     fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         // struct serializer
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("AssetEntryListResult", 5)?;
+        let mut s = serializer.serialize_struct("AssetEntryListResult", 6)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
     }

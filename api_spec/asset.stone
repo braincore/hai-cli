@@ -30,6 +30,10 @@ struct AssetEntry
     entry_id String(min_length=1)
     seq_id Int64
     name String(min_length=1)
+    display_name String(min_length=1)?
+        "Prettier name for display only. For attachments, converts the prefix
+        `:<parent_entry_id>:` to `<anchor_name>:[...:]` so the name is
+        readable."
     op AssetEntryOp
     asset AssetInfo
     metadata AssetMetadataInfo?
@@ -299,6 +303,10 @@ struct AssetEntryListArg
             desc
 
 struct AssetEntryListResult
+    display_prefix String?
+        "Prettier prefix for display only. For attachment prefixes, converts
+        `:<parent_entry_id>:` to `<anchor_name>:[...:]`, the same way as
+        `AssetEntry.display_name`."
     entries List(AssetEntry)
     cursor String(min_length=1)
     has_more Boolean
@@ -350,6 +358,10 @@ struct AssetEntryIterArg
     include_attachments Boolean = false
 
 struct AssetEntryIterResult
+    display_prefix String?
+        "Prettier prefix for display only. For attachment prefixes, converts
+        `:<parent_entry_id>:` to `<anchor_name>:[...:]`, the same way as
+        `AssetEntry.display_name`."
     entries List(AssetEntry)
     cursor String(min_length=1)
     has_more Boolean
