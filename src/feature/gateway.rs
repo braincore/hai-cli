@@ -780,7 +780,7 @@ impl HttpResponse {
             status: 429,
             status_text: "Too Many Requests",
             content_type: "text/plain".into(),
-            body: b"Rate limit exceeded. Try again in 60 seconds.".to_vec(),
+            body: b"Rate limit exceeded".to_vec(),
             set_cookie: None,
             additional_headers: Vec::new(),
         }
