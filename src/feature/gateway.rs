@@ -2226,14 +2226,16 @@ async fn handle_get(
                 return HttpResponse::not_found();
             }
         } else if let Some(data_contents) = data_contents {
-            match asset_crypt::maybe_decrypt_asset_contents(
+            match asset_crypt::maybe_decrypt_asset_contents_with_latest_md_fallback(
                 io,
                 asset_blob_cache.clone(),
                 asset_keyring.clone(),
                 api_client,
                 username.map(|s| KeyRecipient::User(s.to_string())).as_ref(),
+                &resolved_name,
                 &data_contents,
                 md_contents.as_deref(),
+                rev_id.is_some(),
             )
             .await
             {

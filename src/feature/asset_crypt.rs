@@ -1245,31 +1245,47 @@ pub async fn put_asset_encryption_metadata(
 ///
 /// # Arguments
 /// * `metadata` - The raw bytes of the asset metadata to parse.
-/// * `username` - Optional username to match against the available recipient
-///   keys.
+/// * `recipient` - The recipient to match against the available keys.
 pub fn parse_metadata_for_encryption_info(
     metadata: &[u8],
     recipient: Option<&KeyRecipient>,
-) -> Option<RecipientKeyInfo> {
+) -> Result<RecipientKeyInfo, MetadataEncryptionInfoParseError> {
     // Quick exit if there's no recipient since it will never match a key.
-    let recipient = recipient?;
+    let Some(recipient) = recipient else {
+        return Err(MetadataEncryptionInfoParseError::NoRecipient);
+    };
     let md_json =
         serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(metadata).to_string())
-            .ok()?;
-    let enc_info = md_json.get("encrypted")?;
-    let enc_keys = enc_info.get("keys")?.as_array()?;
+            .map_err(|_| MetadataEncryptionInfoParseError::Unencrypted)?;
+    let Some(enc_info) = md_json.get("encrypted") else {
+        return Err(MetadataEncryptionInfoParseError::Unencrypted);
+    };
+    let enc_keys = enc_info
+        .get("keys")
+        .and_then(|v| v.as_array())
+        .ok_or(MetadataEncryptionInfoParseError::Unencrypted)?;
 
-    let (enc_key_id, enc_aes_key_hex) = enc_keys.iter().find_map(|enc_key| {
+    let recipient_entry = enc_keys.iter().find_map(|enc_key| {
         let recipient_key_id = enc_key.get("recipient_key_id")?.as_str()?;
         let enc_key_id = recipient_key_id.strip_prefix(&recipient.recipient_key_id_prefix())?;
         let enc_aes_key_hex = enc_key.get("encrypted_key")?.as_str()?;
         Some((enc_key_id.to_string(), enc_aes_key_hex.to_string()))
-    })?;
-    Some(RecipientKeyInfo {
+    });
+    let Some((enc_key_id, enc_aes_key_hex)) = recipient_entry else {
+        return Err(MetadataEncryptionInfoParseError::RecipientMissing);
+    };
+
+    Ok(RecipientKeyInfo {
         enc_key_id,
         enc_aes_key_hex,
         recipient: recipient.clone(),
     })
+}
+
+pub enum MetadataEncryptionInfoParseError {
+    NoRecipient,
+    Unencrypted,
+    RecipientMissing,
 }
 
 pub fn encrypt_asset_with_aes_key(aes_key: &crypt::AesKey, contents: &[u8]) -> Vec<u8> {
@@ -1381,23 +1397,90 @@ pub async fn maybe_decrypt_asset_contents(
     asset_contents: &[u8],
     md_contents: Option<&[u8]>,
 ) -> Result<Vec<u8>, AssetKeyMaterialDecryptionError> {
-    if let Some(md_contents) = md_contents
-        && let Some(rec_key_info) = parse_metadata_for_encryption_info(&md_contents, recipient)
-    {
-        get_symmetric_key_ez(
-            io,
-            asset_blob_cache,
-            asset_keyring,
-            &api_client,
-            &rec_key_info,
-        )
-        .await
-        .map(|sym_info| {
-            let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
-            crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
-        })
+    if let Some(md_contents) = md_contents {
+        match parse_metadata_for_encryption_info(&md_contents, recipient) {
+            Ok(rec_key_info) => get_symmetric_key_ez(
+                io,
+                asset_blob_cache,
+                asset_keyring,
+                &api_client,
+                &rec_key_info,
+            )
+            .await
+            .map(|sym_info| {
+                let enc_content = crypt::EncryptedContent::from_bytes(&asset_contents).unwrap();
+                crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
+            }),
+            Err(MetadataEncryptionInfoParseError::NoRecipient) => Ok(asset_contents.to_vec()),
+            Err(MetadataEncryptionInfoParseError::RecipientMissing) => {
+                Err(AssetKeyMaterialDecryptionError::NoDecryptionKey)
+            }
+            Err(MetadataEncryptionInfoParseError::Unencrypted) => Ok(asset_contents.to_vec()),
+        }
     } else {
         Ok(asset_contents.to_vec())
+    }
+}
+
+// --
+
+/// Use this to decrypt older revisions of an asset, especially log assets.
+///
+/// This function solves the problem where a user was assigned a decryption key
+/// well after the creation of the asset-log. This means that for a given
+/// revision, the associated metadata may not have the necessary encryption
+/// information, but the latest metadata will.
+pub async fn maybe_decrypt_asset_contents_with_latest_md_fallback(
+    io: &Io,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    api_client: &HaiClient,
+    recipient: Option<&KeyRecipient>,
+    asset_name: &str,
+    asset_contents: &[u8],
+    md_contents: Option<&[u8]>,
+    use_latest_md_as_fallback: bool,
+) -> Result<Vec<u8>, AssetKeyMaterialDecryptionError> {
+    match maybe_decrypt_asset_contents(
+        io,
+        asset_blob_cache.clone(),
+        asset_keyring.clone(),
+        api_client,
+        recipient,
+        asset_contents,
+        md_contents.as_deref(),
+    )
+    .await
+    {
+        Ok(decrypted_asset_contents) => Ok(decrypted_asset_contents),
+        Err(crate::feature::asset_crypt::AssetKeyMaterialDecryptionError::NoDecryptionKey) => {
+            if use_latest_md_as_fallback
+                && let Ok((Some(md_contents_latest), _)) = asset_reader::get_only_asset_metadata(
+                    asset_blob_cache.clone(),
+                    api_client,
+                    &asset_name,
+                    true,
+                )
+                .await
+            {
+                // Try again but this time with the latest metadata.
+                // This is important for asset-logs that are shared
+                // later on.
+                return maybe_decrypt_asset_contents(
+                    io,
+                    asset_blob_cache,
+                    asset_keyring,
+                    api_client,
+                    recipient,
+                    asset_contents,
+                    Some(&md_contents_latest),
+                )
+                .await;
+            } else {
+                Err(AssetKeyMaterialDecryptionError::NoDecryptionKey)
+            }
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -1680,7 +1763,7 @@ pub async fn extract_akm_from_metadata(
         return Ok(None);
     };
     if let Some(md_contents) = md_contents
-        && let Some(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
+        && let Ok(rec_key_info) = parse_metadata_for_encryption_info(md_contents, Some(recipient))
     {
         let sym_key_info = get_symmetric_key_ez(
             io,

@@ -1125,7 +1125,7 @@ pub async fn sync_down_entries(
             let (decrypted_data_contents_temp_file, decrypted_hash) =
                 if let Some(data_contents_temp_file) = data_contents_temp_file.as_ref()
                     && let Some(metadata_contents) = metadata_contents.as_deref()
-                    && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
+                    && let Ok(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
                         &metadata_contents,
                         recipient.as_ref(),
                     )

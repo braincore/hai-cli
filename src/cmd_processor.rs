@@ -3000,50 +3000,33 @@ pub async fn process_cmd(
                                 metadata: Some(md_contents),
                                 asset_entry,
                             }) => {
-                                if let Some(rec_key_info) =
-                                    asset_crypt::parse_metadata_for_encryption_info(
-                                        &md_contents,
-                                        session
-                                            .account
-                                            .as_ref()
-                                            .map(|a| KeyRecipient::User(a.username.clone()))
-                                            .as_ref(),
-                                    )
+                                match asset_crypt::maybe_decrypt_asset_contents(
+                                    io,
+                                    asset_blob_cache.clone(),
+                                    session.asset_keyring.clone(),
+                                    &api_client,
+                                    session
+                                        .account
+                                        .as_ref()
+                                        .map(|a| KeyRecipient::User(a.username.clone()))
+                                        .as_ref(),
+                                    asset_contents,
+                                    Some(&md_contents),
+                                )
+                                .await
                                 {
-                                    match asset_crypt::get_symmetric_key_ez(
-                                        io,
-                                        asset_blob_cache.clone(),
-                                        session.asset_keyring.clone(),
-                                        &api_client,
-                                        &rec_key_info,
-                                    )
-                                    .await
-                                    {
-                                        Ok(sym_info) => {
-                                            let enc_content =
-                                                crypt::EncryptedContent::from_bytes(asset_contents)
-                                                    .unwrap();
-                                            (
-                                                crypt::decrypt_content(
-                                                    &enc_content,
-                                                    &sym_info.aes_key,
-                                                )
-                                                .unwrap(),
-                                                asset_entry,
-                                            )
-                                        }
-                                        Err(e) => {
-                                            errorln!(
-                                                io,
-                                                "{}: failed to get encryption key: {}",
-                                                asset_name,
-                                                e
-                                            );
-                                            return ProcessCmdResult::loop_next();
-                                        }
+                                    Ok(decrypted_asset_contents) => {
+                                        (decrypted_asset_contents, asset_entry)
                                     }
-                                } else {
-                                    (asset_contents.clone(), asset_entry)
+                                    Err(e) => {
+                                        errorln!(
+                                            io,
+                                            "failed to decrypt asset '{}': {}",
+                                            asset_name,
+                                            e
+                                        );
+                                        return ProcessCmdResult::loop_next();
+                                    }
                                 }
                             }
                             Ok(asset_reader::AssetFetchResult {
@@ -8234,37 +8217,33 @@ async fn print_revision(
     if let Some(data_url) = revision.asset.url.as_ref() {
         match asset_reader::download_with_new_client(data_url).await {
             Ok(contents_bin) => {
-                let decrypted_asset_contents = if let Some(md_contents) = md_contents
-                    && let Some(rec_key_info) = asset_crypt::parse_metadata_for_encryption_info(
-                        &md_contents,
+                let decrypted_asset_contents =
+                    match asset_crypt::maybe_decrypt_asset_contents_with_latest_md_fallback(
+                        io,
+                        asset_blob_cache.clone(),
+                        session.asset_keyring.clone(),
+                        api_client,
                         session
                             .account
                             .as_ref()
                             .map(|a| KeyRecipient::User(a.username.clone()))
                             .as_ref(),
-                    ) {
-                    match asset_crypt::get_symmetric_key_ez(
-                        io,
-                        asset_blob_cache.clone(),
-                        session.asset_keyring.clone(),
-                        &api_client,
-                        &rec_key_info,
+                        asset_name,
+                        &contents_bin,
+                        md_contents.as_deref(),
+                        // Since we're printing a revision, we may need to use
+                        // the latest metadata to correctly decrypt, especially
+                        // if this is a log asset.
+                        true,
                     )
                     .await
                     {
-                        Ok(sym_info) => {
-                            let enc_content =
-                                crypt::EncryptedContent::from_bytes(&contents_bin).unwrap();
-                            crypt::decrypt_content(&enc_content, &sym_info.aes_key).unwrap()
-                        }
+                        Ok(decrypted_asset_contents) => decrypted_asset_contents,
                         Err(e) => {
-                            errorln!(io, "failed to get encryption key: {}", e);
+                            errorln!(io, "failed to decrypt asset contents: {}", e);
                             return None;
                         }
-                    }
-                } else {
-                    contents_bin.clone()
-                };
+                    };
                 match std::str::from_utf8(&decrypted_asset_contents) {
                     Ok(contents) => {
                         let was_recording = io.record_off();
