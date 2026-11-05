@@ -302,10 +302,9 @@ The asset is served with an HTTP `Content-Type` header set to the asset's
 type is inferred from the file extension. See [Metadata](#metadata) for details
 on the `content_type` key.
 
-The subdomain root (`https://<username>.hai.dog`) serves the first matching
-public asset found at the account root. The server checks for these names in
-this order: `index`, `index.html`, `README`, and `README.md` (e.g.
-`/<username>/index` or `/<username>/README.md`).
+The subdomain root (`https://<username>.hai.dog`) serves the `index` asset
+found in the public asset root. All folder assets serve the child asset
+specified in the `folder_index` metadata key (if present) at their URLs.
 
 ## Search
 
