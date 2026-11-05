@@ -690,13 +690,22 @@ impl HttpRequest {
 // HTTP Response Helpers
 //
 
-/// URL is prettier if / and + are not percent-encoded. They're common in asset
-/// names in fragments.
-fn encode_asset_fragment(asset_name: &str) -> String {
+/// Percent-encodes an asset name for use as a URI path.
+///
+/// `/` and `+` are not percent-encoded for readability since they're common in
+/// asset names.
+///
+/// NOTE: `:` is always encoded which is required for relative references
+/// whose first segment would otherwise be parsed as a scheme.
+fn encode_asset_path(asset_name: &str) -> String {
     urlencoding::encode(asset_name)
         .to_string()
         .replace("%2F", "/")
         .replace("%2B", "+")
+}
+
+fn encode_asset_fragment(asset_name: &str) -> String {
+    encode_asset_path(asset_name)
 }
 
 struct HttpResponse {
@@ -2044,7 +2053,7 @@ async fn handle_get(
         || asset_helper::is_shared_asset_pool(asset_name)
         || asset_helper::is_private_asset_pool(asset_name);
 
-    let (data_contents, md_contents, asset_revision, resolved_name) = {
+    let (data_contents, md_contents, asset_revision, resolved_name, content_location) = {
         if is_pool_request {
             let pool_index_asset_name = format!("{}/index", asset_name);
             match get_asset_and_metadata_revision_with_head_optimization(
@@ -2059,7 +2068,13 @@ async fn handle_get(
             {
                 Ok((data, md, rev)) => {
                     if is_folder_index_request {
-                        (data, md, rev, pool_index_asset_name)
+                        (
+                            data,
+                            md,
+                            rev,
+                            pool_index_asset_name,
+                            Some("index".to_string()),
+                        )
                     } else {
                         return HttpResponse::redirect_temp(&format!("{}/", asset_name));
                     }
@@ -2138,8 +2153,9 @@ async fn handle_get(
                             let md_json = serde_json::from_str::<serde_json::Value>(&contents)
                                 .expect("failed to parse metadata");
                             if let Some(folder_index) = md_json.get("folder_index") {
+                                let folder_index = folder_index.as_str().unwrap();
                                 let folder_index_asset_name =
-                                    format!("{}/{}", asset_name, folder_index.as_str().unwrap());
+                                    format!("{}/{}", asset_name, folder_index);
                                 let (data, md, rev, folder_index_asset_name) =
                                     match get_asset_and_metadata_revision_with_head_optimization(
                                         head_only,
@@ -2176,7 +2192,13 @@ async fn handle_get(
                                         Err(_) => return HttpResponse::not_found(),
                                     };
                                 if is_folder_index_request {
-                                    (data, md, rev, folder_index_asset_name)
+                                    (
+                                        data,
+                                        md,
+                                        rev,
+                                        folder_index_asset_name,
+                                        Some(encode_asset_path(folder_index)),
+                                    )
                                 } else {
                                     return HttpResponse::redirect_temp(&format!(
                                         "{}/",
@@ -2190,7 +2212,7 @@ async fn handle_get(
                             return HttpResponse::not_found();
                         }
                     } else {
-                        (data, md, rev, asset_name.to_string())
+                        (data, md, rev, asset_name.to_string(), None)
                     }
                 }
                 Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
@@ -2310,6 +2332,11 @@ async fn handle_get(
             apply_range_request(request, decrypted_contents, &content_type),
             content_type,
         )
+    };
+
+    let resp = match content_location.as_deref() {
+        Some(content_location) => resp.with_header("Content-Location", content_location),
+        None => resp,
     };
 
     // IMPORTANT SECURITY NOTE
