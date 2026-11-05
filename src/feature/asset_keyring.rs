@@ -203,6 +203,7 @@ impl AssetKeyring {
     }
 
     /// Whether the persistent store has an entry, without prompting.
+    #[cfg_attr(not(all(target_os = "macos", hai_se)), allow(unused_variables))]
     fn has_stored_password(&self, rec_key_id: &str) -> Option<bool> {
         match &self.store {
             PasswordStore::None => Some(false),
