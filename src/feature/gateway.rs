@@ -2038,45 +2038,35 @@ async fn handle_get(
         return HttpResponse::forbidden();
     }
 
-    let is_attachment = crate::asset_helper::is_attachment(asset_name);
-    let default_filenames = &["index", "index.html", "README", "README.md"];
+    let is_folder_index_request = asset_name.ends_with('/');
+    let asset_name = asset_name.strip_suffix('/').unwrap_or(asset_name);
+    let is_pool_request = asset_helper::is_public_asset_pool(asset_name)
+        || asset_helper::is_shared_asset_pool(asset_name)
+        || asset_helper::is_private_asset_pool(asset_name);
 
     let (data_contents, md_contents, asset_revision, resolved_name) = {
-        let is_directory_request = asset_name.is_empty() || asset_name.ends_with('/');
-
-        if is_directory_request && !is_attachment {
-            // Skip exact lookup, go straight to default files
-            let base_name = asset_name.trim_end_matches('/');
-
-            let mut found = None;
-            for filename in default_filenames {
-                let fallback_name = if base_name.is_empty() {
-                    filename.to_string()
-                } else {
-                    format!("{}/{}", base_name, filename)
-                };
-
-                match get_asset_and_metadata_revision_with_head_optimization(
-                    head_only,
-                    asset_blob_cache.clone(),
-                    api_client,
-                    &fallback_name,
-                    rev_id,
-                    !return_metadata,
-                )
-                .await
-                {
-                    Ok((data, md, rev)) => {
-                        found = Some((data, md, rev, fallback_name));
-                        break;
+        if is_pool_request {
+            let pool_index_asset_name = format!("{}/index", asset_name);
+            match get_asset_and_metadata_revision_with_head_optimization(
+                head_only,
+                asset_blob_cache.clone(),
+                api_client,
+                &pool_index_asset_name,
+                rev_id,
+                !return_metadata,
+            )
+            .await
+            {
+                Ok((data, md, rev)) => {
+                    if is_folder_index_request {
+                        (data, md, rev, pool_index_asset_name)
+                    } else {
+                        return HttpResponse::redirect_temp(&format!("{}/", asset_name));
                     }
-                    Err(_) => continue,
                 }
-            }
-
-            match found {
-                Some(res) => res,
-                None => return HttpResponse::not_found(),
+                Err(_) => {
+                    return HttpResponse::not_found();
+                }
             }
         } else {
             // Try exact asset first
@@ -2089,61 +2079,118 @@ async fn handle_get(
                 !return_metadata,
             )
             .await
-            .and_then(|(data, md, rev)| {
-                if matches!(rev.asset.kind, crate::api::types::asset::AssetKind::Folder)
-                    && !return_metadata
-                {
-                    Err(GetRevisionError::BadEntryRef)
-                } else {
-                    Ok((data, md, rev))
-                }
-            }) {
-                Ok((data, md, rev)) => (data, md, rev, asset_name.to_string()),
-                Err(
-                    GetRevisionError::BadEntryRef
-                    | GetRevisionError::BadRevId
-                    | GetRevisionError::Deleted,
-                ) if rev_id.is_none() && !is_attachment => {
-                    // Exact asset not found, try default files
-                    let mut found = None;
-                    for filename in default_filenames {
-                        let fallback_name = format!("{}/{}", asset_name, filename);
-
-                        match get_asset_and_metadata_revision_with_head_optimization(
-                            head_only,
-                            asset_blob_cache.clone(),
-                            api_client,
-                            &fallback_name,
-                            None,
-                            !return_metadata,
-                        )
-                        .await
+            {
+                Ok((data, md, rev)) => {
+                    if matches!(rev.asset.kind, crate::api::types::asset::AssetKind::Folder)
+                        && rev_id.is_none()
+                    {
+                        // Check if folder specifies a `folder_index` in its
+                        // metadata. Since asset is a folder and
+                        // `only_fetch_if_necessary` was set, metadata may not
+                        // have been fetched (and needs to be).
+                        let md = if let Some(crate::api::types::asset::AssetMetadataInfo {
+                            url: Some(metadata_url),
+                            hash: Some(metadata_hash),
+                            ..
+                        }) = rev.metadata.as_ref()
                         {
-                            Ok((data, md, rev)) => {
-                                found = Some((data, md, rev, fallback_name));
-                                break;
-                            }
-                            Err(_) => continue,
-                        }
-                    }
+                            Some(
+                                match asset_reader::asset_blob_cache_get_asset_contents(
+                                    asset_blob_cache.clone(),
+                                    api_client,
+                                    metadata_url,
+                                    metadata_hash,
+                                )
+                                .await
+                                {
+                                    Ok(contents) => contents,
+                                    Err(crate::asset_reader::GetAssetError::BadName) => {
+                                        return HttpResponse::not_found();
+                                    }
+                                    Err(crate::asset_reader::GetAssetError::DataFetchFailed(
+                                        DataFetchFailure::Unexpected,
+                                    )) => {
+                                        return HttpResponse::internal_error(
+                                            "Unexpected data fetch failure.",
+                                        );
+                                    }
+                                    Err(crate::asset_reader::GetAssetError::DataFetchFailed(
+                                        DataFetchFailure::Retryable,
+                                    )) => {
+                                        return HttpResponse::internal_error(
+                                            "Temporary data fetch failure, please retry again.",
+                                        );
+                                    }
+                                    Err(crate::asset_reader::GetAssetError::DataFetchFailed(
+                                        DataFetchFailure::RateLimited,
+                                    )) => {
+                                        return HttpResponse::too_many_requests();
+                                    }
+                                },
+                            )
+                        } else {
+                            None
+                        };
 
-                    match found {
-                        Some(_res) => {
-                            // Found a default file, redirect to trailing slash
-                            if request.path.find('@').is_some() {
-                                return HttpResponse::redirect_temp(&format!(
-                                    "{}/{}",
-                                    request.path,
-                                    request
-                                        .query_string()
-                                        .map(|qs| format!("?{}", qs))
-                                        .unwrap_or_default(),
-                                ));
+                        if let Some(md) = md {
+                            // Check metadata for folder_index
+                            let contents = String::from_utf8_lossy(&md);
+                            let md_json = serde_json::from_str::<serde_json::Value>(&contents)
+                                .expect("failed to parse metadata");
+                            if let Some(folder_index) = md_json.get("folder_index") {
+                                let folder_index_asset_name =
+                                    format!("{}/{}", asset_name, folder_index.as_str().unwrap());
+                                let (data, md, rev, folder_index_asset_name) =
+                                    match get_asset_and_metadata_revision_with_head_optimization(
+                                        head_only,
+                                        asset_blob_cache.clone(),
+                                        api_client,
+                                        &folder_index_asset_name,
+                                        rev_id,
+                                        !return_metadata,
+                                    )
+                                    .await
+                                    {
+                                        Ok((data, md, rev)) => {
+                                            (data, md, rev, folder_index_asset_name)
+                                        }
+                                        Err(GetRevisionError::DataFetchFailed(
+                                            DataFetchFailure::Unexpected,
+                                        )) => {
+                                            return HttpResponse::internal_error(
+                                                "Unexpected data fetch failure.",
+                                            );
+                                        }
+                                        Err(GetRevisionError::DataFetchFailed(
+                                            DataFetchFailure::Retryable,
+                                        )) => {
+                                            return HttpResponse::internal_error(
+                                                "Temporary data fetch failure, please retry again.",
+                                            );
+                                        }
+                                        Err(GetRevisionError::DataFetchFailed(
+                                            DataFetchFailure::RateLimited,
+                                        )) => {
+                                            return HttpResponse::too_many_requests();
+                                        }
+                                        Err(_) => return HttpResponse::not_found(),
+                                    };
+                                if is_folder_index_request {
+                                    (data, md, rev, folder_index_asset_name)
+                                } else {
+                                    return HttpResponse::redirect_temp(&format!(
+                                        "{}/",
+                                        asset_name
+                                    ));
+                                }
                             } else {
-                                return HttpResponse::redirect_temp(&format!("{}/", asset_name));
+                                return HttpResponse::not_found();
                             }
+                        } else {
+                            return HttpResponse::not_found();
                         }
-                        None => return HttpResponse::not_found(),
+                    } else {
+                        (data, md, rev, asset_name.to_string())
                     }
                 }
                 Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),

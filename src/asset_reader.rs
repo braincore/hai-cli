@@ -59,6 +59,28 @@ impl std::fmt::Display for DataFetchFailure {
     }
 }
 
+pub async fn asset_blob_cache_get_asset_contents(
+    asset_blob_cache: Arc<AssetBlobCache>,
+    api_client: &HaiClient,
+    data_url: &str,
+    hash: &str,
+) -> Result<Vec<u8>, GetAssetError> {
+    match asset_blob_cache
+        .get_or_download_limited(data_url, hash, api_client.limiter())
+        .await
+    {
+        Ok(contents) => Ok(contents),
+        Err(err) => match err {
+            DownloadAssetError::DataFetchFailed(failure) => {
+                return Err(GetAssetError::DataFetchFailed(failure));
+            }
+            DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
+                return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
+            }
+        },
+    }
+}
+
 /// If returns None, responsible for printing error msg.
 pub async fn get_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -72,20 +94,9 @@ pub async fn get_asset(
     if let Some(data_url) = asset_entry.asset.url.as_ref()
         && let Some(hash) = asset_entry.asset.hash.as_ref()
     {
-        let data_contents = match asset_blob_cache
-            .get_or_download_limited(data_url, hash, api_client.limiter())
-            .await
-        {
-            Ok(contents) => contents,
-            Err(err) => match err {
-                DownloadAssetError::DataFetchFailed(failure) => {
-                    return Err(GetAssetError::DataFetchFailed(failure));
-                }
-                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
-                }
-            },
-        };
+        let data_contents =
+            asset_blob_cache_get_asset_contents(asset_blob_cache, api_client, data_url, hash)
+                .await?;
         Ok((data_contents, asset_entry))
     } else {
         Err(GetAssetError::BadName)
@@ -113,20 +124,9 @@ pub async fn get_asset_using_cache(
     if let Some(data_url) = asset_entry.asset.url.as_ref()
         && let Some(hash) = asset_entry.asset.hash.as_ref()
     {
-        let data_contents = match asset_blob_cache
-            .get_or_download_limited(data_url, hash, api_client.limiter())
-            .await
-        {
-            Ok(contents) => contents,
-            Err(err) => match err {
-                DownloadAssetError::DataFetchFailed(failure) => {
-                    return Err(GetAssetError::DataFetchFailed(failure));
-                }
-                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
-                }
-            },
-        };
+        let data_contents =
+            asset_blob_cache_get_asset_contents(asset_blob_cache, api_client, data_url, hash)
+                .await?;
         Ok((data_contents, asset_entry))
     } else {
         Err(GetAssetError::BadName)
@@ -182,20 +182,8 @@ pub async fn get_asset_and_metadata(
     let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
         && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
     {
-        match asset_blob_cache
-            .get_or_download_limited(data_url, hash, api_client.limiter())
-            .await
-        {
-            Ok(contents) => contents,
-            Err(err) => match err {
-                DownloadAssetError::DataFetchFailed(failure) => {
-                    return Err(GetAssetError::DataFetchFailed(failure));
-                }
-                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                    return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
-                }
-            },
-        }
+        asset_blob_cache_get_asset_contents(asset_blob_cache.clone(), api_client, data_url, hash)
+            .await?
     } else {
         return Err(GetAssetError::BadName);
     };
@@ -206,20 +194,13 @@ pub async fn get_asset_and_metadata(
     }) = asset_get_res.entry.metadata.as_ref()
     {
         Some(
-            match asset_blob_cache
-                .get_or_download_limited(metadata_url, metadata_hash, api_client.limiter())
-                .await
-            {
-                Ok(contents) => contents,
-                Err(err) => match err {
-                    DownloadAssetError::DataFetchFailed(failure) => {
-                        return Err(GetAssetError::DataFetchFailed(failure));
-                    }
-                    DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                        return Err(GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected));
-                    }
-                },
-            },
+            asset_blob_cache_get_asset_contents(
+                asset_blob_cache,
+                api_client,
+                metadata_url,
+                metadata_hash,
+            )
+            .await?,
         )
     } else {
         None

@@ -123,6 +123,61 @@ pub fn is_in_public_asset_pool(path: &str) -> bool {
     path.starts_with("/") && !path.starts_with("/s/")
 }
 
+/// Matches a shared-asset-pool path: `/s/<member1>+<member2>[+<member3>...]`
+///
+/// # Arguments
+///
+/// - `asset_name` - Assumes any trailing '/' has already been trimmed.
+///
+/// # Returns
+///
+/// Member names if it matches the asset name.
+pub fn parse_shared_asset_pool(asset_name: &str) -> Option<Vec<&str>> {
+    let rest = asset_name.strip_prefix("/s/")?;
+    // Must be exactly the pool segment, no deeper path
+    if rest.contains('/') {
+        return None;
+    }
+    let members: Vec<&str> = rest.split('+').collect();
+    // Need at least two members, none empty (rejects "a++b", "+a", "a+")
+    if members.len() < 2 || members.iter().any(|m| m.is_empty()) {
+        return None;
+    }
+    Some(members)
+}
+
+pub fn is_shared_asset_pool(asset_name: &str) -> bool {
+    parse_shared_asset_pool(asset_name).is_some()
+}
+
+/// Matches a public-asset-pool path: `/<username>`
+///
+/// # Arguments
+///
+/// - `asset_name` - Assumes any trailing '/' has already been trimmed.
+///
+/// # Returns
+///
+/// Username if it matches.
+pub fn parse_public_asset_pool(asset_name: &str) -> Option<&str> {
+    let username = asset_name.strip_prefix('/')?;
+    if username.is_empty()
+        || username == "s"              // reserved for shared pools ("/s/" trimmed to "/s")
+        || username.contains(['/', '+'])
+    {
+        return None;
+    }
+    Some(username)
+}
+
+pub fn is_public_asset_pool(asset_name: &str) -> bool {
+    parse_public_asset_pool(asset_name).is_some()
+}
+
+pub fn is_private_asset_pool(asset_name: &str) -> bool {
+    asset_name.is_empty()
+}
+
 // --
 
 /// Constructs the publicly accessible URL for an asset.
@@ -137,6 +192,8 @@ pub fn get_public_asset_url(asset_name: &str) -> Option<String> {
     let username = &username[1..];
     Some(format!("https://{username}.hai.dog{asset_path}"))
 }
+
+// --
 
 pub fn best_guess_temp_file_extension(
     asset_name: &str,
