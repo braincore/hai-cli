@@ -146,6 +146,9 @@ union AssetPutError
     attachment_depth
         "If creating an attachment of an attachment, set if chain of
         attachments is too long."
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 union AssetEntryOp
     add
@@ -212,6 +215,9 @@ union AssetReplaceError
     old_rev_id
         "Revision ID is no longer the most recent for the asset."
     over_quota
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 
@@ -239,6 +245,9 @@ struct AssetRemoveResult
 union AssetRemoveError
     bad_name
     no_permission
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 
@@ -264,6 +273,9 @@ union AssetMoveError
         "Assets cannot be moved across asset pools."
     attachment_parent_mismatch
         "Assets cannot change attachment parents."
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 
@@ -546,6 +558,9 @@ union AssetRevisionRedactError
     chain_too_long
         "The redaction requires examining too many revisions in the chain. No
         changes were made."
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 
@@ -577,6 +592,9 @@ union AssetPushError
     attachment_depth
         "If creating an attachment of an attachment, set if chain of
         attachments is too long."
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 
@@ -619,6 +637,9 @@ union AssetEntryAclSetError
         "Returned if :field:`AssetEntryAclSetArg.entry_ref` references an
         attachment. Set ACL on the attachment's parent instead."
     bad_principal
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 struct AssetEntryAclSetResult
     entry AssetEntry
@@ -670,6 +691,9 @@ union AssetMetadataPutError
     over_quota
     bad_metadata
         "Metadata must be valid JSON."
+    contention
+        "Blocked by concurrent writes to the asset or one of its parent
+        folders. Retry after a short delay with backoff."
 
 # --
 

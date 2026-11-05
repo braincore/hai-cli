@@ -1295,6 +1295,9 @@ pub enum AssetEntryAclSetError {
     /// attachment. Set ACL on the attachment's parent instead.
     BadEntryType,
     BadPrincipal,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -1320,6 +1323,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
                     "no_permission" => AssetEntryAclSetError::NoPermission,
                     "bad_entry_type" => AssetEntryAclSetError::BadEntryType,
                     "bad_principal" => AssetEntryAclSetError::BadPrincipal,
+                    "contention" => AssetEntryAclSetError::Contention,
                     _ => AssetEntryAclSetError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -1331,6 +1335,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetEntryAclSetError {
             "no_permission",
             "bad_entry_type",
             "bad_principal",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetEntryAclSetError", VARIANTS, EnumVisitor)
@@ -1366,6 +1371,12 @@ impl ::serde::ser::Serialize for AssetEntryAclSetError {
                 s.serialize_field(".tag", "bad_principal")?;
                 s.end()
             }
+            AssetEntryAclSetError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetEntryAclSetError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetEntryAclSetError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -1377,7 +1388,10 @@ impl ::std::error::Error for AssetEntryAclSetError {}
 
 impl ::std::fmt::Display for AssetEntryAclSetError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        write!(f, "{:?}", *self)
+        match self {
+            AssetEntryAclSetError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
+            _ => write!(f, "{:?}", *self),
+        }
     }
 }
 
@@ -4206,6 +4220,9 @@ pub enum AssetMetadataPutError {
     OverQuota,
     /// Metadata must be valid JSON.
     BadMetadata,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -4232,6 +4249,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMetadataPutError {
                     "conflict" => AssetMetadataPutError::Conflict,
                     "over_quota" => AssetMetadataPutError::OverQuota,
                     "bad_metadata" => AssetMetadataPutError::BadMetadata,
+                    "contention" => AssetMetadataPutError::Contention,
                     _ => AssetMetadataPutError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -4244,6 +4262,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMetadataPutError {
             "conflict",
             "over_quota",
             "bad_metadata",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetMetadataPutError", VARIANTS, EnumVisitor)
@@ -4285,6 +4304,12 @@ impl ::serde::ser::Serialize for AssetMetadataPutError {
                 s.serialize_field(".tag", "bad_metadata")?;
                 s.end()
             }
+            AssetMetadataPutError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMetadataPutError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetMetadataPutError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -4297,10 +4322,9 @@ impl ::std::error::Error for AssetMetadataPutError {}
 impl ::std::fmt::Display for AssetMetadataPutError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
-            AssetMetadataPutError::Conflict => {
-                f.write_str("Only returned if conflict policy is set to reject.")
-            }
+            AssetMetadataPutError::Conflict => f.write_str("Only returned if conflict policy is set to reject."),
             AssetMetadataPutError::BadMetadata => f.write_str("Metadata must be valid JSON."),
+            AssetMetadataPutError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -4421,6 +4445,9 @@ pub enum AssetMoveError {
     AssetPoolMismatch,
     /// Assets cannot change attachment parents.
     AttachmentParentMismatch,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -4449,6 +4476,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
                     "target_name_prefix_conflict" => AssetMoveError::TargetNamePrefixConflict,
                     "asset_pool_mismatch" => AssetMoveError::AssetPoolMismatch,
                     "attachment_parent_mismatch" => AssetMoveError::AttachmentParentMismatch,
+                    "contention" => AssetMoveError::Contention,
                     _ => AssetMoveError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -4463,6 +4491,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetMoveError {
             "target_name_prefix_conflict",
             "asset_pool_mismatch",
             "attachment_parent_mismatch",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetMoveError", VARIANTS, EnumVisitor)
@@ -4516,6 +4545,12 @@ impl ::serde::ser::Serialize for AssetMoveError {
                 s.serialize_field(".tag", "attachment_parent_mismatch")?;
                 s.end()
             }
+            AssetMoveError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetMoveError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetMoveError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -4528,12 +4563,9 @@ impl ::std::error::Error for AssetMoveError {}
 impl ::std::fmt::Display for AssetMoveError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
-            AssetMoveError::AssetPoolMismatch => {
-                f.write_str("Assets cannot be moved across asset pools.")
-            }
-            AssetMoveError::AttachmentParentMismatch => {
-                f.write_str("Assets cannot change attachment parents.")
-            }
+            AssetMoveError::AssetPoolMismatch => f.write_str("Assets cannot be moved across asset pools."),
+            AssetMoveError::AttachmentParentMismatch => f.write_str("Assets cannot change attachment parents."),
+            AssetMoveError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -6097,6 +6129,9 @@ pub enum AssetPushError {
     OverQuota,
     /// If creating an attachment of an attachment, set if chain of attachments is too long.
     AttachmentDepth,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -6125,6 +6160,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
                     "name_prefix_conflict" => AssetPushError::NamePrefixConflict,
                     "over_quota" => AssetPushError::OverQuota,
                     "attachment_depth" => AssetPushError::AttachmentDepth,
+                    "contention" => AssetPushError::Contention,
                     _ => AssetPushError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -6139,6 +6175,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPushError {
             "name_prefix_conflict",
             "over_quota",
             "attachment_depth",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetPushError", VARIANTS, EnumVisitor)
@@ -6192,6 +6229,12 @@ impl ::serde::ser::Serialize for AssetPushError {
                 s.serialize_field(".tag", "attachment_depth")?;
                 s.end()
             }
+            AssetPushError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPushError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetPushError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -6207,6 +6250,7 @@ impl ::std::fmt::Display for AssetPushError {
             AssetPushError::BadAssetKind => f.write_str("The put is operating as a replace and the target is not the same kind. For example, a blob cannot replace a log or folder."),
             AssetPushError::NameConflict => f.write_str("Returned in rare instances where the push is responsible for asset creation and the request loses a race with another push."),
             AssetPushError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
+            AssetPushError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -6542,6 +6586,9 @@ pub enum AssetPutError {
     OverQuota,
     /// If creating an attachment of an attachment, set if chain of attachments is too long.
     AttachmentDepth,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -6570,6 +6617,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
                     "name_prefix_conflict" => AssetPutError::NamePrefixConflict,
                     "over_quota" => AssetPutError::OverQuota,
                     "attachment_depth" => AssetPutError::AttachmentDepth,
+                    "contention" => AssetPutError::Contention,
                     _ => AssetPutError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -6584,6 +6632,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetPutError {
             "name_prefix_conflict",
             "over_quota",
             "attachment_depth",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetPutError", VARIANTS, EnumVisitor)
@@ -6637,6 +6686,12 @@ impl ::serde::ser::Serialize for AssetPutError {
                 s.serialize_field(".tag", "attachment_depth")?;
                 s.end()
             }
+            AssetPutError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetPutError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetPutError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -6652,6 +6707,7 @@ impl ::std::fmt::Display for AssetPutError {
             AssetPutError::BadAssetKind => f.write_str("The put is operating as a replace and the target is not the same kind. For example, a blob cannot replace a log or folder."),
             AssetPutError::NameConflict => f.write_str("Only returned if conflict policy is set to reject or replacing a folder."),
             AssetPutError::AttachmentDepth => f.write_str("If creating an attachment of an attachment, set if chain of attachments is too long."),
+            AssetPutError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -7045,6 +7101,9 @@ impl ::serde::ser::Serialize for AssetRemoveArg {
 pub enum AssetRemoveError {
     BadName,
     NoPermission,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -7068,13 +7127,14 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetRemoveError {
                 let value = match tag {
                     "bad_name" => AssetRemoveError::BadName,
                     "no_permission" => AssetRemoveError::NoPermission,
+                    "contention" => AssetRemoveError::Contention,
                     _ => AssetRemoveError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
                 Ok(value)
             }
         }
-        const VARIANTS: &[&str] = &["bad_name", "no_permission", "other"];
+        const VARIANTS: &[&str] = &["bad_name", "no_permission", "contention", "other"];
         deserializer.deserialize_struct("AssetRemoveError", VARIANTS, EnumVisitor)
     }
 }
@@ -7096,6 +7156,12 @@ impl ::serde::ser::Serialize for AssetRemoveError {
                 s.serialize_field(".tag", "no_permission")?;
                 s.end()
             }
+            AssetRemoveError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRemoveError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetRemoveError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -7107,7 +7173,10 @@ impl ::std::error::Error for AssetRemoveError {}
 
 impl ::std::fmt::Display for AssetRemoveError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        write!(f, "{:?}", *self)
+        match self {
+            AssetRemoveError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
+            _ => write!(f, "{:?}", *self),
+        }
     }
 }
 
@@ -7357,6 +7426,9 @@ pub enum AssetReplaceError {
     /// Revision ID is no longer the most recent for the asset.
     OldRevId,
     OverQuota,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -7384,6 +7456,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetReplaceError {
                     "bad_rev_id" => AssetReplaceError::BadRevId,
                     "old_rev_id" => AssetReplaceError::OldRevId,
                     "over_quota" => AssetReplaceError::OverQuota,
+                    "contention" => AssetReplaceError::Contention,
                     _ => AssetReplaceError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -7397,6 +7470,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetReplaceError {
             "bad_rev_id",
             "old_rev_id",
             "over_quota",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetReplaceError", VARIANTS, EnumVisitor)
@@ -7444,6 +7518,12 @@ impl ::serde::ser::Serialize for AssetReplaceError {
                 s.serialize_field(".tag", "over_quota")?;
                 s.end()
             }
+            AssetReplaceError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetReplaceError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetReplaceError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -7458,6 +7538,7 @@ impl ::std::fmt::Display for AssetReplaceError {
         match self {
             AssetReplaceError::BadAssetKind => f.write_str("The replacement target is not the same kind. For example, a blob cannot replace a log or folder."),
             AssetReplaceError::OldRevId => f.write_str("Revision ID is no longer the most recent for the asset."),
+            AssetReplaceError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
@@ -8850,6 +8931,9 @@ pub enum AssetRevisionRedactError {
     BadRevOp,
     /// The redaction requires examining too many revisions in the chain. No changes were made.
     ChainTooLong,
+    /// Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short
+    /// delay with backoff.
+    Contention,
     /// Catch-all used for unrecognized values returned from the server. Encountering this value
     /// typically indicates that this SDK version is out of date.
     Other,
@@ -8878,6 +8962,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionRedactError {
                     "bad_asset_kind" => AssetRevisionRedactError::BadAssetKind,
                     "bad_rev_op" => AssetRevisionRedactError::BadRevOp,
                     "chain_too_long" => AssetRevisionRedactError::ChainTooLong,
+                    "contention" => AssetRevisionRedactError::Contention,
                     _ => AssetRevisionRedactError::Other,
                 };
                 super::eat_json_fields(&mut map)?;
@@ -8892,6 +8977,7 @@ impl<'de> ::serde::de::Deserialize<'de> for AssetRevisionRedactError {
             "bad_asset_kind",
             "bad_rev_op",
             "chain_too_long",
+            "contention",
             "other",
         ];
         deserializer.deserialize_struct("AssetRevisionRedactError", VARIANTS, EnumVisitor)
@@ -8945,6 +9031,12 @@ impl ::serde::ser::Serialize for AssetRevisionRedactError {
                 s.serialize_field(".tag", "chain_too_long")?;
                 s.end()
             }
+            AssetRevisionRedactError::Contention => {
+                // unit
+                let mut s = serializer.serialize_struct("AssetRevisionRedactError", 1)?;
+                s.serialize_field(".tag", "contention")?;
+                s.end()
+            }
             AssetRevisionRedactError::Other => Err(::serde::ser::Error::custom(
                 "cannot serialize 'Other' variant",
             )),
@@ -8960,6 +9052,7 @@ impl ::std::fmt::Display for AssetRevisionRedactError {
             AssetRevisionRedactError::BadAssetKind => f.write_str("Folders cannot be redacted."),
             AssetRevisionRedactError::BadRevOp => f.write_str("Only log pushes and blob edits (excluding the first revision) can be redacted."),
             AssetRevisionRedactError::ChainTooLong => f.write_str("The redaction requires examining too many revisions in the chain. No changes were made."),
+            AssetRevisionRedactError::Contention => f.write_str("Blocked by concurrent writes to the asset or one of its parent folders. Retry after a short delay with backoff."),
             _ => write!(f, "{:?}", *self),
         }
     }
