@@ -706,7 +706,10 @@ route folder/create(AssetFolderCreateArg, AssetFolderCreateResult, AssetFolderCr
     Folder assets must be created explicitly using this route. When listed
     via :route:`entry/list`, folders automatically collapse their asset
     subtrees. Otherwise, folders behave much like blobs—for example, they
-    support associated metadata."
+    support associated metadata.
+
+    Asset folders with a dot-prefix are understood to be hidden. It is an app's
+    responsibility to hide them by default."
 
 struct AssetFolderCreateArg
     name String(min_length=1, max_length=2048)
