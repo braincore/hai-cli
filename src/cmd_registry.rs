@@ -1330,6 +1330,7 @@ add it to the toolbox.
                  based on new information in the conversation.",
             ),
         )
+        .alias(&["h"])
         .with_traits(Traits::NONE.exec()),
     ),
     Entry::Cmd(cmd(
