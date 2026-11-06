@@ -2098,6 +2098,7 @@ async fn handle_get(
                 Ok((data, md, rev)) => {
                     if matches!(rev.asset.kind, crate::api::types::asset::AssetKind::Folder)
                         && rev_id.is_none()
+                        && !return_metadata
                     {
                         // Check if folder specifies a `folder_index` in its
                         // metadata. Since asset is a folder and
