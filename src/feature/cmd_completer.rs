@@ -11,7 +11,7 @@ pub fn complete(
     cmd_registry: &cmd_registry::Registry,
     api_client: &HaiClient,
     account: &Option<Account>,
-    starred_shortcuts: &[String],
+    shortcuts: &[String],
     is_first_user_input: bool,
     line: &str,
     pos: usize,
@@ -171,10 +171,7 @@ pub fn complete(
                 cmd_registry::ArgKind::Shortcut => {
                     let mut completions = simple_completer(
                         &prefix,
-                        &starred_shortcuts
-                            .iter()
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>(),
+                        &shortcuts.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                     );
                     realign_suggestions(&mut completions, pos - prefix.len());
                     completions
@@ -215,10 +212,7 @@ pub fn complete(
                 // If the user is typing a shortcut, we can try to complete it.
                 let mut completions = simple_completer(
                     prefix,
-                    &starred_shortcuts
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>(),
+                    &shortcuts.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                 );
                 realign_suggestions(&mut completions, pos - prefix.len());
                 completions

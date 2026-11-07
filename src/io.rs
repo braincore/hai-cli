@@ -287,15 +287,11 @@ impl Io {
         &self,
         cmd_registry: &crate::cmd_registry::Registry,
         account: &Option<crate::db::Account>,
-        starred_shortcuts: &Vec<String>,
+        shortcuts: &Vec<String>,
         is_first_user_input: bool,
     ) {
-        self.input.update_config(
-            cmd_registry,
-            account,
-            starred_shortcuts,
-            is_first_user_input,
-        );
+        self.input
+            .update_config(cmd_registry, account, shortcuts, is_first_user_input);
     }
 
     /// Query the user for the answer to a question
@@ -523,7 +519,7 @@ pub trait Input: Send + Sync {
         &self,
         cmd_registry: &crate::cmd_registry::Registry,
         account: &Option<crate::db::Account>,
-        starred_shortcuts: &Vec<String>,
+        shortcuts: &Vec<String>,
         is_first_user_input: bool,
     );
 }
@@ -1832,7 +1828,7 @@ impl Input for NoopInput {
         &self,
         _cmd_registry: &crate::cmd_registry::Registry,
         _account: &Option<crate::db::Account>,
-        _starred_shortcuts: &Vec<String>,
+        _shortcuts: &Vec<String>,
         _is_first_user_input: bool,
     ) {
     }
@@ -2071,7 +2067,7 @@ impl Input for StdinInput {
         &self,
         _cmd_registry: &crate::cmd_registry::Registry,
         _account: &Option<crate::db::Account>,
-        _starred_shortcuts: &Vec<String>,
+        _shortcuts: &Vec<String>,
         _is_first_user_input: bool,
     ) {
         // No-op since terminal maintains its own session

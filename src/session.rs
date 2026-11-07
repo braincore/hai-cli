@@ -267,6 +267,9 @@ pub struct SessionState {
     pub toolbox: tool::Toolbox,
     /// Tool to add to the toolbox when starting a new conversation.
     pub default_tool: Option<tool::ToolWithPolicy>,
+    /// If set, the default tool is not added to the toolbox at the start of
+    /// a new conversation. Important for generating chat logs.
+    pub default_tool_disabled: bool,
     /// Whether to use hai-router for compatible AI models
     pub use_hai_router: HaiRouterState,
     /// Agentic mode
@@ -354,8 +357,10 @@ impl SessionState {
         } else {
             cfg.default_shell.clone().unwrap_or("bash".into())
         };
-        let (toolbox, default_tool) = if let Some(default_tool) = cfg.default_tool.clone() {
-            match cmd::parse_toolbox_add(&cmd_registry, &default_tool) {
+        let (toolbox, default_tool) = if cfg.default_empty_toolbox() {
+            (tool::Toolbox::new(), None)
+        } else {
+            match cmd::parse_toolbox_add(&cmd_registry, "!hai") {
                 Ok(toolbox_add_cmd) => {
                     let mut toolbox = tool::Toolbox::new();
                     let tool_with_policy = tool::ToolWithPolicy {
@@ -366,12 +371,10 @@ impl SessionState {
                     (toolbox, Some(tool_with_policy))
                 }
                 Err(e) => {
-                    errorln!(out, "failed to parse default tool {}: {}", default_tool, e);
+                    errorln!(out, "failed to parse default tool !hai: {}", e);
                     (tool::Toolbox::new(), None)
                 }
             }
-        } else {
-            (tool::Toolbox::new(), None)
         };
 
         SessionState {
@@ -396,6 +399,7 @@ impl SessionState {
             incognito,
             toolbox,
             default_tool: default_tool.clone(),
+            default_tool_disabled: false,
             use_hai_router: HaiRouterState::Off,
             agentic,
             // If model is agentic by default, enable prompt cache as well.
@@ -436,7 +440,11 @@ impl SessionState {
     ///
     /// Useful when history has been pruned.
     pub fn recalculate_toolbox(&mut self) {
-        let mut toolbox = crate::tool::Toolbox::new();
+        let mut toolbox = if self.default_tool_disabled {
+            tool::Toolbox::new()
+        } else {
+            self.get_default_toolbox()
+        };
         for log_entry in &self.history {
             if matches!(log_entry.message.role, chat::MessageRole::User) {
                 for content in &log_entry.message.content {
@@ -478,6 +486,22 @@ impl SessionState {
 
     pub fn reset_toolbox(&mut self) {
         self.toolbox = self.get_default_toolbox();
+        self.default_tool_disabled = false;
+    }
+
+    pub fn is_first_user_input(&self) -> bool {
+        self.history.len() == 0
+            || (self.history.len() == 1
+                && matches!(self.history[0].message.role, chat::MessageRole::System))
+    }
+
+    pub fn disable_default_tool(&mut self) {
+        // Sanity check that the default tool is being disabled only on the
+        // first user input. If it isn't, it's a logic error on our end, so
+        // let's just ignore the request.
+        if self.is_first_user_input() {
+            self.default_tool_disabled = true;
+        }
     }
 
     /// Adds a new masked string to the session.

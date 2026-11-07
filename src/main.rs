@@ -714,10 +714,13 @@ async fn repl(
         } else {
             Vec::new()
         };
-        let is_first_user_input = session.history.len() == 0
-            || (session.history.len() == 1
-                && matches!(session.history[0].message.role, chat::MessageRole::System));
+        let is_first_user_input = session.is_first_user_input();
         let (reported_usage, cost) = session.get_reported_usage_and_cost();
+        let shortcuts: Vec<String> = cfg
+            .get_starred_shortcuts()
+            .into_iter()
+            .chain(["bare".to_string()])
+            .collect();
 
         //
         // REPL Read
@@ -835,7 +838,7 @@ async fn repl(
             io.update_config(
                 &session.cmd_registry,
                 &account,
-                &cfg.get_starred_shortcuts(),
+                &shortcuts,
                 is_first_user_input,
             );
             match io.next_repl(
@@ -911,7 +914,7 @@ async fn repl(
                 session.cmd_registry.clone(),
                 mk_api_client(Some(&session)),
                 session.account.clone(),
-                cfg.get_starred_shortcuts(),
+                shortcuts,
                 is_first_user_input,
             );
             cur_line_editor.pre_readline();
@@ -952,17 +955,25 @@ async fn repl(
         };
 
         // Shortcut handling
-        if let Some(shortcut_line_rewrite) = cfg.is_shortcut_match(&cmd_input.input) {
-            if is_first_user_input {
-                infoln!(io, "Shortcut matched: {}", shortcut_line_rewrite);
-                cmd_input.input = shortcut_line_rewrite;
+        let shortcut_skip_history =
+            if let Some(shortcut_line_rewrite) = cfg.is_starred_shortcut_match(&cmd_input.input) {
+                if is_first_user_input {
+                    infoln!(io, "Shortcut matched: {}", shortcut_line_rewrite);
+                    cmd_input.input = shortcut_line_rewrite;
+                } else {
+                    infoln!(
+                        io,
+                        "Shortcut matched but ignored because of ongoing conversation"
+                    );
+                }
+                false
+            } else if cmd_input.input.trim_end() == "bare" {
+                cmd_input.input = "!-hai".to_string();
+                session.disable_default_tool();
+                true
             } else {
-                infoln!(
-                    io,
-                    "Shortcut matched but ignored because of ongoing conversation"
-                );
-            }
-        }
+                false
+            };
 
         let task_step_signature = cmd_input.source.get_task_step_signature();
         // Task steps only have a non-standard retention policy when they are
@@ -1144,7 +1155,9 @@ async fn repl(
         }
 
         match cmd_result.next {
-            cmd_processor::ProcessCmdNext::Break | cmd_processor::ProcessCmdNext::Loop => {
+            cmd_processor::ProcessCmdNext::Break | cmd_processor::ProcessCmdNext::Loop
+                if !shortcut_skip_history =>
+            {
                 let mut parent_entry_uuid = None;
                 if !cmd_input.input.is_empty() && !cmd_result.discard_cmd_and_output {
                     let (entry_uuid, _token_count) = if transcript.is_empty() {

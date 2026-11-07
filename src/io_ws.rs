@@ -272,7 +272,7 @@ impl Input for WsInput {
         &self,
         cmd_registry: &cmd_registry::Registry,
         account: &Option<crate::db::Account>,
-        starred_shortcuts: &Vec<String>,
+        shortcuts: &Vec<String>,
         is_first_user_input: bool,
     ) {
         if self
@@ -280,7 +280,7 @@ impl Input for WsInput {
             .send(WsCmd::UpdateConfig {
                 cmd_registry: cmd_registry.clone(),
                 account: account.clone(),
-                starred_shortcuts: starred_shortcuts.clone(),
+                shortcuts: shortcuts.clone(),
                 is_first_user_input,
             })
             .is_err()
@@ -553,7 +553,7 @@ pub enum WsCmd {
     UpdateConfig {
         cmd_registry: cmd_registry::Registry,
         account: Option<crate::db::Account>,
-        starred_shortcuts: Vec<String>,
+        shortcuts: Vec<String>,
         is_first_user_input: bool,
     },
 
@@ -630,7 +630,7 @@ pub struct WsActor {
 
     account: Option<crate::db::Account>,
 
-    starred_shortcuts: Vec<String>,
+    shortcuts: Vec<String>,
 
     /// Whether the user has sent a message yet.
     is_first_user_input: bool,
@@ -662,7 +662,7 @@ impl WsActor {
             ever_connected: false,
             cmd_registry,
             account: None,
-            starred_shortcuts: vec![],
+            shortcuts: vec![],
             is_first_user_input: false,
         }
     }
@@ -880,12 +880,12 @@ impl WsActor {
             WsCmd::UpdateConfig {
                 cmd_registry,
                 account,
-                starred_shortcuts,
+                shortcuts,
                 is_first_user_input,
             } => {
                 self.cmd_registry = cmd_registry;
                 self.account = account;
-                self.starred_shortcuts = starred_shortcuts;
+                self.shortcuts = shortcuts;
                 self.is_first_user_input = is_first_user_input;
             }
             WsCmd::CancelReplLine { ack } => {
@@ -1059,7 +1059,7 @@ impl WsActor {
             &self.cmd_registry,
             &api_client,
             &self.account,
-            &self.starred_shortcuts,
+            &self.shortcuts,
             self.is_first_user_input,
             &line,
             line.len(),

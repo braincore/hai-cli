@@ -51,12 +51,14 @@ Windows where it's `powershell`.
 default_shell = "bash"
 ```
 
-### Default tool
+### Default empty toolbox
 
-To start the REPL with a default [tool mode](./repl/tools.md#tool-mode), use:
+By default, the `!hai` tool is added to the toolbox at the start of a new
+conversation. While convenient, it comes with an input-token cost. To disable
+its automatic addition, use:
 
 ```toml
-default_tool = "!hai?"
+default_empty_toolbox = true
 ```
 
 ### Check for updates

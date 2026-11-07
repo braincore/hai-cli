@@ -19,8 +19,8 @@ pub struct Config {
     pub default_editor: Option<String>,
     /// The shell (e.g. bash, zsh, fish, nu, powershell) to use for !sh tool
     pub default_shell: Option<String>,
-    /// Tool to add to the toolbox when starting a new conversation.
-    pub default_tool: Option<String>,
+    /// Start new conversations without the !hai tool
+    default_empty_toolbox: Option<bool>,
     #[serde(default)]
     pub tool_confirm: bool,
     #[serde(default = "default_true")]
@@ -41,6 +41,12 @@ pub struct Config {
     pub haivars: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub starred_task: Vec<StarredTask>,
+}
+
+impl Config {
+    pub fn default_empty_toolbox(&self) -> bool {
+        self.default_empty_toolbox.unwrap_or(false)
+    }
 }
 
 impl Default for Config {
@@ -1074,8 +1080,8 @@ pub fn read_config_as_string_create_if_missing(
 # Temperature ranges differ by model, but 0 is generally best for math/coding (default: true)
 #default_ai_temperature_to_absolute_zero = true
 
-# Tool to add to the toolbox when starting a new conversation (default: unset)
-#default_tool = "!hai"
+# Start new conversations without the !hai tool (default: false)
+#default_empty_toolbox = false
 
 # Whether or not to confirm tool actions (default: false).
 #tool_confirm = false
@@ -1264,7 +1270,7 @@ pub fn merge_configs(local: &Config, remote: &Config) -> Config {
         default_ai_temperature_to_absolute_zero: local.default_ai_temperature_to_absolute_zero,
         default_editor: pick(&local.default_editor, &remote.default_editor),
         default_shell: pick(&local.default_shell, &remote.default_shell),
-        default_tool: pick(&local.default_tool, &remote.default_tool),
+        default_empty_toolbox: pick(&local.default_empty_toolbox, &remote.default_empty_toolbox),
         tool_confirm: local.tool_confirm,
         check_for_updates: local.check_for_updates,
         use_os_keyring: local.use_os_keyring,
@@ -1433,9 +1439,10 @@ impl Config {
             .collect()
     }
 
-    pub fn is_shortcut_match(&self, input: &str) -> Option<String> {
+    pub fn is_starred_shortcut_match(&self, input: &str) -> Option<String> {
+        let input_trimmed = input.trim_end();
         for s in &self.starred_task {
-            if s.shortcut == input.trim_end() {
+            if s.shortcut == input_trimmed {
                 return Some(format!("/task {}", s.task.clone()));
             }
         }

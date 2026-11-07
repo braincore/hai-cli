@@ -267,6 +267,7 @@ pub async fn save_chat_as_asset(
 
     let serialized_log = if let Ok(res) = serde_json::to_string_pretty(&ChatLog {
         history: history_to_save,
+        default_tool_disabled: Some(session.default_tool_disabled),
     }) {
         res.into_bytes()
     } else {
@@ -379,6 +380,7 @@ pub async fn save_chat_as_asset(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ChatLog {
     history: Vec<db::LogEntry>,
+    default_tool_disabled: Option<bool>,
 }
 
 // --
@@ -466,6 +468,8 @@ pub async fn resume_chat_from_db_or_asset(
     match serde_json::from_slice::<ChatLog>(&chat_log_contents) {
         Ok(res) => {
             session.history = res.history;
+            // Recalculation of toolbox happens at end of function.
+            session.default_tool_disabled = res.default_tool_disabled.unwrap_or(false);
         }
         Err(_e) => {
             // Fallback to legacy format.

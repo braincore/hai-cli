@@ -218,6 +218,11 @@ For example:
 
 ## hai tool `!hai`
 
+!!!tip New in v2.0.0
+    `!hai` is now added by default to the toolbox at the start of a new
+    conversation. To remove it without adding to the conversation, enter `bare`
+    as the first message in the conversation.
+
 The LLM knows how to use the REPL.
 
 ```
