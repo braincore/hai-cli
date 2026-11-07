@@ -387,6 +387,10 @@ struct ChatLog {
 
 /// Resumes a chat from a chat log.
 ///
+/// INVARIANT/DANGER: Ensure resumption DOES NOT execute any user commands or
+/// side effects automatically since we don't want this to become an attack
+/// vector.
+///
 /// If chat name isn't specified, the most recent chat stored in the local db
 /// is used.
 ///
