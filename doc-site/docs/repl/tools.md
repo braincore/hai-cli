@@ -239,7 +239,7 @@ The LLM knows how to use the REPL.
 Pushed 2 command(s) into queue
 ```
 ```
-!hai-tool[0]: /load-url https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
+!hai-tool[0]: /http-get https://en.wikipedia.org/wiki/Silk_Road_(marketplace)
 ```
 ```
 Loaded (markdown): Silk Road (marketplace) (32,696 tokens)

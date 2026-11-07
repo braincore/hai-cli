@@ -1532,7 +1532,7 @@ pub async fn process_cmd(
             {
                 Ok(response) => response,
                 Err(e) => {
-                    errorln!(io, "failed to load-url: {}", e);
+                    errorln!(io, "failed to fetch url: {}", e);
                     return ProcessCmdResult::loop_next();
                 }
             };
