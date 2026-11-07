@@ -240,6 +240,8 @@ pub enum Cmd {
     AccountNew,
     /// Login to an account
     AccountLogin(AccountLoginCmd),
+    /// Login to an account using legacy password
+    AccountLoginLegacy(AccountLoginLegacyCmd),
     /// Logout of account (remove local credentials)
     AccountLogout(AccountLogoutCmd),
     /// Balance of an account
@@ -1076,6 +1078,12 @@ pub struct AccountCmd {
 
 #[derive(Clone, Debug)]
 pub struct AccountLoginCmd {
+    // hai account username or email
+    pub login_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountLoginLegacyCmd {
     // hai account username
     pub username: Option<String>,
     // hai account password
@@ -1492,8 +1500,11 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
         "account-new" => Cmd::AccountNew,
         "account-login" => Cmd::AccountLogin(AccountLoginCmd {
-            username: None,
-            password: None,
+            login_id: r.opt_take(0),
+        }),
+        "account-login-legacy" => Cmd::AccountLoginLegacy(AccountLoginLegacyCmd {
+            username: r.opt_take(0),
+            password: r.opt_take(1),
         }),
         "account-logout" => Cmd::AccountLogout(AccountLogoutCmd {
             username: r.opt_take(0),

@@ -102,8 +102,13 @@ enum CliSubcommand {
         #[arg(long = "local")]
         local: bool,
     },
-    /// Login to your hai account (optional)
+    /// Login to your hai account
     Login {
+        /// Your hai account username or email
+        login_id: String,
+    },
+    /// Login to your hai account using the legacy passwords
+    LoginLegacy {
         /// Your hai account username
         username: String,
 
@@ -280,11 +285,21 @@ async fn main() -> process::ExitCode {
                 return process::ExitCode::from(0);
             }
         }
-    } else if let Some(CliSubcommand::Login { username, password }) = args.subcommand {
+    } else if let Some(CliSubcommand::Login { login_id }) = args.subcommand {
+        let account_login_cmd = format!("/account-login {}", login_id);
+        (
+            ReplMode::Normal,
+            // internal() doesn't print the command
+            vec![session::CmdInput::internal(account_login_cmd)],
+            true,
+            false,
+            false,
+        )
+    } else if let Some(CliSubcommand::LoginLegacy { username, password }) = args.subcommand {
         let account_login_cmd = if let Some(password) = password {
-            format!("/account-login {} {}", username, password)
+            format!("/account-login-legacy {} {}", username, password)
         } else {
-            format!("/account-login {}", username)
+            format!("/account-login-legacy {}", username)
         };
         (
             ReplMode::Normal,

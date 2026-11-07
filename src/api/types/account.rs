@@ -201,6 +201,339 @@ impl ::serde::ser::Serialize for AccountGetBalanceResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AccountGetOtpToLoginArg {
+    /// Username or email
+    pub login_id: String,
+}
+
+impl AccountGetOtpToLoginArg {
+    pub fn new(login_id: String) -> Self {
+        AccountGetOtpToLoginArg { login_id }
+    }
+}
+
+const ACCOUNT_GET_OTP_TO_LOGIN_ARG_FIELDS: &[&str] = &["login_id"];
+impl AccountGetOtpToLoginArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AccountGetOtpToLoginArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AccountGetOtpToLoginArg>, V::Error> {
+        let mut field_login_id = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "login_id" => {
+                    if field_login_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("login_id"));
+                    }
+                    field_login_id = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AccountGetOtpToLoginArg {
+            login_id: field_login_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("login_id"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("login_id", &self.login_id)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountGetOtpToLoginArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AccountGetOtpToLoginArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountGetOtpToLoginArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AccountGetOtpToLoginArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AccountGetOtpToLoginArg",
+            ACCOUNT_GET_OTP_TO_LOGIN_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AccountGetOtpToLoginArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AccountGetOtpToLoginArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AccountGetOtpToLoginError {
+    /// Too many requests for OTP codes.
+    TooManyRequests,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountGetOtpToLoginError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AccountGetOtpToLoginError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountGetOtpToLoginError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "too_many_requests" => AccountGetOtpToLoginError::TooManyRequests,
+                    _ => AccountGetOtpToLoginError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["too_many_requests", "other"];
+        deserializer.deserialize_struct("AccountGetOtpToLoginError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AccountGetOtpToLoginError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AccountGetOtpToLoginError::TooManyRequests => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountGetOtpToLoginError", 1)?;
+                s.serialize_field(".tag", "too_many_requests")?;
+                s.end()
+            }
+            AccountGetOtpToLoginError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AccountGetOtpToLoginError {}
+
+impl ::std::fmt::Display for AccountGetOtpToLoginError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AccountGetOtpToLoginError::TooManyRequests => {
+                f.write_str("Too many requests for OTP codes.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AccountGetOtpToRegisterArg {
+    pub email: String,
+}
+
+impl AccountGetOtpToRegisterArg {
+    pub fn new(email: String) -> Self {
+        AccountGetOtpToRegisterArg { email }
+    }
+}
+
+const ACCOUNT_GET_OTP_TO_REGISTER_ARG_FIELDS: &[&str] = &["email"];
+impl AccountGetOtpToRegisterArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AccountGetOtpToRegisterArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AccountGetOtpToRegisterArg>, V::Error> {
+        let mut field_email = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "email" => {
+                    if field_email.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("email"));
+                    }
+                    field_email = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AccountGetOtpToRegisterArg {
+            email: field_email.ok_or_else(|| ::serde::de::Error::missing_field("email"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("email", &self.email)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountGetOtpToRegisterArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AccountGetOtpToRegisterArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountGetOtpToRegisterArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AccountGetOtpToRegisterArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AccountGetOtpToRegisterArg",
+            ACCOUNT_GET_OTP_TO_REGISTER_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AccountGetOtpToRegisterArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AccountGetOtpToRegisterArg", 1)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AccountGetOtpToRegisterError {
+    /// [`AccountGetOtpToRegisterArg::email`](AccountGetOtpToRegisterArg) is not a valid email.
+    BadEmail,
+    /// Too many requests for OTP codes.
+    TooManyRequests,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountGetOtpToRegisterError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AccountGetOtpToRegisterError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountGetOtpToRegisterError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_email" => AccountGetOtpToRegisterError::BadEmail,
+                    "too_many_requests" => AccountGetOtpToRegisterError::TooManyRequests,
+                    _ => AccountGetOtpToRegisterError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_email", "too_many_requests", "other"];
+        deserializer.deserialize_struct("AccountGetOtpToRegisterError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AccountGetOtpToRegisterError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AccountGetOtpToRegisterError::BadEmail => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountGetOtpToRegisterError", 1)?;
+                s.serialize_field(".tag", "bad_email")?;
+                s.end()
+            }
+            AccountGetOtpToRegisterError::TooManyRequests => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountGetOtpToRegisterError", 1)?;
+                s.serialize_field(".tag", "too_many_requests")?;
+                s.end()
+            }
+            AccountGetOtpToRegisterError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AccountGetOtpToRegisterError {}
+
+impl ::std::fmt::Display for AccountGetOtpToRegisterError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AccountGetOtpToRegisterError::TooManyRequests => {
+                f.write_str("Too many requests for OTP codes.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive] // variants may be added in the future
 pub enum AccountGetSubscribeLinkError {
     AlreadySubscribed,
@@ -584,6 +917,248 @@ impl ::std::error::Error for AccountRegisterError {}
 impl ::std::fmt::Display for AccountRegisterError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         write!(f, "{:?}", *self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AccountRegisterOtpArg {
+    pub username: String,
+    pub email: String,
+    /// Acquired from [`get_otp_to_register()`](crate::account::get_otp_to_register) using matching
+    /// `email`.
+    pub otp: String,
+}
+
+impl AccountRegisterOtpArg {
+    pub fn new(username: String, email: String, otp: String) -> Self {
+        AccountRegisterOtpArg {
+            username,
+            email,
+            otp,
+        }
+    }
+}
+
+const ACCOUNT_REGISTER_OTP_ARG_FIELDS: &[&str] = &["username", "email", "otp"];
+impl AccountRegisterOtpArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AccountRegisterOtpArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AccountRegisterOtpArg>, V::Error> {
+        let mut field_username = None;
+        let mut field_email = None;
+        let mut field_otp = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "username" => {
+                    if field_username.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("username"));
+                    }
+                    field_username = Some(map.next_value()?);
+                }
+                "email" => {
+                    if field_email.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("email"));
+                    }
+                    field_email = Some(map.next_value()?);
+                }
+                "otp" => {
+                    if field_otp.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("otp"));
+                    }
+                    field_otp = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AccountRegisterOtpArg {
+            username: field_username
+                .ok_or_else(|| ::serde::de::Error::missing_field("username"))?,
+            email: field_email.ok_or_else(|| ::serde::de::Error::missing_field("email"))?,
+            otp: field_otp.ok_or_else(|| ::serde::de::Error::missing_field("otp"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("username", &self.username)?;
+        s.serialize_field("email", &self.email)?;
+        s.serialize_field("otp", &self.otp)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountRegisterOtpArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AccountRegisterOtpArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountRegisterOtpArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AccountRegisterOtpArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AccountRegisterOtpArg",
+            ACCOUNT_REGISTER_OTP_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AccountRegisterOtpArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AccountRegisterOtpArg", 3)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AccountRegisterOtpError {
+    /// [`AccountRegisterOtpArg::username`](AccountRegisterOtpArg) is not a valid username.
+    BadUsername,
+    /// [`AccountRegisterOtpArg::username`](AccountRegisterOtpArg) is already registered.
+    UsernameTaken,
+    /// [`AccountRegisterOtpArg::email`](AccountRegisterOtpArg) is not a valid email.
+    BadEmail,
+    /// [`AccountRegisterOtpArg::email`](AccountRegisterOtpArg) address is already registered.
+    EmailTaken,
+    /// [`AccountRegisterOtpArg::otp`](AccountRegisterOtpArg) is not a valid code for the given
+    /// [`AccountRegisterOtpArg::email`](AccountRegisterOtpArg).
+    BadOtp,
+    /// Too many attempts at registering especially with bad OTPs.
+    TooManyAttempts,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountRegisterOtpError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AccountRegisterOtpError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountRegisterOtpError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_username" => AccountRegisterOtpError::BadUsername,
+                    "username_taken" => AccountRegisterOtpError::UsernameTaken,
+                    "bad_email" => AccountRegisterOtpError::BadEmail,
+                    "email_taken" => AccountRegisterOtpError::EmailTaken,
+                    "bad_otp" => AccountRegisterOtpError::BadOtp,
+                    "too_many_attempts" => AccountRegisterOtpError::TooManyAttempts,
+                    _ => AccountRegisterOtpError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &[
+            "bad_username",
+            "username_taken",
+            "bad_email",
+            "email_taken",
+            "bad_otp",
+            "too_many_attempts",
+            "other",
+        ];
+        deserializer.deserialize_struct("AccountRegisterOtpError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AccountRegisterOtpError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AccountRegisterOtpError::BadUsername => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "bad_username")?;
+                s.end()
+            }
+            AccountRegisterOtpError::UsernameTaken => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "username_taken")?;
+                s.end()
+            }
+            AccountRegisterOtpError::BadEmail => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "bad_email")?;
+                s.end()
+            }
+            AccountRegisterOtpError::EmailTaken => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "email_taken")?;
+                s.end()
+            }
+            AccountRegisterOtpError::BadOtp => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "bad_otp")?;
+                s.end()
+            }
+            AccountRegisterOtpError::TooManyAttempts => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountRegisterOtpError", 1)?;
+                s.serialize_field(".tag", "too_many_attempts")?;
+                s.end()
+            }
+            AccountRegisterOtpError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AccountRegisterOtpError {}
+
+impl ::std::fmt::Display for AccountRegisterOtpError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AccountRegisterOtpError::TooManyAttempts => {
+                f.write_str("Too many attempts at registering especially with bad OTPs.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
     }
 }
 
@@ -1535,6 +2110,190 @@ impl ::serde::ser::Serialize for AccountTokenFromLoginResult {
         let mut s = serializer.serialize_struct("AccountTokenFromLoginResult", 3)?;
         self.internal_serialize::<S>(&mut s)?;
         s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // structs may have more fields added in the future.
+pub struct AccountTokenFromOtpArg {
+    pub login_id: String,
+    /// Acquired from [`get_otp_to_login()`](crate::account::get_otp_to_login) using matching
+    /// `login_id`.
+    pub otp: String,
+}
+
+impl AccountTokenFromOtpArg {
+    pub fn new(login_id: String, otp: String) -> Self {
+        AccountTokenFromOtpArg { login_id, otp }
+    }
+}
+
+const ACCOUNT_TOKEN_FROM_OTP_ARG_FIELDS: &[&str] = &["login_id", "otp"];
+impl AccountTokenFromOtpArg {
+    pub(crate) fn internal_deserialize<'de, V: ::serde::de::MapAccess<'de>>(
+        map: V,
+    ) -> Result<AccountTokenFromOtpArg, V::Error> {
+        Self::internal_deserialize_opt(map, false).map(Option::unwrap)
+    }
+
+    pub(crate) fn internal_deserialize_opt<'de, V: ::serde::de::MapAccess<'de>>(
+        mut map: V,
+        optional: bool,
+    ) -> Result<Option<AccountTokenFromOtpArg>, V::Error> {
+        let mut field_login_id = None;
+        let mut field_otp = None;
+        let mut nothing = true;
+        while let Some(key) = map.next_key::<&str>()? {
+            nothing = false;
+            match key {
+                "login_id" => {
+                    if field_login_id.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("login_id"));
+                    }
+                    field_login_id = Some(map.next_value()?);
+                }
+                "otp" => {
+                    if field_otp.is_some() {
+                        return Err(::serde::de::Error::duplicate_field("otp"));
+                    }
+                    field_otp = Some(map.next_value()?);
+                }
+                _ => {
+                    // unknown field allowed and ignored
+                    map.next_value::<::serde_json::Value>()?;
+                }
+            }
+        }
+        if optional && nothing {
+            return Ok(None);
+        }
+        let result = AccountTokenFromOtpArg {
+            login_id: field_login_id
+                .ok_or_else(|| ::serde::de::Error::missing_field("login_id"))?,
+            otp: field_otp.ok_or_else(|| ::serde::de::Error::missing_field("otp"))?,
+        };
+        Ok(Some(result))
+    }
+
+    pub(crate) fn internal_serialize<S: ::serde::ser::Serializer>(
+        &self,
+        s: &mut S::SerializeStruct,
+    ) -> Result<(), S::Error> {
+        use serde::ser::SerializeStruct;
+        s.serialize_field("login_id", &self.login_id)?;
+        s.serialize_field("otp", &self.otp)?;
+        Ok(())
+    }
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountTokenFromOtpArg {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // struct deserializer
+        use serde::de::{MapAccess, Visitor};
+        struct StructVisitor;
+        impl<'de> Visitor<'de> for StructVisitor {
+            type Value = AccountTokenFromOtpArg;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountTokenFromOtpArg struct")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, map: V) -> Result<Self::Value, V::Error> {
+                AccountTokenFromOtpArg::internal_deserialize(map)
+            }
+        }
+        deserializer.deserialize_struct(
+            "AccountTokenFromOtpArg",
+            ACCOUNT_TOKEN_FROM_OTP_ARG_FIELDS,
+            StructVisitor,
+        )
+    }
+}
+
+impl ::serde::ser::Serialize for AccountTokenFromOtpArg {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // struct serializer
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("AccountTokenFromOtpArg", 2)?;
+        self.internal_serialize::<S>(&mut s)?;
+        s.end()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive] // variants may be added in the future
+pub enum AccountTokenFromOtpError {
+    /// [`AccountTokenFromOtpArg::otp`](AccountTokenFromOtpArg) is not a valid code for the given
+    /// [`AccountTokenFromOtpArg::login_id`](AccountTokenFromOtpArg).
+    BadOtp,
+    /// Too many attempts especially with bad OTPs.
+    TooManyAttempts,
+    /// Catch-all used for unrecognized values returned from the server. Encountering this value
+    /// typically indicates that this SDK version is out of date.
+    Other,
+}
+
+impl<'de> ::serde::de::Deserialize<'de> for AccountTokenFromOtpError {
+    fn deserialize<D: ::serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // union deserializer
+        use serde::de::{self, MapAccess, Visitor};
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = AccountTokenFromOtpError;
+            fn expecting(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str("a AccountTokenFromOtpError structure")
+            }
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Self::Value, V::Error> {
+                let tag: &str = match map.next_key()? {
+                    Some(".tag") => map.next_value()?,
+                    _ => return Err(de::Error::missing_field(".tag")),
+                };
+                let value = match tag {
+                    "bad_otp" => AccountTokenFromOtpError::BadOtp,
+                    "too_many_attempts" => AccountTokenFromOtpError::TooManyAttempts,
+                    _ => AccountTokenFromOtpError::Other,
+                };
+                super::eat_json_fields(&mut map)?;
+                Ok(value)
+            }
+        }
+        const VARIANTS: &[&str] = &["bad_otp", "too_many_attempts", "other"];
+        deserializer.deserialize_struct("AccountTokenFromOtpError", VARIANTS, EnumVisitor)
+    }
+}
+
+impl ::serde::ser::Serialize for AccountTokenFromOtpError {
+    fn serialize<S: ::serde::ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // union serializer
+        use serde::ser::SerializeStruct;
+        match *self {
+            AccountTokenFromOtpError::BadOtp => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountTokenFromOtpError", 1)?;
+                s.serialize_field(".tag", "bad_otp")?;
+                s.end()
+            }
+            AccountTokenFromOtpError::TooManyAttempts => {
+                // unit
+                let mut s = serializer.serialize_struct("AccountTokenFromOtpError", 1)?;
+                s.serialize_field(".tag", "too_many_attempts")?;
+                s.end()
+            }
+            AccountTokenFromOtpError::Other => Err(::serde::ser::Error::custom(
+                "cannot serialize 'Other' variant",
+            )),
+        }
+    }
+}
+
+impl ::std::error::Error for AccountTokenFromOtpError {}
+
+impl ::std::fmt::Display for AccountTokenFromOtpError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match self {
+            AccountTokenFromOtpError::TooManyAttempts => {
+                f.write_str("Too many attempts especially with bad OTPs.")
+            }
+            _ => write!(f, "{:?}", *self),
+        }
     }
 }
 

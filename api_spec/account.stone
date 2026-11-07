@@ -4,8 +4,99 @@ import common
 
 annotation PasswordRedactor = RedactedBlot()
 
-route register(AccountRegisterArg, AccountRegisterResult, AccountRegisterError)
+# --
+
+route register_otp(AccountRegisterOtpArg, AccountRegisterResult, AccountRegisterOtpError)
     "Create a new user account."
+
+    attrs
+        auth = "noauth"
+
+struct AccountRegisterOtpArg
+    username String(min_length=3, max_length=64)
+    email String(min_length=1, max_length=64)
+    otp String(min_length=1, max_length=10)
+        "Acquired from :route:`get_otp_to_register` using matching :field:`email`."
+
+union AccountRegisterOtpError
+    bad_username
+        ":field:`AccountRegisterOtpArg.username` is not a valid username."
+    username_taken
+        ":field:`AccountRegisterOtpArg.username` is already registered."
+    bad_email
+        ":field:`AccountRegisterOtpArg.email` is not a valid email."
+    email_taken
+        ":field:`AccountRegisterOtpArg.email` address is already registered."
+    bad_otp
+        ":field:`AccountRegisterOtpArg.otp` is not a valid code for the given
+        :field:`AccountRegisterOtpArg.email`."
+    too_many_attempts
+        "Too many attempts at registering especially with bad OTPs."
+
+# --
+
+route get_otp_to_login(AccountGetOtpToLoginArg, Void, AccountGetOtpToLoginError)
+    "Get a one-time-password (OTP) for an account. Code is sent to associated
+    email.
+
+    Does not reveal if email address is not registered."
+
+    attrs
+        auth = "noauth"
+
+struct AccountGetOtpToLoginArg
+    login_id String(min_length=3, max_length=64)
+        "Username or email"
+
+union AccountGetOtpToLoginError
+    too_many_requests
+        "Too many requests for OTP codes."
+
+# --
+
+route get_otp_to_register(AccountGetOtpToRegisterArg, Void, AccountGetOtpToRegisterError)
+    "Get a one-time-password (OTP) sent to an email.
+
+    Does not reveal if email address is already registered."
+
+    attrs
+        auth = "noauth"
+
+struct AccountGetOtpToRegisterArg
+    email String(min_length=1, max_length=64)
+
+union AccountGetOtpToRegisterError
+    bad_email
+        ":field:`AccountGetOtpToRegisterArg.email` is not a valid email."
+    too_many_requests
+        "Too many requests for OTP codes."
+
+# --
+
+route token_from_otp(AccountTokenFromOtpArg, AccountTokenFromLoginResult, AccountTokenFromOtpError)
+    "Gets a bearer token from a one-time-password (OTP)."
+
+    attrs
+        auth = "noauth"
+
+struct AccountTokenFromOtpArg
+    login_id String(min_length=3, max_length=64)
+    otp String(min_length=1, max_length=10)
+        "Acquired from :route:`get_otp_to_login` using matching :field:`login_id`."
+
+union AccountTokenFromOtpError
+    bad_otp
+        ":field:`AccountTokenFromOtpArg.otp` is not a valid code for the given
+        :field:`AccountTokenFromOtpArg.login_id`."
+    too_many_attempts
+        "Too many attempts especially with bad OTPs."
+
+# --
+
+route register(AccountRegisterArg, AccountRegisterResult, AccountRegisterError)
+    "DEPRECATED: Use :route:`register_otp`.
+
+    Create a new user account."
 
     attrs
         auth = "noauth"

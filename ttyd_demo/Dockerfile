@@ -25,7 +25,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -LsSf https://hai.dog/hai-installer.sh | sh
 
 # Login to hn_demo user
-RUN /home/ubuntu/.local/bin/hai login hn_demo $DEMO_PASS
+RUN /home/ubuntu/.local/bin/hai login-legacy hn_demo $DEMO_PASS
 
 # Expose ttyd's default port
 EXPOSE 1337

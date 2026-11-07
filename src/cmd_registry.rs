@@ -993,8 +993,20 @@ pub static REGISTRY: &[Entry] = &[
             Slash,
             Cow::Borrowed("account-login"),
             Cow::Borrowed("account"),
-            Cow::Borrowed(&[]),
+            Cow::Borrowed(&[arg("login_id", Text, Optional)]),
             Doc::new("Log in to your account"),
+        )
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.net().interactive()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("account-login-legacy"),
+            Cow::Borrowed("account"),
+            Cow::Borrowed(&[arg("username", Username, Optional),
+            arg("password", Text, Optional)]),
+            Doc::new("Log in to your account using legacy password"),
         )
         .for_audience(Audience::UserOnly)
         .with_traits(Traits::NONE.net().interactive()),

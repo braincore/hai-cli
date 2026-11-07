@@ -6827,97 +6827,6 @@ pub async fn process_cmd(
             let logged_out_api_client = mk_api_client(None);
 
             outln!(io);
-            outln!(io, "Choose a username for your account. This cannot be ");
-            outln!(io, "changed later. It must be at least 3 characters long");
-            outln!(io);
-
-            let mut username;
-            loop {
-                username = match io.query(&crate::io::Query::line("Username?")).into_option() {
-                    Some(username) => username,
-                    None => return ProcessCmdResult::loop_next(),
-                };
-                if username.len() == 0 {
-                    // Assume the user wants to cancel the account creation by
-                    // pressing Enter without entering a username.
-                    return ProcessCmdResult::loop_next();
-                } else if username.len() >= 3 {
-                    use api::types::account::AccountSearchArg;
-                    match logged_out_api_client
-                        .account_search(AccountSearchArg {
-                            q: username.clone(),
-                        })
-                        .await
-                    {
-                        Ok(res) => {
-                            let mut found = false;
-                            for user in res.users {
-                                if user.username == username {
-                                    errorln!(io, "Username '{}' is already taken", username);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if found {
-                                continue;
-                            } else {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            // If there's a problem, don't fail the
-                            // process.
-                            warnln!(
-                                io,
-                                "failed to check username availability: {} (proceeding anyway)",
-                                e
-                            );
-                            break;
-                        }
-                    }
-                } else {
-                    outln!(io, "Username must be at least 3 characters")
-                }
-            }
-
-            outln!(io);
-            outln!(io, "Next, choose a password for your account.");
-            outln!(io);
-
-            let mut password;
-            loop {
-                password = match io
-                    .query(&crate::io::Query::secret_line("Password?").with_record_answer(false))
-                    .into_option()
-                {
-                    Some(password) => password,
-                    None => return ProcessCmdResult::loop_next(),
-                };
-                if password.len() >= 8 {
-                    break;
-                } else {
-                    outln!(io, "Password must be at least 8 characters")
-                }
-            }
-
-            outln!(io);
-
-            let email_answer = match io
-                .query(&crate::io::Query::line(
-                    "Email (optional: if you forget your password)?",
-                ))
-                .into_option()
-            {
-                Some(email_answer) => email_answer,
-                None => return ProcessCmdResult::loop_next(),
-            };
-            let email = if email_answer.trim().is_empty() {
-                None
-            } else {
-                Some(email_answer.trim().to_string())
-            };
-
-            outln!(io);
             outln!(
                 io,
                 "Read our terms of service: `/cat /hai/terms-of-service`"
@@ -6938,14 +6847,125 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
 
+            outln!(io);
+            outln!(io, "Choose a username for your account. 3+ characters.");
+            outln!(io, "Choose wisely, it can't be changed later.");
+            outln!(io);
+
+            let username = loop {
+                let username_answer =
+                    match io.query(&crate::io::Query::line("Username?")).into_option() {
+                        Some(username_answer) => username_answer,
+                        None => return ProcessCmdResult::loop_next(),
+                    };
+                if username_answer.len() == 0 {
+                    // Assume the user wants to cancel the account creation by
+                    // pressing Enter without entering a username.
+                    return ProcessCmdResult::loop_next();
+                } else if username_answer.len() >= 3 {
+                    use api::types::account::AccountSearchArg;
+                    match logged_out_api_client
+                        .account_search(AccountSearchArg {
+                            q: username_answer.clone(),
+                        })
+                        .await
+                    {
+                        Ok(res) => {
+                            let mut already_taken = false;
+                            for user in res.users {
+                                if user.username == username_answer {
+                                    errorln!(io, "Username '{}' is already taken", username_answer);
+                                    already_taken = true;
+                                    break;
+                                }
+                            }
+                            if already_taken {
+                                continue;
+                            } else {
+                                break username_answer;
+                            }
+                        }
+                        Err(e) => {
+                            // If there's a problem, don't fail the
+                            // process.
+                            warnln!(
+                                io,
+                                "failed to check username availability: {} (proceeding anyway)",
+                                e
+                            );
+                            break username_answer;
+                        }
+                    }
+                } else {
+                    outln!(io, "Username must be at least 3 characters")
+                }
+            };
+
+            outln!(io);
+            outln!(
+                io,
+                "Next, choose an email. We'll send you a code to verify it."
+            );
+            outln!(io);
+
+            let email = loop {
+                let email_answer = match io.query(&crate::io::Query::line("Email?")).into_option() {
+                    Some(email_answer) => email_answer,
+                    None => {
+                        errorln!(io, "email required");
+                        return ProcessCmdResult::loop_next();
+                    }
+                };
+                let email = if email_answer.trim().is_empty() {
+                    continue;
+                } else {
+                    email_answer.trim().to_string()
+                };
+
+                use api::types::account::AccountGetOtpToRegisterArg;
+                match logged_out_api_client
+                    .account_get_otp_to_register(AccountGetOtpToRegisterArg {
+                        email: email.clone(),
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        outln!(io, "Code sent to your email.");
+                        break email;
+                    }
+                    Err(e) => {
+                        errorln!(io, "{}", e);
+                        continue;
+                    }
+                }
+            };
+
+            outln!(io);
+
+            let otp_code = loop {
+                let otp_code_answer = match io.query(&crate::io::Query::line("Code?")).into_option()
+                {
+                    Some(otp_code_answer) => otp_code_answer,
+                    None => {
+                        errorln!(io, "code required");
+                        return ProcessCmdResult::loop_next();
+                    }
+                };
+                if otp_code_answer.trim().is_empty() {
+                    continue;
+                } else {
+                    break otp_code_answer.trim().to_string();
+                }
+            };
+
             let mut new_cmds = vec![];
 
-            use api::types::account::AccountRegisterArg;
+            use api::types::account::AccountRegisterOtpArg;
             match logged_out_api_client
-                .account_register(AccountRegisterArg {
+                .account_register_otp(AccountRegisterOtpArg {
                     username,
-                    password,
                     email,
+                    otp: otp_code,
                 })
                 .await
             {
@@ -6964,7 +6984,7 @@ pub async fn process_cmd(
                         "/prep.info Setting up your **inbox**".to_string(),
                     ));
                     new_cmds.push(session::CmdInput::internal("/inbox-setup".to_string()));
-                    new_cmds.push(session::CmdInput::internal_printed("/prep.info Setting up your data **encryption key**\nUnlike your account password, we **CANNOT** help you if you forget this password.".to_string()));
+                    new_cmds.push(session::CmdInput::internal_printed("/prep.info Setting up your data **encryption key**\nWe **CANNOT** help you if you forget this password.".to_string()));
                     new_cmds.push(session::CmdInput::internal(
                         "/asset-crypt-setup".to_string(),
                     ));
@@ -6984,7 +7004,100 @@ pub async fn process_cmd(
                 .with_new_cmds(new_cmds)
                 .with_new_cmds_cascade_error(true)
         }
-        cmd::Cmd::AccountLogin(cmd::AccountLoginCmd { username, password }) => {
+        cmd::Cmd::AccountLogin(cmd::AccountLoginCmd { login_id }) => {
+            let login_id = if let Some(login_id) = login_id {
+                login_id.to_owned()
+            } else {
+                match io
+                    .query(&crate::io::Query::line("Username or email?"))
+                    .into_option()
+                {
+                    Some(login_id) => login_id,
+                    None => return ProcessCmdResult::loop_next(),
+                }
+            };
+
+            let logged_out_api_client = mk_api_client(None);
+
+            use api::types::account::AccountGetOtpToLoginArg;
+            match logged_out_api_client
+                .account_get_otp_to_login(AccountGetOtpToLoginArg {
+                    login_id: login_id.clone(),
+                })
+                .await
+            {
+                Ok(_) => {
+                    outln!(io, "Code sent to your email.");
+                }
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                    return ProcessCmdResult::loop_next();
+                }
+            }
+
+            outln!(io);
+
+            let otp_code = loop {
+                let otp_code_answer = match io.query(&crate::io::Query::line("Code?")).into_option()
+                {
+                    Some(otp_code_answer) => otp_code_answer,
+                    None => {
+                        errorln!(io, "code required");
+                        return ProcessCmdResult::loop_next();
+                    }
+                };
+                if otp_code_answer.trim().is_empty() {
+                    continue;
+                } else {
+                    break otp_code_answer.trim().to_string();
+                }
+            };
+
+            use api::types::account::AccountTokenFromOtpArg;
+            match logged_out_api_client
+                .account_token_from_otp(AccountTokenFromOtpArg {
+                    login_id,
+                    otp: otp_code,
+                })
+                .await
+            {
+                Ok(res) => {
+                    outln!(io, "ハイ {}!", res.username);
+                    session::account_login_setup_session(
+                        &io.out,
+                        session,
+                        db.clone(),
+                        &res.user_id,
+                        &res.username,
+                        &res.token,
+                    )
+                    .await;
+                    let new_api_client = mk_api_client(Some(session));
+                    match new_api_client.account_get_balance(()).await {
+                        Ok(balance_res) => {
+                            if balance_res.remaining > 0 {
+                                hai_router_try_activate(session);
+                                db::set_misc_entry(
+                                    &*db.lock().await,
+                                    &res.username,
+                                    "hai-router",
+                                    "on",
+                                )
+                                .expect("failed to write to db");
+                            }
+                        }
+                        Err(_) => {
+                            errorln!(io, "could not fetch balance");
+                        }
+                    }
+                }
+                Err(e) => {
+                    errorln!(io, "{}", e);
+                }
+            }
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::AccountLoginLegacy(cmd::AccountLoginLegacyCmd { username, password }) => {
             let username = if let Some(username) = username {
                 username.to_owned()
             } else {

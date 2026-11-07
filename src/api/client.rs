@@ -187,6 +187,52 @@ impl HaiClient {
         .await
     }
 
+    pub async fn account_register_otp(
+        &self,
+        arg: account::AccountRegisterOtpArg,
+    ) -> Result<account::AccountRegisterResult, RequestError<account::AccountRegisterOtpError>>
+    {
+        self.mk_api_request::<_, account::AccountRegisterResult, account::AccountRegisterOtpError>(
+            "/account/register_otp",
+            &arg,
+        )
+        .await
+    }
+
+    pub async fn account_get_otp_to_register(
+        &self,
+        arg: account::AccountGetOtpToRegisterArg,
+    ) -> Result<(), RequestError<account::AccountGetOtpToRegisterError>> {
+        self.mk_api_request::<_, (), account::AccountGetOtpToRegisterError>(
+            "/account/get_otp_to_register",
+            &arg,
+        )
+        .await
+    }
+
+    pub async fn account_get_otp_to_login(
+        &self,
+        arg: account::AccountGetOtpToLoginArg,
+    ) -> Result<(), RequestError<account::AccountGetOtpToLoginError>> {
+        self.mk_api_request::<_, (), account::AccountGetOtpToLoginError>(
+            "/account/get_otp_to_login",
+            &arg,
+        )
+        .await
+    }
+
+    pub async fn account_token_from_otp(
+        &self,
+        arg: account::AccountTokenFromOtpArg,
+    ) -> Result<account::AccountTokenFromLoginResult, RequestError<account::AccountTokenFromOtpError>>
+    {
+        self.mk_api_request::<_, account::AccountTokenFromLoginResult, account::AccountTokenFromOtpError>(
+            "/account/token_from_otp",
+            &arg,
+        )
+        .await
+    }
+
     pub async fn account_check_client_version(
         &self,
         arg: (),
