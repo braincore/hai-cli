@@ -27,6 +27,10 @@ pub enum ParseError {
         name: String,
         suggestion: Option<String>,
     },
+    /// The command exists, but a registered filter disallows it here.
+    DisabledCmd {
+        spec: CmdSpec,
+    },
     UnknownOption {
         spec: CmdSpec,
         got: String,
@@ -86,7 +90,7 @@ impl ParseError {
     pub fn spec(&self) -> Option<&CmdSpec> {
         use ParseError::*;
         match self {
-            NotACommand | UnknownCmd { .. } | UnterminatedQuote => None,
+            NotACommand | UnknownCmd { .. } | DisabledCmd { .. } | UnterminatedQuote => None,
             UnknownOption { spec, .. }
             | OptionNeedsValue { spec, .. }
             | BadOptionValue { spec, .. }
@@ -109,6 +113,7 @@ impl fmt::Display for ParseError {
         match self {
             NotACommand => write!(f, "not a command")?,
             UnterminatedQuote => write!(f, "unterminated quote")?,
+            DisabledCmd { spec } => write!(f, "{} is disabled in this session", spec.canonical())?,
             UnknownCmd {
                 sigil,
                 name,
@@ -436,19 +441,31 @@ static FALLBACK_ARG: Arg = Arg {
 //
 
 /// Parse a full input string (sigil + command word + args + body).
-pub fn parse(reg: &Registry, input: &str) -> Result<ResolvedCmdSpec, ParseError> {
+///
+/// `who` selects which registered filters to enforce; `None` bypasses them
+/// (history replay, display-only parsing, internal commands).
+pub fn parse(
+    reg: &Registry,
+    who: Option<crate::cmd_registry::Who>,
+    input: &str,
+) -> Result<ResolvedCmdSpec, ParseError> {
     let (sigil, after_sigil) = split_sigil(input).ok_or(ParseError::NotACommand)?;
     let (name, consumed) = scan_name(after_sigil);
     if name.is_empty() {
         return Err(ParseError::NotACommand);
     }
-    let spec = reg
-        .lookup(sigil, name)
-        .ok_or_else(|| ParseError::UnknownCmd {
-            sigil,
-            name: name.to_string(),
-            suggestion: did_you_mean(reg, sigil, name).map(str::to_string),
-        })?;
+    use crate::cmd_registry::Lookup;
+    let spec = match reg.lookup(who, sigil, name) {
+        Lookup::Found(spec) => spec,
+        Lookup::Filtered(spec) => return Err(ParseError::DisabledCmd { spec }),
+        Lookup::NotFound => {
+            return Err(ParseError::UnknownCmd {
+                sigil,
+                name: name.to_string(),
+                suggestion: did_you_mean(reg, who, sigil, name).map(str::to_string),
+            });
+        }
+    };
     parse_with_spec(spec, &after_sigil[consumed..])
 }
 
@@ -533,10 +550,21 @@ fn scan_name(s: &str) -> (&str, usize) {
 }
 
 /// Helper to find command word mispellings with edit distance <= 2.
-fn did_you_mean<'a>(reg: &'a Registry, sigil: Sigil, name: &str) -> Option<&'a str> {
+/// Commands disallowed for `who` are never suggested.
+fn did_you_mean<'a>(
+    reg: &'a Registry,
+    who: Option<crate::cmd_registry::Who>,
+    sigil: Sigil,
+    name: &str,
+) -> Option<&'a str> {
     let mut best: Option<(usize, &'a str)> = None;
     for c in reg.iter_cmds() {
         if c.sigil != sigil {
+            continue;
+        }
+        if let Some(w) = who
+            && !reg.allows(c, w, &[])
+        {
             continue;
         }
         for cand in std::iter::once(c.name.as_ref()).chain(c.aliases.iter().copied()) {
@@ -1051,7 +1079,7 @@ mod tests {
     use crate::cmd_registry::Registry;
 
     fn p(input: &str) -> Result<ResolvedCmdSpec, ParseError> {
-        parse(&Registry::new(), input)
+        parse(&Registry::new(), None, input)
     }
 
     #[test]
@@ -1200,7 +1228,7 @@ mod tests {
             } else if matches!(spec.body, Body::Patch) {
                 line.push_str("\nsearch\n=======\nreplace");
             }
-            parse(&reg, &line)
+            parse(&reg, None, &line)
                 .unwrap_or_else(|e| panic!("{} failed to parse {line:?}: {e}", spec.canonical()));
         }
     }
@@ -1224,8 +1252,28 @@ mod tests {
     }
 
     #[test]
+    fn filtered_commands_are_disabled_not_unknown() {
+        use crate::cmd_registry::{Filter, Who};
+        let mut reg = Registry::new();
+        reg.add_filter(None, Filter::exclude(&["exec"]));
+
+        let e = parse(&reg, Some(Who::User), "/exec ls").unwrap_err();
+        assert!(matches!(e, ParseError::DisabledCmd { .. }));
+        assert!(e.to_string().contains("disabled"));
+        // `None` bypasses filters.
+        assert!(parse(&reg, None, "/exec ls").is_ok());
+        // Disabled commands aren't offered as typo suggestions.
+        match parse(&reg, Some(Who::User), "/exex ls") {
+            Err(ParseError::UnknownCmd { suggestion, .. }) => {
+                assert_ne!(suggestion.as_deref(), Some("exec"))
+            }
+            other => panic!("expected UnknownCmd, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn optional_rest_allows_an_empty_tail() {
-        let spec = Registry::new().lookup(Sigil::Bang, "py").unwrap();
+        let spec = Registry::new().get(Sigil::Bang, "py").unwrap();
         assert_eq!(parse_with_spec(spec.clone(), "").unwrap().arg(0), "");
         assert_eq!(parse_with_spec(spec.clone(), "   ").unwrap().arg(0), "");
         assert_eq!(
@@ -1240,7 +1288,7 @@ mod tests {
 
     #[test]
     fn bare_tool_line_with_body_is_a_prompt_not_tool_mode() {
-        let spec = Registry::new().lookup(Sigil::Bang, "py").unwrap();
+        let spec = Registry::new().get(Sigil::Bang, "py").unwrap();
         assert_eq!(
             parse_with_spec(spec, "\nwrite a script").unwrap().arg(0),
             "write a script"

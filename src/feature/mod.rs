@@ -29,7 +29,11 @@ pub mod opengraph;
 /// The `using cargo?` boolean is useful for adjusting usage in development
 /// mode, e.g. longer timeout when waiting for invocation due to compilation
 /// time.
-fn self_invocation(account_user: Option<&str>) -> (String, Vec<String>, bool) {
+fn self_invocation(
+    account_user: Option<&str>,
+    // FIXME: Use filters!
+    filters: &[&crate::cmd_registry::Filter],
+) -> (String, Vec<String>, bool) {
     // For dev: check if running under `cargo`, which sets the `CARGO` env var.
     // Beware that `CARGO` may have been inherited from a parent process and
     // the current binary may not actually be from `cargo run`.
@@ -39,6 +43,51 @@ fn self_invocation(account_user: Option<&str>) -> (String, Vec<String>, bool) {
     } else {
         vec!["--user".to_string(), "_".to_string()]
     };
+
+    let mut cmd_allow_flags = Vec::new();
+    let mut cmd_deny_flags = Vec::new();
+
+    for filter in filters {
+        match filter {
+            crate::cmd_registry::Filter::Include(cmds) => {
+                for cmd in cmds {
+                    cmd_allow_flags.push(cmd.clone());
+                }
+            }
+            crate::cmd_registry::Filter::Exclude(cmds) => {
+                for cmd in cmds {
+                    cmd_deny_flags.push(cmd.clone());
+                }
+            }
+            crate::cmd_registry::Filter::Deny(deny_traits) => {
+                if deny_traits.fs {
+                    cmd_deny_flags.push("fs".to_string());
+                }
+                if deny_traits.fs_write {
+                    cmd_deny_flags.push("fs_write".to_string());
+                }
+                if deny_traits.assets {
+                    cmd_deny_flags.push("assets".to_string());
+                }
+                if deny_traits.assets_write {
+                    cmd_deny_flags.push("assets_write".to_string());
+                }
+                if deny_traits.executes {
+                    cmd_deny_flags.push("exec".to_string());
+                }
+            }
+        }
+    }
+
+    let mut cmd_filter_flags = vec![];
+    if !cmd_allow_flags.is_empty() {
+        cmd_filter_flags.push("--cmd-allow".to_string());
+        cmd_filter_flags.push(cmd_allow_flags.join(" "));
+    }
+    if !cmd_deny_flags.is_empty() {
+        cmd_filter_flags.push("--cmd-deny".to_string());
+        cmd_filter_flags.push(cmd_deny_flags.join(" "));
+    }
 
     // Path of Cargo.toml
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -76,7 +125,10 @@ fn self_invocation(account_user: Option<&str>) -> (String, Vec<String>, bool) {
 
         (
             cargo,
-            args.into_iter().chain(user_flag.into_iter()).collect(),
+            args.into_iter()
+                .chain(cmd_filter_flags.into_iter())
+                .chain(user_flag.into_iter())
+                .collect(),
             true,
         )
     } else {
@@ -90,6 +142,7 @@ fn self_invocation(account_user: Option<&str>) -> (String, Vec<String>, bool) {
             exe,
             debug_flag()
                 .into_iter()
+                .chain(cmd_filter_flags.into_iter())
                 .chain(user_flag.into_iter())
                 .collect(),
             false,

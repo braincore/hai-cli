@@ -309,6 +309,7 @@ pub fn execute_hai_repl_tool(
     out: &Out,
     tool: &Tool,
     arg: &str,
+    who: Option<crate::cmd_registry::Who>,
 ) -> Result<(String, Vec<session::CmdInput>), Box<dyn std::error::Error>> {
     let ToolHaiReplArg {
         mut cmds,
@@ -334,6 +335,7 @@ pub fn execute_hai_repl_tool(
                         source: session::CmdSource::HaiTool {
                             step_id: index as u32,
                         },
+                        who,
                         reply_channel: None,
                     })
                     .collect(),

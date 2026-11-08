@@ -295,11 +295,10 @@ pub async fn process_cmd(
             ProcessCmdResult::break_next().discard_cmd_and_output()
         }
         cmd::Cmd::Help(cmd::HelpCmd { history: _ }) => {
-            let cmd_filter = cmd_registry::Filter::user();
             outln!(
                 io,
                 "{}\n\n- For quick answers, just ask the LLM.\n- `/forget` to unload help from conversation.\n- For more extensive help, use: `/task hai/help`",
-                cmd_registry::render_help(&session.cmd_registry, &cmd_filter)
+                cmd_registry::render_help(&session.cmd_registry, &[])
             );
             ProcessCmdResult::loop_next()
         }
@@ -694,6 +693,14 @@ pub async fn process_cmd(
                 }
             }
             ProcessCmdResult::loop_next().discard_cmd_and_output()
+        }
+        cmd::Cmd::CmdAllow(cmd::CmdAllowCmd { cmds }) => {
+            let _filter_id = session.cmd_registry.add_filter_include(None, cmds);
+            ProcessCmdResult::loop_next()
+        }
+        cmd::Cmd::CmdDeny(cmd::CmdDenyCmd { cmds }) => {
+            let _ = session.cmd_registry.add_filter_exclude(None, cmds);
+            ProcessCmdResult::loop_next()
         }
         cmd::Cmd::Dump => {
             // Undocumented (for manual testing)
@@ -1723,8 +1730,8 @@ pub async fn process_cmd(
             if matches!(session.repl_mode, ReplMode::Task(..)) {
                 // If already in task mode, clear the existing session state and start fresh.
                 new_cmds.extend(vec![
-                    session::CmdInput::internal("/task-end".to_string()),
-                    session::CmdInput::internal(cmd_input.input.clone()),
+                    session::CmdInput::internal("/task-end".to_string(), cmd_input.who.clone()),
+                    session::CmdInput::internal(cmd_input.input.clone(), cmd_input.who.clone()),
                 ]);
             } else if let Some((_, haitask)) = get_haitask_from_task_ref(
                 io,
@@ -1874,6 +1881,7 @@ pub async fn process_cmd(
                             task_fqn: haitask.name.clone(),
                             task_key: key.clone(),
                         },
+                        who: cmd_input.who.clone(),
                         reply_channel: None,
                     });
                 }
@@ -1899,6 +1907,7 @@ pub async fn process_cmd(
                             task_fqn: haitask.name.clone(),
                             task_key: key.clone(),
                         },
+                        who: cmd_input.who.clone(),
                         reply_channel: None,
                     });
                 }
@@ -2394,6 +2403,7 @@ pub async fn process_cmd(
                     db.clone(),
                     asset_blob_cache.clone(),
                     &api_client,
+                    session.cmd_registry.get_filters(),
                     Some(&username),
                     update_asset_tx.clone(),
                     is_task_mode_step,
@@ -2648,10 +2658,13 @@ pub async fn process_cmd(
                     .cmd_queue
                     .lock()
                     .await
-                    .push_cmd(session::CmdInput::internal(format!(
-                        "/asset-list{}{}{} {}/",
-                        desc_option, full_option, hidden_option, prefix
-                    )));
+                    .push_cmd(session::CmdInput::internal(
+                        format!(
+                            "/asset-list{}{}{} {}/",
+                            desc_option, full_option, hidden_option, prefix
+                        ),
+                        cmd_input.who.clone(),
+                    ));
                 return ProcessCmdResult::loop_next();
             }
 
@@ -4841,14 +4854,14 @@ pub async fn process_cmd(
             };
             ProcessCmdResult::loop_next()
                 .with_new_cmds(vec![
-                    session::CmdInput::internal(format!(
-                        "/asset-crypt-grant '{}' {}",
-                        asset_name, recipient
-                    )),
-                    session::CmdInput::internal(format!(
-                        "/asset-acl-set '{}' {} {}",
-                        asset_name, principal, ace,
-                    )),
+                    session::CmdInput::internal(
+                        format!("/asset-crypt-grant '{}' {}", asset_name, recipient),
+                        cmd_input.who.clone(),
+                    ),
+                    session::CmdInput::internal(
+                        format!("/asset-acl-set '{}' {} {}", asset_name, principal, ace,),
+                        cmd_input.who.clone(),
+                    ),
                 ])
                 .with_new_cmds_cascade_error(true)
         }
@@ -4862,11 +4875,11 @@ pub async fn process_cmd(
                 format!("user:{}", recipient)
             };
             ProcessCmdResult::loop_next().with_new_cmds(vec![
-                session::CmdInput::internal(format!("/asset-crypt-revoke '{}' {}", asset_name, recipient)),
+                session::CmdInput::internal(format!("/asset-crypt-revoke '{}' {}", asset_name, recipient), cmd_input.who.clone()),
                 session::CmdInput::internal(format!(
                         "/asset-acl-set '{}' {} inherit:read-data inherit:read-revisions inherit:write-data inherit:push-data",
                         asset_name, principal
-                    )),
+                    ), cmd_input.who.clone()),
             ]).with_new_cmds_cascade_error(true)
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
@@ -5737,6 +5750,7 @@ pub async fn process_cmd(
                 db.clone(),
                 asset_blob_cache.clone(),
                 &api_client,
+                session.cmd_registry.get_filters(),
                 username.as_deref(),
                 update_asset_tx.clone(),
                 is_task_mode_step,
@@ -5841,6 +5855,7 @@ pub async fn process_cmd(
                     db.clone(),
                     asset_blob_cache.clone(),
                     &api_client,
+                    session.cmd_registry.get_filters(),
                     username.as_deref(),
                     update_asset_tx.clone(),
                     is_task_mode_step,
@@ -5856,10 +5871,10 @@ pub async fn process_cmd(
                     .cmd_queue
                     .lock()
                     .await
-                    .push_cmd(session::CmdInput::internal(format!(
-                        "/asset.no_create {}",
-                        asset_name
-                    )));
+                    .push_cmd(session::CmdInput::internal(
+                        format!("/asset.no_create {}", asset_name),
+                        cmd_input.who.clone(),
+                    ));
             }
             ProcessCmdResult::loop_next()
         }
@@ -5965,10 +5980,10 @@ pub async fn process_cmd(
                                 .cmd_queue
                                 .lock()
                                 .await
-                                .push_cmd(session::CmdInput::internal(format!(
-                                    "/chat-resume {}",
-                                    asset_name
-                                )));
+                                .push_cmd(session::CmdInput::internal(
+                                    format!("/chat-resume {}", asset_name),
+                                    cmd_input.who.clone(),
+                                ));
                             break;
                         }
                         _ => {
@@ -6502,8 +6517,10 @@ pub async fn process_cmd(
             );
             outln!(io);
 
-            ProcessCmdResult::loop_next()
-                .with_new_cmds(vec![session::CmdInput::internal("/bot-probe".to_string())])
+            ProcessCmdResult::loop_next().with_new_cmds(vec![session::CmdInput::internal(
+                "/bot-probe".to_string(),
+                cmd_input.who.clone(),
+            )])
         }
         cmd::Cmd::BotGetActive => {
             let _username = if let Some(account) = &session.account {
@@ -7011,18 +7028,25 @@ pub async fn process_cmd(
                     });
                     new_cmds.push(session::CmdInput::internal_printed(
                         "/prep.info Setting up your **inbox**".to_string(),
+                        cmd_input.who.clone(),
                     ));
-                    new_cmds.push(session::CmdInput::internal("/inbox-setup".to_string()));
-                    new_cmds.push(session::CmdInput::internal_printed("/prep.info Setting up your data **encryption key**\nWe **CANNOT** help you if you forget this password.".to_string()));
+                    new_cmds.push(session::CmdInput::internal(
+                        "/inbox-setup".to_string(),
+                        cmd_input.who.clone(),
+                    ));
+                    new_cmds.push(session::CmdInput::internal_printed("/prep.info Setting up your data **encryption key**\nWe **CANNOT** help you if you forget this password.".to_string(), cmd_input.who.clone()));
                     new_cmds.push(session::CmdInput::internal(
                         "/asset-crypt-setup".to_string(),
+                        cmd_input.who.clone(),
                     ));
                     // Do this silently. If it fails, that's okay.
                     new_cmds.push(session::CmdInput::internal(
                         "/asset-folder-new .sys".to_string(),
+                        cmd_input.who.clone(),
                     ));
                     new_cmds.push(session::CmdInput::internal(
                         "/asset-folder-new .app".to_string(),
+                        cmd_input.who.clone(),
                     ));
                 }
                 Err(e) => {
@@ -7267,15 +7291,21 @@ pub async fn process_cmd(
                 }
             };
             ProcessCmdResult::loop_next().with_new_cmds(vec![
-                session::CmdInput::internal("/asset-push //inbox\n{}".to_string()),
+                session::CmdInput::internal(
+                    "/asset-push //inbox\n{}".to_string(),
+                    cmd_input.who.clone(),
+                ),
                 session::CmdInput::internal(
                     "/asset-acl-set //inbox everyone deny:read-data".to_string(),
+                    cmd_input.who.clone(),
                 ),
                 session::CmdInput::internal(
                     "/asset-acl-set //inbox everyone allow:push-data".to_string(),
+                    cmd_input.who.clone(),
                 ),
                 session::CmdInput::internal(
                     "/asset-md-set-key //inbox content_type \"application/json\"".to_string(),
+                    cmd_input.who.clone(),
                 ),
             ])
         }

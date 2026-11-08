@@ -70,6 +70,19 @@ pub enum CmdSource {
 }
 
 impl CmdSource {
+    /// Which registry filters a command from this source is subject to.
+    /// `None` means unrestricted.
+    pub fn who(&self) -> Option<crate::cmd_registry::Who> {
+        use crate::cmd_registry::Who;
+        match self {
+            CmdSource::HaiTool { .. } | CmdSource::Agentic => Some(Who::Llm),
+            CmdSource::User | CmdSource::Task { .. } | CmdSource::HaiBye { .. } => Some(Who::User),
+            CmdSource::Internal { .. } | CmdSource::Unknown => None,
+        }
+    }
+}
+
+impl CmdSource {
     pub fn get_task_step_signature(&self) -> Option<(String, Option<String>, u32)> {
         if let CmdSource::Task {
             step_id,
@@ -88,24 +101,30 @@ impl CmdSource {
 pub struct CmdInput {
     pub input: String,
     pub source: CmdSource,
+    pub who: Option<crate::cmd_registry::Who>,
     pub reply_channel: Option<tokio::sync::mpsc::Sender<CmdInputReply>>,
 }
 
 impl CmdInput {
     /// Internally generated command that is not printed when executed.
-    pub fn internal(input: impl Into<String>) -> Self {
+    pub fn internal(input: impl Into<String>, who: Option<crate::cmd_registry::Who>) -> Self {
         Self {
             input: input.into(),
             source: CmdSource::Internal { print_cmd: false },
+            who,
             reply_channel: None,
         }
     }
 
     /// Internally generated command that is printed when executed.
-    pub fn internal_printed(input: impl Into<String>) -> Self {
+    pub fn internal_printed(
+        input: impl Into<String>,
+        who: Option<crate::cmd_registry::Who>,
+    ) -> Self {
         Self {
             input: input.into(),
             source: CmdSource::Internal { print_cmd: true },
+            who,
             reply_channel: None,
         }
     }
@@ -449,7 +468,7 @@ impl SessionState {
             if matches!(log_entry.message.role, chat::MessageRole::User) {
                 for content in &log_entry.message.content {
                     if let chat::MessageContent::Text { text } = content {
-                        match cmd::parse_user_input(&self.cmd_registry, &text) {
+                        match cmd::parse_user_input(&self.cmd_registry, None, &text) {
                             Ok(cmd::Cmd::Tool(tool_cmd)) if !tool_cmd.temporary => {
                                 toolbox.add_tool(tool_cmd.tool, tool_cmd.user_confirmation);
                             }

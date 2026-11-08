@@ -384,6 +384,7 @@ fn get_pid_file() -> PathBuf {
 pub async fn start_bot(
     out: &Out,
     account: Option<db::Account>,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     launch_as_daemon: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let is_daemon_child = std::env::var("HAI_BOT_DAEMON").is_ok();
@@ -402,7 +403,7 @@ pub async fn start_bot(
         let pid = spawn_background()?;
         outln!(out, "Bot started (PID: {})", pid);
     } else {
-        match run_bot_loop(out, account).await {
+        match run_bot_loop(out, account, cmd_filters).await {
             Ok(_) => outln!(out, "Bot exited normally"),
             Err(e) => errorln!(out, "Bot exited with error: {}", e),
         }
@@ -578,6 +579,7 @@ fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
 pub async fn run_bot_loop(
     out: &Out,
     account: Option<db::Account>,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     outln!(out, "Bot running...");
 
@@ -635,6 +637,7 @@ pub async fn run_bot_loop(
         job_groups,
         schedule_notify,
         api_client_for_scheduler,
+        cmd_filters,
     )
     .await
 }
@@ -1136,6 +1139,7 @@ async fn run_scheduler(
     job_groups: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
     api_client: crate::api::client::HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Track running daemons (always-on tasks)
     let mut daemons: HashMap<String, DaemonState> = HashMap::new();
@@ -1164,6 +1168,7 @@ async fn run_scheduler(
             &scheduled_jobs,
             &mut asset_watchers,
             &api_client,
+            cmd_filters.clone(),
             account_user.clone(),
         )
         .await;
@@ -1186,6 +1191,7 @@ async fn run_scheduler(
                         job.task.as_deref(),
                         job.steps.as_deref(),
                         None, // No asset revision for scheduled jobs
+                        &cmd_filters.iter().collect::<Vec<_>>(),
                     )
                     .await;
 
@@ -1265,6 +1271,7 @@ async fn reconcile_asset_watchers(
     jobs: &[ScheduledJob],
     watchers: &mut HashMap<String, AssetWatcherState>,
     api_client: &crate::api::client::HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     account_user: Option<String>,
 ) {
     // Find all asset change jobs
@@ -1304,6 +1311,7 @@ async fn reconcile_asset_watchers(
 
                 match spawn_asset_watcher(
                     api_client.clone(),
+                    cmd_filters.clone(),
                     account_user.clone(),
                     job_key.clone(),
                     asset_name.clone(),
@@ -1328,6 +1336,7 @@ async fn reconcile_asset_watchers(
 /// Spawn an asset watcher that listens for changes to a specific asset
 async fn spawn_asset_watcher(
     api_client: crate::api::client::HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     account_user: Option<String>,
     job_key: String,
     asset_name: String,
@@ -1359,6 +1368,7 @@ async fn spawn_asset_watcher(
     let handle = tokio::spawn(async move {
         asset_watcher_loop(
             api_client,
+            cmd_filters,
             account_user,
             job_key,
             asset_name,
@@ -1376,6 +1386,7 @@ async fn spawn_asset_watcher(
 /// The main loop for watching an asset for changes
 async fn asset_watcher_loop(
     api_client: crate::api::client::HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     account_user: Option<String>,
     job_key: String,
     asset_name: String,
@@ -1506,6 +1517,7 @@ async fn asset_watcher_loop(
                                     task.as_deref(),
                                     steps.as_deref(),
                                     Some((&asset_name, rev_id)),
+                                    &cmd_filters.iter().collect::<Vec<_>>(),
                                 )
                                 .await;
                             }
@@ -2018,11 +2030,12 @@ async fn execute_job(
     task: Option<&str>,
     steps: Option<&[String]>,
     asset_revision: Option<(&str, &str)>,
+    cmd_filters: &[&crate::cmd_registry::Filter],
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
     let (program, mut args, _using_cargo) =
-        crate::feature::self_invocation(account_user.as_deref());
+        crate::feature::self_invocation(account_user.as_deref(), cmd_filters);
 
     args.push("bye".to_string());
 

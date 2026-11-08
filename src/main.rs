@@ -62,7 +62,7 @@ struct Cli {
     #[arg(short = 'd', long = "debug")]
     debug: bool, // Defaults to false
 
-    /// Does not log conversation to history
+    /// Does not log conversation to history.
     /// An incognito AI model can be set in your config
     #[arg(short = 'i', long = "incognito")]
     incognito: bool, // Defaults to false
@@ -82,6 +82,14 @@ struct Cli {
     /// Non-default path to config file (defaults to ~/.hai/hai.toml)
     #[arg(short = 'c', long = "config", value_name = "FILE")]
     config: Option<String>,
+
+    /// Commands allowed
+    #[arg(long = "cmd-allow")]
+    cmd_allow: Option<String>,
+
+    /// Commands denied
+    #[arg(long = "cmd-deny")]
+    cmd_deny: Option<String>,
 
     /// Subcommands for the CLI
     #[command(subcommand)]
@@ -176,6 +184,22 @@ async fn main() -> process::ExitCode {
         config::create_config_dir_if_missing().expect("Could not create dir");
     }
 
+    let mut cmd_registry = cmd_registry::Registry::new();
+    if let Some(cmd_allow) = &args.cmd_allow {
+        let cmds = cmd_allow
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        cmd_registry.add_filter_include(None, cmds.clone());
+    }
+    if let Some(cmd_deny) = &args.cmd_deny {
+        let cmds = cmd_deny
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        cmd_registry.add_filter_exclude(None, cmds.clone());
+    }
+
     //
     // Setup logging
     //
@@ -216,12 +240,14 @@ async fn main() -> process::ExitCode {
                                 session::CmdInput {
                                     input: format!("/prep {}", stdin_buffer),
                                     source: session::CmdSource::HaiBye { step_id: idx as u32 },
+                                    who: Some(crate::cmd_registry::Who::User),
                                     reply_channel: None,
                                 }
                             } else {
                                 session::CmdInput {
                                     input: prompt,
                                     source: session::CmdSource::HaiBye { step_id: idx as u32 },
+                                    who: Some(crate::cmd_registry::Who::User),
                                     reply_channel: None,
                                 }
                             }
@@ -273,7 +299,13 @@ async fn main() -> process::ExitCode {
         let out = Out::stdio();
         match command {
             BotSubcommand::Start { daemon } => {
-                let _ = crate::feature::haibot::start_bot(&out, account, daemon).await;
+                let _ = crate::feature::haibot::start_bot(
+                    &out,
+                    account,
+                    cmd_registry.get_filters(),
+                    daemon,
+                )
+                .await;
                 return process::ExitCode::from(0);
             }
             BotSubcommand::Stop => {
@@ -290,7 +322,10 @@ async fn main() -> process::ExitCode {
         (
             ReplMode::Normal,
             // internal() doesn't print the command
-            vec![session::CmdInput::internal(account_login_cmd)],
+            vec![session::CmdInput::internal(
+                account_login_cmd,
+                Some(crate::cmd_registry::Who::User),
+            )],
             true,
             false,
             false,
@@ -304,7 +339,10 @@ async fn main() -> process::ExitCode {
         (
             ReplMode::Normal,
             // internal() doesn't print the command
-            vec![session::CmdInput::internal(account_login_cmd)],
+            vec![session::CmdInput::internal(
+                account_login_cmd,
+                Some(crate::cmd_registry::Who::User),
+            )],
             true,
             false,
             false,
@@ -318,10 +356,10 @@ async fn main() -> process::ExitCode {
         let set_key_cmd = if local { "/set-key.local" } else { "/set-key" };
         (
             ReplMode::Normal,
-            vec![session::CmdInput::internal(format!(
-                "{} {} {}",
-                set_key_cmd, provider, key
-            ))],
+            vec![session::CmdInput::internal(
+                format!("{} {} {}", set_key_cmd, provider, key),
+                Some(crate::cmd_registry::Who::User),
+            )],
             true,
             false,
             false,
@@ -362,6 +400,7 @@ async fn main() -> process::ExitCode {
             vec![session::CmdInput {
                 input: task_cmd,
                 source: session::CmdSource::User,
+                who: Some(crate::cmd_registry::Who::User),
                 reply_channel: None,
             }],
             false,
@@ -453,6 +492,7 @@ async fn main() -> process::ExitCode {
         force_yes,
         mute_all_but_final,
         args.kernel,
+        cmd_registry,
     )
     .await;
 
@@ -491,6 +531,7 @@ async fn repl(
     force_yes: bool,
     mute_all_but_final_output: bool,
     kernel_mode: bool,
+    cmd_registry: cmd_registry::Registry,
 ) -> Result<u8, Box<dyn Error>> {
     let local_cfg_at_startup = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
@@ -557,8 +598,6 @@ async fn repl(
     });
 
     let multiple_accounts = db::list_accounts(&*db.lock().await)?.len() > 1;
-
-    let cmd_registry = cmd_registry::Registry::new();
 
     let mut session = SessionState::new_from_cfg(
         &io.out,
@@ -872,6 +911,7 @@ async fn repl(
                 Answer::Text(buffer) => session::CmdInput {
                     input: buffer,
                     source: session::CmdSource::User,
+                    who: Some(crate::cmd_registry::Who::User),
                     reply_channel: None,
                 },
                 // Client cancelled this line (their equivalent of CtrlC): loop.
@@ -943,6 +983,7 @@ async fn repl(
                 Ok(Signal::Success(buffer)) => session::CmdInput {
                     input: buffer,
                     source: session::CmdSource::User,
+                    who: Some(crate::cmd_registry::Who::User),
                     reply_channel: None,
                 },
                 Ok(Signal::ExternalBreak(_buffer)) => {
@@ -1018,7 +1059,11 @@ async fn repl(
         let tokenizer_locked = tokenizer.lock().await;
         let bpe_tokenizer = tokenizer_locked.as_ref().unwrap();
 
-        let mut cmd = match cmd::parse_user_input(&session.cmd_registry, &cmd_input.input) {
+        let mut cmd = match cmd::parse_user_input(
+            &session.cmd_registry,
+            cmd_input.source.who(),
+            &cmd_input.input,
+        ) {
             Ok(cmd) => cmd,
             Err(e) => match e {
                 cmd_parse::ParseError::UnknownCmd { .. } => {
@@ -1683,6 +1728,7 @@ async fn repl(
                                     &io.out,
                                     &toolbox_tool_policy.tool,
                                     arg,
+                                    Some(cmd_registry::Who::Llm),
                                 ) {
                                     Ok((output_text, new_cmds)) => {
                                         cmd_queue.push_cmds(new_cmds, false);
@@ -1960,7 +2006,10 @@ async fn repl(
 /// REPL loop.
 fn on_eof(session: &SessionState, io: &Io) -> Option<session::CmdInput> {
     if matches!(session.repl_mode, ReplMode::Task(..)) {
-        Some(session::CmdInput::internal_printed("/task-end".to_string()))
+        Some(session::CmdInput::internal_printed(
+            "/task-end".to_string(),
+            Some(crate::cmd_registry::Who::User),
+        ))
     } else {
         outln!(io, "バイバイ！");
         None
@@ -2040,7 +2089,7 @@ fn print_internal_cmd_input(
         masked_input = masked_input.replace(masked_string, &mask);
     }
     if cmd::get_cmds_with_markdown_body_re().is_match(input) {
-        let parsed_cmd = cmd::parse_user_input(&cmd_registry, input);
+        let parsed_cmd = cmd::parse_user_input(&cmd_registry, None, input);
         // For prep & pin, we print the message w/o the command prefix.
         let (message, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, message }))
         | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, message })) =

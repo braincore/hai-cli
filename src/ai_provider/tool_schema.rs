@@ -273,8 +273,7 @@ The script should print important values to stdout."#
             },
         }),
         Tool::HaiRepl => {
-            let hai_tool_cmd_registry_rendered =
-                cmd_registry::render_llm(&cmd_registry, &cmd_registry::Filter::llm());
+            let hai_tool_cmd_registry_rendered = cmd_registry::render_llm(&cmd_registry, &[]);
             json!({
                     "name": tool_name,
                     "description": format!(r#"

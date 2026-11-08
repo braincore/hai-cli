@@ -262,6 +262,10 @@ pub enum Cmd {
     ReprintHistory,
     /// Update local copy of asset-backed config
     ConfigSync,
+    /// Specify commands to include
+    CmdAllow(CmdAllowCmd),
+    /// Specify commands to exclude
+    CmdDeny(CmdDenyCmd),
     /// Program info
     About,
     /// Dumps raw chat history (undocumented)
@@ -1119,6 +1123,18 @@ pub struct ImageUriCmd {
     pub image_hq: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct CmdAllowCmd {
+    /// Commands to allow
+    pub cmds: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdDenyCmd {
+    /// Commands to deny
+    pub cmds: Vec<String>,
+}
+
 pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
     static CMDS_WITH_MARKDOWN_BODY_RE: OnceLock<Regex> = OnceLock::new();
     CMDS_WITH_MARKDOWN_BODY_RE.get_or_init(|| {
@@ -1134,8 +1150,11 @@ pub fn get_cmds_with_markdown_body_re() -> &'static Regex {
 /// conflicts between prompts from the user (especially pasted code) and our
 /// command list. For example, we don't want a "//comment" input to trigger an
 /// error even though if you squint it looks like a cmd.
+///
+/// `who` selects which registry filters to enforce; `None` bypasses them.
 pub fn parse_user_input(
     cmd_registry: &crate::cmd_registry::Registry,
+    who: Option<crate::cmd_registry::Who>,
     input: &str,
 ) -> Result<Cmd, cmd_parse::ParseError> {
     if input.trim().is_empty() {
@@ -1177,7 +1196,7 @@ pub fn parse_user_input(
         ));
     }
 
-    match crate::cmd_parse::parse(cmd_registry, &peeled_input) {
+    match crate::cmd_parse::parse(cmd_registry, who, &peeled_input) {
         Ok(resolved_cmd_spec) => match build(resolved_cmd_spec) {
             Ok(cmd) => Ok(apply_tool_modifiers(cmd, user_confirmation, tool_temporary)),
             Err(e) => Err(e),
@@ -1979,6 +1998,12 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
         "reprint-history" => Cmd::ReprintHistory,
         "config-sync" => Cmd::ConfigSync,
+        "cmd-allow" => Cmd::CmdAllow(CmdAllowCmd {
+            cmds: r.take_rest(0),
+        }),
+        "cmd-deny" => Cmd::CmdDeny(CmdDenyCmd {
+            cmds: r.take_rest(0),
+        }),
         "about" => Cmd::About,
 
         //
@@ -2096,7 +2121,7 @@ pub fn parse_toolbox_add(
             .map_err(|e| e.to_string())?;
         build_custom_tool(r, shell_cmd).map_err(|e| e.to_string())?
     } else {
-        match cmd_parse::parse(cmd_registry, &peeled) {
+        match cmd_parse::parse(cmd_registry, None, &peeled) {
             Ok(r) => build(r).map_err(|e| e.to_string())?,
             // `!`, `! foo`, `!!` — scan_name finds nothing to look up.
             Err(ParseError::NotACommand) => {
@@ -2153,7 +2178,7 @@ mod tests {
         // treated as an AI prompt and never as a command. This eases issues
         // with pasting code that looks like a command.
         let input = " /load xyz";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Prompt(PromptCmd { prompt, .. })) => {
                 assert_eq!(prompt, input);
@@ -2166,7 +2191,7 @@ mod tests {
     fn test_arguments() {
         // Test no arguments
         let input = "/ask-human agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2182,7 +2207,7 @@ mod tests {
 
         // Test one argument
         let input = "/ask-human.secret agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2198,7 +2223,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2214,7 +2239,7 @@ mod tests {
 
         // Test two arguments separated by space
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2233,7 +2258,7 @@ mod tests {
     fn test_arguments_new() {
         // Test one argument
         let input = "/ask-human.secret=true agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2249,7 +2274,7 @@ mod tests {
 
         // Test two arguments
         let input = "/ask-human.secret=true.cache=true agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2265,7 +2290,7 @@ mod tests {
 
         // Test two arguments shorthand
         let input = "/ask-human.secret.cache agree?";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::AskHuman(AskHumanCmd {
                 question,
@@ -2281,7 +2306,7 @@ mod tests {
 
         // Test string argument
         let input = "/task.key=\"test\".trust user/task";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,
@@ -2299,7 +2324,7 @@ mod tests {
     #[test]
     fn test_clip_tool_command() {
         let input = "!clip Copy this to clipboard";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::CopyToClipboard,
@@ -2317,7 +2342,7 @@ mod tests {
     #[test]
     fn test_py_tool_command() {
         let input = "!py print('Hello, World!')";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2335,7 +2360,7 @@ mod tests {
     #[test]
     fn test_sh_tool_command() {
         let input = "!sh ls -lah";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellScriptExec,
@@ -2354,14 +2379,14 @@ mod tests {
     #[test]
     fn test_invalid_tool_command() {
         let input = "!invalid_tool Something";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         matches!(cmd, Err(ParseError::UnknownCmd { sigil: Sigil::Bang, name, .. }) if name == "invalid_tool");
     }
 
     #[test]
     fn test_optional_tool_command() {
         let input = "!?py print('Hello, World!')";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2379,7 +2404,7 @@ mod tests {
     #[test]
     fn test_custom_tool_command() {
         let input = "!?'psql' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2396,7 +2421,7 @@ mod tests {
 
         // custom tool with space
         let input = "!?'psql -hlocalhost' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2413,7 +2438,7 @@ mod tests {
 
         // custom tool with double-quotes
         let input = "!?'psql -h \"localhost\"' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2430,7 +2455,7 @@ mod tests {
 
         // custom tool with escaped single-quote
         let input = "!?'psql -h loc\\'alhost' describe the user table";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithStdin(cmd),
@@ -2447,7 +2472,7 @@ mod tests {
 
         // custom tool with file+ext placeholder
         let input = "!?'uv run {file.py}' distance sf to nyc";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -2465,7 +2490,7 @@ mod tests {
 
         // custom tool with file sans ext placeholder
         let input = "!?'uv run {file}' distance sf to nyc";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ShellExecWithFile(cmd, ext),
@@ -2485,7 +2510,7 @@ mod tests {
     #[test]
     fn test_tool_command_with_option() {
         let input = "!fn-py.cache double a number";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2507,7 +2532,7 @@ mod tests {
         }
 
         let input = "!fn-py.cache=true double a number";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2529,7 +2554,7 @@ mod tests {
         }
 
         let input = "!fn-py.cache double a number";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool:
@@ -2554,7 +2579,7 @@ mod tests {
     #[test]
     fn test_tool_require() {
         let input = "!py area of circle w/ radius 3";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2571,7 +2596,7 @@ mod tests {
         }
 
         let input = "!py? area of circle w/ radius 3";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Tool(ToolCmd {
                 tool: tool::Tool::ExecPythonScript,
@@ -2601,7 +2626,7 @@ mod tests {
     fn test_string_option() {
         // Test simple
         let input = "/task.key=\"A\".trust hai/test";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,
@@ -2618,7 +2643,7 @@ mod tests {
 
         // Test comma in string
         let input = "/task.key=\"A,B\".trust hai/test";
-        let cmd = parse_user_input(&Registry::new(), input);
+        let cmd = parse_user_input(&Registry::new(), None, input);
         match cmd {
             Ok(Cmd::Task(TaskCmd {
                 task_ref,

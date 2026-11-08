@@ -939,7 +939,7 @@ pub async fn reprint_conversation(io: &Io, history: &[db::LogEntry]) {
 use crate::{cmd, cmd_registry, io};
 
 pub fn print_user_input(io: &Io, cmd_registry: &cmd_registry::Registry, input: &str) {
-    let parsed_cmd = cmd::parse_user_input(&cmd_registry, input);
+    let parsed_cmd = cmd::parse_user_input(&cmd_registry, None, input);
     let (notice_section_guard, color) = if let Ok(cmd::Cmd::Pin(cmd::PinCmd { accent, .. }))
     | Ok(cmd::Cmd::Prep(cmd::PrepCmd { accent, .. })) =
         parsed_cmd.as_ref()

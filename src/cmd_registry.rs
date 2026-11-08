@@ -59,10 +59,14 @@ pub enum Who {
 /// (e.g. no filesystem access mode).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Traits {
+    /// Reads from the local filesystem.
+    pub fs_read: bool,
     /// Writes to the local filesystem.
-    pub mutates_fs: bool,
+    pub fs_write: bool,
+    /// Reads from the asset store.
+    pub assets_read: bool,
     /// Creates, modifies, or deletes assets.
-    pub mutates_assets: bool,
+    pub assets_write: bool,
     /// Runs arbitrary code on the user's machine.
     pub executes: bool,
     /// Talks to the network.
@@ -77,8 +81,10 @@ pub struct Traits {
 
 impl Traits {
     pub const NONE: Traits = Traits {
-        mutates_fs: false,
-        mutates_assets: false,
+        fs_read: false,
+        fs_write: false,
+        assets_read: false,
+        assets_write: false,
         executes: false,
         network: false,
         needs_account: false,
@@ -87,11 +93,27 @@ impl Traits {
     };
 
     pub const fn fs(mut self) -> Self {
-        self.mutates_fs = true;
+        self.fs_read = true;
+        self.fs_write = true;
+        self
+    }
+    pub const fn fs_ro(mut self) -> Self {
+        self.fs_read = true;
         self
     }
     pub const fn assets(mut self) -> Self {
-        self.mutates_assets = true;
+        self.assets_read = true;
+        self.assets_write = true;
+        self.network = true;
+        self
+    }
+    pub const fn assets_ro(mut self) -> Self {
+        self.assets_read = true;
+        self.network = true;
+        self
+    }
+    pub const fn assets_ro_local(mut self) -> Self {
+        self.assets_read = true;
         self.network = true;
         self
     }
@@ -121,8 +143,10 @@ impl Traits {
 /// A `false` field means "don't care"; `true` means "exclude commands with it".
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DenyTraits {
-    pub mutates_fs: bool,
-    pub mutates_assets: bool,
+    pub fs: bool,
+    pub fs_write: bool,
+    pub assets: bool,
+    pub assets_write: bool,
     pub executes: bool,
     pub network: bool,
     pub needs_account: bool,
@@ -132,8 +156,10 @@ pub struct DenyTraits {
 
 impl DenyTraits {
     pub const NONE: DenyTraits = DenyTraits {
-        mutates_fs: false,
-        mutates_assets: false,
+        fs: false,
+        fs_write: false,
+        assets: false,
+        assets_write: false,
         executes: false,
         network: false,
         needs_account: false,
@@ -142,8 +168,10 @@ impl DenyTraits {
     };
 
     fn rejects(&self, t: &Traits) -> bool {
-        (self.mutates_fs && t.mutates_fs)
-            || (self.mutates_assets && t.mutates_assets)
+        (self.fs && (t.fs_read || t.fs_write))
+            || (self.fs_write && t.fs_write)
+            || (self.assets && (t.assets_read || t.assets_write))
+            || (self.assets_write && t.assets_write)
             || (self.executes && t.executes)
             || (self.network && t.network)
             || (self.needs_account && t.needs_account)
@@ -1079,7 +1107,8 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Load files into the conversation (e.g. `/file-read src/**/*.py`)")
                 .more("Supports text files, PNG/JPG images, and PDFs"),
         )
-        .with_opts(&[OPT_N, OPT_HQ]),
+        .with_opts(&[OPT_N, OPT_HQ])
+        .with_traits(Traits::NONE.fs_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1118,7 +1147,8 @@ pub static REGISTRY: &[Entry] = &[
             )]),
             Doc::new("Load files into the conversation and print them").more("Supports text files, PNG/JPG images, and PDFs"),
         )
-        .with_opts(&[OPT_N, OPT_HQ]),
+        .with_opts(&[OPT_N, OPT_HQ])
+        .with_traits(Traits::NONE.fs_ro()),
     ),
     Entry::Cmd(cmd(
         Slash,
@@ -1498,7 +1528,7 @@ add it to the toolbox.
             flag("full", "Include asset IDs and extra columns"),
             flag("hidden", "Include hidden (dot-prefixed) folders"),
         ])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1515,7 +1545,7 @@ add it to the toolbox.
             None,
             "Filter results by asset name prefix",
         )])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1531,7 +1561,7 @@ add it to the toolbox.
         )
         .alias(&["read"])
         .with_opts(&[OPT_N, OPT_HQ])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1565,7 +1595,7 @@ add it to the toolbox.
         )
         .alias(&["cat"])
         .with_opts(&[OPT_N, OPT_HQ])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.net().assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1586,7 +1616,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Required)]),
             Doc::new("Print a link to an asset (valid 24hr)"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1601,7 +1631,7 @@ add it to the toolbox.
                 .user("Without <count>, revisions are listed one at a time, waiting for input"),
         )
         .with_opts(&[OPT_N])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1617,7 +1647,7 @@ add it to the toolbox.
                  Redaction must be performed by the revision creator."),
         )
         .with_opts(&[OPT_N])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -1631,7 +1661,7 @@ add it to the toolbox.
             Doc::new("Block until an asset changes, then print information about it")
                 .more("If <cursor> is set, listening begins at that revision so no changes are missed"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1674,7 +1704,7 @@ add it to the toolbox.
             ]),
             Doc::new("Export an asset to a local path"),
         )
-        .with_traits(Traits::NONE.fs().net()),
+        .with_traits(Traits::NONE.assets_ro().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1688,7 +1718,7 @@ add it to the toolbox.
             Doc::new("Export an asset and its metadata to temporary files")
                 .more("If <count> is specified, that many revisions are exported"),
         )
-        .with_traits(Traits::NONE.fs().net()),
+        .with_traits(Traits::NONE.assets_ro().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1701,7 +1731,7 @@ add it to the toolbox.
             ]),
             Doc::new("Export a single revision of an asset to a temporary file"),
         )
-        .with_traits(Traits::NONE.fs().net()),
+        .with_traits(Traits::NONE.assets_ro().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1719,7 +1749,7 @@ add it to the toolbox.
             flag("new", "Whether to sync up new files (default: false)"),
             flag("dry", "Whether to perform a dry run with no changes made"),
         ])
-        .with_traits(Traits::NONE.assets()),
+        .with_traits(Traits::NONE.assets().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1733,7 +1763,7 @@ add it to the toolbox.
             Doc::new("Sync assets with a prefix down to a local path")
                 .more("A trailing / on the prefix syncs the folder's contents (rsync semantics)"),
         )
-        .with_traits(Traits::NONE.fs().net()),
+        .with_traits(Traits::NONE.assets_ro().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1743,7 +1773,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::File, glob_ok: false }, Required)]),
             Doc::new("Show which assets have changed locally since the last sync-down"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro().fs()),
     ),
     Entry::Cmd(
         cmd(
@@ -1800,7 +1830,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Required)]),
             Doc::new("List the ACL on an asset"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1810,7 +1840,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Required)]),
             Doc::new("Show effective permissions on an asset"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1872,7 +1902,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Required)]),
             Doc::new("Get the JSON-object metadata of an asset"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1942,7 +1972,7 @@ add it to the toolbox.
             ),
         )
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -1952,7 +1982,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("name", AssetName { glob_ok: false }, Required)]),
             Doc::new("Follow an asset and print a message when it changes"),
         )
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1963,7 +1993,7 @@ add it to the toolbox.
             Doc::new("List all asset pools available to your account"),
         )
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.account().assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -1974,7 +2004,7 @@ add it to the toolbox.
             Doc::new("Create a new shared asset pool"),
         )
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.account().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -1987,7 +2017,7 @@ add it to the toolbox.
             ]),
             Doc::new("Grant a user the ability to decrypt an asset (does not change ACL)"),
         )
-        .with_traits(Traits::NONE.assets()),
+        .with_traits(Traits::NONE.account().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -2000,7 +2030,7 @@ add it to the toolbox.
             ]),
             Doc::new("Remove a user's decryption key for an asset (does not change ACL)"),
         )
-        .with_traits(Traits::NONE.assets()),
+        .with_traits(Traits::NONE.account().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -2012,7 +2042,7 @@ add it to the toolbox.
             ]),
             Doc::new("List users who hold a decryption key for an asset"),
         )
-        .with_traits(Traits::NONE.assets()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -2023,7 +2053,7 @@ add it to the toolbox.
             Doc::new("Set up asset encryption for your account"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().account().interactive()),
+        .with_traits(Traits::NONE.account().assets().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2034,7 +2064,7 @@ add it to the toolbox.
             Doc::new("Lock an encryption key (a password is required on next use)"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.interactive()),
+        .with_traits(Traits::NONE.account().assets_ro().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2045,7 +2075,7 @@ add it to the toolbox.
             Doc::new("Unlock an encryption key (no password until locked again)"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.interactive()),
+        .with_traits(Traits::NONE.account().assets_ro().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2056,7 +2086,7 @@ add it to the toolbox.
             Doc::new("Recover asset encryption keys using your recovery code"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.interactive()),
+        .with_traits(Traits::NONE.account().assets().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2067,7 +2097,7 @@ add it to the toolbox.
             Doc::new("Set up your inbox"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.interactive()),
+        .with_traits(Traits::NONE.account().assets().interactive()),
     ),
     //
     // Asset-apps
@@ -2085,7 +2115,7 @@ add it to the toolbox.
             flag("no_open", "Do not open the asset in the browser"),
             opt("dev_mode", OptType::Str, None, "Local path to a vite project"),
         ])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -2097,7 +2127,7 @@ add it to the toolbox.
         )
         .alias(&["app-perms-list"])
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro_local()),
     ),
     Entry::Cmd(
         cmd(
@@ -2109,7 +2139,7 @@ add it to the toolbox.
         )
         .alias(&["app-perms-revoke"])
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets_ro_local()),
     ),
     Entry::Cmd(
         cmd(
@@ -2121,7 +2151,7 @@ add it to the toolbox.
         )
         .alias(&["o", "open"])
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets().interactive()),
     ),
     note(ATTACHMENTS_DOC, &[Anchor::Family("asset")]),
     note(ASSET_ID_DOC, &[Anchor::Family("asset")]),
@@ -2139,7 +2169,7 @@ add it to the toolbox.
             Doc::new("Interactive prompt to resume a recent conversation"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.interactive().repl()),
+        .with_traits(Traits::NONE.assets().repl().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2169,7 +2199,7 @@ add it to the toolbox.
                 .more("If the name is omitted, resumes the last auto-saved chat"),
         )
         .with_opts(&[flag("fork", "Re-saves will create a new asset")])
-        .with_traits(Traits::NONE.net().repl()),
+        .with_traits(Traits::NONE.assets_ro().repl()),
     ),
     //
     // Tasks
@@ -2195,7 +2225,7 @@ add it to the toolbox.
             opt("key", OptType::Str, None, "Namespace the cache"),
             flag("trust", "Do not prompt for user confirmations"),
         ])
-        .with_traits(Traits::NONE.net().repl()),
+        .with_traits(Traits::NONE.repl()),
     ),
     Entry::Cmd(
         cmd(
@@ -2539,6 +2569,42 @@ add it to the toolbox.
     Entry::Cmd(
         cmd(
             Slash,
+            Cow::Borrowed("cmd-allow"),
+            Cow::Borrowed("utils"),
+            Cow::Borrowed(&[
+                arg_doc(
+                    "cmd",
+                    Text,
+                    Repeated { at_least: 1 },
+                    "Use exact command or asterisk pattern to match commands.",
+                )
+            ]),
+            Doc::new("Specify commands to allow"),
+        )
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.repl()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("cmd-deny"),
+            Cow::Borrowed("utils"),
+            Cow::Borrowed(&[
+                arg_doc(
+                    "cmd",
+                    Text,
+                    Repeated { at_least: 1 },
+                    "Use exact command, asterisk pattern, or capability (`fs`, `fs_write`, `assets`, `assets_write`, `exec`) to match commands.",
+                )
+            ]),
+            Doc::new("Specify commands to deny"),
+        )
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.repl()),
+    ),
+    Entry::Cmd(
+        cmd(
+            Slash,
             Cow::Borrowed("cost"),
             Cow::Borrowed("utils"),
             Cow::Borrowed(&[]),
@@ -2558,8 +2624,7 @@ add it to the toolbox.
             ]),
             Doc::new("Set $variable"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .for_audience(Audience::UserOnly),
     ),
     Entry::Cmd(
         cmd(
@@ -2569,8 +2634,7 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Print all $variables"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .for_audience(Audience::UserOnly),
     ),
     Entry::Cmd(
         cmd(
@@ -2580,8 +2644,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("state", Enum(ONOFF), Optional)]),
             Doc::new("Mask secrets (from /ask-human.secret) in the conversation (default: off)."),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .for_audience(Audience::UserOnly),
     ),
     Entry::Cmd(
         cmd(
@@ -2594,8 +2657,7 @@ add it to the toolbox.
         .with_opts(&[
             OPT_HQ,
         ])
-        .for_audience(Audience::Neither)
-        .with_traits(Traits::NONE.net()),
+        .for_audience(Audience::Neither),
     ),
     Entry::Cmd(
         cmd(
@@ -2605,8 +2667,7 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Reprint the conversation"),
         )
-        .for_audience(Audience::Neither)
-        .with_traits(Traits::NONE.account()),
+        .for_audience(Audience::Neither),
     ),
     Entry::Cmd(
         cmd(
@@ -2617,7 +2678,7 @@ add it to the toolbox.
             Doc::new("Update local copy of asset-backed config"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_traits(Traits::NONE.account().assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -2627,8 +2688,7 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("About hai"),
         )
-        .for_audience(Audience::Neither)
-        .with_traits(Traits::NONE.repl()),
+        .for_audience(Audience::Neither),
     ),
     //
     // Debugging
@@ -2642,8 +2702,7 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Dump conversation history"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.repl()),
+        .for_audience(Audience::UserOnly),
     ),
     Entry::Cmd(
         cmd(
@@ -2653,8 +2712,7 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Dump current session state"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.repl()),
+        .for_audience(Audience::UserOnly),
     ),
     //
     //
@@ -2714,13 +2772,16 @@ pub struct DynEntry {
 #[derive(Clone, Debug, Default)]
 pub struct Registry {
     dynamic: Vec<DynEntry>,
+    /// Restrictions that travel with the registry. Enforced by `lookup`,
+    /// `complete`, `select`, and the renderers so callers never need to carry
+    /// filters alongside the registry.
+    filters: Vec<RegisteredFilter>,
+    next_filter_id: u32,
 }
 
 impl Registry {
     pub fn new() -> Self {
-        Registry {
-            dynamic: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Add a dynamic entry (section, note, or cmd)
@@ -2806,16 +2867,158 @@ impl Registry {
         })
     }
 
-    pub fn lookup(&self, sigil: Sigil, bare_name: &str) -> Option<CmdSpec> {
-        self.cmds()
-            .into_iter()
+    /// Unfiltered lookup by sigil and bare name. Ignores registered filters;
+    /// prefer `lookup` when acting on behalf of a user or the LLM.
+    pub fn get(&self, sigil: Sigil, bare_name: &str) -> Option<CmdSpec> {
+        self.iter_cmds()
             .find(|c| c.sigil == sigil && c.matches_name(bare_name))
+            .cloned()
+    }
+
+    /// Filter-aware lookup. `who = None` bypasses registered filters (history
+    /// replay, display-only parsing, internal commands).
+    ///
+    /// Audience is deliberately NOT checked: it governs what is advertised in
+    /// `/help` and the tool schema, not what may be invoked (tasks use
+    /// LLM-only `/prompt`, internal code uses `Audience::Neither` commands).
+    pub fn lookup(&self, who: Option<Who>, sigil: Sigil, bare_name: &str) -> Lookup {
+        match self.get(sigil, bare_name) {
+            None => Lookup::NotFound,
+            Some(c) => match who {
+                Some(w) if !self.allows(&c, w, &[]) => Lookup::Filtered(c),
+                _ => Lookup::Found(c),
+            },
+        }
     }
 
     /// Look up by a full invocation such as `"/asset-list"` or `"!sh"`.
-    pub fn lookup_invocation(&self, invocation: &str) -> Option<CmdSpec> {
-        let (sigil, bare) = split_sigil(invocation)?;
-        self.lookup(sigil, bare.split('.').next().unwrap_or(bare))
+    #[allow(dead_code)]
+    pub fn lookup_invocation(&self, who: Option<Who>, invocation: &str) -> Lookup {
+        let Some((sigil, bare)) = split_sigil(invocation) else {
+            return Lookup::NotFound;
+        };
+        self.lookup(who, sigil, bare.split('.').next().unwrap_or(bare))
+    }
+
+    //
+    // Filters
+    //
+
+    pub fn get_filters(&self) -> Vec<Filter> {
+        self.filters.iter().map(|f| f.filter.clone()).collect()
+    }
+
+    /// Register a filter that stays in effect until removed. `who = None`
+    /// applies it to both audiences.
+    pub fn add_filter(&mut self, who: Option<Who>, filter: Filter) -> FilterId {
+        let id = FilterId(self.next_filter_id);
+        self.next_filter_id += 1;
+        self.filters.push(RegisteredFilter { id, who, filter });
+        id
+    }
+
+    pub fn add_filter_include(&mut self, who: Option<Who>, cmds: Vec<String>) -> FilterId {
+        let filter = Filter::Include(cmds);
+        self.add_filter(who, filter)
+    }
+
+    pub fn add_filter_exclude(
+        &mut self,
+        who: Option<Who>,
+        cmds: Vec<String>,
+    ) -> (Option<FilterId>, Option<FilterId>) {
+        let mut filter_cmds = vec![];
+        let mut deny_traits = DenyTraits::default();
+        let mut deny_set = false;
+        for cmd in &cmds {
+            if cmd == "fs" {
+                deny_set = true;
+                deny_traits.fs = true;
+            } else if cmd == "fs_write" {
+                deny_set = true;
+                deny_traits.fs_write = true;
+            } else if cmd == "assets" {
+                deny_set = true;
+                deny_traits.assets = true;
+            } else if cmd == "assets_write" {
+                deny_set = true;
+                deny_traits.assets_write = true;
+            } else if cmd == "exec" {
+                deny_set = true;
+                deny_traits.executes = true;
+            } else {
+                filter_cmds.push(cmd.clone());
+            }
+        }
+        let exclude_filter_id = if !filter_cmds.is_empty() {
+            let filter = Filter::Exclude(filter_cmds.clone());
+            let filter_id = self.add_filter(who, filter);
+            Some(filter_id)
+        } else {
+            None
+        };
+        let deny_filter_id = if deny_set {
+            let filter = Filter::Deny(deny_traits);
+            let filter_id = self.add_filter(who, filter);
+            Some(filter_id)
+        } else {
+            None
+        };
+        (exclude_filter_id, deny_filter_id)
+    }
+
+    /// Remove a previously registered filter. Returns whether it was present.
+    #[allow(dead_code)]
+    pub fn remove_filter(&mut self, id: FilterId) -> bool {
+        let before = self.filters.len();
+        self.filters.retain(|r| r.id != id);
+        self.filters.len() != before
+    }
+
+    #[allow(dead_code)]
+    pub fn clear_filters(&mut self) {
+        self.filters.clear();
+    }
+
+    /// Whether `c` passes every registered filter that applies to `who`, and
+    /// every one-off filter in `extra`. Filters intersect; they never merge.
+    ///
+    /// Does not consider audience (see `lookup`).
+    pub fn allows(&self, c: &CmdSpec, who: Who, extra: &[Filter]) -> bool {
+        self.filters
+            .iter()
+            .filter(|r| r.who.is_none_or(|w| w == who))
+            .map(|r| &r.filter)
+            .chain(extra)
+            .all(|f| f.keeps(c))
+    }
+
+    /// All commands allowed for `who`, in registry order. Audience is not
+    /// considered (see `lookup`).
+    pub fn allowed_cmds(&self, who: Who) -> Vec<CmdSpec> {
+        self.cmds()
+            .into_iter()
+            .filter(|c| self.allows(c, who, &[]))
+            .collect()
+    }
+}
+
+/// Result of a filter-aware `Registry::lookup`.
+#[derive(Clone, Debug)]
+pub enum Lookup {
+    Found(CmdSpec),
+    /// The command exists, but a registered filter disallows it.
+    Filtered(CmdSpec),
+    NotFound,
+}
+
+impl Lookup {
+    /// The spec, only if it's allowed.
+    pub fn found(self) -> Option<CmdSpec> {
+        match self {
+            Lookup::Found(c) => Some(c),
+            _ => None,
+        }
     }
 }
 
@@ -2827,83 +3030,63 @@ pub fn split_sigil(s: &str) -> Option<(Sigil, &str)> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Filtering
-// ---------------------------------------------------------------------------
+// --
 
-/// Selects a subset of the registry. `include`/`exclude` patterns match a
-/// command's name or any alias, and may end in `*`.
+//
+// Filtering
+//
+
+/// Restrict the set of available commands.
+///
+/// Filters are never merged: a command is allowed only if it passes every
+/// active filter (set intersection). For example, `Include` of `["asset*"]`
+/// and `["asset-read", "file*"]` together allows only `asset-read`.
+///
+/// `Include`/`Exclude` patterns match a command's name or any alias, and may
+/// end in `*`.
 #[derive(Clone, Debug)]
-pub struct Filter {
-    pub who: Who,
-    /// `None` means everything.
-    pub include: Option<Vec<String>>,
-    pub exclude: Vec<String>,
-    pub deny: DenyTraits,
+pub enum Filter {
+    /// Allow only commands matching at least one pattern.
+    Include(Vec<String>),
+    /// Reject commands matching any pattern.
+    Exclude(Vec<String>),
+    /// Reject commands having any of the denied traits.
+    Deny(DenyTraits),
 }
 
 impl Filter {
-    pub fn user() -> Self {
-        Filter {
-            who: Who::User,
-            include: None,
-            exclude: Vec::new(),
-            deny: DenyTraits::NONE,
-        }
+    pub fn include(pats: &[&str]) -> Self {
+        Filter::Include(pats.iter().map(|s| s.to_string()).collect())
     }
 
-    pub fn llm() -> Self {
-        Filter {
-            who: Who::Llm,
-            include: None,
-            exclude: Vec::new(),
-            deny: DenyTraits {
-                interactive: false,
-                ..DenyTraits::NONE
-            },
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn including(mut self, pats: &[&str]) -> Self {
-        self.include = Some(pats.iter().map(|s| s.to_string()).collect());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn excluding(mut self, pats: &[&str]) -> Self {
-        self.exclude = pats.iter().map(|s| s.to_string()).collect();
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn denying(mut self, deny: DenyTraits) -> Self {
-        self.deny = deny;
-        self
+    pub fn exclude(pats: &[&str]) -> Self {
+        Filter::Exclude(pats.iter().map(|s| s.to_string()).collect())
     }
 
     pub fn keeps(&self, c: &CmdSpec) -> bool {
-        if !c.audience.shows_to(self.who) {
-            return false;
-        }
-        if self.deny.rejects(&c.traits) {
-            return false;
-        }
-        let names: Vec<&str> = std::iter::once(c.name.as_ref())
-            .chain(c.aliases.iter().copied())
-            .collect();
-        if self
-            .exclude
-            .iter()
-            .any(|p| names.iter().any(|n| glob_match(p, n)))
-        {
-            return false;
-        }
-        match &self.include {
-            None => true,
-            Some(inc) => inc.iter().any(|p| names.iter().any(|n| glob_match(p, n))),
+        let matches_any = |pats: &[String]| {
+            std::iter::once(c.name.as_ref())
+                .chain(c.aliases.iter().copied())
+                .any(|n| pats.iter().any(|p| glob_match(p, n)))
+        };
+        match self {
+            Filter::Include(pats) => matches_any(pats),
+            Filter::Exclude(pats) => !matches_any(pats),
+            Filter::Deny(deny) => !deny.rejects(&c.traits),
         }
     }
+}
+
+/// Handle returned by `Registry::add_filter`; removes exactly that filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FilterId(u32);
+
+#[derive(Clone, Debug)]
+struct RegisteredFilter {
+    id: FilterId,
+    /// `None` applies to both audiences.
+    who: Option<Who>,
+    filter: Filter,
 }
 
 fn glob_match(pat: &str, name: &str) -> bool {
@@ -2913,18 +3096,23 @@ fn glob_match(pat: &str, name: &str) -> bool {
     }
 }
 
-/// Select entries in registry order.
+/// Select entries in registry order, as advertised to `who`.
+///
+/// A command is kept if its audience includes `who`, it passes every filter
+/// registered on `reg` for `who`, and it passes every one-off filter in
+/// `extra`.
 ///
 /// Sections and Notes survive only if one of their anchors matched a surviving
 /// command; anchor-less prose survives if anything at all survived. Sections
 /// that end up with no commands beneath them are dropped.
-pub fn select(reg: &Registry, f: &Filter) -> Vec<Entry> {
+pub fn select(reg: &Registry, who: Who, extra: &[Filter]) -> Vec<Entry> {
     let all = reg.entries();
+    let keeps = |c: &CmdSpec| c.audience.shows_to(who) && reg.allows(c, who, extra);
 
     let kept: Vec<&CmdSpec> = all
         .iter()
         .filter_map(|e| match e {
-            Entry::Cmd(c) if f.keeps(c) => Some(c),
+            Entry::Cmd(c) if keeps(c) => Some(c),
             _ => None,
         })
         .collect();
@@ -2934,14 +3122,14 @@ pub fn select(reg: &Registry, f: &Filter) -> Vec<Entry> {
     }
 
     let anchored = |anchors: &[Anchor], aud: Audience| -> bool {
-        aud.shows_to(f.who)
+        aud.shows_to(who)
             && (anchors.is_empty() || kept.iter().any(|c| anchors.iter().any(|a| a.matches(c))))
     };
 
     let mut out: Vec<Entry> = Vec::new();
     for e in &all {
         let keep = match e {
-            Entry::Cmd(c) => f.keeps(c),
+            Entry::Cmd(c) => keeps(c),
             Entry::Note(n) => anchored(n.anchors, n.audience),
             Entry::Section(s) => anchored(s.anchors, s.audience),
         };
@@ -3030,13 +3218,14 @@ pub fn render_opt(o: &Opt) -> String {
     }
 }
 
-/// The `/help` output.
-pub fn render_help(reg: &Registry, f: &Filter) -> String {
+/// The `/help` output. `extra` holds one-off filters on top of the registered
+/// ones.
+pub fn render_help(reg: &Registry, extra: &[Filter]) -> String {
     let mut o = String::new();
     let pad = " ".repeat(HELP_COL);
     let mut first = true;
 
-    for e in select(reg, f) {
+    for e in select(reg, Who::User, extra) {
         match e {
             Entry::Section(s) => {
                 if !first {
@@ -3121,10 +3310,10 @@ pub fn render_help(reg: &Registry, f: &Filter) -> String {
 /// Kept deliberately tighter than `/help`: no column alignment, no ANSI, and
 /// only `llm_extra` prose. Run your tokenizer over the result to report the
 /// schema's token cost.
-pub fn render_llm(reg: &Registry, f: &Filter) -> String {
+pub fn render_llm(reg: &Registry, extra: &[Filter]) -> String {
     let mut o = String::new();
 
-    for e in select(reg, f) {
+    for e in select(reg, Who::Llm, extra) {
         match e {
             Entry::Section(s) => {
                 o.push('\n');
@@ -3332,6 +3521,9 @@ fn complete_opts(cmd: &CmdSpec, optpart: &str) -> Completion {
 /// The caller needs to match on the completion type to decide how to provide
 /// candidates. Moreover, certain completion variants require additional
 /// discrimination (e.g. `ArgKind`).
+///
+/// Completion is for humans: commands that registered filters disallow for
+/// `Who::User` are neither offered nor completed.
 pub fn complete(reg: &Registry, line: &str, cursor: usize) -> Completion {
     let cursor = cursor.min(line.len());
     let head = &line[..cursor];
@@ -3384,6 +3576,7 @@ pub fn complete(reg: &Registry, line: &str, cursor: usize) -> Completion {
                     .into_iter()
                     .filter(|c| {
                         c.sigil == sigil
+                            && reg.allows(c, Who::User, &[])
                             && (c.name.starts_with(rest)
                                 || c.aliases.iter().any(|a| a.starts_with(rest)))
                     })
@@ -3393,7 +3586,7 @@ pub fn complete(reg: &Registry, line: &str, cursor: usize) -> Completion {
                     candidates,
                 }
             }
-            Some((name, optpart)) => match reg.lookup(sigil, name) {
+            Some((name, optpart)) => match reg.lookup(Some(Who::User), sigil, name).found() {
                 Some(c) => complete_opts(&c, optpart),
                 None => Completion::None,
             },
@@ -3407,7 +3600,7 @@ pub fn complete(reg: &Registry, line: &str, cursor: usize) -> Completion {
         return Completion::None;
     };
     let name = rest.split('.').next().unwrap_or(rest);
-    let Some(cmd) = reg.lookup(sigil, name) else {
+    let Some(cmd) = reg.lookup(Some(Who::User), sigil, name).found() else {
         return Completion::None;
     };
 
@@ -3570,8 +3763,11 @@ mod tests {
 
     #[test]
     fn asset_filter_drags_along_asset_prose() {
-        let f = Filter::user().including(&["asset*", "ls", "cat", "a"]);
-        let out = select(&reg(), &f);
+        let out = select(
+            &reg(),
+            Who::User,
+            &[Filter::include(&["asset*", "ls", "cat", "a"])],
+        );
 
         let has_section = out.iter().any(|e| {
             matches!(
@@ -3602,8 +3798,7 @@ mod tests {
 
     #[test]
     fn file_filter_excludes_asset_prose() {
-        let f = Filter::user().including(&["file*"]);
-        let out = select(&reg(), &f);
+        let out = select(&reg(), Who::User, &[Filter::include(&["file*"])]);
         assert!(
             !out.iter()
                 .any(|e| matches!(e, Entry::Note(n) if n.blurb == ATTACHMENTS_DOC))
@@ -3617,8 +3812,7 @@ mod tests {
 
     #[test]
     fn empty_sections_are_pruned() {
-        let f = Filter::user().including(&["file*"]);
-        let out = select(&reg(), &f);
+        let out = select(&reg(), Who::User, &[Filter::include(&["file*"])]);
         assert!(!out.iter().any(|e| matches!(
             e, Entry::Section(s) if s.title == Some("Tasks")
         )));
@@ -3627,13 +3821,13 @@ mod tests {
     #[test]
     fn usage_lines() {
         let r = reg();
-        let ls = r.lookup(Sigil::Slash, "ls").unwrap();
+        let ls = r.get(Sigil::Slash, "ls").unwrap();
         assert_eq!(ls.usage(), "/ls /asset-ls /asset-list [<prefix>]");
 
-        let read = r.lookup(Sigil::Slash, "asset-read").unwrap();
+        let read = r.get(Sigil::Slash, "asset-read").unwrap();
         assert_eq!(read.usage(), "/read /asset-read <name> [<name> ...]");
 
-        let write = r.lookup(Sigil::Slash, "file-write").unwrap();
+        let write = r.get(Sigil::Slash, "file-write").unwrap();
         assert_eq!(write.usage(), "/file-write <path> <multi-line contents>");
     }
 
@@ -3904,7 +4098,7 @@ mod tests {
         assert!(f1 > fns, "f1 should land after the static fn commands");
         assert!(f1 < asset, "f1 should land before the asset commands");
 
-        assert!(r.lookup(Sigil::Slash, "f1").is_some());
+        assert!(r.get(Sigil::Slash, "f1").is_some());
         match complete(&r, "/f", 2) {
             Completion::Command { candidates, .. } => {
                 assert!(candidates.iter().any(|c| c.name == "f1"));
@@ -3913,30 +4107,103 @@ mod tests {
         }
 
         r.remove_cmds(|c| c.name == "f1");
-        assert!(r.lookup(Sigil::Slash, "f1").is_none());
+        assert!(r.get(Sigil::Slash, "f1").is_none());
     }
 
     #[test]
     fn deny_traits_shrink_the_llm_surface() {
-        let r = reg();
-        let f = Filter::llm().denying(DenyTraits {
-            executes: true,
-            ..DenyTraits::NONE
-        });
-        let kept: Vec<CmdSpec> = r.cmds().into_iter().filter(|c| f.keeps(c)).collect();
+        let mut r = reg();
+        r.add_filter(
+            Some(Who::Llm),
+            Filter::Deny(DenyTraits {
+                executes: true,
+                ..DenyTraits::NONE
+            }),
+        );
+        let kept = r.allowed_cmds(Who::Llm);
         assert!(!kept.iter().any(|c| c.name == "exec"));
         assert!(!kept.iter().any(|c| c.name == "sh"));
         assert!(kept.iter().any(|c| c.name == "asset-list"));
+
+        // Scoped to the LLM: the user keeps them.
+        assert!(r.allowed_cmds(Who::User).iter().any(|c| c.name == "exec"));
+        assert!(matches!(
+            r.lookup(Some(Who::Llm), Sigil::Slash, "exec"),
+            Lookup::Filtered(_)
+        ));
+        assert!(matches!(
+            r.lookup(Some(Who::User), Sigil::Slash, "exec"),
+            Lookup::Found(_)
+        ));
+    }
+
+    #[test]
+    fn includes_intersect_rather_than_union() {
+        let mut r = reg();
+        r.add_filter(None, Filter::include(&["asset*"]));
+        r.add_filter(None, Filter::include(&["asset-read", "file*"]));
+        let kept: Vec<String> = r
+            .allowed_cmds(Who::User)
+            .iter()
+            .map(|c| c.name.to_string())
+            .collect();
+        assert_eq!(kept, vec!["asset-read".to_string()]);
+    }
+
+    #[test]
+    fn registered_filters_apply_everywhere_until_removed() {
+        let mut r = reg();
+        let id = r.add_filter(None, Filter::exclude(&["exec"]));
+
+        // Lookup: disabled (even via alias) vs. unknown vs. bypassed.
+        assert!(matches!(
+            r.lookup(Some(Who::User), Sigil::Slash, "e"),
+            Lookup::Filtered(_)
+        ));
+        assert!(matches!(
+            r.lookup(Some(Who::User), Sigil::Slash, "no-such-cmd"),
+            Lookup::NotFound
+        ));
+        assert!(matches!(
+            r.lookup(None, Sigil::Slash, "exec"),
+            Lookup::Found(_)
+        ));
+
+        // Completion.
+        match complete(&r, "/ex", 3) {
+            Completion::Command { candidates, .. } => {
+                assert!(!candidates.iter().any(|c| c.name == "exec"));
+            }
+            other => panic!("expected Command, got {:?}", other),
+        }
+        let line = "/exec cat foo";
+        assert!(matches!(complete(&r, line, line.len()), Completion::None));
+
+        // Help and tool schema.
+        for who in [Who::User, Who::Llm] {
+            assert!(
+                !select(&r, who, &[])
+                    .iter()
+                    .any(|e| matches!(e, Entry::Cmd(c) if c.name == "exec"))
+            );
+        }
+
+        assert!(r.remove_filter(id));
+        assert!(!r.remove_filter(id));
+        assert!(matches!(
+            r.lookup(Some(Who::User), Sigil::Slash, "exec"),
+            Lookup::Found(_)
+        ));
     }
 
     #[test]
     fn renderers_produce_output() {
         let r = reg();
-        let help = render_help(&r, &Filter::user());
+        let help = render_help(&r, &[]);
         assert!(help.contains("/ls /asset-ls /asset-list"));
         assert!(help.contains("Show this help menu"));
 
-        let llm = render_llm(&r, &Filter::llm());
+        let llm = render_llm(&r, &[]);
         assert!(llm.contains("/asset-list"));
         // User-only commands stay out of the tool schema.
         assert!(!llm.contains("Show this help menu"));

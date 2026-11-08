@@ -966,6 +966,7 @@ pub async fn launch_gateway(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     username: Option<&str>,
     update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     auth_token: Option<&str>,
@@ -1127,6 +1128,7 @@ pub async fn launch_gateway(
             asset_blob_cache: asset_blob_cache.clone(),
             asset_keyring: asset_keyring.clone(),
             api_client: api_client.clone(),
+            cmd_filters: cmd_filters.clone(),
             clients: clients.clone(),
             perm_ctxs: perm_ctxs.clone(),
             perm_request_map: perm_request_map.clone(),
@@ -1159,6 +1161,7 @@ pub async fn launch_gateway(
             asset_blob_cache: asset_blob_cache.clone(),
             asset_keyring: asset_keyring.clone(),
             api_client: api_client.clone(),
+            cmd_filters: vec![],
             clients: Arc::new(Mutex::new(HashMap::new())),
             perm_ctxs: Arc::new(Mutex::new(perm_gate_default_perms())),
             // The perm-gate cannot request perms for itself
@@ -1196,6 +1199,7 @@ struct ListenerCtx {
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
     clients: Clients,
     perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
@@ -1243,6 +1247,7 @@ fn spawn_accept_loop(listener: TcpListener, cancel: CancellationToken, ctx: List
                             ctx.asset_blob_cache.clone(),
                             ctx.asset_keyring.clone(),
                             ctx.api_client.clone(),
+                            &ctx.cmd_filters.iter().collect::<Vec<_>>(),
                             ctx.clients.clone(),
                             ctx.perm_ctxs.clone(),
                             ctx.perm_request_map.clone(),
@@ -1278,6 +1283,7 @@ async fn handle_connection(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: HaiClient,
+    cmd_filters: &[&crate::cmd_registry::Filter],
     clients: Clients,
     perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
@@ -1327,6 +1333,7 @@ async fn handle_connection(
             api_client,
             asset_blob_cache,
             asset_keyring,
+            cmd_filters,
             clients,
             perm_ctxs,
             perm_request_map,
@@ -1408,6 +1415,7 @@ async fn handle_websocket_connection(
     api_client: HaiClient,
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
+    cmd_filters: &[&crate::cmd_registry::Filter],
     clients: Clients,
     perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
@@ -1576,6 +1584,7 @@ async fn handle_websocket_connection(
                             asset_blob_cache.clone(),
                             asset_keyring.clone(),
                             &api_client,
+                            cmd_filters,
                             perm_ctxs.clone(),
                             perm_request_map.clone(),
                             kernel_map.clone(),
@@ -3431,6 +3440,7 @@ async fn handle_client_message(
     asset_blob_cache: Arc<AssetBlobCache>,
     asset_keyring: Arc<Mutex<crate::feature::asset_keyring::AssetKeyring>>,
     api_client: &HaiClient,
+    cmd_filters: &[&crate::cmd_registry::Filter],
     perm_ctxs: PermCtxs,
     perm_request_map: PermRequestMap,
     kernel_map: KernelMap,
@@ -3495,7 +3505,8 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args, using_cargo) = crate::feature::self_invocation(username);
+            let (exe, mut args, using_cargo) =
+                crate::feature::self_invocation(username, cmd_filters);
             if let Some(model) = spawn_arg.model {
                 args.push("-m".into());
                 args.push(model);
@@ -4010,7 +4021,8 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args, _using_cargo) = crate::feature::self_invocation(username);
+            let (exe, mut args, _using_cargo) =
+                crate::feature::self_invocation(username, cmd_filters);
             if let Some(model) = repl_arg.model {
                 args.push("-m".to_string());
                 args.push(model);
@@ -5609,6 +5621,7 @@ async fn handle_perm_gate_open(
         .push_cmd(crate::session::CmdInput {
             input: format!("/asset-app.no_open {}", pending_open.asset_app),
             source: session::CmdSource::Internal { print_cmd: false },
+            who: None,
             reply_channel: Some(reply_tx),
         })
         .await;

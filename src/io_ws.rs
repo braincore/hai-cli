@@ -1042,7 +1042,7 @@ impl WsActor {
     fn on_cmd_registry_list(&mut self, mid: u64) {
         let cmds = self
             .cmd_registry
-            .cmds()
+            .allowed_cmds(crate::cmd_registry::Who::User)
             .iter()
             .map(|cmd_spec| CmdEntry {
                 canonical: cmd_spec.canonical(),
