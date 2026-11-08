@@ -5381,7 +5381,7 @@ pub async fn process_cmd(
                     );
                     outln!(
                         io,
-                        "║           ⚠  WRITE THIS DOWN BEFORE CONTINUING  ⚠            ║"
+                        "║             ⚠  TAKE A PHOTO BEFORE CONTINUING  ⚠             ║"
                     );
                     outln!(
                         io,
@@ -5393,15 +5393,15 @@ pub async fn process_cmd(
                     );
                     outln!(
                         io,
-                        "║         BEST   Pen and paper, kept somewhere safe            ║"
+                        "║   RECOMMENDED   Take a photo with your phone                 ║"
                     );
                     outln!(
                         io,
-                        "║         GOOD   Password manager                              ║"
+                        "║   ADVANCED      Pen and paper, kept somewhere safe           ║"
                     );
                     outln!(
                         io,
-                        "║         OK     Photo                                         ║"
+                        "║                 Password manager                             ║"
                     );
                     outln!(
                         io,
@@ -5585,8 +5585,37 @@ pub async fn process_cmd(
             outln!(io, "Recovering keys for key ID: {}", enc_key_id);
             outln!(io);
 
+            outln!(
+                io,
+                "Can't find your recovery code? When you signed up, we recommended:"
+            );
+
+            use api::types::account::AccountWhoisArg;
+            match api_client
+                .account_whois(AccountWhoisArg {
+                    username: username.clone(),
+                })
+                .await
+            {
+                Ok(res) => match chrono::DateTime::parse_from_rfc3339(&res.joined_on) {
+                    Ok(dt) => outln!(
+                        io,
+                        "1. Taking a photo. Check your camera roll around {}.",
+                        dt.format("%Y-%m-%d")
+                    ),
+                    Err(_) => outln!(io, "1. Taking a photo of it."),
+                },
+                Err(_) => {
+                    outln!(io, "1. Taking a photo of it.");
+                }
+            }
+            outln!(io, "2. Writing it down somewhere safe.");
+            outln!(io, "3. Storing it in your password manager.");
+
+            outln!(io);
+
             // Prompt for recovery code
-            outln!(io, "⚠ Make sure no one can see your screen");
+            outln!(io, "⚠ Make sure no one can see your screen ⚠");
             let recovery_code_str = if let Some(code) = io
                 .query(&crate::io::Query::line("Enter recovery code:"))
                 .into_option()
