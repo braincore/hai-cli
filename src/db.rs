@@ -522,7 +522,7 @@ pub fn load_gateway_perms(
     conn: &rusqlite::Connection,
     username: &str,
     service_name: &str,
-) -> Vec<crate::feature::gateway::Perm> {
+) -> Vec<crate::feature::access::Perm> {
     let result: Option<String> = conn
         .query_row(
             "SELECT perms_json FROM gateway_perms WHERE username = ?1 AND service_name = ?2",
@@ -546,7 +546,7 @@ pub fn merge_gateway_perms(
     conn: &mut rusqlite::Connection,
     username: &str,
     service_name: &str,
-    new_perms: &[crate::feature::gateway::Perm],
+    new_perms: &[crate::feature::access::Perm],
 ) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
 
@@ -558,7 +558,7 @@ pub fn merge_gateway_perms(
         )
         .optional()?;
 
-    let mut merged: Vec<crate::feature::gateway::Perm> = match existing_json {
+    let mut merged: Vec<crate::feature::access::Perm> = match existing_json {
         Some(json) => serde_json::from_str(&json).unwrap_or_default(),
         None => Vec::new(),
     };
@@ -591,7 +591,7 @@ pub fn remove_gateway_perm(
     conn: &mut rusqlite::Connection,
     username: &str,
     service_name: &str,
-    perm: &crate::feature::gateway::Perm,
+    perm: &crate::feature::access::Perm,
 ) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
 
@@ -604,7 +604,7 @@ pub fn remove_gateway_perm(
         .optional()?;
 
     if let Some(json) = existing_json {
-        let mut perms: Vec<crate::feature::gateway::Perm> =
+        let mut perms: Vec<crate::feature::access::Perm> =
             serde_json::from_str(&json).unwrap_or_default();
         perms.retain(|p| p != perm);
 

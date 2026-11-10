@@ -1,3 +1,4 @@
+pub mod access;
 pub mod asset_app;
 pub mod asset_crypt;
 pub mod asset_keyring;
@@ -31,8 +32,8 @@ pub mod opengraph;
 /// time.
 fn self_invocation(
     account_user: Option<&str>,
-    // FIXME: Use filters!
     filters: &[&crate::cmd_registry::Filter],
+    access: Option<&[&crate::feature::access::Perm]>,
 ) -> (String, Vec<String>, bool) {
     // For dev: check if running under `cargo`, which sets the `CARGO` env var.
     // Beware that `CARGO` may have been inherited from a parent process and
@@ -42,6 +43,15 @@ fn self_invocation(
         vec!["--user".to_string(), user.to_string()]
     } else {
         vec!["--user".to_string(), "_".to_string()]
+    };
+
+    let access_flag = if let Some(access) = access {
+        vec![
+            "--access".to_string(),
+            crate::feature::access::access_to_json(access),
+        ]
+    } else {
+        vec![]
     };
 
     let mut cmd_allow_flags = Vec::new();
@@ -71,6 +81,12 @@ fn self_invocation(
                 }
                 if deny_traits.assets_write {
                     cmd_deny_flags.push("assets_write".to_string());
+                }
+                if deny_traits.tasks {
+                    cmd_deny_flags.push("tasks".to_string());
+                }
+                if deny_traits.bot {
+                    cmd_deny_flags.push("bot".to_string());
                 }
                 if deny_traits.executes {
                     cmd_deny_flags.push("exec".to_string());
@@ -127,6 +143,7 @@ fn self_invocation(
             cargo,
             args.into_iter()
                 .chain(cmd_filter_flags.into_iter())
+                .chain(access_flag.into_iter())
                 .chain(user_flag.into_iter())
                 .collect(),
             true,
@@ -143,6 +160,7 @@ fn self_invocation(
             debug_flag()
                 .into_iter()
                 .chain(cmd_filter_flags.into_iter())
+                .chain(access_flag.into_iter())
                 .chain(user_flag.into_iter())
                 .collect(),
             false,

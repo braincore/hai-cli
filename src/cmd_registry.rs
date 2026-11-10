@@ -67,6 +67,10 @@ pub struct Traits {
     pub assets_read: bool,
     /// Creates, modifies, or deletes assets.
     pub assets_write: bool,
+    /// Publishes tasks or modifies task repository.
+    pub tasks: bool,
+    /// Controls the bot.
+    pub bot: bool,
     /// Runs arbitrary code on the user's machine.
     pub executes: bool,
     /// Talks to the network.
@@ -85,6 +89,8 @@ impl Traits {
         fs_write: false,
         assets_read: false,
         assets_write: false,
+        tasks: false,
+        bot: false,
         executes: false,
         network: false,
         needs_account: false,
@@ -117,6 +123,14 @@ impl Traits {
         self.network = true;
         self
     }
+    pub const fn tasks(mut self) -> Self {
+        self.tasks = true;
+        self
+    }
+    pub const fn bot(mut self) -> Self {
+        self.bot = true;
+        self
+    }
     pub const fn exec(mut self) -> Self {
         self.executes = true;
         self
@@ -147,6 +161,8 @@ pub struct DenyTraits {
     pub fs_write: bool,
     pub assets: bool,
     pub assets_write: bool,
+    pub tasks: bool,
+    pub bot: bool,
     pub executes: bool,
     pub network: bool,
     pub needs_account: bool,
@@ -160,6 +176,8 @@ impl DenyTraits {
         fs_write: false,
         assets: false,
         assets_write: false,
+        tasks: false,
+        bot: false,
         executes: false,
         network: false,
         needs_account: false,
@@ -175,6 +193,8 @@ impl DenyTraits {
             || (self.executes && t.executes)
             || (self.network && t.network)
             || (self.needs_account && t.needs_account)
+            || (self.tasks && t.tasks)
+            || (self.bot && t.bot)
             || (self.interactive && t.interactive)
             || (self.repl_state && t.repl_state)
     }
@@ -1373,7 +1393,7 @@ add it to the toolbox.
             ),
         )
         .alias(&["h"])
-        .with_traits(Traits::NONE.exec()),
+        .with_traits(Traits::NONE),
     ),
     Entry::Cmd(cmd(
         Bang,
@@ -2276,7 +2296,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::File, glob_ok: false }, Required)]),
             Doc::new("Publish a task to the repository").user("Requires /account-login"),
         )
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.net().account().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2346,7 +2366,7 @@ add it to the toolbox.
             Doc::new("Star a task for quick access"),
         )
         .with_opts(&[OPT_LOCAL])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2359,7 +2379,7 @@ add it to the toolbox.
             Doc::new("Remove a starred item by shortcut"),
         )
         .with_opts(&[OPT_LOCAL])
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.assets().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2446,7 +2466,8 @@ add it to the toolbox.
             ]),
             Doc::new("Boot and setup your hai bot"),
         )
-        .for_audience(Audience::Both),
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.bot()),
     ),
     Entry::Cmd(
         cmd(
@@ -2466,7 +2487,8 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Connect to hai bot and query basic info"),
         )
-        .for_audience(Audience::Both),
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.bot()),
     ),
     Entry::Cmd(
         cmd(
@@ -2476,7 +2498,8 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Setup hai bot machine"),
         )
-        .for_audience(Audience::Both),
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.bot()),
     ),
     Entry::Cmd(
         cmd(
@@ -2486,7 +2509,8 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("SSH into your hai bot"),
         )
-        .for_audience(Audience::UserOnly),
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.bot().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2496,7 +2520,8 @@ add it to the toolbox.
             Cow::Borrowed(&[]),
             Doc::new("Shutdown your hai bot"),
         )
-        .for_audience(Audience::Both),
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.bot()),
     ),
     //
     // Messaging
@@ -2566,6 +2591,19 @@ add it to the toolbox.
     // Utils
     //
     section(Some("Utils"), None, &[Anchor::Family("utils")]),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("access"),
+            Cow::Borrowed("utils"),
+            Cow::Borrowed(&[]),
+            Doc::new("Prints access rights for REPL which are the source of `access denied` errors.").more(
+                "Distinct from permission enforcement by the API (e.g. ACLs on assets; NoPermission errors). Set when CLI launched and immutable until exit."
+            ),
+        )
+        .for_audience(Audience::Both)
+        .with_traits(Traits::NONE.repl()),
+    ),
     Entry::Cmd(
         cmd(
             Slash,
@@ -2943,6 +2981,12 @@ impl Registry {
             } else if cmd == "assets_write" {
                 deny_set = true;
                 deny_traits.assets_write = true;
+            } else if cmd == "tasks" {
+                deny_set = true;
+                deny_traits.tasks = true;
+            } else if cmd == "bot" {
+                deny_set = true;
+                deny_traits.bot = true;
             } else if cmd == "exec" {
                 deny_set = true;
                 deny_traits.executes = true;

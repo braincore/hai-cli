@@ -334,6 +334,8 @@ pub struct SessionState {
     /// can be added and removed dynamically. In particular, this is tied to
     /// list of added mcp/fn-tool commands.
     pub cmd_registry: cmd_registry::Registry,
+    /// Access permissions. Static for entirety of program.
+    pub access: Option<Vec<crate::feature::access::Perm>>,
 }
 
 #[derive(Debug)]
@@ -357,6 +359,7 @@ impl SessionState {
         incognito: bool,
         force_ai_model: Option<config::AiModel>,
         cmd_registry: cmd_registry::Registry,
+        access: Option<Vec<crate::feature::access::Perm>>,
     ) -> Self {
         let mut default_ai_model = config::choose_init_ai_model(&cfg);
         if incognito && let Some(ref ai_model_unmatched_str) = cfg.default_incognito_ai_model {
@@ -435,6 +438,7 @@ impl SessionState {
             mcps: HashMap::new(),
             chat_log_asset_name: None,
             cmd_registry,
+            access,
         }
     }
 

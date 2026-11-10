@@ -31,6 +31,7 @@ use crate::{
     config, crypt, ctrlc_handler,
     db::{self, LogEntryRetentionPolicy},
     feature::{
+        access,
         asset_crypt::{self, KeyRecipient},
         chat_store, haivar, model_pricing,
     },
@@ -678,6 +679,11 @@ pub async fn process_cmd(
                 session.asset_keyring.clone(),
                 &api_client,
                 session.account.as_ref().map(|a| a.username.as_str()),
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await
             {
@@ -693,6 +699,16 @@ pub async fn process_cmd(
                 }
             }
             ProcessCmdResult::loop_next().discard_cmd_and_output()
+        }
+        cmd::Cmd::Access => {
+            if let Some(access) = &session.access {
+                for perm in access.iter() {
+                    outln!(io, "{:?}", perm);
+                }
+            } else {
+                outln!(io, "Full access");
+            }
+            ProcessCmdResult::loop_next()
         }
         cmd::Cmd::CmdAllow(cmd::CmdAllowCmd { cmds }) => {
             let _filter_id = session.cmd_registry.add_filter_include(None, cmds);
@@ -2393,6 +2409,24 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            // Check access to target asset
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, true).await {
+                return ProcessCmdResult::loop_next();
+            }
+            // Check access to prog asset
+            if let Some(prog_asset_name) = editor.as_deref().and_then(|e| e.strip_prefix("@"))
+                && !session_check_asset_access(
+                    io,
+                    api_client,
+                    session,
+                    prog_asset_name,
+                    true,
+                    false,
+                )
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             if let Some(editor) = editor.as_deref()
                 && let Some(prog_asset_name) = editor.strip_prefix("@")
             {
@@ -2422,6 +2456,11 @@ pub async fn process_cmd(
                         &api_client,
                         &asset_name,
                         true,
+                        session
+                            .access
+                            .as_ref()
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .as_deref(),
                     )
                     .await
                     .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
@@ -2534,6 +2573,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
                 io,
                 asset_blob_cache.clone(),
@@ -2597,6 +2640,16 @@ pub async fn process_cmd(
             hidden,
         }) => {
             let prefix = resolve_asset_name(&io.out, &prefix, session).await;
+            {
+                let list_prefix = if asset_reader::is_glob_pattern(&prefix) {
+                    asset_reader::parse_glob_pattern(&prefix).0
+                } else {
+                    prefix.clone()
+                };
+                if !session_check_asset_list_access(io, api_client, session, &list_prefix).await {
+                    return ProcessCmdResult::loop_next();
+                }
+            }
             // A dot in the last segment is treated as an implicit request for
             // hidden asset folders (`ls .sys/`, `ls .*`)
             let explicit_dot = prefix
@@ -2928,6 +2981,17 @@ pub async fn process_cmd(
             let prefix = prefix
                 .as_ref()
                 .map(|p| asset_helper::expand_pub_asset_name(p, &session.account));
+            // Search results are names under the prefix, so require list access.
+            if !session_check_asset_list_access(
+                io,
+                api_client,
+                session,
+                prefix.as_deref().unwrap_or(""),
+            )
+            .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::AssetEntrySearchArg;
             let asset_search_res = match api_client
                 .asset_entry_search(AssetEntrySearchArg {
@@ -2988,10 +3052,24 @@ pub async fn process_cmd(
                 &asset_names,
                 4,
                 true,
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await
             {
-                Ok((asset_map, _, assets_skipped_content_restrictions, assets_skipped_folders)) => {
+                Ok(asset_reader::AssetFetchGroupResult {
+                    fetched: asset_map,
+                    skipped_content_restrictions: assets_skipped_content_restrictions,
+                    skipped_folders: assets_skipped_folders,
+                    access_denied,
+                    ..
+                }) => {
+                    for asset_name in &access_denied {
+                        errorln!(io, "error: asset '{}' skipped: access denied.", asset_name);
+                    }
                     for asset_name in &assets_skipped_content_restrictions {
                         let err_msg = format!(
                             "error: asset '{}' skipped due to content restrictions.",
@@ -3049,6 +3127,9 @@ pub async fn process_cmd(
                             }) => (asset_contents.clone(), asset_entry),
                             Err(e) => {
                                 match e {
+                                    asset_reader::GetAssetError::AccessDenied => {
+                                        errorln!(io, "{}: access denied", asset_name);
+                                    }
                                     asset_reader::GetAssetError::BadName => {
                                         errorln!(io, "{}: asset not found", asset_name);
                                     }
@@ -3211,6 +3292,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             if !asset_helper::is_likely_valid_asset_name(&asset_name, true) {
                 // A client-side check is performed because interactive editors
                 // like vim sometimes swallow the error message which means a
@@ -3274,12 +3359,21 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let (decrypted_asset_contents, asset_entry, akm_info) =
                 match asset_reader::get_asset_and_metadata(
                     asset_blob_cache.clone(),
                     &api_client,
                     &asset_name,
                     true,
+                    session
+                        .access
+                        .as_ref()
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .as_deref(),
                 )
                 .await
                 .map(|(ac, mc, ae)| (ac, mc, Some(ae)))
@@ -3384,6 +3478,10 @@ pub async fn process_cmd(
             show_line_numbers,
         }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             let mut history_entries = vec![];
 
@@ -3510,6 +3608,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetRevisionRedact(cmd::AssetRevisionRedactCmd { asset_name, rev_id }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let entry_id =
                 match asset_reader::get_asset_entry(&api_client, &asset_name, false).await {
                     Ok(get_res) => get_res.entry.entry_id,
@@ -3535,6 +3637,10 @@ pub async fn process_cmd(
         cmd::Cmd::AssetFollow(cmd::AssetFollowCmd { asset_name }) => {
             outln!(io, "WARN: /asset-follow is for debugging.");
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::{
                 AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
             };
@@ -3625,6 +3731,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetListen(cmd::AssetListenCmd { asset_name, cursor }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::{
                 AssetCreatedBy, AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef,
                 RevisionIterDirection,
@@ -3789,6 +3899,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetLink(cmd::AssetLinkCmd { asset_name }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::AssetGetArg;
             let asset_data_url = match api_client
                 .asset_get(AssetGetArg {
@@ -3850,6 +3964,12 @@ pub async fn process_cmd(
                 &api_client,
                 &[asset_name.clone()],
                 folder_policy,
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
+                true,
             )
             .await
             {
@@ -3943,6 +4063,16 @@ pub async fn process_cmd(
                 asset_helper::expand_pub_asset_name(&source_asset_name, &session.account);
             let dest_asset_name =
                 asset_helper::expand_pub_asset_name(&dest_asset_name, &session.account);
+            if !session_check_asset_access(io, api_client, session, &source_asset_name, true, true)
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
+            if !session_check_asset_access(io, api_client, session, &dest_asset_name, false, true)
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             use crate::api::types::asset::AssetMoveArg;
             match api_client
@@ -3987,12 +4117,30 @@ pub async fn process_cmd(
             let mut copy_tasks = vec![(source_asset_name, target_asset_name)];
 
             while let Some((source_asset_name, target_asset_name)) = copy_tasks.pop() {
+                // Source read is enforced by get_asset_and_metadata(perms).
+                if !session_check_asset_access(
+                    io,
+                    api_client,
+                    session,
+                    &target_asset_name,
+                    false,
+                    true,
+                )
+                .await
+                {
+                    return ProcessCmdResult::loop_next();
+                }
                 let (data_contents, source_md_contents, source_asset_entry) =
                     match asset_reader::get_asset_and_metadata(
                         asset_blob_cache.clone(),
                         &api_client,
                         &source_asset_name,
                         false,
+                        session
+                            .access
+                            .as_ref()
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .as_deref(),
                     )
                     .await
                     {
@@ -4070,6 +4218,11 @@ pub async fn process_cmd(
                         &api_client,
                         &target_asset_name,
                         false,
+                        session
+                            .access
+                            .as_ref()
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .as_deref(),
                     )
                     .await
                     {
@@ -4173,6 +4326,11 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             };
             let target_asset_name = resolve_asset_name(&io.out, &target_asset_name, &session).await;
+            if !session_check_asset_access(io, api_client, session, &target_asset_name, false, true)
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let source_file_path = match shellexpand::full(&source_file_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -4260,6 +4418,11 @@ pub async fn process_cmd(
                     &api_client,
                     &source_asset_name,
                     false,
+                    session
+                        .access
+                        .as_ref()
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .as_deref(),
                 )
                 .await
                 {
@@ -4310,6 +4473,18 @@ pub async fn process_cmd(
                     &session.account,
                 ))
             };
+            if !session_check_asset_prefix_access(
+                io,
+                api_client,
+                session,
+                prefix.as_deref().unwrap_or(""),
+                true,
+                false,
+            )
+            .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let target_path = match shellexpand::full(&target_path) {
                 Ok(s) => s.into_owned(),
                 Err(e) => {
@@ -4361,6 +4536,18 @@ pub async fn process_cmd(
                     &session.account,
                 ))
             };
+            if !session_check_asset_prefix_access(
+                io,
+                api_client,
+                session,
+                target_prefix.as_deref().unwrap_or(""),
+                true,
+                true,
+            )
+            .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             match asset_sync::sync_up(
                 &io,
                 asset_blob_cache.clone(),
@@ -4451,6 +4638,9 @@ pub async fn process_cmd(
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next();
             };
+            if !session_check_unrestricted(io, session, "/asset-sync-diff") {
+                return ProcessCmdResult::loop_next();
+            }
             let path_style = detect_path_style(&path);
             let path = match shellexpand::full(&path) {
                 Ok(s) => s.into_owned(),
@@ -4505,6 +4695,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetTemp(cmd::AssetTempCmd { asset_name, count }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             use crate::api::types::asset::{
                 AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
@@ -4657,6 +4851,10 @@ pub async fn process_cmd(
             };
 
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             use api::types::asset::{AssetRevisionGetArg, EntryRef};
             let revision_get_res = match api_client
@@ -4728,6 +4926,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use api::types::asset::AssetGetArg;
             match api_client
                 .asset_get(AssetGetArg {
@@ -4746,6 +4948,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetAclGetEffective(cmd::AssetAclGetEffectiveCmd { asset_name }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use api::types::asset::{AssetEntryAclGetEffectiveArg, EntryRef};
             match api_client
                 .asset_entry_acl_get_effective(AssetEntryAclGetEffectiveArg {
@@ -4779,6 +4985,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next().with_error(true);
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use api::types::asset::{
                 AceEffectSet, AssetAcePrincipal, AssetEntryAclSetArg, EntryRef,
             };
@@ -4884,6 +5094,10 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetMdGet(cmd::AssetMdGetCmd { asset_name }) => {
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::{AssetGetArg, AssetMetadataInfo};
             match api_client.asset_get(AssetGetArg { name: asset_name }).await {
                 Ok(res) => {
@@ -4925,6 +5139,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             use crate::api::types::asset::{AssetMetadataPutArg, PutConflictPolicy};
             match api_client
                 .asset_metadata_put(AssetMetadataPutArg {
@@ -4952,6 +5170,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let value_json = match serde_json::from_str::<serde_json::Value>(&value) {
                 Ok(value_json) => value_json,
                 Err(e) => {
@@ -4985,11 +5207,20 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let md_json = match asset_reader::get_only_asset_metadata(
                 asset_blob_cache.clone(),
                 &api_client,
                 &asset_name,
                 false,
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await
             {
@@ -5044,6 +5275,10 @@ pub async fn process_cmd(
                 return ProcessCmdResult::loop_next();
             }
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             match asset_async_writer::asset_metadata_set_key(&api_client, &asset_name, &key, None)
                 .await
             {
@@ -5064,6 +5299,10 @@ pub async fn process_cmd(
             };
 
             let asset_name = resolve_asset_name(&io.out, &name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             use api::types::asset::AssetFolderCreateArg;
             // Determine AKM before creating the folder so that we don't use
@@ -5135,6 +5374,11 @@ pub async fn process_cmd(
             };
 
             let anchor_asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &anchor_asset_name, false, true)
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             let mut grant_tasks = vec![anchor_asset_name];
 
@@ -5144,6 +5388,11 @@ pub async fn process_cmd(
                     &api_client,
                     &asset_name,
                     false,
+                    session
+                        .access
+                        .as_ref()
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .as_deref(),
                 )
                 .await
                 {
@@ -5221,6 +5470,11 @@ pub async fn process_cmd(
             };
 
             let anchor_asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &anchor_asset_name, false, true)
+                .await
+            {
+                return ProcessCmdResult::loop_next();
+            }
 
             let mut revoke_tasks = vec![anchor_asset_name];
 
@@ -5230,6 +5484,11 @@ pub async fn process_cmd(
                     &api_client,
                     &asset_name,
                     false,
+                    session
+                        .access
+                        .as_ref()
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .as_deref(),
                 )
                 .await
                 {
@@ -5309,6 +5568,11 @@ pub async fn process_cmd(
                 &api_client,
                 &asset_name,
                 false,
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await
             {
@@ -5345,6 +5609,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetCryptSetup => {
+            if !session_check_unrestricted(io, session, "/asset-crypt-setup") {
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -5467,6 +5734,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetCryptUnlock(cmd::AssetCryptUnlockCmd { enc_key_id }) => {
+            if !session_check_unrestricted(io, session, "/asset-crypt-unlock") {
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -5539,6 +5809,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetCryptRecover(cmd::AssetCryptRecoverCmd { enc_key_id }) => {
+            if !session_check_unrestricted(io, session, "/asset-crypt-recover") {
+                return ProcessCmdResult::loop_next();
+            }
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
@@ -5556,6 +5829,11 @@ pub async fn process_cmd(
                         &api_client,
                         &format!("/{username}/.keys/enc.pub"),
                         true,
+                        session
+                            .access
+                            .as_ref()
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .as_deref(),
                     )
                     .await
                     {
@@ -5582,6 +5860,10 @@ pub async fn process_cmd(
                             return ProcessCmdResult::loop_next();
                         }
                         Err(e) => match e {
+                            asset_reader::GetAssetError::AccessDenied => {
+                                errorln!(io, "access denied to keys");
+                                return ProcessCmdResult::loop_next();
+                            }
                             asset_reader::GetAssetError::BadName => {
                                 errorln!(io, "No keys found");
                                 return ProcessCmdResult::loop_next();
@@ -5743,6 +6025,10 @@ pub async fn process_cmd(
                 None
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             let start_app_res = crate::feature::asset_app::start_app_and_launch_browser(
                 &io,
                 config_path_override,
@@ -5775,6 +6061,10 @@ pub async fn process_cmd(
                 None
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, true, false).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             if let Some(username) = username {
                 let perms =
                     crate::db::load_gateway_perms(&*db.lock().await, &username, &asset_name);
@@ -5796,6 +6086,10 @@ pub async fn process_cmd(
                 None
             };
             let asset_name = resolve_asset_name(&io.out, &asset_name, session).await;
+            if !session_check_asset_access(io, api_client, session, &asset_name, false, true).await
+            {
+                return ProcessCmdResult::loop_next();
+            }
             if let Some(username) = username {
                 let _ = crate::db::clear_gateway_perms(&*db.lock().await, &username, &asset_name);
             }
@@ -5817,6 +6111,11 @@ pub async fn process_cmd(
                 &api_client,
                 &asset_name,
                 false,
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await
             {
@@ -5839,6 +6138,10 @@ pub async fn process_cmd(
                     }
                 }),
                 Err(e) => match e {
+                    asset_reader::GetAssetError::AccessDenied => {
+                        errorln!(io, "access denied to asset metadata");
+                        return ProcessCmdResult::loop_next();
+                    }
                     asset_reader::GetAssetError::BadName => None,
                     asset_reader::GetAssetError::DataFetchFailed(e) => {
                         errorln!(io, "failed to fetch asset metadata: {}", e);
@@ -5879,6 +6182,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetPoolNew(cmd::AssetPoolNewCmd { usernames }) => {
+            if !session_check_unrestricted(io, session, "/asset-pool-new") {
+                return ProcessCmdResult::loop_next();
+            }
             if session.account.is_none() {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next();
@@ -5900,6 +6206,9 @@ pub async fn process_cmd(
             ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AssetPools => {
+            if !session_check_unrestricted(io, session, "/asset-pools") {
+                return ProcessCmdResult::loop_next();
+            }
             if session.account.is_none() {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
                 return ProcessCmdResult::loop_next();
@@ -7814,6 +8123,11 @@ pub async fn shell_exec_with_asset_substitution(
         username.map(|u| KeyRecipient::User(u.to_string())),
         cmd,
         4,
+        session
+            .access
+            .as_ref()
+            .map(|v| v.iter().collect::<Vec<_>>())
+            .as_deref(),
     )
     .await
     {
@@ -7821,6 +8135,9 @@ pub async fn shell_exec_with_asset_substitution(
             for (asset_name, temp_res) in &asset_map {
                 if let Err(e) = temp_res {
                     let err_msg = match e {
+                        asset_reader::GetAssetError::AccessDenied => {
+                            format!("access denied: {}", asset_name)
+                        }
                         asset_reader::GetAssetError::BadName => {
                             format!("bad name: {}", asset_name)
                         }
@@ -7865,6 +8182,9 @@ pub async fn shell_exec_with_asset_substitution(
                     Some(Ok(temp_file)) => temp_file,
                     Some(Err(e)) => {
                         let err_msg = match e {
+                            asset_reader::GetAssetError::AccessDenied => {
+                                format!("access denied: {}", output_asset)
+                            }
                             asset_reader::GetAssetError::BadName => {
                                 format!("bad name: {}", output_asset)
                             }
@@ -8205,6 +8525,172 @@ pub async fn shell_exec_interactive(
     let mut child = command.spawn()?;
     child.wait().await?;
     Ok(())
+}
+
+// --
+
+//
+// Access check helpers for `/asset*` cmds.
+//
+
+fn session_access_perms(session: &SessionState) -> Option<Vec<&access::Perm>> {
+    session.access.as_ref().map(|v| v.iter().collect())
+}
+
+/// Session is unrestricted if access isn't set at all (distinct from empty)
+/// or has the `Everything` permission.
+fn session_is_unrestricted(session: &SessionState) -> bool {
+    match &session.access {
+        None => true,
+        Some(perms) => perms.iter().any(|p| matches!(p, access::Perm::Everything)),
+    }
+}
+
+/// For cmds that aren't scoped to an asset (keyring, pools, ...). Prints an
+/// error and returns false unless the session is unrestricted.
+fn session_check_unrestricted(io: &Io, session: &SessionState, what: &str) -> bool {
+    if session_is_unrestricted(session) {
+        true
+    } else {
+        errorln!(io, "access denied: {} requires unrestricted access", what);
+        false
+    }
+}
+
+/// Checks access rights for a single asset (complicated by attachment
+/// anchors).
+///
+/// Prints an error and returns false if denied or if the check couldn't
+/// complete.
+async fn session_check_asset_access(
+    io: &Io,
+    api_client: &HaiClient,
+    session: &SessionState,
+    asset_name: &str,
+    read: bool,
+    write: bool,
+) -> bool {
+    let Some(perms) = session_access_perms(session) else {
+        return true;
+    };
+    for (needed, is_write) in [(read, false), (write, true)] {
+        if !needed {
+            continue;
+        }
+        match access::access_perm_for_asset_access_request(api_client, asset_name, &perms, is_write)
+            .await
+        {
+            Ok(true) => {}
+            // API errors (e.g. missing) is reported as denied to avoid leaking
+            // existence.
+            Ok(false) | Err((_, api::client::RequestError::Route(_))) => {
+                errorln!(
+                    io,
+                    "access denied: {} ({})",
+                    asset_name,
+                    if is_write { "write" } else { "read" }
+                );
+                return false;
+            }
+            Err((name, e)) => {
+                errorln!(
+                    io,
+                    "cannot check access for {}: {}: {}",
+                    asset_name,
+                    name,
+                    e
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Checks session access rights for listing a prefix.
+///
+/// Prints an error and returns false if denied.
+async fn session_check_asset_list_access(
+    io: &Io,
+    api_client: &HaiClient,
+    session: &SessionState,
+    prefix: &str,
+) -> bool {
+    let Some(perms) = session_access_perms(session) else {
+        return true;
+    };
+    match access::access_perm_for_asset_list_prefix_request(api_client, prefix, &perms).await {
+        Ok(true) => true,
+        Ok(false) | Err((_, api::client::RequestError::Route(_))) => {
+            errorln!(io, "access denied: {} (list)", display_prefix(prefix));
+            false
+        }
+        Err((name, e)) => {
+            errorln!(
+                io,
+                "cannot check access for {}: {}: {}",
+                display_prefix(prefix),
+                name,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Checks session access rights for bulk ops under a prefix.
+///
+/// Requires list access, plus read/write access that covers the whole prefix.
+async fn session_check_asset_prefix_access(
+    io: &Io,
+    api_client: &HaiClient,
+    session: &SessionState,
+    prefix: &str,
+    read: bool,
+    write: bool,
+) -> bool {
+    if session_is_unrestricted(session) {
+        return true;
+    }
+    let Some(perms) = session_access_perms(session) else {
+        return true;
+    };
+    if access::ASSET_PREFIX_PERM_EXCLUDED_PATHS
+        .iter()
+        .any(|excluded| excluded.starts_with(prefix))
+    {
+        errorln!(
+            io,
+            "access denied: {} includes protected paths",
+            display_prefix(prefix)
+        );
+        return false;
+    }
+    if !session_check_asset_list_access(io, api_client, session, prefix).await {
+        return false;
+    }
+    for (needed, req, label) in [
+        (
+            read,
+            access::AccessRequest::ReadByName { name: prefix },
+            "read",
+        ),
+        (
+            write,
+            access::AccessRequest::WriteByName { name: prefix },
+            "write",
+        ),
+    ] {
+        if needed && access::check_access(&perms, &req).is_err() {
+            errorln!(io, "access denied: {} ({})", display_prefix(prefix), label);
+            return false;
+        }
+    }
+    true
+}
+
+fn display_prefix(prefix: &str) -> &str {
+    if prefix.is_empty() { "[root]" } else { prefix }
 }
 
 // --

@@ -9,6 +9,9 @@ use crate::feature::{
 use crate::io::Io;
 use crate::{asset_async_writer, asset_cache::AssetBlobCache, asset_reader, config, db};
 
+/// Determines if the local asset needs to be updated based on the remote
+/// version. Does NOT modify any local files.
+///
 /// # Arguments
 /// - `io`: Set to Io::noop() to avoid key password prompt.
 ///
@@ -41,6 +44,9 @@ async fn local_asset_needs_update(
             api_client,
             username,
             asset_name,
+            // Checking most recent version of config is considered safe and
+            // therefore unrestricted. Actual contents aren't written out here.
+            None,
         )
         .await
         {
@@ -92,7 +98,13 @@ pub async fn get_merged_config(
 }
 
 /// # Arguments
+///
 /// - `io`: Set to Io::noop() to avoid key password prompt.
+///
+/// # Returns
+/// - `Ok(true)` if the local copy of the remote config was updated.
+/// - `Ok(false)` if no update was performed.
+/// - `Err(_)` if an error occurred during the process.
 pub async fn store_remote_config_if_updated(
     io: &Io,
     db: Arc<Mutex<rusqlite::Connection>>,
@@ -100,8 +112,21 @@ pub async fn store_remote_config_if_updated(
     asset_keyring: Arc<Mutex<AssetKeyring>>,
     api_client: &HaiClient,
     username: Option<&str>,
+    access: Option<&[&crate::feature::access::Perm]>,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if let Some(username) = username {
+        if let Some(access) = access {
+            // Check for necessary permissions to read the remote config.
+            // NOTE: It's unclear if blocking this sync check if permissions
+            // are lacking is necessary.
+            if !access.iter().any(|&p| {
+                p.grants(&crate::feature::access::AccessRequest::ReadByName {
+                    name: HAI_TOML_ASSET_NAME,
+                })
+            }) {
+                return Ok(false);
+            }
+        }
         let existing_seq_id = if let Some(existing_asset_store_entry) =
             db::asset_store_get(&*db.lock().await, username, HAI_TOML_ASSET_NAME)?
         {

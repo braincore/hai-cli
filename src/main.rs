@@ -1,8 +1,5 @@
-use ai_provider::{anthropic, ollama, openai, openai_responses, tool_schema, void};
-use chat::ChatCompletionResponse;
 use clap::{Parser, Subcommand};
 use colored::*;
-use line_editor::LineEditor;
 use reedline::{self, Signal};
 use std::collections::HashMap;
 use std::env;
@@ -16,6 +13,13 @@ use std::sync::{
 };
 use tokio::sync::Mutex;
 use uuid::Uuid;
+
+use ai_provider::{anthropic, ollama, openai, openai_responses, tool_schema, void};
+use chat::ChatCompletionResponse;
+use feature::access::Access;
+use io::{Io, Out, SectionKind};
+use line_editor::LineEditor;
+use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 mod ai_provider;
 mod api;
@@ -46,9 +50,6 @@ mod session;
 mod term;
 mod term_color;
 mod tool;
-
-use io::{Io, Out, SectionKind};
-use session::{HaiRouterState, ReplMode, SessionState, get_api_base_url, mk_api_client};
 
 /// A CLI for interacting with LLMs in a hacker-centric way
 #[derive(Parser)]
@@ -90,6 +91,10 @@ struct Cli {
     /// Commands denied
     #[arg(long = "cmd-deny")]
     cmd_deny: Option<String>,
+
+    /// Commands allowed
+    #[arg(long = "access")]
+    access: Option<String>,
 
     /// Subcommands for the CLI
     #[command(subcommand)]
@@ -200,6 +205,18 @@ async fn main() -> process::ExitCode {
         cmd_registry.add_filter_exclude(None, cmds.clone());
     }
 
+    let access: Option<Access> = if let Some(access_str) = &args.access {
+        match crate::feature::access::access_from_json_str(access_str) {
+            Ok(perms) => Some(perms),
+            Err(e) => {
+                eprintln!("error: bad access JSON: {}", e);
+                return process::ExitCode::from(1);
+            }
+        }
+    } else {
+        None
+    };
+
     //
     // Setup logging
     //
@@ -303,6 +320,7 @@ async fn main() -> process::ExitCode {
                     &out,
                     account,
                     cmd_registry.get_filters(),
+                    access,
                     daemon,
                 )
                 .await;
@@ -493,6 +511,7 @@ async fn main() -> process::ExitCode {
         mute_all_but_final,
         args.kernel,
         cmd_registry,
+        access,
     )
     .await;
 
@@ -532,6 +551,7 @@ async fn repl(
     mute_all_but_final_output: bool,
     kernel_mode: bool,
     cmd_registry: cmd_registry::Registry,
+    access: Option<Access>,
 ) -> Result<u8, Box<dyn Error>> {
     let local_cfg_at_startup = match config::get_config(config_path_override) {
         Ok(cfg) => cfg,
@@ -607,6 +627,7 @@ async fn repl(
         incognito,
         force_ai_model,
         cmd_registry,
+        access,
     );
 
     if let Some(account) = &account {
@@ -634,6 +655,7 @@ async fn repl(
             let asset_keyring_clone = session.asset_keyring.clone();
             let account_clone = account.clone();
             let db_clone = db.clone();
+            let access_clone = session.access.clone();
             tokio::spawn(async move {
                 let api_client = session::mk_api_client_from_account(account_clone.as_ref());
                 let _ = crate::feature::config_sync::store_remote_config_if_updated(
@@ -643,6 +665,10 @@ async fn repl(
                     asset_keyring_clone,
                     &api_client,
                     account_clone.as_ref().map(|a| a.username.as_str()),
+                    access_clone
+                        .as_ref()
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .as_deref(),
                 )
                 .await;
             });
@@ -656,6 +682,11 @@ async fn repl(
                 session.asset_keyring.clone(),
                 &api_client,
                 account.as_ref().map(|a| a.username.as_str()),
+                session
+                    .access
+                    .as_ref()
+                    .map(|v| v.iter().collect::<Vec<_>>())
+                    .as_deref(),
             )
             .await;
             if let Ok(merged_cfg) = crate::feature::config_sync::get_merged_config(

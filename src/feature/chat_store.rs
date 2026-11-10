@@ -94,6 +94,10 @@ pub async fn save_chat_as_asset(
                 get_res.entry.entry_id.clone(),
                 get_res.entry.asset.rev_id.clone(),
             )),
+            Err(asset_reader::GetAssetError::AccessDenied) => {
+                errorln!(io, "access denied: {}", chat_log_asset_name);
+                return;
+            }
             Err(asset_reader::GetAssetError::BadName) => None,
             Err(asset_reader::GetAssetError::DataFetchFailed(failure)) => {
                 errorln!(
@@ -420,6 +424,11 @@ pub async fn resume_chat_from_db_or_asset(
             api_client,
             username.as_deref(),
             &chat_log_name,
+            session
+                .access
+                .as_ref()
+                .map(|v| v.iter().collect::<Vec<_>>())
+                .as_deref(),
         )
         .await
         {
@@ -635,6 +644,11 @@ pub async fn resume_chat_from_db_or_asset(
                         api_client,
                         username.as_deref(),
                         &image_url.url,
+                        session
+                            .access
+                            .as_ref()
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .as_deref(),
                     )
                     .await
                     {

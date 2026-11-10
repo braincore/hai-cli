@@ -54,7 +54,16 @@ pub async fn asset_crypt_setup(
 
     let mut rotation_accepted = false;
     let pub_key_path = format!("/{username}/.keys/enc.pub");
-    match get_only_asset_metadata(asset_blob_cache.clone(), &api_client, &pub_key_path, true).await
+    match get_only_asset_metadata(
+        asset_blob_cache.clone(),
+        &api_client,
+        &pub_key_path,
+        true,
+        // Checking existence of own public key is considered safe and
+        // therefore unrestricted.
+        None,
+    )
+    .await
     {
         Ok((enc_key_md_contents, _enc_key_entry)) => {
             outln!(
@@ -163,6 +172,9 @@ pub async fn asset_crypt_setup(
         }
         Err(e) => {
             match e {
+                GetAssetError::AccessDenied => {
+                    return Err(CryptSetupError::ServerAbort("access denied".to_string()));
+                }
                 GetAssetError::BadName => {
                     // Continue with key generation
                 }
@@ -175,7 +187,10 @@ pub async fn asset_crypt_setup(
             }
         }
     };
-    match get_only_asset_metadata(asset_blob_cache, &api_client, ".keys/sign.key", true).await {
+    // Checking existence of own verification key is considered safe and
+    // therefore unrestricted.
+    match get_only_asset_metadata(asset_blob_cache, &api_client, ".keys/sign.key", true, None).await
+    {
         Ok((sign_key_md_contents, _sign_key_entry)) => {
             outln!(io, "Asset sign key `.keys/sign.key` already exists.");
             if !rotation_accepted {
@@ -216,6 +231,9 @@ pub async fn asset_crypt_setup(
         }
         Err(e) => {
             match e {
+                GetAssetError::AccessDenied => {
+                    return Err(CryptSetupError::ServerAbort("access denied".to_string()));
+                }
                 GetAssetError::BadName => {
                     // Continue with key generation
                 }
@@ -1187,7 +1205,8 @@ pub async fn get_key(
     api_client: &HaiClient,
     key_path: &str,
 ) -> Result<(Vec<u8>, String, serde_json::Value, AssetEntry), GetKeyError> {
-    match asset_reader::get_asset_and_metadata(asset_blob_cache, &api_client, &key_path, true).await
+    match asset_reader::get_asset_and_metadata(asset_blob_cache, &api_client, &key_path, true, None)
+        .await
     {
         Ok((data_contents, Some(md_contents), entry)) => {
             let md_json = serde_json::from_str::<serde_json::Value>(
@@ -1205,6 +1224,7 @@ pub async fn get_key(
         // The keyfile exists but has no metadata, therefore it's broken.
         Ok((_data_contents, None, _entry)) => Err(GetKeyError::BrokenKey),
         Err(e) => match e {
+            GetAssetError::AccessDenied => Err(GetKeyError::NoKey),
             GetAssetError::BadName => Err(GetKeyError::NoKey),
             GetAssetError::DataFetchFailed(failure) => Err(GetKeyError::DataFetchFailed(failure)),
         },
@@ -1460,6 +1480,7 @@ pub async fn maybe_decrypt_asset_contents_with_latest_md_fallback(
                     api_client,
                     &asset_name,
                     true,
+                    None,
                 )
                 .await
             {
@@ -1537,6 +1558,7 @@ pub async fn asset_crypt_recover(
         &api_client,
         &recovery_file_name,
         true,
+        None,
     )
     .await
     {
@@ -1560,6 +1582,12 @@ pub async fn asset_crypt_recover(
             ));
         }
         Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(CryptRecoverError::Other(format!(
+                    "Access denied: {}",
+                    recovery_file_name
+                )));
+            }
             GetAssetError::BadName => {
                 return Err(CryptRecoverError::Other(format!(
                     "Recovery file not found: {}",
@@ -1577,26 +1605,37 @@ pub async fn asset_crypt_recover(
 
     // Fetch encryption public key
     let enc_pub_name = format!("/{username}/.keys/enc_{enc_key_id}.pub");
-    let enc_pub_data =
-        match asset_reader::get_asset(asset_blob_cache.clone(), &api_client, &enc_pub_name, true)
-            .await
-        {
-            Ok((data, _entry)) => data,
-            Err(e) => match e {
-                GetAssetError::BadName => {
-                    return Err(CryptRecoverError::Other(format!(
-                        "Encryption public key not found: {}",
-                        enc_pub_name
-                    )));
-                }
-                GetAssetError::DataFetchFailed(failure) => {
-                    return Err(CryptRecoverError::ServerAbort(format!(
-                        "Failed to fetch encryption public key: {}",
-                        failure
-                    )));
-                }
-            },
-        };
+    let enc_pub_data = match asset_reader::get_asset(
+        asset_blob_cache.clone(),
+        &api_client,
+        &enc_pub_name,
+        true,
+        None,
+    )
+    .await
+    {
+        Ok((data, _entry)) => data,
+        Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(CryptRecoverError::Other(format!(
+                    "Access denied: {}",
+                    enc_pub_name
+                )));
+            }
+            GetAssetError::BadName => {
+                return Err(CryptRecoverError::Other(format!(
+                    "Encryption public key not found: {}",
+                    enc_pub_name
+                )));
+            }
+            GetAssetError::DataFetchFailed(failure) => {
+                return Err(CryptRecoverError::ServerAbort(format!(
+                    "Failed to fetch encryption public key: {}",
+                    failure
+                )));
+            }
+        },
+    };
 
     if enc_pub_data.len() != 32 {
         return Err(CryptRecoverError::Other(
@@ -1609,26 +1648,37 @@ pub async fn asset_crypt_recover(
 
     // Fetch signing public key
     let sign_pub_name = format!("/{username}/.keys/sign_{sign_key_id}.pub");
-    let sign_pub_data =
-        match asset_reader::get_asset(asset_blob_cache.clone(), &api_client, &sign_pub_name, true)
-            .await
-        {
-            Ok((data, _entry)) => data,
-            Err(e) => match e {
-                GetAssetError::BadName => {
-                    return Err(CryptRecoverError::Other(format!(
-                        "Signing public key not found: {}",
-                        sign_pub_name
-                    )));
-                }
-                GetAssetError::DataFetchFailed(failure) => {
-                    return Err(CryptRecoverError::ServerAbort(format!(
-                        "Failed to fetch signing public key: {}",
-                        failure
-                    )));
-                }
-            },
-        };
+    let sign_pub_data = match asset_reader::get_asset(
+        asset_blob_cache.clone(),
+        &api_client,
+        &sign_pub_name,
+        true,
+        None,
+    )
+    .await
+    {
+        Ok((data, _entry)) => data,
+        Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(CryptRecoverError::Other(format!(
+                    "Access denied: {}",
+                    sign_pub_name
+                )));
+            }
+            GetAssetError::BadName => {
+                return Err(CryptRecoverError::Other(format!(
+                    "Signing public key not found: {}",
+                    sign_pub_name
+                )));
+            }
+            GetAssetError::DataFetchFailed(failure) => {
+                return Err(CryptRecoverError::ServerAbort(format!(
+                    "Failed to fetch signing public key: {}",
+                    failure
+                )));
+            }
+        },
+    };
 
     if sign_pub_data.len() != 32 {
         return Err(CryptRecoverError::Other(
@@ -1970,11 +2020,18 @@ pub async fn choose_akm_for_asset_by_name(
             &api_client,
             asset_name,
             true,
+            None,
         )
         .await
         {
             Ok(res) => (res.0, None, Some(res.1.name)),
             Err(e) => match e {
+                GetAssetError::AccessDenied => {
+                    return Err(AkmSelectionError::Abort(format!(
+                        "access denied: {}",
+                        asset_name
+                    )));
+                }
                 GetAssetError::BadName => {
                     let asset_ref = AssetRef::parse(asset_name);
                     match asset_ref {
@@ -1998,6 +2055,7 @@ pub async fn choose_akm_for_asset_by_name(
                                 &api_client,
                                 &parent_asset_name,
                                 false,
+                                None,
                             )
                             .await
                             {
@@ -2032,6 +2090,7 @@ pub async fn choose_akm_for_asset_by_name(
                                 &api_client,
                                 &format!(":{}", entry_id),
                                 false,
+                                None,
                             )
                             .await
                             {
@@ -2064,6 +2123,7 @@ pub async fn choose_akm_for_asset_by_name(
                                 &api_client,
                                 &format!(":{}", folder_entry_id),
                                 true,
+                                None,
                             )
                             .await
                             {
@@ -2208,11 +2268,15 @@ pub async fn sign_message_using_ed25519_key(
         &api_client,
         &verifying_key_asset_name,
         true,
+        None,
     )
     .await
     {
         Ok((data, _entry)) => data,
         Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(SignMessageError::KeyNotFound);
+            }
             GetAssetError::BadName => {
                 return Err(SignMessageError::KeyNotFound);
             }
@@ -2278,11 +2342,15 @@ pub async fn verify_signature_using_ed25519_key(
         &api_client,
         &verifying_key_asset_name,
         true,
+        None,
     )
     .await
     {
         Ok((data, _entry)) => data,
         Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(VerifySignatureError::KeyNotFound);
+            }
             GetAssetError::BadName => {
                 return Err(VerifySignatureError::KeyNotFound);
             }
@@ -2356,11 +2424,15 @@ pub async fn get_ed25519_for_ssh_key(
         &api_client,
         &verifying_key_asset_name,
         true,
+        None,
     )
     .await
     {
         Ok((data, _entry)) => data,
         Err(e) => match e {
+            GetAssetError::AccessDenied => {
+                return Err(SshKeyGenerationError::KeyNotFound);
+            }
             GetAssetError::BadName => {
                 return Err(SshKeyGenerationError::KeyNotFound);
             }

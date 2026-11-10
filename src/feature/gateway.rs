@@ -21,6 +21,9 @@ use crate::api::client::{HaiClient, RequestError};
 use crate::api::types::asset;
 use crate::asset_cache::AssetBlobCache;
 use crate::asset_reader::{DataFetchFailure, GetRevisionError};
+use crate::feature::access::{
+    self, AccessRequest, AssetPerm, AssetPrefixPerm, Perm, PermCheckError,
+};
 use crate::feature::asset_crypt::{EncryptKeyInfo, VerifyingKeyInfo};
 use crate::feature::{kernel, opengraph};
 use crate::session::{self, CmdInputReply};
@@ -180,191 +183,8 @@ pub enum GatewayMode {
 // Asset-app Permissions
 //
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssetPerm {
-    pub read: bool,
-    pub write: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssetPrefixPerm {
-    pub create: bool,
-    pub list: bool,
-}
-
-/// A key detail about `Perm` is that it's a coarse permission scheme for what
-/// requests will be forwarded from the gateway to the API. Just because an op
-/// has permission in the gateway doesn't mean it will be allowed by the API.
-///
-/// For example, there's a permission for public assets that's read/write.
-/// But, unless the asset is the current user's public asset, it won't be
-/// writable. The API will reject the request and the error will be sent back.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = ".tag", rename_all = "snake_case")]
-pub enum Perm {
-    AssetName {
-        name: String,
-        perm: AssetPerm,
-    },
-    AssetEntryId {
-        entry_id: String,
-        perm: AssetPerm,
-    },
-    /// prefix: Require that it ends with "/"
-    AssetPrefix {
-        prefix: String,
-        perm: AssetPerm,
-        prefix_perm: AssetPrefixPerm,
-    },
-    PublicAsset,
-    SharedAssetName {
-        name: String,
-        perm: AssetPerm,
-    },
-    SharedAssetPrefix {
-        prefix: String,
-        perm: AssetPerm,
-        prefix_perm: AssetPrefixPerm,
-    },
-    LlmPrompt,
-    /// NOTE: This isn't intended to be used long-term. It's a temporary
-    /// measure since the hai kernel has no capability for restricting
-    /// permissions.
-    Everything,
-}
-
-impl Perm {
-    /// Check if this single permission grants the requested access
-    fn grants(&self, request: &AccessRequest<'_>) -> bool {
-        match (self, request) {
-            // The Everything permission grants all access
-            (Perm::Everything, _) => true,
-
-            // Exact name match for read
-            (Perm::AssetName { name, perm }, AccessRequest::ReadByName { name: req_name }) => {
-                name == *req_name && perm.read
-            }
-
-            // Exact name match for write
-            (Perm::AssetName { name, perm }, AccessRequest::WriteByName { name: req_name }) => {
-                name == *req_name && perm.write
-            }
-
-            // Entry ID match for read
-            (
-                Perm::AssetEntryId { entry_id, perm },
-                AccessRequest::ReadByEntryId { entry_id: req_id },
-            ) => entry_id == *req_id && perm.read,
-
-            // Entry ID match for write
-            (
-                Perm::AssetEntryId { entry_id, perm },
-                AccessRequest::WriteByEntryId { entry_id: req_id },
-            ) => entry_id == *req_id && perm.write,
-
-            // Prefix match for read by name
-            (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
-                name.starts_with(prefix)
-                    && perm.read
-                    && !name.starts_with(".keys/")
-                    && !name.starts_with("vault/")
-                    && !name.starts_with(".sys/hai.toml")
-            }
-
-            // Prefix match for write by name
-            (Perm::AssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
-                name.starts_with(prefix)
-                    && perm.write
-                    && !name.starts_with(".keys/")
-                    && !name.starts_with("vault/")
-                    && !name.starts_with(".sys/hai.toml")
-            }
-
-            // Prefix permissions for list
-            (
-                Perm::AssetPrefix {
-                    prefix,
-                    prefix_perm,
-                    ..
-                },
-                AccessRequest::ListPrefix { prefix: req_prefix },
-            ) => req_prefix.starts_with(prefix) && prefix_perm.list,
-
-            // Public paths
-            (Perm::PublicAsset, AccessRequest::ReadByName { name: req_name }) => {
-                asset_helper::is_in_public_asset_pool(req_name)
-            }
-            (Perm::PublicAsset, AccessRequest::WriteByName { name: req_name }) => {
-                // Allow an attempt to write to a public path knowing that the
-                // API will reject it unless the owner has given explicit
-                // permission otherwise.
-                asset_helper::is_in_public_asset_pool(req_name)
-            }
-
-            // --- Shared asset name: match the suffix after /s/<participants>/ ---
-            (
-                Perm::SharedAssetName { name, perm },
-                AccessRequest::ReadByName { name: req_name },
-            ) => asset_helper::get_shared_asset_relpath(req_name)
-                .map_or(false, |suffix| suffix == name && perm.read),
-            (
-                Perm::SharedAssetName { name, perm },
-                AccessRequest::WriteByName { name: req_name },
-            ) => asset_helper::get_shared_asset_relpath(req_name)
-                .map_or(false, |suffix| suffix == name && perm.write),
-
-            // --- Shared asset prefix: match the suffix after /s/<participants>/ ---
-            (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::ReadByName { name }) => {
-                asset_helper::get_shared_asset_relpath(name)
-                    .map_or(false, |suffix| suffix.starts_with(prefix) && perm.read)
-            }
-            (Perm::SharedAssetPrefix { prefix, perm, .. }, AccessRequest::WriteByName { name }) => {
-                asset_helper::get_shared_asset_relpath(name)
-                    .map_or(false, |suffix| suffix.starts_with(prefix) && perm.write)
-            }
-            (
-                Perm::SharedAssetPrefix {
-                    prefix,
-                    prefix_perm,
-                    ..
-                },
-                AccessRequest::ListPrefix { prefix: req_prefix },
-            ) => asset_helper::get_shared_asset_relpath(req_prefix).map_or(false, |suffix| {
-                suffix.starts_with(prefix) && prefix_perm.list
-            }),
-
-            // LlmPrompt
-            (Perm::LlmPrompt, AccessRequest::LlmPrompt) => true,
-
-            // No match
-            _ => false,
-        }
-    }
-
-    // Helper if permission requires keyring access
-    fn requires_keyring(&self) -> bool {
-        matches!(
-            self,
-            Perm::AssetName { .. }
-                | Perm::AssetEntryId { .. }
-                | Perm::AssetPrefix { .. }
-                | Perm::SharedAssetName { .. }
-                | Perm::SharedAssetPrefix { .. }
-                | Perm::Everything
-        )
-    }
-}
-
-/// Check if any permission in the list grants the requested access
-pub fn check_access(
-    perm_ctxs: &[PermCtx],
-    request: &AccessRequest<'_>,
-) -> Result<(), PermCheckError> {
-    if perm_ctxs.iter().any(|p| p.perm.grants(request)) {
-        Ok(())
-    } else {
-        Err(PermCheckError::Unauthorized)
-    }
+pub fn perm_ctxs_to_perms(perm_ctxs: &[PermCtx]) -> crate::feature::access::AccessRef<'_> {
+    perm_ctxs.iter().map(|p| &p.perm).collect()
 }
 
 /// Async version that takes the Arc<Mutex<...>> directly
@@ -373,31 +193,37 @@ pub async fn check_access_async(
     request: &AccessRequest<'_>,
 ) -> Result<(), PermCheckError> {
     let perm_ctxs = perm_ctxs.lock().await;
-    check_access(&perm_ctxs, request)
+    crate::feature::access::check_access(&perm_ctxs_to_perms(&perm_ctxs), request)
 }
 
-/// What kind of access is being requested
-#[derive(Debug, Clone)]
-pub enum AccessRequest<'a> {
-    /// Read a specific asset by name
-    ReadByName { name: &'a str },
-    /// Write a specific asset by name
-    WriteByName { name: &'a str },
-    /// Read a specific asset by entry_id
-    ReadByEntryId { entry_id: &'a str },
-    /// Write a specific asset by entry_id
-    WriteByEntryId { entry_id: &'a str },
-    /// List assets under a prefix
-    ListPrefix { prefix: &'a str },
-    /// Prompt LLM
-    LlmPrompt,
-    /// Everything
-    Everything,
+pub async fn gateway_access_perm_for_asset_access_request(
+    api_client: &HaiClient,
+    asset_name: &str,
+    perm_ctxs: &PermCtxs,
+    write: bool,
+) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
+    let perm_ctxs_locked = perm_ctxs.lock().await;
+    access::access_perm_for_asset_access_request(
+        api_client,
+        asset_name,
+        &perm_ctxs_to_perms(&perm_ctxs_locked),
+        write,
+    )
+    .await
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermCheckError {
-    Unauthorized,
+pub async fn gateway_access_perm_for_asset_list_prefix_request(
+    api_client: &HaiClient,
+    asset_prefix: &str,
+    perm_ctxs: &PermCtxs,
+) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
+    let perm_ctxs_locked = perm_ctxs.lock().await;
+    access::access_perm_for_asset_list_prefix_request(
+        api_client,
+        asset_prefix,
+        &perm_ctxs_to_perms(&perm_ctxs_locked),
+    )
+    .await
 }
 
 // --
@@ -1955,16 +1781,19 @@ async fn get_asset_and_metadata_revision_with_head_optimization(
     only_fetch_metadata_if_necessary: bool,
 ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, asset::AssetRevision), GetRevisionError> {
     if head_only {
-        asset_reader::get_asset_revision(api_client, asset_name, rev_id)
+        // Perm check handled by gateway router, so skipped here.
+        asset_reader::get_asset_revision(api_client, asset_name, rev_id, None)
             .await
             .map(|rev| (None, None, rev))
     } else {
+        // Perm check handled by gateway router, so skipped here.
         asset_reader::get_asset_and_metadata_revision(
             asset_blob_cache,
             api_client,
             asset_name,
             rev_id,
             only_fetch_metadata_if_necessary,
+            None,
         )
         .await
     }
@@ -2024,13 +1853,8 @@ async fn handle_get(
         }
     }
 
-    match asset_app_has_gateway_perm_for_asset_access_request(
-        &api_client,
-        asset_name,
-        &perm_ctxs,
-        false,
-    )
-    .await
+    match gateway_access_perm_for_asset_access_request(&api_client, asset_name, &perm_ctxs, false)
+        .await
     {
         Ok(has_perm) => {
             if !has_perm {
@@ -2129,6 +1953,9 @@ async fn handle_get(
                                 .await
                                 {
                                     Ok(contents) => contents,
+                                    Err(crate::asset_reader::GetAssetError::AccessDenied) => {
+                                        return HttpResponse::forbidden();
+                                    }
                                     Err(crate::asset_reader::GetAssetError::BadName) => {
                                         return HttpResponse::not_found();
                                     }
@@ -2228,6 +2055,7 @@ async fn handle_get(
                 Err(GetRevisionError::BadEntryRef) => return HttpResponse::not_found(),
                 Err(GetRevisionError::BadRevId) => return HttpResponse::not_found(),
                 Err(GetRevisionError::NoPermission) => return HttpResponse::forbidden(),
+                Err(GetRevisionError::AccessDenied) => return HttpResponse::forbidden(),
                 Err(GetRevisionError::Deleted) => return HttpResponse::not_found(),
                 Err(GetRevisionError::DataFetchFailed(DataFetchFailure::Unexpected)) => {
                     return HttpResponse::internal_error("Unexpected data fetch failure.");
@@ -2694,13 +2522,8 @@ async fn handle_put(
         )
     };
 
-    match asset_app_has_gateway_perm_for_asset_access_request(
-        &api_client,
-        asset_name,
-        &perm_ctxs,
-        true,
-    )
-    .await
+    match gateway_access_perm_for_asset_access_request(&api_client, asset_name, &perm_ctxs, true)
+        .await
     {
         Ok(has_perm) => {
             if !has_perm {
@@ -2838,13 +2661,8 @@ async fn handle_put_metadata(
     perm_ctxs: PermCtxs,
     _username: Option<&str>,
 ) -> HttpResponse {
-    match asset_app_has_gateway_perm_for_asset_access_request(
-        &api_client,
-        asset_name,
-        &perm_ctxs,
-        true,
-    )
-    .await
+    match gateway_access_perm_for_asset_access_request(&api_client, asset_name, &perm_ctxs, true)
+        .await
     {
         Ok(has_perm) => {
             if !has_perm {
@@ -2898,136 +2716,6 @@ async fn handle_put_metadata(
             }
         }
     }
-}
-
-// --
-
-/// Checks permission to access an asset across multiple dimensions.
-///
-/// 1. entry_id (with : prefix)
-/// 2. asset_name
-/// 3. resolving attachment to asset_name / entry_id
-///
-/// # Returns
-///
-/// True if user has the necessary permission.
-pub async fn asset_app_has_gateway_perm_for_asset_access_request(
-    api_client: &HaiClient,
-    asset_name: &str,
-    perm_ctxs: &PermCtxs,
-    write: bool,
-) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
-    // Quick exit: Try to check access by the `asset_name` given to see if we
-    // can avoid any extra queries.
-    if asset_helper::is_entry_id(asset_name) {
-        let access_req = if write {
-            AccessRequest::WriteByEntryId {
-                entry_id: asset_name,
-            }
-        } else {
-            AccessRequest::ReadByEntryId {
-                entry_id: asset_name,
-            }
-        };
-        if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
-            return Ok(true);
-        }
-    } else {
-        let access_req = if write {
-            AccessRequest::WriteByName { name: asset_name }
-        } else {
-            AccessRequest::ReadByName { name: asset_name }
-        };
-        if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
-            return Ok(true);
-        }
-    }
-
-    // If the quick exit didn't work, we need to resolve the full perm-granting
-    // entry (attachment anchor, if applicable) and try both the name and
-    // entry_id. NOTE: Could be optimized to use fewer queries on average.
-    let perm_granting_asset_entry =
-        asset_helper::resolve_perm_granting_asset_entry(api_client, asset_name).await?;
-    let access_req_by_name = if write {
-        AccessRequest::WriteByName {
-            name: &perm_granting_asset_entry.name,
-        }
-    } else {
-        AccessRequest::ReadByName {
-            name: &perm_granting_asset_entry.name,
-        }
-    };
-    if check_access_async(&perm_ctxs, &access_req_by_name)
-        .await
-        .is_ok()
-    {
-        return Ok(true);
-    }
-    let access_req_by_entry_id = if write {
-        AccessRequest::WriteByEntryId {
-            entry_id: &perm_granting_asset_entry.entry_id,
-        }
-    } else {
-        AccessRequest::ReadByEntryId {
-            entry_id: &perm_granting_asset_entry.entry_id,
-        }
-    };
-    if check_access_async(&perm_ctxs, &access_req_by_entry_id)
-        .await
-        .is_ok()
-    {
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-/// Checks permission to list a prefix across multiple dimensions.
-///
-/// 1. List prefix access is superset of asset_prefix.
-/// 2. Read access to perm-granting asset (attachment anchor).
-///
-/// # Returns
-///
-/// True if user has the necessary permission.
-pub async fn asset_app_has_gateway_perm_for_asset_list_prefix_request(
-    api_client: &HaiClient,
-    asset_prefix: &str,
-    perm_ctxs: &PermCtxs,
-) -> Result<bool, (String, RequestError<asset::AssetGetError>)> {
-    // Quick exit: Try to check access by the `asset_prefix` given to see if we
-    // can avoid any extra queries.
-    let access_req = AccessRequest::ListPrefix {
-        prefix: asset_prefix,
-    };
-    if check_access_async(&perm_ctxs, &access_req).await.is_ok() {
-        return Ok(true);
-    }
-
-    if asset_helper::is_attachment(asset_prefix) {
-        // If it's an attachment, get the perm-granting asset and check if we
-        // have read permissions to it.
-        let perm_granting_asset_entry =
-            asset_helper::resolve_perm_granting_asset_entry(api_client, asset_prefix).await?;
-        let access_req_by_name = AccessRequest::ReadByName {
-            name: &perm_granting_asset_entry.name,
-        };
-        if check_access_async(&perm_ctxs, &access_req_by_name)
-            .await
-            .is_ok()
-        {
-            return Ok(true);
-        }
-        let access_req_by_entry_id = AccessRequest::ReadByEntryId {
-            entry_id: &perm_granting_asset_entry.entry_id,
-        };
-        if check_access_async(&perm_ctxs, &access_req_by_entry_id)
-            .await
-            .is_ok()
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 // --
@@ -3492,7 +3180,7 @@ async fn handle_client_message(
     match route.as_str() {
         "repl/kernel/spawn" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Kernel).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -3505,8 +3193,51 @@ async fn handle_client_message(
                 }
             };
 
+            // Allow asset only if there's an asset perm set.
+            let perm_ctxs_locked = perm_ctxs.lock().await;
+            let perms = perm_ctxs_to_perms(&perm_ctxs_locked);
+            let mut deny_traits = crate::cmd_registry::DenyTraits::default();
+            deny_traits.assets = true;
+            deny_traits.fs = true;
+            deny_traits.bot = true;
+            deny_traits.tasks = true;
+            deny_traits.executes = true;
+
+            for perm in &perms {
+                match perm {
+                    Perm::AssetName { .. }
+                    | Perm::AssetEntryId { .. }
+                    | Perm::AssetPrefix { .. }
+                    | Perm::PublicAsset
+                    | Perm::SharedAssetName { .. }
+                    | Perm::SharedAssetPrefix { .. } => {
+                        deny_traits.assets = false;
+                    }
+                    Perm::Filesystem => {
+                        deny_traits.fs = false;
+                    }
+                    Perm::Tasks => {
+                        deny_traits.tasks = false;
+                    }
+                    Perm::Bot => {
+                        deny_traits.bot = false;
+                    }
+                    Perm::Everything => {
+                        deny_traits.assets = false;
+                        deny_traits.fs = false;
+                        deny_traits.bot = false;
+                        deny_traits.tasks = false;
+                        deny_traits.executes = false;
+                    }
+                    _ => {}
+                }
+            }
+            let baseline_deny_cmd_filter = &crate::cmd_registry::Filter::Deny(deny_traits);
+            let cmd_filters_full: &[&crate::cmd_registry::Filter] =
+                &[cmd_filters, &[&baseline_deny_cmd_filter]].concat();
             let (exe, mut args, using_cargo) =
-                crate::feature::self_invocation(username, cmd_filters);
+                crate::feature::self_invocation(username, cmd_filters_full, Some(&perms));
+            drop(perm_ctxs_locked);
             if let Some(model) = spawn_arg.model {
                 args.push("-m".into());
                 args.push(model);
@@ -3594,7 +3325,7 @@ async fn handle_client_message(
         }
         "repl/kernel/teardown" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Kernel).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -3632,7 +3363,7 @@ async fn handle_client_message(
         }
         "repl/kernel/list" => {
             if let Err(PermCheckError::Unauthorized) =
-                check_access_async(&perm_ctxs, &AccessRequest::Everything).await
+                check_access_async(&perm_ctxs, &AccessRequest::Kernel).await
             {
                 send_bad_authorization_error(ws_sink, mid, "Unauthorized").await;
                 return;
@@ -3705,7 +3436,7 @@ async fn handle_client_message(
                 }
             };
 
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &share_arg.asset_name,
                 &perm_ctxs,
@@ -3733,6 +3464,7 @@ async fn handle_client_message(
                     &api_client,
                     &asset_name,
                     false,
+                    None,
                 )
                 .await
                 {
@@ -3869,7 +3601,7 @@ async fn handle_client_message(
                 }
             };
 
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &unshare_arg.asset_name,
                 &perm_ctxs,
@@ -3897,6 +3629,7 @@ async fn handle_client_message(
                     &api_client,
                     &asset_name,
                     false,
+                    None,
                 )
                 .await
                 {
@@ -4021,8 +3754,13 @@ async fn handle_client_message(
                 }
             };
 
-            let (exe, mut args, _using_cargo) =
-                crate::feature::self_invocation(username, cmd_filters);
+            let perm_ctxs_locked = perm_ctxs.lock().await;
+            let (exe, mut args, _using_cargo) = crate::feature::self_invocation(
+                username,
+                cmd_filters,
+                Some(&perm_ctxs_to_perms(&perm_ctxs_locked)),
+            );
+            drop(perm_ctxs_locked);
             if let Some(model) = repl_arg.model {
                 args.push("-m".to_string());
                 args.push(model);
@@ -4588,7 +4326,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_arg.name,
                 &perm_ctxs,
@@ -4641,7 +4379,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_list_prefix_request(
+            match gateway_access_perm_for_asset_list_prefix_request(
                 &api_client,
                 list_arg.prefix.as_deref().unwrap_or(""),
                 &perm_ctxs,
@@ -4731,7 +4469,7 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            match asset_app_has_gateway_perm_for_asset_list_prefix_request(
+            match gateway_access_perm_for_asset_list_prefix_request(
                 &api_client,
                 search_arg.asset_pool_path.as_deref().unwrap_or(""),
                 &perm_ctxs,
@@ -4783,7 +4521,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &move_arg.source_name,
                 &perm_ctxs,
@@ -4802,7 +4540,7 @@ async fn handle_client_message(
                     return;
                 }
             }
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &move_arg.target_name,
                 &perm_ctxs,
@@ -4855,7 +4593,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &remove_arg.name,
                 &perm_ctxs,
@@ -4919,7 +4657,7 @@ async fn handle_client_message(
                 }
             };
 
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
                 &perm_ctxs,
@@ -5019,7 +4757,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
                 &perm_ctxs,
@@ -5074,7 +4812,7 @@ async fn handle_client_message(
                     }
                 };
             let asset_name_for_perm_check = format!(":{}", redact_get_arg.entry_id);
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
                 &perm_ctxs,
@@ -5184,7 +4922,7 @@ async fn handle_client_message(
                         return;
                     }
                 };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &folder_create_arg.name,
                 &perm_ctxs,
@@ -5301,7 +5039,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
                 &perm_ctxs,
@@ -5364,7 +5102,7 @@ async fn handle_client_message(
                     return;
                 }
             };
-            match asset_app_has_gateway_perm_for_asset_access_request(
+            match gateway_access_perm_for_asset_access_request(
                 &api_client,
                 &asset_name_for_perm_check,
                 &perm_ctxs,

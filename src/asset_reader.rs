@@ -13,6 +13,7 @@ use crate::api::types::asset::{
     AssetRevision, AssetRevisionGetArg, AssetRevisionGetError, EntryRef,
 };
 use crate::asset_cache::{AssetBlobCache, DownloadAssetError};
+use crate::feature::access::{self, AccessRequest, Perm};
 use crate::feature::asset_crypt::AkmSelectionError;
 use crate::feature::{
     asset_crypt::{self, KeyRecipient},
@@ -27,6 +28,9 @@ use crate::{asset_helper, crypt};
 pub enum GetAssetError {
     BadName,
     DataFetchFailed(DataFetchFailure),
+    /// Caller's permissions / access rights are insufficient.
+    /// Prioritized over `BadName` to avoid leaking existence.
+    AccessDenied,
 }
 
 impl std::error::Error for GetAssetError {}
@@ -35,6 +39,7 @@ impl std::fmt::Display for GetAssetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GetAssetError::BadName => write!(f, "bad-name"),
+            GetAssetError::AccessDenied => write!(f, "access-denied"),
             GetAssetError::DataFetchFailed(failure) => write!(f, "data-fetch-failed: {}", failure),
         }
     }
@@ -59,6 +64,148 @@ impl std::fmt::Display for DataFetchFailure {
     }
 }
 
+// --
+
+//
+// Access checks
+//
+
+/// Outcome of a permission check against `perms`.
+enum AccessCheck {
+    Allowed,
+    Denied,
+    /// The check couldn't complete (e.g. network). Kept distinct from denial
+    /// so that a timeout isn't reported as "access denied".
+    Failed(DataFetchFailure),
+}
+
+impl AccessCheck {
+    fn into_get_asset_result(self) -> Result<(), GetAssetError> {
+        match self {
+            AccessCheck::Allowed => Ok(()),
+            AccessCheck::Denied => Err(GetAssetError::AccessDenied),
+            AccessCheck::Failed(f) => Err(GetAssetError::DataFetchFailed(f)),
+        }
+    }
+}
+
+fn access_resolve_err_to_check(e: RequestError<AssetGetError>) -> AccessCheck {
+    match e {
+        // Do not propagate route errors because it can confirm existence of
+        // assets.
+        RequestError::Route(_) => AccessCheck::Denied,
+        RequestError::RateLimit(_) => AccessCheck::Failed(DataFetchFailure::RateLimited),
+        RequestError::Http(_) => AccessCheck::Failed(DataFetchFailure::Retryable),
+        RequestError::BadRequest(_) | RequestError::Unexpected(_) => {
+            AccessCheck::Failed(DataFetchFailure::Unexpected)
+        }
+    }
+}
+
+/// Checks access to `asset_name`.
+///
+/// Supports resolving attachment anchors and writes to new assets.
+async fn check_name_access(
+    api_client: &HaiClient,
+    access: Option<&[&Perm]>,
+    asset_name: &str,
+    write: bool,
+) -> AccessCheck {
+    let Some(access) = access else {
+        return AccessCheck::Allowed;
+    };
+    match access::access_perm_for_asset_access_request(api_client, asset_name, access, write).await
+    {
+        Ok(true) => AccessCheck::Allowed,
+        Ok(false) => AccessCheck::Denied,
+        Err((_, e)) => access_resolve_err_to_check(e),
+    }
+}
+
+/// Checks access for an already-fetched entry by name and entry_id.
+///
+/// Since the entry is already fetched, an additional fetch is only necessary
+/// if the entry is an attachment whose anchor must be resolved.
+async fn check_entry_access(
+    api_client: &HaiClient,
+    access: Option<&[&Perm]>,
+    entry: &AssetEntry,
+    write: bool,
+) -> AccessCheck {
+    let Some(access) = access else {
+        return AccessCheck::Allowed;
+    };
+    let (by_name, by_id) = if write {
+        (
+            AccessRequest::WriteByName { name: &entry.name },
+            AccessRequest::WriteByEntryId {
+                entry_id: &entry.entry_id,
+            },
+        )
+    } else {
+        (
+            AccessRequest::ReadByName { name: &entry.name },
+            AccessRequest::ReadByEntryId {
+                entry_id: &entry.entry_id,
+            },
+        )
+    };
+    if access::check_access(access, &by_name).is_ok()
+        || access::check_access(access, &by_id).is_ok()
+    {
+        return AccessCheck::Allowed;
+    }
+    if !asset_helper::is_attachment(&entry.name) {
+        return AccessCheck::Denied;
+    }
+    check_name_access(api_client, Some(access), &entry.name, write).await
+}
+
+async fn check_list_access(
+    api_client: &HaiClient,
+    access: Option<&[&Perm]>,
+    prefix: &str,
+) -> AccessCheck {
+    let Some(access) = access else {
+        return AccessCheck::Allowed;
+    };
+    match access::access_perm_for_asset_list_prefix_request(api_client, prefix, access).await {
+        Ok(true) => AccessCheck::Allowed,
+        Ok(false) => AccessCheck::Denied,
+        Err((_, e)) => access_resolve_err_to_check(e),
+    }
+}
+
+/// Fetches an entry and, if `access` is set, enforces read or write access.
+///
+/// Careful to report `AccessDenied` rather than `BadName` to mask existence
+/// when applicable.
+pub async fn get_asset_entry_checked(
+    api_client: &HaiClient,
+    asset_name: &str,
+    bad_name_ok: bool,
+    access: Option<&[&Perm]>,
+    write: bool,
+) -> Result<AssetGetResult, GetAssetError> {
+    match get_asset_entry(api_client, asset_name, bad_name_ok).await {
+        Ok(res) => {
+            check_entry_access(api_client, access, &res.entry, write)
+                .await
+                .into_get_asset_result()?;
+            Ok(res)
+        }
+        Err(GetAssetError::BadName) => {
+            check_name_access(api_client, access, asset_name, write)
+                .await
+                .into_get_asset_result()?;
+            Err(GetAssetError::BadName)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+// --
+
 pub async fn asset_blob_cache_get_asset_contents(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
@@ -81,14 +228,15 @@ pub async fn asset_blob_cache_get_asset_contents(
     }
 }
 
-/// If returns None, responsible for printing error msg.
+/// If `access` is None, no access checks are performed.
 pub async fn get_asset(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
+    access: Option<&[&Perm]>,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
-    let asset_entry = get_asset_entry(api_client, asset_name, bad_name_ok)
+    let asset_entry = get_asset_entry_checked(api_client, asset_name, bad_name_ok, access, false)
         .await?
         .entry;
     if let Some(data_url) = asset_entry.asset.url.as_ref()
@@ -103,18 +251,28 @@ pub async fn get_asset(
     }
 }
 
+/// If `access` is None, no access checks are performed.
 pub async fn get_asset_using_cache(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
+    access: Option<&[&Perm]>,
 ) -> Result<(Vec<u8>, AssetEntry), GetAssetError> {
     let asset_entry = match asset_blob_cache.get_entry_cache(asset_name).await {
-        Some(entry) => entry.clone(),
+        Some(entry) => {
+            // Just because an entry is in the cache doesn't mean the caller
+            // has access to it. Re-check access.
+            check_entry_access(api_client, access, &entry, false)
+                .await
+                .into_get_asset_result()?;
+            entry.clone()
+        }
         None => {
-            let asset_entry = get_asset_entry(api_client, asset_name, bad_name_ok)
-                .await?
-                .entry;
+            let asset_entry =
+                get_asset_entry_checked(api_client, asset_name, bad_name_ok, access, false)
+                    .await?
+                    .entry;
             asset_blob_cache
                 .insert_entry_cache(asset_entry.clone())
                 .await;
@@ -133,6 +291,7 @@ pub async fn get_asset_using_cache(
     }
 }
 
+/// WARNING: Does not check access, see `get_asset_entry_checked`.
 pub async fn get_asset_entry(
     api_client: &HaiClient,
     asset_name: &str,
@@ -171,14 +330,16 @@ pub async fn get_asset_entry(
 
 // --
 
-/// If returns None, responsible for printing error msg.
+/// If `access` is None, no access checks are performed.
 pub async fn get_asset_and_metadata(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
+    access: Option<&[&Perm]>,
 ) -> Result<(Vec<u8>, Option<Vec<u8>>, AssetEntry), GetAssetError> {
-    let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
+    let asset_get_res =
+        get_asset_entry_checked(api_client, asset_name, bad_name_ok, access, false).await?;
     let data_contents = if let Some(data_url) = asset_get_res.entry.asset.url.as_ref()
         && let Some(hash) = asset_get_res.entry.asset.hash.as_ref()
     {
@@ -229,8 +390,17 @@ pub async fn get_decrypted_asset_and_metadata(
     api_client: &HaiClient,
     username: Option<&str>,
     asset_name: &str,
+    access: Option<&[&Perm]>,
 ) -> Result<(Vec<u8>, AssetEntry), GetDecryptedAssetError> {
-    match get_asset_and_metadata(asset_blob_cache.clone(), &api_client, &asset_name, false).await {
+    match get_asset_and_metadata(
+        asset_blob_cache.clone(),
+        &api_client,
+        &asset_name,
+        false,
+        access,
+    )
+    .await
+    {
         Ok((asset_contents, md_contents, asset_entry)) => {
             let akm_info = match asset_crypt::extract_akm_from_metadata(
                 io,
@@ -268,7 +438,10 @@ pub async fn get_decrypted_asset_and_metadata(
 pub enum GetRevisionError {
     BadEntryRef,
     BadRevId,
+    /// For clarity (wrt AccessDenied): This is an API rejection.
     NoPermission,
+    /// Access rights of the session are insufficient. Checked pre-API request.
+    AccessDenied,
     Deleted,
     DataFetchFailed(DataFetchFailure),
 }
@@ -282,6 +455,7 @@ pub enum GetRevisionError {
 /// * `rev_id` - Optional revision ID to fetch; if None, fetches latest revision
 /// * `only_fetch_metadata_if_necessary` - If true, only fetches metadata if
 ///   the asset is encrypted.
+/// * `access` - If None, no access checks are performed.
 ///
 /// # Returns
 /// `Ok((data_contents, metadata_contents, revision))` on success, where
@@ -296,8 +470,9 @@ pub async fn get_asset_and_metadata_revision(
     asset_name: &str,
     rev_id: Option<&str>,
     only_fetch_metadata_if_necessary: bool,
+    access: Option<&[&Perm]>,
 ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, AssetRevision), GetRevisionError> {
-    let revision = get_asset_revision(api_client, asset_name, rev_id).await?;
+    let revision = get_asset_revision(api_client, asset_name, rev_id, access).await?;
 
     let data_contents = if let Some(data_url) = revision.asset.url.as_ref()
         && let Some(hash) = revision.asset.hash.as_ref()
@@ -360,11 +535,19 @@ pub async fn get_asset_and_metadata_revision(
 /// downloaded).
 ///
 /// Returns `GetRevisionError::Deleted` if the revision is a deletion.
+///
+/// If `access` is set, access is checked before the revision is requested.
 pub async fn get_asset_revision(
     api_client: &HaiClient,
     asset_name: &str,
     rev_id: Option<&str>,
+    access: Option<&[&Perm]>,
 ) -> Result<AssetRevision, GetRevisionError> {
+    match check_name_access(api_client, access, asset_name, false).await {
+        AccessCheck::Allowed => {}
+        AccessCheck::Denied => return Err(GetRevisionError::AccessDenied),
+        AccessCheck::Failed(f) => return Err(GetRevisionError::DataFetchFailed(f)),
+    }
     let revision_get_res = match api_client
         .asset_revision_get(AssetRevisionGetArg {
             entry_ref: EntryRef::Name(asset_name.to_string()),
@@ -408,14 +591,16 @@ pub async fn get_asset_revision(
 
 // --
 
-/// If returns None, responsible for printing error msg.
+/// If `access` is None, no access checks are performed.
 pub async fn get_only_asset_metadata(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_name: &str,
     bad_name_ok: bool,
+    access: Option<&[&Perm]>,
 ) -> Result<(Option<Vec<u8>>, AssetEntry), GetAssetError> {
-    let asset_get_res = get_asset_entry(api_client, asset_name, bad_name_ok).await?;
+    let asset_get_res =
+        get_asset_entry_checked(api_client, asset_name, bad_name_ok, access, false).await?;
     if asset_get_res.entry.asset.url.is_none()
         && asset_get_res.entry.asset.kind != AssetKind::Folder
     {
@@ -594,6 +779,60 @@ async fn expand_glob(
 
 // --
 
+/// Result of expanding a glob while checking access.
+enum CheckedGlob {
+    /// No prefix access rights to expand the glob.
+    Denied,
+    Failed(DataFetchFailure),
+    Expanded {
+        /// Matches that passed the access check (sorted).
+        allowed: Vec<AssetEntry>,
+        /// Matches that failed the access check. Safe to reveal by name since
+        /// the caller is allowed to list them.
+        denied: Vec<String>,
+        /// Matches whose access check could not complete.
+        failed: Vec<(String, DataFetchFailure)>,
+    },
+}
+
+/// Like `expand_glob`, but if `access` is set, requires list access to the
+/// glob's prefix and checks each match for read (or write) access.
+///
+/// NOTE: The entire glob must be accessible according to the provided `access`
+/// rights. If only a portion of the glob is satisfied by an `access` right, an
+/// `access-denied` error is returned.
+async fn expand_glob_checked(
+    api_client: &HaiClient,
+    glob_pattern: &str,
+    access: Option<&[&Perm]>,
+    write: bool,
+) -> Result<CheckedGlob, String> {
+    let (prefix, _) = parse_glob_pattern(glob_pattern);
+    match check_list_access(api_client, access, &prefix).await {
+        AccessCheck::Allowed => {}
+        AccessCheck::Denied => return Ok(CheckedGlob::Denied),
+        AccessCheck::Failed(f) => return Ok(CheckedGlob::Failed(f)),
+    }
+    let entries = expand_glob(api_client, glob_pattern).await?;
+    let mut allowed = Vec::new();
+    let mut denied = Vec::new();
+    let mut failed = Vec::new();
+    for entry in entries {
+        match check_entry_access(api_client, access, &entry, write).await {
+            AccessCheck::Allowed => allowed.push(entry),
+            AccessCheck::Denied => denied.push(entry.name),
+            AccessCheck::Failed(f) => failed.push((entry.name, f)),
+        }
+    }
+    Ok(CheckedGlob::Expanded {
+        allowed,
+        denied,
+        failed,
+    })
+}
+
+// --
+
 pub enum FolderPolicy {
     #[allow(dead_code)]
     Exclude,
@@ -604,10 +843,17 @@ pub enum FolderPolicy {
 }
 
 /// Fetches asset entries for a list of asset names or glob patterns.
+///
+/// * `access` - If `None`, no permission checks are performed. If `Some`, each
+///   glob's prefix must be listable and every resolved entry (including
+///   recursed folder contents) must grant read access, or write access if
+///   `write`. Any denial is returned as an error.
 pub async fn get_asset_entries_from_globs(
     api_client: &HaiClient,
     asset_names_or_globs: &[String],
     folder_policy: FolderPolicy,
+    access: Option<&[&Perm]>,
+    write: bool,
 ) -> Result<Vec<AssetEntry>, String> {
     let mut resolved_entries: Vec<AssetEntry> = Vec::new();
     let mut seen_globs: HashSet<String> = HashSet::new();
@@ -623,41 +869,54 @@ pub async fn get_asset_entries_from_globs(
             }
             seen_globs.insert(asset_ref.clone());
 
-            // Expand the glob
-            let asset_entries = expand_glob(api_client, &asset_ref).await?;
-
-            // Collect unique asset entries
-            let matched_asset_entries: Vec<AssetEntry> = asset_entries
-                .into_iter()
-                .filter_map(|entry| {
-                    if seen_asset_names.contains(&entry.name) {
-                        None
-                    } else if entry.asset.kind == AssetKind::Folder {
-                        seen_asset_names.insert(entry.name.clone());
-                        match folder_policy {
-                            FolderPolicy::Exclude => None,
-                            FolderPolicy::ExcludeButRecurse => {
-                                frontier.push(format!("{}/*", entry.name));
-                                None
-                            }
-                            FolderPolicy::IncludeOnly => Some(entry),
-                            FolderPolicy::IncludeAndRecurse => {
-                                frontier.push(format!("{}/*", entry.name));
-                                Some(entry)
-                            }
-                        }
-                    } else {
-                        seen_asset_names.insert(entry.name.clone());
-                        Some(entry)
+            let asset_entries =
+                match expand_glob_checked(api_client, &asset_ref, access, write).await? {
+                    CheckedGlob::Denied => {
+                        return Err(format!("access denied: {}", asset_ref));
                     }
-                })
-                .collect();
+                    CheckedGlob::Failed(f) => {
+                        return Err(format!("cannot check access for {}: {}", asset_ref, f));
+                    }
+                    CheckedGlob::Expanded {
+                        allowed,
+                        denied,
+                        failed,
+                    } => {
+                        if let Some(name) = denied.first() {
+                            return Err(format!("access denied: {}", name));
+                        }
+                        if let Some((name, f)) = failed.first() {
+                            return Err(format!("cannot check access for {}: {}", name, f));
+                        }
+                        allowed
+                    }
+                };
 
-            resolved_entries.extend_from_slice(matched_asset_entries.as_slice());
+            for entry in asset_entries {
+                if seen_asset_names.contains(&entry.name) {
+                    continue;
+                }
+                seen_asset_names.insert(entry.name.clone());
+                if entry.asset.kind == AssetKind::Folder {
+                    match folder_policy {
+                        FolderPolicy::Exclude => {}
+                        FolderPolicy::ExcludeButRecurse => {
+                            frontier.push(format!("{}/*", entry.name));
+                        }
+                        FolderPolicy::IncludeOnly => resolved_entries.push(entry),
+                        FolderPolicy::IncludeAndRecurse => {
+                            frontier.push(format!("{}/*", entry.name));
+                            resolved_entries.push(entry);
+                        }
+                    }
+                } else {
+                    resolved_entries.push(entry);
+                }
+            }
         } else {
             // Regular asset (non-glob)
             if !seen_asset_names.contains(&asset_ref) {
-                match get_asset_entry(api_client, &asset_ref, false).await {
+                match get_asset_entry_checked(api_client, &asset_ref, false, access, write).await {
                     Ok(get_res) => {
                         seen_asset_names.insert(asset_ref.clone());
                         if get_res.entry.asset.kind == AssetKind::Folder {
@@ -678,6 +937,9 @@ pub async fn get_asset_entries_from_globs(
                             resolved_entries.push(get_res.entry);
                         }
                     }
+                    Err(GetAssetError::AccessDenied) => {
+                        return Err(format!("access denied: {}", asset_ref));
+                    }
                     Err(e) => {
                         return Err(e.to_string());
                     }
@@ -692,6 +954,16 @@ pub async fn get_asset_entries_from_globs(
 
 pub type AssetTempFileMap = HashMap<String, Result<tempfile::NamedTempFile, GetAssetError>>;
 
+pub struct PreparedTempAssets {
+    /// Asset name -> temp file creation result
+    pub asset_map: AssetTempFileMap,
+    /// Glob pattern -> expanded asset names. Excludes access-denied matches.
+    pub expanded_globs: HashMap<String, Vec<String>>,
+    /// Asset names (or glob patterns, if the glob's prefix couldn't be listed)
+    /// that failed the access check.
+    pub access_denied: Vec<String>,
+}
+
 /// Prepares assets from a list of asset names/globs as temporary files.
 ///
 /// This function:
@@ -704,11 +976,9 @@ pub type AssetTempFileMap = HashMap<String, Result<tempfile::NamedTempFile, GetA
 /// * `asset_names_or_globs` - A slice of asset names or glob patterns (without @ prefix)
 /// * `max_concurrent_downloads` - Maximum number of concurrent downloads
 /// * `skip_download` - Optional set of asset names to create as empty files instead of downloading
-///
-/// # Returns
-/// A tuple containing:
-/// - A map of asset names to their (NamedTempFile, PathBuf) tuples
-/// - A map of glob patterns to their expanded asset names (for callers that need this info)
+/// * `access` - If `None`, no permission checks are performed. If `Some`,
+///   downloaded assets require read access, `skip_download` assets (outputs)
+///   require write access, and globs require list access to their prefix.
 pub async fn prepare_assets_from_names_as_temp_files(
     io: &Io,
     asset_blob_cache: Arc<AssetBlobCache>,
@@ -718,7 +988,8 @@ pub async fn prepare_assets_from_names_as_temp_files(
     asset_names_or_globs: &[String],
     max_concurrent_downloads: usize,
     skip_download: Option<&HashSet<String>>,
-) -> Result<(AssetTempFileMap, HashMap<String, Vec<String>>), String> {
+    access: Option<&[&Perm]>,
+) -> Result<PreparedTempAssets, String> {
     let empty_set = HashSet::new();
     let skip_download = skip_download.unwrap_or(&empty_set);
 
@@ -731,6 +1002,7 @@ pub async fn prepare_assets_from_names_as_temp_files(
     let mut seen_assets: HashSet<String> = HashSet::new();
     let mut assets_to_download: Vec<AssetEntry> = Vec::new();
     let mut asset_fetch_failures = Vec::new();
+    let mut access_denied = Vec::new();
 
     for asset_ref in asset_names_or_globs {
         if is_glob_pattern(asset_ref) {
@@ -739,55 +1011,73 @@ pub async fn prepare_assets_from_names_as_temp_files(
                 continue;
             }
 
-            // Expand the glob
-            let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
-            if matched_asset_entries.is_empty() {
-                // If glob doesn't match anything, use the shell approach and
-                // treat the blob as the literal asset name.
-                asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
-            } else {
-                // Queue each matched asset for download
-                for matched_asset_entry in &matched_asset_entries {
-                    if !seen_assets.contains(&matched_asset_entry.name) {
-                        seen_assets.insert(matched_asset_entry.name.clone());
-                        // Glob-matched assets are always inputs, so they need download
-                        assets_to_download.push(matched_asset_entry.clone());
+            match expand_glob_checked(api_client, asset_ref, access, false).await? {
+                CheckedGlob::Denied => access_denied.push(asset_ref.clone()),
+                CheckedGlob::Failed(f) => asset_fetch_failures
+                    .push((asset_ref.clone(), GetAssetError::DataFetchFailed(f))),
+                CheckedGlob::Expanded {
+                    allowed,
+                    denied,
+                    failed,
+                } => {
+                    if allowed.is_empty() && denied.is_empty() && failed.is_empty() {
+                        // If glob doesn't match anything, use the shell approach and
+                        // treat the blob as the literal asset name.
+                        asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
+                        continue;
+                    }
+                    for name in denied {
+                        if seen_assets.insert(name.clone()) {
+                            access_denied.push(name);
+                        }
+                    }
+                    for (name, f) in failed {
+                        if seen_assets.insert(name.clone()) {
+                            asset_fetch_failures.push((name, GetAssetError::DataFetchFailed(f)));
+                        }
+                    }
+                    expanded_globs.insert(
+                        asset_ref.clone(),
+                        allowed.iter().map(|entry| entry.name.clone()).collect(),
+                    );
+                    for entry in allowed {
+                        if seen_assets.insert(entry.name.clone()) {
+                            // Glob-matched assets are always inputs, so they need download
+                            assets_to_download.push(entry);
+                        }
                     }
                 }
-
-                expanded_globs.insert(
-                    asset_ref.clone(),
-                    matched_asset_entries
-                        .iter()
-                        .map(|entry| entry.name.clone())
-                        .collect::<Vec<_>>(),
-                );
             }
-        } else {
+        } else if seen_assets.insert(asset_ref.clone()) {
             // Regular asset (non-glob)
-            if !seen_assets.contains(asset_ref) {
-                seen_assets.insert(asset_ref.clone());
-                if skip_download.contains(asset_ref) {
-                    asset_final_map.insert(
-                        asset_ref.clone(),
-                        create_empty_temp_file(asset_ref, None, None).map_err(
-                            |dl_err| match dl_err {
-                                DownloadAssetError::FsFailed | DownloadAssetError::HashMismatch => {
-                                    GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)
+            if skip_download.contains(asset_ref) {
+                // Output-only: must be writable. It may not exist yet.
+                match check_name_access(api_client, access, asset_ref, true).await {
+                    AccessCheck::Allowed => {
+                        asset_final_map.insert(
+                            asset_ref.clone(),
+                            create_empty_temp_file(asset_ref, None, None).map_err(|dl_err| {
+                                match dl_err {
+                                    DownloadAssetError::FsFailed
+                                    | DownloadAssetError::HashMismatch => {
+                                        GetAssetError::DataFetchFailed(DataFetchFailure::Unexpected)
+                                    }
+                                    DownloadAssetError::DataFetchFailed(failure) => {
+                                        GetAssetError::DataFetchFailed(failure)
+                                    }
                                 }
-                                DownloadAssetError::DataFetchFailed(failure) => {
-                                    GetAssetError::DataFetchFailed(failure)
-                                }
-                            },
-                        ),
-                    );
-                } else {
-                    match get_asset_entry(api_client, asset_ref, false).await {
-                        Ok(get_res) => assets_to_download.push(get_res.entry),
-                        Err(e) => {
-                            asset_fetch_failures.push((asset_ref.clone(), e));
-                        }
-                    };
+                            }),
+                        );
+                    }
+                    AccessCheck::Denied => access_denied.push(asset_ref.clone()),
+                    AccessCheck::Failed(f) => asset_fetch_failures
+                        .push((asset_ref.clone(), GetAssetError::DataFetchFailed(f))),
+                }
+            } else {
+                match get_asset_entry_checked(api_client, asset_ref, false, access, false).await {
+                    Ok(get_res) => assets_to_download.push(get_res.entry),
+                    Err(GetAssetError::AccessDenied) => access_denied.push(asset_ref.clone()),
+                    Err(e) => asset_fetch_failures.push((asset_ref.clone(), e)),
                 }
             }
         }
@@ -824,7 +1114,11 @@ pub async fn prepare_assets_from_names_as_temp_files(
     for (asset_ref, e) in asset_fetch_failures {
         asset_final_map.insert(asset_ref, Err(e));
     }
-    Ok((asset_final_map, expanded_globs))
+    Ok(PreparedTempAssets {
+        asset_map: asset_final_map,
+        expanded_globs,
+        access_denied,
+    })
 }
 
 /// Prepares @assets in shell commands and handles redirections.
@@ -836,6 +1130,9 @@ pub async fn prepare_assets_from_names_as_temp_files(
 /// 4. Creates appropriate temporary files for output assets
 /// 5. Handles append operations (>>) by downloading existing assets first
 /// 6. Rewrites the shell command to use the local file paths
+/// 7. If `access` is set, returns an error listing every ref that fails an
+///    access check (outputs/appends need write, inputs need read, globs need
+///    list). Nothing is downloaded-and-run partially.
 ///
 /// NOTE: Care is taken to detect asset-names that have added trailing
 /// characters. For example, a semicolon that indicates the end of a shell cmd.
@@ -854,6 +1151,7 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
     recipient: Option<KeyRecipient>,
     cmd: &str,
     max_concurrent_downloads: usize,
+    access: Option<&[&Perm]>,
 ) -> Result<(String, AssetTempFileMap, HashSet<String>), String> {
     let asset_regex = Regex::new(r"@@([^\s]+)").expect("Invalid regex");
     let append_regex = Regex::new(r">>\s*@@([^\s]+)").expect("Invalid regex");
@@ -944,8 +1242,26 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
         .cloned()
         .collect();
 
-    // Use the new function to prepare all assets
-    let (asset_map, expanded_globs) = prepare_assets_from_names_as_temp_files(
+    // Check write access for outputs.
+    let mut access_denied: Vec<String> = Vec::new();
+    for output_asset in output_assets
+        .iter()
+        .filter(|asset| !output_only_assets.contains(*asset))
+    {
+        match check_name_access(api_client, access, output_asset, true).await {
+            AccessCheck::Allowed => {}
+            AccessCheck::Denied => access_denied.push(output_asset.clone()),
+            AccessCheck::Failed(f) => {
+                return Err(format!("cannot check access for {}: {}", output_asset, f));
+            }
+        }
+    }
+
+    let PreparedTempAssets {
+        asset_map,
+        expanded_globs,
+        access_denied: prepare_access_denied,
+    } = prepare_assets_from_names_as_temp_files(
         io,
         asset_blob_cache,
         asset_keyring,
@@ -954,8 +1270,20 @@ pub async fn prepare_assets_from_cmd_as_temp_files(
         &asset_refs,
         max_concurrent_downloads,
         Some(&output_only_assets),
+        access,
     )
     .await?;
+
+    // Don't run command at all if any asset ref failed access check.
+    for name in prepare_access_denied {
+        if !access_denied.contains(&name) {
+            access_denied.push(name);
+        }
+    }
+    if !access_denied.is_empty() {
+        access_denied.sort();
+        return Err(format!("access denied: {}", access_denied.join(", ")));
+    }
 
     // Build final replacements with actual paths
     let mut final_replacements: Vec<(String, String)> = Vec::new();
@@ -1054,6 +1382,22 @@ pub struct AssetFetchResult {
 
 pub type AssetExtendedFetchMap = HashMap<String, Result<AssetFetchResult, GetAssetError>>;
 
+#[derive(Debug)]
+pub struct AssetFetchGroupResult {
+    /// Asset name -> contents/metadata fetch result
+    pub fetched: AssetExtendedFetchMap,
+    /// Glob pattern -> expanded asset names. Excludes access-denied matches.
+    #[allow(dead_code)]
+    pub expanded_globs: HashMap<String, Vec<String>>,
+    /// Assets skipped due to content restrictions (redactions).
+    pub skipped_content_restrictions: Vec<String>,
+    /// Assets skipped because they're folders.
+    pub skipped_folders: Vec<String>,
+    /// Asset names (or glob patterns, if the glob's prefix couldn't be listed)
+    /// that failed the access check.
+    pub access_denied: Vec<String>,
+}
+
 /// Fetches assets and their metadata from a list of asset names/globs, keeping contents in memory.
 ///
 /// This function:
@@ -1066,28 +1410,17 @@ pub type AssetExtendedFetchMap = HashMap<String, Result<AssetFetchResult, GetAss
 /// * `asset_names_or_globs` - A slice of asset names or glob patterns (without @ prefix)
 /// * `max_concurrent_downloads` - Maximum number of concurrent downloads
 /// * `download_metadata` - Whether to download asset metadata along with the data
-///
-/// # Returns
-/// A tuple containing:
-/// - A map of asset names to their data and optional metadata
-/// - A map of glob patterns to their expanded asset names (for callers that need this info)
-/// - A list of asset names that were skipped due to content restrictions.
-/// - A list of asset names that were skipped b/c they're folders.
+/// * `access` - If `None`, no permission checks are performed. If `Some`, every
+///   asset must grant read access and every glob's prefix must be listable.
+///   Permission is checked before redaction/folder status so neither leaks.
 pub async fn fetch_assets_from_names_in_memory_extended(
     asset_blob_cache: Arc<AssetBlobCache>,
     api_client: &HaiClient,
     asset_names_or_globs: &[String],
     max_concurrent_downloads: usize,
     download_metadata: bool,
-) -> Result<
-    (
-        AssetExtendedFetchMap,
-        HashMap<String, Vec<String>>,
-        Vec<String>,
-        Vec<String>,
-    ),
-    String,
-> {
+    access: Option<&[&Perm]>,
+) -> Result<AssetFetchGroupResult, String> {
     // Track expanded globs for caller reference
     let mut expanded_globs: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -1095,8 +1428,9 @@ pub async fn fetch_assets_from_names_in_memory_extended(
     let mut seen_assets: HashSet<String> = HashSet::new();
     // (asset ref, entry)
     let mut assets_to_fetch: Vec<(String, AssetEntry)> = Vec::new();
-    let mut assets_skipped_content_restrictions = Vec::new();
-    let mut assets_skipped_folders = Vec::new();
+    let mut skipped_content_restrictions = Vec::new();
+    let mut skipped_folders = Vec::new();
+    let mut access_denied = Vec::new();
 
     let mut asset_fetch_failures = Vec::new();
     for asset_ref in asset_names_or_globs {
@@ -1106,59 +1440,65 @@ pub async fn fetch_assets_from_names_in_memory_extended(
                 continue;
             }
 
-            // Expand the glob
-            let matched_asset_entries = expand_glob(api_client, asset_ref).await?;
-            if matched_asset_entries.is_empty() {
-                // If glob doesn't match anything, use the shell approach and
-                // treat the blob as the literal asset name.
-                asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
-            } else {
-                // Queue each matched asset for download
-                for matched_asset_entry in &matched_asset_entries {
-                    if seen_assets.contains(&matched_asset_entry.name) {
+            match expand_glob_checked(api_client, asset_ref, access, false).await? {
+                CheckedGlob::Denied => access_denied.push(asset_ref.clone()),
+                CheckedGlob::Failed(f) => asset_fetch_failures
+                    .push((asset_ref.clone(), GetAssetError::DataFetchFailed(f))),
+                CheckedGlob::Expanded {
+                    allowed,
+                    denied,
+                    failed,
+                } => {
+                    if allowed.is_empty() && denied.is_empty() && failed.is_empty() {
+                        // If glob doesn't match anything, use the shell approach and
+                        // treat the blob as the literal asset name.
+                        asset_fetch_failures.push((asset_ref.clone(), GetAssetError::BadName));
                         continue;
                     }
-                    if matched_asset_entry.redactions.is_some() {
-                        assets_skipped_content_restrictions.push(matched_asset_entry.name.clone());
-                        continue;
-                    }
-                    if matches!(matched_asset_entry.asset.kind, AssetKind::Folder) {
-                        assets_skipped_folders.push(matched_asset_entry.name.clone());
-                        continue;
-                    }
-                    seen_assets.insert(matched_asset_entry.name.clone());
-                    assets_to_fetch.push((
-                        matched_asset_entry.name.clone(),
-                        matched_asset_entry.clone(),
-                    ));
-                }
-
-                expanded_globs.insert(
-                    asset_ref.clone(),
-                    matched_asset_entries
-                        .iter()
-                        .map(|entry| entry.name.clone())
-                        .collect::<Vec<_>>(),
-                );
-            }
-        } else {
-            // Regular asset (non-glob)
-            if !seen_assets.contains(asset_ref) {
-                seen_assets.insert(asset_ref.clone());
-                match get_asset_entry(api_client, asset_ref, false).await {
-                    Ok(get_res) => {
-                        if get_res.entry.redactions.is_some() {
-                            assets_skipped_content_restrictions.push(get_res.entry.name.clone());
-                        } else if matches!(get_res.entry.asset.kind, AssetKind::Folder) {
-                            assets_skipped_folders.push(get_res.entry.name.clone());
-                        } else {
-                            assets_to_fetch.push((asset_ref.clone(), get_res.entry));
+                    for name in denied {
+                        if seen_assets.insert(name.clone()) {
+                            access_denied.push(name);
                         }
                     }
-                    Err(e) => {
-                        asset_fetch_failures.push((asset_ref.clone(), e));
+                    for (name, f) in failed {
+                        if seen_assets.insert(name.clone()) {
+                            asset_fetch_failures.push((name, GetAssetError::DataFetchFailed(f)));
+                        }
                     }
-                };
+                    expanded_globs.insert(
+                        asset_ref.clone(),
+                        allowed.iter().map(|entry| entry.name.clone()).collect(),
+                    );
+                    for entry in allowed {
+                        // Mark seen even when skipped so overlapping globs
+                        // don't report the same asset twice.
+                        if !seen_assets.insert(entry.name.clone()) {
+                            continue;
+                        }
+                        if entry.redactions.is_some() {
+                            skipped_content_restrictions.push(entry.name);
+                        } else if matches!(entry.asset.kind, AssetKind::Folder) {
+                            skipped_folders.push(entry.name);
+                        } else {
+                            assets_to_fetch.push((entry.name.clone(), entry));
+                        }
+                    }
+                }
+            }
+        } else if seen_assets.insert(asset_ref.clone()) {
+            // Regular asset (non-glob)
+            match get_asset_entry_checked(api_client, asset_ref, false, access, false).await {
+                Ok(get_res) => {
+                    if get_res.entry.redactions.is_some() {
+                        skipped_content_restrictions.push(get_res.entry.name.clone());
+                    } else if matches!(get_res.entry.asset.kind, AssetKind::Folder) {
+                        skipped_folders.push(get_res.entry.name.clone());
+                    } else {
+                        assets_to_fetch.push((asset_ref.clone(), get_res.entry));
+                    }
+                }
+                Err(GetAssetError::AccessDenied) => access_denied.push(asset_ref.clone()),
+                Err(e) => asset_fetch_failures.push((asset_ref.clone(), e)),
             }
         }
     }
@@ -1199,12 +1539,13 @@ pub async fn fetch_assets_from_names_in_memory_extended(
         asset_final_map.insert(asset_ref, Err(e));
     }
 
-    Ok((
-        asset_final_map,
+    Ok(AssetFetchGroupResult {
+        fetched: asset_final_map,
         expanded_globs,
-        assets_skipped_content_restrictions,
-        assets_skipped_folders,
-    ))
+        skipped_content_restrictions,
+        skipped_folders,
+        access_denied,
+    })
 }
 
 #[derive(Debug, Clone)]

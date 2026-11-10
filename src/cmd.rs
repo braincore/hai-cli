@@ -262,6 +262,8 @@ pub enum Cmd {
     ReprintHistory,
     /// Update local copy of asset-backed config
     ConfigSync,
+    /// Print access rights for REPL
+    Access,
     /// Specify commands to include
     CmdAllow(CmdAllowCmd),
     /// Specify commands to exclude
@@ -1998,6 +2000,7 @@ pub fn build(mut r: ResolvedCmdSpec) -> Result<Cmd, ParseError> {
         }),
         "reprint-history" => Cmd::ReprintHistory,
         "config-sync" => Cmd::ConfigSync,
+        "access" => Cmd::Access,
         "cmd-allow" => Cmd::CmdAllow(CmdAllowCmd {
             cmds: r.take_rest(0),
         }),
