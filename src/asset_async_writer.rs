@@ -341,7 +341,7 @@ pub async fn worker_update_asset(
                         && let Some(first_text_line) = first_text_line
                         && let Some(title_candidate) = first_text_line.strip_prefix("# ")
                     {
-                        let title = title_candidate.trim().to_string();
+                        let title = strip_markdown_heading(title_candidate);
                         if (title.is_empty() && clear_title_ok) || !title.is_empty() {
                             let md_title = if title.is_empty() {
                                 None
@@ -565,5 +565,16 @@ pub fn metadata_merge(
             }
             Some(target)
         }
+    }
+}
+
+/// Converts a markdown heading's text into plain text.
+///
+/// Strips inline syntax: links, code, etc.
+fn strip_markdown_heading(heading_text: &str) -> String {
+    let src = format!("# {}", heading_text.trim());
+    match markdown::to_mdast(&src, &markdown::ParseOptions::gfm()) {
+        Ok(node) => node.to_string().trim().to_string(),
+        Err(_) => heading_text.trim().to_string(),
     }
 }
