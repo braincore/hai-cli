@@ -5171,11 +5171,7 @@ fn parse_arg<T: DeserializeOwned>(arg: &serde_json::Value) -> Option<T> {
 // --
 
 /// Read-only access to the whole asset tree (minus the usual `.keys/`,
-/// `vault/`, `.sys/hai.toml` exclusions), plus `Everything`.
-///
-/// NOTE: `Everything` is redundant with (and broader than) the read-only perm.
-/// It's a stopgap for kernel access until a dedicated kernel perm exists, at
-/// which point `Everything` should be dropped.
+/// `vault/`, `.sys/hai.toml` exclusions), plus `Kernel`.
 fn perm_gate_default_perms() -> Vec<PermCtx> {
     vec![
         PermCtx {
@@ -5193,7 +5189,7 @@ fn perm_gate_default_perms() -> Vec<PermCtx> {
             lifetime: PermLifetime::Default,
         },
         PermCtx {
-            perm: Perm::Everything,
+            perm: Perm::Kernel,
             lifetime: PermLifetime::Default,
         },
     ]
