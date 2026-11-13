@@ -4,7 +4,7 @@ use russh::keys::{PrivateKey, PrivateKeyWithHashAlg};
 use russh::*;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, read_to_string};
 use std::io::Write;
@@ -950,6 +950,11 @@ pub struct JobConfig {
     pub timezone: Option<String>,
 }
 
+/// Max number of missed revisions an asset watcher processes when resuming
+/// from a stored cursor. If more were missed, only the most recent ones are
+/// processed.
+const RESUME_MAX_REVISIONS: u32 = 20;
+
 #[derive(Debug, Clone)]
 pub enum HumanSchedule {
     Always,
@@ -1157,6 +1162,9 @@ fn parse_monthly(s: &str) -> Result<HumanSchedule, String> {
 struct ScheduledJob {
     /// Name of the asset defining this job (also serves as the job key)
     asset_name: String,
+    /// Entry ID of the asset defining this job. Used to generate the name of
+    /// the `<entry_id>:cursor.json` attachment.
+    entry_id: String,
     /// Job description
     description: Option<String>,
     /// "username/task-name"
@@ -1396,104 +1404,409 @@ async fn reconcile_asset_watchers(
 
     // Start new watchers
     for (job_key, job) in asset_change_jobs {
-        if !watchers.contains_key(&job_key) {
-            if let ResolvedSchedule::AssetChange(asset_name) = &job.schedule {
-                log_scheduler(&format!(
-                    "Starting asset watcher for job {} on asset: {}",
-                    job_key, asset_name
-                ));
+        if watchers.contains_key(&job_key) {
+            continue;
+        }
+        let ResolvedSchedule::AssetChange(asset_name) = &job.schedule else {
+            // Watchers only for asset-change jobs.
+            continue;
+        };
+        log_scheduler(&format!(
+            "Starting asset watcher for job {} on asset: {}",
+            job_key, asset_name
+        ));
 
-                match spawn_asset_watcher(
-                    api_client.clone(),
-                    cmd_filters.clone(),
-                    access.clone(),
-                    account_user.clone(),
-                    job_key.clone(),
-                    asset_name.clone(),
-                    job.task.clone(),
-                    job.steps.clone(),
-                    job.description.clone(),
-                )
-                .await
-                {
-                    Ok(handle) => {
-                        watchers.insert(job_key.clone(), AssetWatcherState { job_key, handle });
-                    }
-                    Err(e) => {
-                        log_scheduler(&format!("Failed to start asset watcher: {}", e));
-                    }
-                }
+        let env = JobExecEnv {
+            account_user: account_user.clone(),
+            cmd_filters: cmd_filters.clone(),
+            access: access.clone(),
+        };
+        let watcher_job = AssetWatcherJob {
+            job_key: job_key.clone(),
+            job_entry_id: job.entry_id.clone(),
+            asset_name: asset_name.clone(),
+            description: job.description.clone(),
+            task: job.task.clone(),
+            steps: job.steps.clone(),
+        };
+        let handle = tokio::spawn(asset_watcher_loop(api_client.clone(), env, watcher_job));
+        watchers.insert(job_key.clone(), AssetWatcherState { job_key, handle });
+    }
+}
+
+/// Job info for asset-watcher
+#[derive(Debug, Clone)]
+struct AssetWatcherJob {
+    job_key: String,
+    job_entry_id: String,
+    /// Asset being watched for changes.
+    asset_name: String,
+    description: Option<String>,
+    task: Option<String>,
+    steps: Option<Vec<String>>,
+}
+
+/// Execution context for jobs launched by a watcher.
+#[derive(Clone)]
+struct JobExecEnv {
+    account_user: Option<String>,
+    cmd_filters: Vec<crate::cmd_registry::Filter>,
+    access: Option<Vec<crate::feature::access::Perm>>,
+}
+
+/// A batch of revisions to process. Once every revision has been processed,
+/// `cursor_after` is persisted.
+///
+/// Processing is at-least-once: a crash mid-batch means the batch is
+/// reprocessed on restart.
+struct RevisionBatch {
+    rev_ids: Vec<String>,
+    cursor_after: String,
+}
+
+// --
+
+//
+// Persisted watcher cursor
+//
+
+/// Contents of the `cursor.json` attachment on a job config asset.
+#[derive(Debug, Serialize, Deserialize)]
+struct AssetWatcherStoredCursor {
+    /// Revision-iteration cursor for the watched asset.
+    cursor: String,
+    /// Asset the cursor belongs to. If the job config change the watched
+    /// asset, the stored cursor is ignored/replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asset_name: Option<String>,
+}
+
+fn cursor_attachment_name(job_entry_id: &str) -> String {
+    format!(":{}:cursor.json", job_entry_id)
+}
+
+/// Load the persisted cursor for a job. Any problems (missing, unreadable,
+/// mismatched asset) yields `None` so the caller falls back to the tip.
+async fn load_stored_cursor(
+    api_client: &crate::api::client::HaiClient,
+    job: &AssetWatcherJob,
+) -> Option<String> {
+    use crate::api::types::asset::AssetGetArg;
+
+    let name = cursor_attachment_name(&job.job_entry_id);
+    let entry = match api_client
+        .asset_get(AssetGetArg { name: name.clone() })
+        .await
+    {
+        Ok(res) => res.entry,
+        Err(e) => {
+            log_scheduler(&format!(
+                "Asset watcher '{}': no stored cursor at {} ({})",
+                job.job_key, name, e
+            ));
+            return None;
+        }
+    };
+    // No URL => deleted or no data.
+    let url = entry.asset.url?;
+    let bytes = match crate::asset_reader::download_with_new_client(&url).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            log_scheduler(&format!(
+                "Asset watcher '{}': failed to download stored cursor {}",
+                job.job_key, name
+            ));
+            return None;
+        }
+    };
+    match serde_json::from_slice::<AssetWatcherStoredCursor>(&bytes) {
+        Ok(stored) => {
+            if let Some(stored_asset) = &stored.asset_name
+                && stored_asset != &job.asset_name
+            {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': stored cursor is for '{}', not '{}'; ignoring",
+                    job.job_key, stored_asset, job.asset_name
+                ));
+                return None;
             }
+            Some(stored.cursor)
+        }
+        Err(e) => {
+            log_scheduler(&format!(
+                "Asset watcher '{}': invalid stored cursor {}: {}",
+                job.job_key, name, e
+            ));
+            None
         }
     }
 }
 
-/// Spawn an asset watcher that listens for changes to a specific asset
-async fn spawn_asset_watcher(
-    api_client: crate::api::client::HaiClient,
-    cmd_filters: Vec<crate::cmd_registry::Filter>,
-    access: Option<Vec<crate::feature::access::Perm>>,
-    account_user: Option<String>,
-    job_key: String,
-    asset_name: String,
-    task: Option<String>,
-    steps: Option<Vec<String>>,
-    description: Option<String>,
-) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error + Send + Sync>> {
-    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
+/// Persist the cursor for a job. Returns whether the write succeeded.
+async fn save_cursor(
+    api_client: &crate::api::client::HaiClient,
+    job: &AssetWatcherJob,
+    cursor: &str,
+) -> bool {
+    use crate::api::types::asset::{AssetPutArg, PutConflictPolicy};
 
-    // Get initial cursor (latest revision) - we don't want to process existing versions
-    let initial_cursor = match api_client
-        .asset_revision_iter(AssetRevisionIterArg {
-            entry_ref: EntryRef::Name(asset_name.clone()),
-            limit: 1,
-            direction: RevisionIterDirection::Newer,
+    let stored = AssetWatcherStoredCursor {
+        cursor: cursor.to_string(),
+        asset_name: Some(job.asset_name.clone()),
+    };
+    let data = match serde_json::to_vec(&stored) {
+        Ok(data) => data,
+        Err(e) => {
+            log_scheduler(&format!(
+                "Asset watcher '{}': failed to serialize cursor: {}",
+                job.job_key, e
+            ));
+            return false;
+        }
+    };
+    match api_client
+        .asset_put(AssetPutArg {
+            name: cursor_attachment_name(&job.job_entry_id),
+            data,
+            conflict_policy: PutConflictPolicy::Override,
         })
         .await
     {
-        Ok(iter_res) => iter_res.next.map(|n| n.cursor),
+        Ok(_) => true,
         Err(e) => {
             log_scheduler(&format!(
-                "Warning: Could not get initial cursor for asset '{}': {}. Will retry on connection.",
-                asset_name, e
+                "Asset watcher '{}': failed to save cursor: {}",
+                job.job_key, e
             ));
-            None
+            false
         }
+    }
+}
+
+// --
+
+//
+// Revision iteration helpers
+//
+
+/// Get a cursor positioned at the tip of the asset's revision history,
+/// retrying until one is available.
+async fn wait_for_tip_cursor(
+    api_client: &crate::api::client::HaiClient,
+    job_key: &str,
+    asset_name: &str,
+) -> String {
+    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
+
+    loop {
+        match api_client
+            .asset_revision_iter(AssetRevisionIterArg {
+                entry_ref: EntryRef::Name(asset_name.to_string()),
+                limit: 1,
+                direction: RevisionIterDirection::Newer,
+            })
+            .await
+        {
+            Ok(iter_res) => {
+                if let Some(next) = iter_res.next {
+                    return next.cursor;
+                }
+                log_scheduler(&format!(
+                    "Asset watcher '{}': asset '{}' has no revisions yet, waiting...",
+                    job_key, asset_name
+                ));
+            }
+            Err(e) => {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': error getting cursor for asset '{}': {}, retrying...",
+                    job_key, asset_name, e
+                ));
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
+/// Rev IDs of the `n` most recent revisions, oldest first.
+async fn fetch_latest_rev_ids(
+    api_client: &crate::api::client::HaiClient,
+    asset_name: &str,
+    n: u32,
+) -> Result<Vec<String>, String> {
+    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
+
+    let res = api_client
+        .asset_revision_iter(AssetRevisionIterArg {
+            entry_ref: EntryRef::Name(asset_name.to_string()),
+            limit: n,
+            direction: RevisionIterDirection::Older,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    // Older iteration yields newest first.
+    Ok(res
+        .revisions
+        .into_iter()
+        .rev()
+        .map(|r| r.asset.rev_id)
+        .collect())
+}
+
+/// Result of paging forward through revisions from a cursor.
+struct CollectedRevisions {
+    rev_ids: Vec<String>,
+    /// Cursor positioned after the last collected revision.
+    cursor: String,
+    /// Set if pagination stopped early due to an error.
+    error: Option<String>,
+}
+
+/// Page forward from `cursor` collecting rev IDs until caught up, an error
+/// occurs, or `max` revisions have been collected.
+async fn collect_revisions_after(
+    api_client: &crate::api::client::HaiClient,
+    cursor: &str,
+    max: Option<usize>,
+) -> CollectedRevisions {
+    use crate::api::types::asset::AssetRevisionIterNextArg;
+    const PAGE: usize = 100;
+
+    let mut out = CollectedRevisions {
+        rev_ids: Vec::new(),
+        cursor: cursor.to_string(),
+        error: None,
+    };
+    loop {
+        let limit = match max {
+            Some(max) => max.saturating_sub(out.rev_ids.len()).min(PAGE),
+            None => PAGE,
+        };
+        if limit == 0 {
+            break;
+        }
+        match api_client
+            .asset_revision_iter_next(AssetRevisionIterNextArg {
+                cursor: out.cursor.clone(),
+                limit: limit as u32,
+            })
+            .await
+        {
+            Ok(iter_res) => {
+                let n = iter_res.revisions.len();
+                out.rev_ids
+                    .extend(iter_res.revisions.into_iter().map(|r| r.asset.rev_id));
+                match iter_res.next {
+                    Some(next) => out.cursor = next.cursor,
+                    None => break,
+                }
+                if n < limit {
+                    break;
+                }
+            }
+            Err(e) => {
+                out.error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Determine where a watcher starts: the initial batch of missed revisions
+/// (possibly empty, at most `RESUME_MAX_REVISIONS`) and the cursor to listen
+/// from.
+async fn resume_watcher(
+    api_client: &crate::api::client::HaiClient,
+    job: &AssetWatcherJob,
+) -> RevisionBatch {
+    let Some(stored) = load_stored_cursor(api_client, job).await else {
+        let tip = wait_for_tip_cursor(api_client, &job.job_key, &job.asset_name).await;
+        log_scheduler(&format!(
+            "Asset watcher '{}': starting at tip of '{}'",
+            job.job_key, job.asset_name
+        ));
+        return RevisionBatch {
+            rev_ids: Vec::new(),
+            cursor_after: tip,
+        };
     };
 
-    let handle = tokio::spawn(async move {
-        asset_watcher_loop(
-            api_client,
-            cmd_filters,
-            access,
-            account_user,
-            job_key,
-            asset_name,
-            task,
-            steps,
-            description,
-            initial_cursor,
-        )
-        .await;
-    });
+    // Fetch one more than the cap so we can tell whether we're over it.
+    let collected =
+        collect_revisions_after(api_client, &stored, Some(RESUME_MAX_REVISIONS as usize + 1)).await;
 
-    Ok(handle)
+    if let Some(e) = &collected.error {
+        if collected.rev_ids.is_empty() {
+            log_scheduler(&format!(
+                "Asset watcher '{}': stored cursor unusable ({}), starting at tip",
+                job.job_key, e
+            ));
+            let tip = wait_for_tip_cursor(api_client, &job.job_key, &job.asset_name).await;
+            return RevisionBatch {
+                rev_ids: Vec::new(),
+                cursor_after: tip,
+            };
+        }
+        log_scheduler(&format!(
+            "Asset watcher '{}': error while catching up ({}), continuing with {} revision(s)",
+            job.job_key,
+            e,
+            collected.rev_ids.len()
+        ));
+    }
+
+    if collected.rev_ids.len() > RESUME_MAX_REVISIONS as usize {
+        // Too far behind: jump to the tip and only process the newest ones.
+        // Tip is fetched first so revisions landing in between are picked up
+        // by the listener (possibly redundantly) rather than skipped.
+        let tip = wait_for_tip_cursor(api_client, &job.job_key, &job.asset_name).await;
+        let rev_ids = match fetch_latest_rev_ids(api_client, &job.asset_name, RESUME_MAX_REVISIONS)
+            .await
+        {
+            Ok(rev_ids) => rev_ids,
+            Err(e) => {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': failed to fetch latest revisions ({}), skipping catch-up",
+                    job.job_key, e
+                ));
+                Vec::new()
+            }
+        };
+        log_scheduler(&format!(
+            "Asset watcher '{}': more than {} missed revision(s); processing only the {} most recent",
+            job.job_key,
+            RESUME_MAX_REVISIONS,
+            rev_ids.len()
+        ));
+        return RevisionBatch {
+            rev_ids,
+            cursor_after: tip,
+        };
+    }
+
+    log_scheduler(&format!(
+        "Asset watcher '{}': resuming from stored cursor with {} missed revision(s)",
+        job.job_key,
+        collected.rev_ids.len()
+    ));
+    RevisionBatch {
+        rev_ids: collected.rev_ids,
+        cursor_after: collected.cursor,
+    }
 }
+
+// --
+
+//
+// Asset watcher
+//
 
 /// The main loop for watching an asset for changes
 async fn asset_watcher_loop(
     api_client: crate::api::client::HaiClient,
-    cmd_filters: Vec<crate::cmd_registry::Filter>,
-    access: Option<Vec<crate::feature::access::Perm>>,
-    account_user: Option<String>,
-    job_key: String,
-    asset_name: String,
-    task: Option<String>,
-    steps: Option<Vec<String>>,
-    description: Option<String>,
-    initial_cursor: Option<String>,
+    env: JobExecEnv,
+    job: AssetWatcherJob,
 ) {
-    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
     use crate::api::types::notify::{ListenAsset, NotifyListenArg};
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
@@ -1504,72 +1817,22 @@ async fn asset_watcher_loop(
         crate::session::get_api_base_url().replace("http", "ws")
     );
 
-    // If we don't have an initial cursor, we need to get one
-    let mut current_cursor = match initial_cursor {
-        Some(cursor) => cursor,
-        None => {
-            // Keep trying to get a cursor
-            loop {
-                match api_client
-                    .asset_revision_iter(AssetRevisionIterArg {
-                        entry_ref: EntryRef::Name(asset_name.clone()),
-                        limit: 1,
-                        direction: RevisionIterDirection::Newer,
-                    })
-                    .await
-                {
-                    Ok(iter_res) => {
-                        if let Some(next) = iter_res.next {
-                            break next.cursor;
-                        }
-                        log_scheduler(&format!(
-                            "Asset '{}' has no revisions yet, waiting...",
-                            asset_name
-                        ));
-                    }
-                    Err(e) => {
-                        log_scheduler(&format!(
-                            "Error getting cursor for asset '{}': {}, retrying...",
-                            asset_name, e
-                        ));
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            }
-        }
-    };
+    let initial_batch = resume_watcher(&api_client, &job).await;
+    let mut current_cursor = initial_batch.cursor_after.clone();
 
     // Jobs run on a separate task so the websocket keeps being read (and
-    // pinged) while a potentially long job executes. Revisions are still
+    // pinged) while a potentially long job executes. Batches are still
     // processed sequentially.
-    let (job_tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    {
-        let job_key = job_key.clone();
-        let asset_name = asset_name.clone();
-        tokio::spawn(async move {
-            while let Some(rev_id) = job_rx.recv().await {
-                log_scheduler(&format!(
-                    "Asset watcher '{}': executing job for revision {}",
-                    job_key, rev_id
-                ));
-                execute_job(
-                    account_user.clone(),
-                    &job_key,
-                    description.as_deref(),
-                    task.as_deref(),
-                    steps.as_deref(),
-                    Some((&asset_name, &rev_id)),
-                    &cmd_filters.iter().collect::<Vec<_>>(),
-                    access
-                        .as_ref()
-                        .map(|a| a.iter().collect::<Vec<_>>())
-                        .as_deref(),
-                )
-                .await;
-            }
-        });
-    }
+    let (job_tx, job_rx) = tokio::sync::mpsc::unbounded_channel::<RevisionBatch>();
+    tokio::spawn(run_revision_batches(
+        api_client.clone(),
+        env,
+        job.clone(),
+        job_rx,
+    ));
+    let _ = job_tx.send(initial_batch);
 
+    let job_key = &job.job_key;
     let mut attempt = 0;
 
     loop {
@@ -1656,11 +1919,11 @@ async fn asset_watcher_loop(
                         Message::Text(_) | Message::Binary(_) => {
                             log_scheduler(&format!(
                                 "Asset watcher '{}': change detected on '{}'",
-                                job_key, asset_name
+                                job_key, job.asset_name
                             ));
                             enqueue_new_revisions(
                                 &api_client,
-                                &job_key,
+                                job_key,
                                 &mut current_cursor,
                                 &job_tx,
                             )
@@ -1676,47 +1939,67 @@ async fn asset_watcher_loop(
     }
 }
 
-/// Fetch all revisions after `cursor`, queue them for execution, and advance
-/// the cursor.
+/// Executes batches sequentially, persisting each batch's cursor after all of
+/// its revisions have been processed.
+async fn run_revision_batches(
+    api_client: crate::api::client::HaiClient,
+    env: JobExecEnv,
+    job: AssetWatcherJob,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<RevisionBatch>,
+) {
+    let cmd_filters = env.cmd_filters.iter().collect::<Vec<_>>();
+    let access = env.access.as_ref().map(|a| a.iter().collect::<Vec<_>>());
+    let mut saved_cursor: Option<String> = None;
+
+    while let Some(batch) = rx.recv().await {
+        for rev_id in &batch.rev_ids {
+            log_scheduler(&format!(
+                "Asset watcher '{}': executing job for revision {}",
+                job.job_key, rev_id
+            ));
+            execute_job(
+                env.account_user.clone(),
+                &job.job_key,
+                job.description.as_deref(),
+                job.task.as_deref(),
+                job.steps.as_deref(),
+                Some((&job.asset_name, rev_id)),
+                &cmd_filters,
+                access.as_deref(),
+            )
+            .await;
+        }
+        if saved_cursor.as_deref() != Some(batch.cursor_after.as_str())
+            && save_cursor(&api_client, &job, &batch.cursor_after).await
+        {
+            saved_cursor = Some(batch.cursor_after);
+        }
+    }
+}
+
+/// Fetch all revisions after `cursor`, queue them as a single batch, and
+/// advance the cursor.
 async fn enqueue_new_revisions(
     api_client: &crate::api::client::HaiClient,
     job_key: &str,
     cursor: &mut String,
-    job_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+    job_tx: &tokio::sync::mpsc::UnboundedSender<RevisionBatch>,
 ) {
-    use crate::api::types::asset::AssetRevisionIterNextArg;
-    const PAGE: usize = 100;
-
-    loop {
-        match api_client
-            .asset_revision_iter_next(AssetRevisionIterNextArg {
-                cursor: cursor.clone(),
-                limit: 100,
-            })
-            .await
-        {
-            Ok(iter_res) => {
-                let n = iter_res.revisions.len();
-                for revision in iter_res.revisions {
-                    let _ = job_tx.send(revision.asset.rev_id.clone());
-                }
-                match iter_res.next {
-                    Some(next) => *cursor = next.cursor,
-                    None => break,
-                }
-                if n < PAGE {
-                    break;
-                }
-            }
-            Err(e) => {
-                log_scheduler(&format!(
-                    "Asset watcher '{}': error fetching revisions: {}",
-                    job_key, e
-                ));
-                break;
-            }
-        }
+    let collected = collect_revisions_after(api_client, cursor, None).await;
+    if let Some(e) = &collected.error {
+        log_scheduler(&format!(
+            "Asset watcher '{}': error fetching revisions: {}",
+            job_key, e
+        ));
     }
+    if collected.rev_ids.is_empty() && collected.cursor == *cursor {
+        return;
+    }
+    *cursor = collected.cursor.clone();
+    let _ = job_tx.send(RevisionBatch {
+        rev_ids: collected.rev_ids,
+        cursor_after: collected.cursor,
+    });
 }
 
 // --
@@ -1792,6 +2075,7 @@ async fn parse_job(asset_entry: &AssetEntry) -> Option<ScheduledJob> {
 
     Some(ScheduledJob {
         asset_name: asset_entry.name.clone(),
+        entry_id: asset_entry.entry_id.clone(),
         description: job_config.description,
         task: job_config.task,
         steps: job_config.steps,
