@@ -612,8 +612,8 @@ pub async fn run_bot_loop(
     let api_client = crate::session::mk_api_client_from_account(account.as_ref());
     let prefix = "haibot/jobs/".to_string();
 
-    // Initial fetch of job groups
-    let (initial_jobs, initial_cursor) = fetch_job_groups(out, &api_client, &prefix).await?;
+    // Initial fetch of job assets
+    let (initial_jobs, initial_cursor) = fetch_job_assets(out, &api_client, &prefix).await?;
 
     if initial_jobs.is_empty() {
         outln!(
@@ -622,9 +622,9 @@ pub async fn run_bot_loop(
         );
     }
 
-    // Each toml file defines a group/list of jobs.
-    let job_groups = Arc::new(RwLock::new(initial_jobs));
-    let job_groups_clone = Arc::clone(&job_groups);
+    // Each toml asset defines exactly one job.
+    let job_assets = Arc::new(RwLock::new(initial_jobs));
+    let job_assets_clone = Arc::clone(&job_assets);
 
     // Notify channel for waking up the scheduler when job configs change
     let schedule_notify = Arc::new(Notify::new());
@@ -643,12 +643,12 @@ pub async fn run_bot_loop(
 
     let out_clone = out.clone();
     let _listener_handle = tokio::spawn(async move {
-        listen_for_job_group_changes(
+        listen_for_job_changes(
             &out_clone,
             api_client_for_listener,
             prefix_clone,
             initial_cursor,
-            job_groups_clone,
+            job_assets_clone,
             listen_url,
             schedule_notify_clone, // Wake scheduler on changes
         )
@@ -663,7 +663,7 @@ pub async fn run_bot_loop(
     run_scheduler(
         out,
         account.map(|a| a.username),
-        job_groups,
+        job_assets,
         schedule_notify,
         api_client_for_scheduler,
         cmd_filters,
@@ -672,13 +672,13 @@ pub async fn run_bot_loop(
     .await
 }
 
-/// Fetching the list of job groups is equivalent to listing all assets at a given
-/// prefix.
+/// Fetching the list of jobs is equivalent to listing all assets at a given
+/// prefix. Each asset defines exactly one job.
 ///
 /// If pool does not exist, will keep trying until it does so that a cursor can
 /// be returned. (Applicable if `prefix` is to a non-private pool that isn't
 /// created by default)
-async fn fetch_job_groups(
+async fn fetch_job_assets(
     out: &Out,
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
@@ -731,16 +731,16 @@ async fn fetch_job_groups(
     }
 }
 
-/// Listen for changes to job group configurations.
+/// Listen for changes to job configurations.
 ///
 /// Upon detecting a change, the cursor is advanced and changes are
-/// synchronized to `job_groups`.
-async fn listen_for_job_group_changes(
+/// synchronized to `job_assets`.
+async fn listen_for_job_changes(
     out: &Out,
     api_client: crate::api::client::HaiClient,
     prefix: String,
     initial_cursor: String,
-    job_groups: Arc<RwLock<Vec<crate::api::types::asset::AssetEntry>>>,
+    job_assets: Arc<RwLock<Vec<crate::api::types::asset::AssetEntry>>>,
     listen_url: String,
     notify: Arc<Notify>,
 ) {
@@ -824,7 +824,7 @@ async fn listen_for_job_group_changes(
                                 &api_client,
                                 &prefix,
                                 &mut current_cursor,
-                                &job_groups,
+                                &job_assets,
                                 &notify,
                             )
                             .await;
@@ -840,7 +840,7 @@ async fn listen_for_job_group_changes(
     }
 }
 
-/// Fetch job-asset changes since `current_cursor` and update `job_groups` +
+/// Fetch job-asset changes since `current_cursor` and update `job_assets` +
 /// `current_cursor`.
 ///
 /// Falls back to a full refresh on failure.
@@ -849,7 +849,7 @@ async fn sync_job_changes(
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
     current_cursor: &mut String,
-    job_groups: &Arc<RwLock<Vec<AssetEntry>>>,
+    job_assets: &Arc<RwLock<Vec<AssetEntry>>>,
     notify: &Notify,
 ) {
     use crate::api::types::asset::AssetEntryIterNextArg;
@@ -887,9 +887,9 @@ async fn sync_job_changes(
 
     if first_page_failed {
         // Fallback: full refresh
-        match fetch_job_groups(out, api_client, prefix).await {
+        match fetch_job_assets(out, api_client, prefix).await {
             Ok((new_jobs, new_cursor)) => {
-                *job_groups.write().await = new_jobs;
+                *job_assets.write().await = new_jobs;
                 *current_cursor = new_cursor;
                 notify.notify_one();
             }
@@ -908,18 +908,18 @@ async fn sync_job_changes(
             "Detected {} changed entries, updating job list...",
             changed_entries.len()
         );
-        let mut job_groups_guard = job_groups.write().await;
+        let mut job_assets_guard = job_assets.write().await;
         for changed in &changed_entries {
             // Remove existing entry with same name (if any)
-            job_groups_guard.retain(|e| e.name != changed.name);
+            job_assets_guard.retain(|e| e.name != changed.name);
             // Add updated entry (unless it was deleted - check if it has a URL)
             if changed.asset.url.is_some() {
-                job_groups_guard.push(changed.clone());
+                job_assets_guard.push(changed.clone());
             } else {
                 outln!(out, "Entry removed: {}", changed.name);
             }
         }
-        drop(job_groups_guard);
+        drop(job_assets_guard);
         notify.notify_one();
         outln!(out, "Job list updated");
     }
@@ -931,20 +931,7 @@ async fn sync_job_changes(
 // Job configuration
 //
 
-/// Each toml file can define multiple jobs, hence JobGroup.
-#[derive(Debug, Deserialize)]
-pub struct JobGroupConfig {
-    /// Default timezone for all jobs in this asset (IANA format)
-    #[serde(default = "default_timezone")]
-    pub timezone: String,
-    #[serde(default)]
-    pub job: Vec<JobConfig>,
-}
-
-fn default_timezone() -> String {
-    "UTC".to_string()
-}
-
+/// Each toml asset under the jobs prefix defines exactly one job.
 #[derive(Debug, Deserialize)]
 pub struct JobConfig {
     /// Description of the job
@@ -959,7 +946,7 @@ pub struct JobConfig {
     pub cron: Option<String>,
     /// Trigger on change to asset with given name
     pub asset_change: Option<String>,
-    /// Override bot-level timezone
+    /// Timezone for the schedule (IANA format). Defaults to UTC.
     pub timezone: Option<String>,
 }
 
@@ -1168,9 +1155,7 @@ fn parse_monthly(s: &str) -> Result<HumanSchedule, String> {
 
 #[derive(Debug, Clone)]
 struct ScheduledJob {
-    /// Job index
-    index_in_group: usize,
-    /// From the asset entry
+    /// Name of the asset defining this job (also serves as the job key)
     asset_name: String,
     /// Job description
     description: Option<String>,
@@ -1194,8 +1179,6 @@ enum ResolvedSchedule {
 
 #[derive(Debug)]
 struct DaemonState {
-    asset_name: String,
-    index_in_group: usize,
     task: Option<String>,
     steps: Option<Vec<String>>,
     child: Child,
@@ -1217,7 +1200,7 @@ struct AssetWatcherState {
 async fn run_scheduler(
     out: &Out,
     account_user: Option<String>,
-    job_groups: Arc<RwLock<Vec<AssetEntry>>>,
+    job_assets: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
     api_client: crate::api::client::HaiClient,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
@@ -1239,8 +1222,8 @@ async fn run_scheduler(
         running_jobs.retain(|_, h| !h.is_finished());
         // Parse current job configurations
         let scheduled_jobs = {
-            let assets = job_groups.read().await;
-            parse_all_job_groups(&assets).await
+            let assets = job_assets.read().await;
+            parse_all_jobs(&assets).await
         };
 
         // Reconcile daemons (start new ones, stop removed ones)
@@ -1742,81 +1725,79 @@ async fn enqueue_new_revisions(
 // Job config parsing
 //
 
-async fn parse_all_job_groups(asset_entries: &[AssetEntry]) -> Vec<ScheduledJob> {
+async fn parse_all_jobs(asset_entries: &[AssetEntry]) -> Vec<ScheduledJob> {
     let mut jobs = Vec::new();
-
     for asset_entry in asset_entries {
-        let data_url = if let Some(data_url) = asset_entry.asset.url.as_ref() {
-            data_url.clone()
-        } else {
-            log_scheduler(&format!("Asset {} has no URL, skipping", asset_entry.name));
-            continue;
-        };
-        match crate::asset_reader::download_with_new_client(&data_url).await {
-            Ok(toml_content) => {
-                let toml_str = String::from_utf8_lossy(&toml_content);
-                match toml::from_str::<JobGroupConfig>(&toml_str) {
-                    Ok(group_config) => {
-                        let default_tz: Tz = match group_config.timezone.parse() {
-                            Ok(tz) => tz,
-                            Err(e) => {
-                                log_scheduler(&format!(
-                                    "Job config in asset {} has an invalid timezone: {}",
-                                    asset_entry.name, e
-                                ));
-                                continue;
-                            }
-                        };
-
-                        for (index, job_config) in group_config.job.into_iter().enumerate() {
-                            if job_config.task.is_none() && job_config.steps.is_none() {
-                                log_scheduler(&format!(
-                                    "Job {} in asset {} has no task or steps specified, skipping",
-                                    index, asset_entry.name
-                                ));
-                                continue;
-                            }
-                            let tz = job_config
-                                .timezone
-                                .as_ref()
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(default_tz);
-
-                            let schedule = resolve_schedule(&job_config);
-
-                            if let Some(schedule) = schedule {
-                                jobs.push(ScheduledJob {
-                                    index_in_group: index,
-                                    asset_name: asset_entry.name.clone(),
-                                    description: job_config.description,
-                                    task: job_config.task,
-                                    steps: job_config.steps,
-                                    timezone: tz,
-                                    schedule,
-                                });
-                            } else {
-                                log_scheduler(&format!(
-                                    "Job {} in asset {} has an invalid schedule, skipping",
-                                    index, asset_entry.name
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log_scheduler(&format!(
-                            "Failed to parse job group {}: {}",
-                            asset_entry.name, e
-                        ));
-                    }
-                }
-            }
-            Err(_) => {
-                log_scheduler(&format!("Failed to download asset: {}", asset_entry.name));
-            }
+        if let Some(job) = parse_job(asset_entry).await {
+            jobs.push(job);
         }
     }
-
     jobs
+}
+
+/// Download and parse a single job asset. Returns `None` (after logging) if
+/// the asset can't be fetched or doesn't define a valid job.
+async fn parse_job(asset_entry: &AssetEntry) -> Option<ScheduledJob> {
+    let Some(data_url) = asset_entry.asset.url.as_ref() else {
+        log_scheduler(&format!("Asset {} has no URL, skipping", asset_entry.name));
+        return None;
+    };
+
+    let toml_content = match crate::asset_reader::download_with_new_client(data_url).await {
+        Ok(content) => content,
+        Err(_) => {
+            log_scheduler(&format!("Failed to download asset: {}", asset_entry.name));
+            return None;
+        }
+    };
+
+    let toml_str = String::from_utf8_lossy(&toml_content);
+    let job_config = match toml::from_str::<JobConfig>(&toml_str) {
+        Ok(job_config) => job_config,
+        Err(e) => {
+            log_scheduler(&format!("Failed to parse job {}: {}", asset_entry.name, e));
+            return None;
+        }
+    };
+
+    if job_config.task.is_none() && job_config.steps.is_none() {
+        log_scheduler(&format!(
+            "Job {} has no task or steps specified, skipping",
+            asset_entry.name
+        ));
+        return None;
+    }
+
+    let tz: Tz = match job_config.timezone.as_deref() {
+        None => Tz::UTC,
+        Some(tz_str) => match tz_str.parse() {
+            Ok(tz) => tz,
+            Err(e) => {
+                log_scheduler(&format!(
+                    "Job {} has an invalid timezone '{}': {}, skipping",
+                    asset_entry.name, tz_str, e
+                ));
+                return None;
+            }
+        },
+    };
+
+    let Some(schedule) = resolve_schedule(&job_config) else {
+        log_scheduler(&format!(
+            "Job {} has an invalid schedule, skipping",
+            asset_entry.name
+        ));
+        return None;
+    };
+
+    Some(ScheduledJob {
+        asset_name: asset_entry.name.clone(),
+        description: job_config.description,
+        task: job_config.task,
+        steps: job_config.steps,
+        timezone: tz,
+        schedule,
+    })
 }
 
 fn resolve_schedule(job: &JobConfig) -> Option<ResolvedSchedule> {
@@ -1857,8 +1838,9 @@ fn resolve_schedule(job: &JobConfig) -> Option<ResolvedSchedule> {
     None
 }
 
+/// One job per asset, so the asset name uniquely identifies the job.
 fn job_key_for(job: &ScheduledJob) -> String {
-    format!("{}:{}", job.asset_name, job.index_in_group)
+    job.asset_name.clone()
 }
 
 // --
@@ -1898,8 +1880,6 @@ async fn reconcile_daemons(jobs: &[ScheduledJob], daemons: &mut HashMap<String, 
                     daemons.insert(
                         job_key,
                         DaemonState {
-                            asset_name: job.asset_name.clone(),
-                            index_in_group: job.index_in_group,
                             task: job.task.clone(),
                             steps: job.steps.clone(),
                             child,
@@ -1925,13 +1905,7 @@ async fn check_daemon_health(daemons: &mut HashMap<String, DaemonState>) {
                     "Daemon {} exited with status {:?}, will restart",
                     job_key, status
                 ));
-                to_restart.push((
-                    job_key.clone(),
-                    daemon.asset_name.clone(),
-                    daemon.index_in_group,
-                    daemon.task.clone(),
-                    daemon.steps.clone(),
-                ));
+                to_restart.push(job_key.clone());
             }
             Ok(None) => {
                 // Still running, good
@@ -1941,29 +1915,23 @@ async fn check_daemon_health(daemons: &mut HashMap<String, DaemonState>) {
                     "Error checking daemon {} status: {}, will restart",
                     job_key, e
                 ));
-                to_restart.push((
-                    job_key.clone(),
-                    daemon.asset_name.clone(),
-                    daemon.index_in_group,
-                    daemon.task.clone(),
-                    daemon.steps.clone(),
-                ));
+                to_restart.push(job_key.clone());
             }
         }
     }
 
-    for (job_key, asset_name, index_in_group, task, steps) in to_restart.iter() {
-        daemons.remove(job_key);
+    for job_key in to_restart {
+        let Some(old) = daemons.remove(&job_key) else {
+            continue;
+        };
         log_scheduler(&format!("Restarting daemon: {}", job_key));
-        match spawn_daemon(task.as_deref(), steps.as_deref()).await {
+        match spawn_daemon(old.task.as_deref(), old.steps.as_deref()).await {
             Ok(child) => {
                 daemons.insert(
                     job_key.clone(),
                     DaemonState {
-                        asset_name: asset_name.clone(),
-                        index_in_group: *index_in_group,
-                        task: task.clone(),
-                        steps: steps.clone(),
+                        task: old.task,
+                        steps: old.steps,
                         child,
                     },
                 );
