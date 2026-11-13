@@ -21,6 +21,27 @@ use crate::io::Out;
 use crate::{config, db};
 use crate::{errorln, outln, warnln};
 
+/// Interval to send keepalive pings to keep load balancer from dropping
+/// connection.
+const WS_PING_INTERVAL: Duration = Duration::from_secs(20);
+
+/// If websocket is quiet for this long, reconnect because it may have silently
+/// dropped (common with load balancer).
+const WS_DEAD_AFTER: Duration = Duration::from_secs(50);
+
+/// How long a single job execution may take before being force killed.
+const JOB_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Exponential backoff for reconnect attempts.
+fn reconnect_backoff(attempt: u32) -> Duration {
+    Duration::from_secs(2_u64.pow(attempt.min(6)).min(60))
+}
+
+fn is_conn_reset(e: &tokio_tungstenite::tungstenite::Error) -> bool {
+    e.to_string()
+        .contains("Connection reset without closing handshake")
+}
+
 // --
 
 /// RAII guard so raw mode is always disabled, even on early return/panic
@@ -591,8 +612,8 @@ pub async fn run_bot_loop(
     let api_client = crate::session::mk_api_client_from_account(account.as_ref());
     let prefix = "haibot/jobs/".to_string();
 
-    // Initial fetch of job list
-    let (initial_jobs, initial_cursor) = fetch_job_list(out, &api_client, &prefix).await?;
+    // Initial fetch of job groups
+    let (initial_jobs, initial_cursor) = fetch_job_groups(out, &api_client, &prefix).await?;
 
     if initial_jobs.is_empty() {
         outln!(
@@ -601,15 +622,18 @@ pub async fn run_bot_loop(
         );
     }
 
-    // Shared state
+    // Each toml file defines a group/list of jobs.
     let job_groups = Arc::new(RwLock::new(initial_jobs));
     let job_groups_clone = Arc::clone(&job_groups);
 
-    // Notify channel for waking up the scheduler when jobs change
+    // Notify channel for waking up the scheduler when job configs change
     let schedule_notify = Arc::new(Notify::new());
     let schedule_notify_clone = Arc::clone(&schedule_notify);
 
+    //
     // Spawn the listener task for job config changes
+    //
+
     let api_client_for_listener = api_client.clone();
     let prefix_clone = prefix.clone();
     let listen_url = format!(
@@ -619,7 +643,7 @@ pub async fn run_bot_loop(
 
     let out_clone = out.clone();
     let _listener_handle = tokio::spawn(async move {
-        listen_for_changes(
+        listen_for_job_group_changes(
             &out_clone,
             api_client_for_listener,
             prefix_clone,
@@ -631,7 +655,10 @@ pub async fn run_bot_loop(
         .await
     });
 
-    // Run the scheduler (which will also spawn asset change listeners)
+    //
+    // Run the scheduler (which will also spawn asset-change listeners)
+    //
+
     let api_client_for_scheduler = api_client.clone();
     run_scheduler(
         out,
@@ -645,12 +672,13 @@ pub async fn run_bot_loop(
     .await
 }
 
-/// Fetching the list of jobs is equivalent to listing all assets at a given
+/// Fetching the list of job groups is equivalent to listing all assets at a given
 /// prefix.
 ///
 /// If pool does not exist, will keep trying until it does so that a cursor can
-/// be returned.
-async fn fetch_job_list(
+/// be returned. (Applicable if `prefix` is to a non-private pool that isn't
+/// created by default)
+async fn fetch_job_groups(
     out: &Out,
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
@@ -703,7 +731,11 @@ async fn fetch_job_list(
     }
 }
 
-async fn listen_for_changes(
+/// Listen for changes to job group configurations.
+///
+/// Upon detecting a change, the cursor is advanced and changes are
+/// synchronized to `job_groups`.
+async fn listen_for_job_group_changes(
     out: &Out,
     api_client: crate::api::client::HaiClient,
     prefix: String,
@@ -712,16 +744,12 @@ async fn listen_for_changes(
     listen_url: String,
     notify: Arc<Notify>,
 ) {
+    use crate::api::types::notify::{ListenAssetPool, NotifyListenArg};
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;
 
-    // Special handling of the initial cursor for cases where the pool is not
-    // created. It's a bit of overkill.
     let mut current_cursor = initial_cursor;
-
-    use crate::api::types::notify::{ListenAssetPool, NotifyListenArg};
-
     let mut attempt = 0;
 
     loop {
@@ -734,7 +762,7 @@ async fn listen_for_changes(
             Err(e) => {
                 errorln!(out, "Failed to connect: {}", e);
                 attempt += 1;
-                let backoff_duration = std::time::Duration::from_secs(2_u64.pow(attempt).min(60));
+                let backoff_duration = reconnect_backoff(attempt);
                 warnln!(out, "Retrying in {} seconds...", backoff_duration.as_secs());
                 tokio::time::sleep(backoff_duration).await;
                 continue;
@@ -751,100 +779,149 @@ async fn listen_for_changes(
             .await
         {
             errorln!(out, "Error sending listen arg: {}", e);
+            tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
 
-        while let Some(msg) = ws_stream.next().await {
-            match msg {
-                Ok(_msg) => {
-                    // Received a notification - use iter_next to get changes
-                    outln!(out, "Received change notification, scanning for changes...");
-                    use crate::api::types::asset::AssetEntryIterNextArg;
+        let mut ping = tokio::time::interval(WS_PING_INTERVAL);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ping.tick().await; // first tick completes immediately
+        let mut last_seen = std::time::Instant::now();
 
-                    match api_client
-                        .asset_entry_iter_next(AssetEntryIterNextArg {
-                            cursor: current_cursor.clone(),
-                            limit: 200,
-                        })
-                        .await
-                    {
-                        Ok(mut iter_res) => {
-                            let mut changed_entries = Vec::new();
-                            loop {
-                                changed_entries.extend_from_slice(&iter_res.entries);
-                                if !iter_res.has_more {
-                                    current_cursor = iter_res.cursor;
-                                    break;
-                                }
-                                match api_client
-                                    .asset_entry_iter_next(AssetEntryIterNextArg {
-                                        cursor: iter_res.cursor,
-                                        limit: 200,
-                                    })
-                                    .await
-                                {
-                                    Ok(next_res) => iter_res = next_res,
-                                    Err(e) => {
-                                        errorln!(out, "Error during iter_next pagination: {}", e);
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !changed_entries.is_empty() {
-                                outln!(
-                                    out,
-                                    "Detected {} changed entries, updating job list...",
-                                    changed_entries.len()
-                                );
-
-                                // Apply changes to the job groups
-                                let mut job_groups_guard = job_groups.write().await;
-                                for changed in &changed_entries {
-                                    // Remove existing entry with same name (if any)
-                                    job_groups_guard.retain(|e| e.name != changed.name);
-                                    // Add updated entry (unless it was deleted - check if it has a URL)
-                                    if changed.asset.url.is_some() {
-                                        job_groups_guard.push(changed.clone());
-                                    } else {
-                                        outln!(out, "Entry removed: {}", changed.name);
-                                    }
-                                }
-                                drop(job_groups_guard);
-
-                                notify.notify_one();
-                                outln!(out, "Job list updated");
-                            }
-                        }
-                        Err(e) => {
-                            errorln!(out, "Error fetching changes via iter_next: {}", e);
-                            // Fallback: full refresh
-                            match fetch_job_list(out, &api_client, &prefix).await {
-                                Ok((new_jobs, new_cursor)) => {
-                                    let mut job_groups_guard = job_groups.write().await;
-                                    *job_groups_guard = new_jobs;
-                                    drop(job_groups_guard);
-                                    current_cursor = new_cursor;
-                                    notify.notify_one();
-                                }
-                                Err(e2) => {
-                                    errorln!(out, "Error during fallback refresh: {}", e2);
-                                }
-                            }
-                        }
+        loop {
+            tokio::select! {
+                _ = ping.tick() => {
+                    if last_seen.elapsed() > WS_DEAD_AFTER {
+                        warnln!(
+                            out,
+                            "Listener websocket silent for {}s, reconnecting...",
+                            last_seen.elapsed().as_secs()
+                        );
+                        break;
+                    }
+                    if let Err(e) = ws_stream.send(Message::Ping(Default::default())).await {
+                        warnln!(out, "Listener ping failed ({}), reconnecting...", e);
+                        break;
                     }
                 }
-                Err(e) => {
-                    if !e
-                        .to_string()
-                        .contains("Connection reset without closing handshake")
-                    {
-                        errorln!(out, "websocket: {}", e);
+                msg = ws_stream.next() => {
+                    let msg = match msg {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(e)) => {
+                            if !is_conn_reset(&e) {
+                                errorln!(out, "websocket: {}", e);
+                            }
+                            break;
+                        }
+                        None => break,
+                    };
+                    last_seen = std::time::Instant::now();
+                    match msg {
+                        Message::Text(_) | Message::Binary(_) => {
+                            outln!(out, "Received change notification, scanning for changes...");
+                            sync_job_changes(
+                                out,
+                                &api_client,
+                                &prefix,
+                                &mut current_cursor,
+                                &job_groups,
+                                &notify,
+                            )
+                            .await;
+                        }
+                        Message::Close(_) => break,
+                        // Ping/pong/raw frames
+                        _ => {}
                     }
-                    break; // Reconnect
                 }
             }
         }
+        // Falls through to reconnect.
+    }
+}
+
+/// Fetch job-asset changes since `current_cursor` and update `job_groups` +
+/// `current_cursor`.
+///
+/// Falls back to a full refresh on failure.
+async fn sync_job_changes(
+    out: &Out,
+    api_client: &crate::api::client::HaiClient,
+    prefix: &str,
+    current_cursor: &mut String,
+    job_groups: &Arc<RwLock<Vec<AssetEntry>>>,
+    notify: &Notify,
+) {
+    use crate::api::types::asset::AssetEntryIterNextArg;
+
+    let mut changed_entries = Vec::new();
+    let mut cursor = current_cursor.clone();
+    let mut first_page_failed = false;
+
+    loop {
+        match api_client
+            .asset_entry_iter_next(AssetEntryIterNextArg {
+                cursor: cursor.clone(),
+                limit: 200,
+            })
+            .await
+        {
+            Ok(iter_res) => {
+                changed_entries.extend_from_slice(&iter_res.entries);
+                cursor = iter_res.cursor;
+                if !iter_res.has_more {
+                    break;
+                }
+            }
+            Err(e) => {
+                if cursor == *current_cursor {
+                    errorln!(out, "Error fetching changes via iter_next: {}", e);
+                    first_page_failed = true;
+                } else {
+                    errorln!(out, "Error during iter_next pagination: {}", e);
+                }
+                break;
+            }
+        }
+    }
+
+    if first_page_failed {
+        // Fallback: full refresh
+        match fetch_job_groups(out, api_client, prefix).await {
+            Ok((new_jobs, new_cursor)) => {
+                *job_groups.write().await = new_jobs;
+                *current_cursor = new_cursor;
+                notify.notify_one();
+            }
+            Err(e2) => {
+                errorln!(out, "Error during fallback refresh: {}", e2);
+            }
+        }
+        return;
+    }
+
+    *current_cursor = cursor;
+
+    if !changed_entries.is_empty() {
+        outln!(
+            out,
+            "Detected {} changed entries, updating job list...",
+            changed_entries.len()
+        );
+        let mut job_groups_guard = job_groups.write().await;
+        for changed in &changed_entries {
+            // Remove existing entry with same name (if any)
+            job_groups_guard.retain(|e| e.name != changed.name);
+            // Add updated entry (unless it was deleted - check if it has a URL)
+            if changed.asset.url.is_some() {
+                job_groups_guard.push(changed.clone());
+            } else {
+                outln!(out, "Entry removed: {}", changed.name);
+            }
+        }
+        drop(job_groups_guard);
+        notify.notify_one();
+        outln!(out, "Job list updated");
     }
 }
 
@@ -854,6 +931,7 @@ async fn listen_for_changes(
 // Job configuration
 //
 
+/// Each toml file can define multiple jobs, hence JobGroup.
 #[derive(Debug, Deserialize)]
 pub struct JobGroupConfig {
     /// Default timezone for all jobs in this asset (IANA format)
@@ -1154,7 +1232,11 @@ async fn run_scheduler(
     // Track asset change watchers
     let mut asset_watchers: HashMap<String, AssetWatcherState> = HashMap::new();
 
+    // Track in-flight scheduled job executions (to avoid overlapping runs)
+    let mut running_jobs: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+
     loop {
+        running_jobs.retain(|_, h| !h.is_finished());
         // Parse current job configurations
         let scheduled_jobs = {
             let assets = job_groups.read().await;
@@ -1189,20 +1271,39 @@ async fn run_scheduler(
             Some((job_key, next_time)) if next_time <= now => {
                 // Time to run this job
                 if let Some(job) = scheduled_jobs.iter().find(|j| job_key_for(j) == job_key) {
-                    execute_job(
-                        account_user.clone(),
-                        &job_key,
-                        job.description.as_deref(),
-                        job.task.as_deref(),
-                        job.steps.as_deref(),
-                        None, // No asset revision for scheduled jobs
-                        &cmd_filters.iter().collect::<Vec<_>>(),
-                        access
-                            .as_ref()
-                            .map(|a| a.iter().collect::<Vec<_>>())
-                            .as_deref(),
-                    )
-                    .await;
+                    if running_jobs.contains_key(&job_key) {
+                        log_scheduler(&format!(
+                            "Job {} is still running from a previous run, skipping",
+                            job_key
+                        ));
+                    } else {
+                        // Run in the background so a slow job doesn't block
+                        // the scheduler, daemon health checks, or other jobs.
+                        let account_user = account_user.clone();
+                        let key = job_key.clone();
+                        let description = job.description.clone();
+                        let task = job.task.clone();
+                        let steps = job.steps.clone();
+                        let cmd_filters = cmd_filters.clone();
+                        let access = access.clone();
+                        let handle = tokio::spawn(async move {
+                            execute_job(
+                                account_user,
+                                &key,
+                                description.as_deref(),
+                                task.as_deref(),
+                                steps.as_deref(),
+                                None, // No asset revision for scheduled jobs
+                                &cmd_filters.iter().collect::<Vec<_>>(),
+                                access
+                                    .as_ref()
+                                    .map(|a| a.iter().collect::<Vec<_>>())
+                                    .as_deref(),
+                            )
+                            .await;
+                        });
+                        running_jobs.insert(job_key.clone(), handle);
+                    }
 
                     // Calculate next run time
                     if let Some(next) = calculate_next_run(&job.schedule, &job.timezone, now) {
@@ -1409,9 +1510,7 @@ async fn asset_watcher_loop(
     description: Option<String>,
     initial_cursor: Option<String>,
 ) {
-    use crate::api::types::asset::{
-        AssetRevisionIterArg, AssetRevisionIterNextArg, EntryRef, RevisionIterDirection,
-    };
+    use crate::api::types::asset::{AssetRevisionIterArg, EntryRef, RevisionIterDirection};
     use crate::api::types::notify::{ListenAsset, NotifyListenArg};
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::connect_async;
@@ -1457,6 +1556,37 @@ async fn asset_watcher_loop(
         }
     };
 
+    // Jobs run on a separate task so the websocket keeps being read (and
+    // pinged) while a potentially long job executes. Revisions are still
+    // processed sequentially.
+    let (job_tx, mut job_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    {
+        let job_key = job_key.clone();
+        let asset_name = asset_name.clone();
+        tokio::spawn(async move {
+            while let Some(rev_id) = job_rx.recv().await {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': executing job for revision {}",
+                    job_key, rev_id
+                ));
+                execute_job(
+                    account_user.clone(),
+                    &job_key,
+                    description.as_deref(),
+                    task.as_deref(),
+                    steps.as_deref(),
+                    Some((&asset_name, &rev_id)),
+                    &cmd_filters.iter().collect::<Vec<_>>(),
+                    access
+                        .as_ref()
+                        .map(|a| a.iter().collect::<Vec<_>>())
+                        .as_deref(),
+                )
+                .await;
+            }
+        });
+    }
+
     let mut attempt = 0;
 
     loop {
@@ -1472,7 +1602,7 @@ async fn asset_watcher_loop(
                     job_key, e
                 ));
                 attempt += 1;
-                let backoff_duration = std::time::Duration::from_secs(2_u64.pow(attempt).min(60));
+                let backoff_duration = reconnect_backoff(attempt);
                 log_scheduler(&format!(
                     "Asset watcher '{}': retrying in {} seconds...",
                     job_key,
@@ -1496,75 +1626,111 @@ async fn asset_watcher_loop(
                 "Asset watcher '{}': error sending listen arg: {}",
                 job_key, e
             ));
+            tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
 
-        while let Some(msg) = ws_stream.next().await {
-            match msg {
-                Ok(_msg) => {
-                    // Received a notification - fetch new revisions
-                    log_scheduler(&format!(
-                        "Asset watcher '{}': change detected on '{}'",
-                        job_key, asset_name
-                    ));
+        let mut ping = tokio::time::interval(WS_PING_INTERVAL);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ping.tick().await; // first tick completes immediately
+        let mut last_seen = std::time::Instant::now();
 
-                    match api_client
-                        .asset_revision_iter_next(AssetRevisionIterNextArg {
-                            cursor: current_cursor.clone(),
-                            limit: 100, // Process up to 100 revisions at once
-                        })
-                        .await
-                    {
-                        Ok(iter_res) => {
-                            for revision in iter_res.revisions {
-                                let rev_id = &revision.asset.rev_id;
-                                log_scheduler(&format!(
-                                    "Asset watcher '{}': executing job for revision {}",
-                                    job_key, rev_id
-                                ));
-
-                                // Execute the job with the asset revision
-                                execute_job(
-                                    account_user.clone(),
-                                    &job_key,
-                                    description.as_deref(),
-                                    task.as_deref(),
-                                    steps.as_deref(),
-                                    Some((&asset_name, rev_id)),
-                                    &cmd_filters.iter().collect::<Vec<_>>(),
-                                    access
-                                        .as_ref()
-                                        .map(|a| a.iter().collect::<Vec<_>>())
-                                        .as_deref(),
-                                )
-                                .await;
-                            }
-
-                            // Update cursor
-                            if let Some(next) = iter_res.next {
-                                current_cursor = next.cursor;
-                            }
-                        }
-                        Err(e) => {
-                            log_scheduler(&format!(
-                                "Asset watcher '{}': error fetching revisions: {}",
-                                job_key, e
-                            ));
-                        }
-                    }
-                }
-                Err(e) => {
-                    if !e
-                        .to_string()
-                        .contains("Connection reset without closing handshake")
-                    {
+        loop {
+            tokio::select! {
+                _ = ping.tick() => {
+                    if last_seen.elapsed() > WS_DEAD_AFTER {
                         log_scheduler(&format!(
-                            "Asset watcher '{}': websocket error: {}",
+                            "Asset watcher '{}': websocket silent for {}s, reconnecting",
+                            job_key,
+                            last_seen.elapsed().as_secs()
+                        ));
+                        break;
+                    }
+                    if let Err(e) = ws_stream.send(Message::Ping(Default::default())).await {
+                        log_scheduler(&format!(
+                            "Asset watcher '{}': ping failed ({}), reconnecting",
                             job_key, e
                         ));
+                        break;
                     }
-                    break; // Reconnect
                 }
+                msg = ws_stream.next() => {
+                    let msg = match msg {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(e)) => {
+                            if !is_conn_reset(&e) {
+                                log_scheduler(&format!(
+                                    "Asset watcher '{}': websocket error: {}",
+                                    job_key, e
+                                ));
+                            }
+                            break;
+                        }
+                        None => break,
+                    };
+                    last_seen = std::time::Instant::now();
+                    match msg {
+                        Message::Text(_) | Message::Binary(_) => {
+                            log_scheduler(&format!(
+                                "Asset watcher '{}': change detected on '{}'",
+                                job_key, asset_name
+                            ));
+                            enqueue_new_revisions(
+                                &api_client,
+                                &job_key,
+                                &mut current_cursor,
+                                &job_tx,
+                            )
+                            .await;
+                        }
+                        Message::Close(_) => break,
+                        _ => {} // Ping/Pong/raw frames
+                    }
+                }
+            }
+        }
+        // Falls through to reconnect.
+    }
+}
+
+/// Fetch all revisions after `cursor`, queue them for execution, and advance
+/// the cursor.
+async fn enqueue_new_revisions(
+    api_client: &crate::api::client::HaiClient,
+    job_key: &str,
+    cursor: &mut String,
+    job_tx: &tokio::sync::mpsc::UnboundedSender<String>,
+) {
+    use crate::api::types::asset::AssetRevisionIterNextArg;
+    const PAGE: usize = 100;
+
+    loop {
+        match api_client
+            .asset_revision_iter_next(AssetRevisionIterNextArg {
+                cursor: cursor.clone(),
+                limit: 100,
+            })
+            .await
+        {
+            Ok(iter_res) => {
+                let n = iter_res.revisions.len();
+                for revision in iter_res.revisions {
+                    let _ = job_tx.send(revision.asset.rev_id.clone());
+                }
+                match iter_res.next {
+                    Some(next) => *cursor = next.cursor,
+                    None => break,
+                }
+                if n < PAGE {
+                    break;
+                }
+            }
+            Err(e) => {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': error fetching revisions: {}",
+                    job_key, e
+                ));
+                break;
             }
         }
     }
@@ -2071,12 +2237,32 @@ async fn execute_job(
 
     log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
 
-    let result = Command::new(&program)
+    let child = match Command::new(&program)
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .output()
-        .await;
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log_scheduler(&format!("Failed to execute job {}: {}", job_key, e));
+            return;
+        }
+    };
+
+    // On timeout the future (and child) is dropped, which kills the process.
+    let result = match tokio::time::timeout(JOB_TIMEOUT, child.wait_with_output()).await {
+        Ok(r) => r,
+        Err(_) => {
+            log_scheduler(&format!(
+                "Job {} timed out after {}s and was killed",
+                job_key,
+                JOB_TIMEOUT.as_secs()
+            ));
+            return;
+        }
+    };
 
     match result {
         Ok(output) => {
