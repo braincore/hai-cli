@@ -182,6 +182,13 @@ pub struct SeVault {
 const REASON: &str = "unlock your hai encryption keys";
 
 impl SeVault {
+    /// Returns a vault handle for removing sealed entries only. Unlike
+    /// `open`, it doesn't check whether the enclave is usable, because
+    /// deleting never touches the enclave or prompts.
+    pub fn for_cleanup(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
     /// Returns a vault if the Secure Enclave is usable in this context.
     pub fn open(dir: PathBuf) -> Option<Self> {
         if !is_available() {

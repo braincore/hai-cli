@@ -36,6 +36,31 @@ const WS_DEAD_AFTER: Duration = Duration::from_secs(50);
 /// How long a single job execution may take before being force killed.
 const JOB_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// Name of the fn-json function injected into asset-change jobs. The job (or
+/// its AI) invokes it to defer context to the next asset-change trigger.
+const NEXT_FN_NAME: &str = "next";
+
+/// First step injected into asset-change jobs to define the `next` function.
+const NEXT_FN_JSON_STEP: &str = r#"/fn-json next Add context for next asset-change trigger
+{
+  "type": "object",
+  "description": "Use this to add context to next asset-change trigger. Helps for deferring work until later where it can be better handled by batching.",
+  "properties": {
+    "context": {
+      "type": "string"
+    },
+    "delay": {
+      "type": "number",
+      "description": "If `delay` seconds pass without an asset-change trigger, the job is triggered manually with provided context."
+    }
+  },
+  "required": ["context"],
+  "additionalProperties": false
+}"#;
+
+/// Upper bound on a `next` delay (to keep `Instant` arithmetic sane).
+const NEXT_MAX_DELAY: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
 /// Exponential backoff for reconnect attempts.
 fn reconnect_backoff(attempt: u32) -> Duration {
     Duration::from_secs(2_u64.pow(attempt.min(6)).min(60))
@@ -2155,34 +2180,126 @@ async fn run_revision_batches(
     job: AssetWatcherJob,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<RevisionBatch>,
 ) {
-    let cmd_filters = env.cmd_filters.iter().collect::<Vec<_>>();
-    let access = env.access.as_ref().map(|a| a.iter().collect::<Vec<_>>());
     let mut saved_cursor: Option<String> = None;
+    let mut pending = PendingNext::default();
 
-    while let Some(batch) = rx.recv().await {
-        for rev_id in &batch.rev_ids {
-            log_scheduler(&format!(
-                "Asset watcher '{}': executing job for revision {}",
-                job.job_key, rev_id
-            ));
-            execute_job(
-                env.account_user.clone(),
-                &job.job_key,
-                job.description.as_deref(),
-                job.task.as_deref(),
-                job.steps.as_deref(),
-                Some((&job.asset_name, rev_id)),
-                &cmd_filters,
-                access.as_deref(),
-            )
-            .await;
-        }
-        if saved_cursor.as_deref() != Some(batch.cursor_after.as_str())
-            && save_cursor(&api_client, &crypt, &job, &batch.cursor_after).await
-        {
-            saved_cursor = Some(batch.cursor_after);
+    loop {
+        let deadline = pending.deadline;
+        tokio::select! {
+            maybe_batch = rx.recv() => {
+                let Some(batch) = maybe_batch else { break };
+                for rev_id in &batch.rev_ids {
+                    log_scheduler(&format!(
+                        "Asset watcher '{}': executing job for revision {}",
+                        job.job_key, rev_id
+                    ));
+                    run_watcher_job(&env, &job, Some(rev_id), &mut pending, false).await;
+                }
+                if saved_cursor.as_deref() != Some(batch.cursor_after.as_str())
+                    && save_cursor(&api_client, &crypt, &job, &batch.cursor_after).await
+                {
+                    saved_cursor = Some(batch.cursor_after);
+                }
+            }
+            _ = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)),
+                if deadline.is_some() =>
+            {
+                log_scheduler(&format!(
+                    "Asset watcher '{}': `next` delay elapsed without asset change, executing job with {} deferred context(s)",
+                    job.job_key,
+                    pending.contexts.len()
+                ));
+                run_watcher_job(&env, &job, None, &mut pending, true).await;
+            }
         }
     }
+}
+
+/// Context deferred via `next` calls, awaiting the next trigger.
+#[derive(Default)]
+struct PendingNext {
+    contexts: Vec<String>,
+    /// Earliest deadline requested by a `next` call's `delay`. When reached
+    /// without an asset-change trigger, the job is run manually.
+    deadline: Option<tokio::time::Instant>,
+}
+
+impl PendingNext {
+    fn absorb(&mut self, job_key: &str, reqs: Vec<NextArg>) {
+        for req in reqs {
+            log_scheduler(&format!(
+                "Asset watcher '{}': `next` deferred context ({} bytes, delay={:?})",
+                job_key,
+                req.context.len(),
+                req.delay
+            ));
+            self.contexts.push(req.context);
+            if let Some(delay) = req.delay
+                && delay.is_finite()
+                && delay >= 0.0
+            {
+                let delay = Duration::from_secs_f64(delay).min(NEXT_MAX_DELAY);
+                let dl = tokio::time::Instant::now() + delay;
+                self.deadline = Some(match self.deadline {
+                    Some(existing) => existing.min(dl),
+                    None => dl,
+                });
+            }
+        }
+    }
+}
+
+/// Run an asset-change job once, consuming any pending `next` context and
+/// absorbing new `next` calls made during the run.
+async fn run_watcher_job(
+    env: &JobExecEnv,
+    job: &AssetWatcherJob,
+    rev_id: Option<&str>,
+    pending: &mut PendingNext,
+    delay_triggered: bool,
+) {
+    let cmd_filters = env.cmd_filters.iter().collect::<Vec<_>>();
+    let access = env.access.as_ref().map(|a| a.iter().collect::<Vec<_>>());
+
+    let contexts = std::mem::take(&mut pending.contexts);
+    pending.deadline = None;
+    let context_step = build_next_context_step(&contexts, delay_triggered);
+
+    let reqs = execute_job_with_kernel(
+        env.account_user.clone(),
+        &job.job_key,
+        job.description.as_deref(),
+        job.task.as_deref(),
+        job.steps.as_deref(),
+        rev_id.map(|rev_id| (job.asset_name.as_str(), rev_id)),
+        context_step,
+        &cmd_filters,
+        access.as_deref(),
+    )
+    .await;
+    pending.absorb(&job.job_key, reqs);
+}
+
+/// Build the `/prep` step that hands deferred `next` context to a run.
+fn build_next_context_step(contexts: &[String], delay_triggered: bool) -> Option<String> {
+    if contexts.is_empty() {
+        return None;
+    }
+    let mut msg = String::new();
+    if delay_triggered {
+        msg.push_str(
+            "This run was triggered because the `next` delay elapsed without an asset change \
+             (there is no new asset revision).\n\n",
+        );
+    }
+    msg.push_str("Context deferred from previous run(s) via `next`:\n");
+    for context in contexts {
+        msg.push_str("\n---\n");
+        msg.push_str(context);
+        msg.push('\n');
+    }
+    // Avoid a trailing blank line, which /prep treats specially.
+    Some(format!("/prep {}", msg.trim_end()))
 }
 
 /// Fetch all revisions after `cursor`, queue them as a single batch, and
@@ -2695,17 +2812,7 @@ async fn execute_job(
         crate::feature::self_invocation(account_user.as_deref(), cmd_filters, access);
 
     args.push("bye".to_string());
-
-    if let Some((asset_name, rev_id)) = asset_revision {
-        args.push(format!("/asset-revision-temp {} {}", asset_name, rev_id));
-    }
-
-    if let Some(task) = task {
-        args.push(format!("/task.trust {}", task));
-    }
-    if let Some(steps) = steps {
-        args.extend(steps.iter().cloned());
-    }
+    push_job_steps(&mut args, asset_revision, task, steps);
 
     log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
 
@@ -2756,6 +2863,373 @@ async fn execute_job(
         Err(e) => {
             log_scheduler(&format!("Failed to execute job {}: {}", job_key, e));
         }
+    }
+}
+
+/// Append the common job steps (asset revision, task, extra steps) to `args`.
+fn push_job_steps(
+    args: &mut Vec<String>,
+    asset_revision: Option<(&str, &str)>,
+    task: Option<&str>,
+    steps: Option<&[String]>,
+) {
+    if let Some((asset_name, rev_id)) = asset_revision {
+        args.push(format!("/asset-revision-temp {} {}", asset_name, rev_id));
+    }
+    if let Some(task) = task {
+        args.push(format!("/task.trust {}", task));
+    }
+    if let Some(steps) = steps {
+        args.extend(steps.iter().cloned());
+    }
+}
+
+// --
+
+//
+// Kernel-mode job execution (asset-change jobs)
+//
+
+/// Argument of the injected `next` fn-json function.
+#[derive(Debug, Deserialize)]
+struct NextArg {
+    context: String,
+    delay: Option<f64>,
+}
+
+/// Subset of the kernel's `ServerMsg` (see `io_ws.rs`) that haibot cares
+/// about.
+#[derive(Deserialize)]
+#[serde(tag = ".tag", rename_all = "snake_case")]
+enum KernelServerMsg {
+    Out {
+        text: String,
+    },
+    Err {
+        text: String,
+    },
+    Alert {
+        text: String,
+    },
+    Apply {
+        apply_id: crate::io::ApplyId,
+        fn_name: String,
+        fn_arg: String,
+        expects_result: bool,
+    },
+    Query {
+        query_id: u64,
+        message: String,
+    },
+    ReplPrompt {},
+    #[serde(other)]
+    Other,
+}
+
+/// Execute an asset-change job as a kernel so that `next` applies can be
+/// received.
+///
+/// The `next` fn-json function is injected as the first step, followed by the
+/// deferred-context step (if any), and the usual job steps.
+///
+/// Returns the `next` calls made during the run.
+async fn execute_job_with_kernel(
+    account_user: Option<String>,
+    job_key: &str,
+    description: Option<&str>,
+    task: Option<&str>,
+    steps: Option<&[String]>,
+    asset_revision: Option<(&str, &str)>,
+    context_step: Option<String>,
+    cmd_filters: &[&crate::cmd_registry::Filter],
+    access: Option<&[&crate::feature::access::Perm]>,
+) -> Vec<NextArg> {
+    log_scheduler(&format!(
+        "Executing job (kernel): {} ({:?})",
+        job_key, description
+    ));
+
+    let (program, mut args, using_cargo) =
+        crate::feature::self_invocation(account_user.as_deref(), cmd_filters, access);
+
+    // Global flag: must precede the `bye` subcommand.
+    args.push("--kernel".to_string());
+    args.push("bye".to_string());
+    args.push(NEXT_FN_JSON_STEP.to_string());
+    if let Some(context_step) = context_step {
+        args.push(context_step);
+    }
+    push_job_steps(&mut args, asset_revision, task, steps);
+
+    log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
+
+    let mut child = match Command::new(&program)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        // Stdout must be piped to read the kernel's ready message.
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log_scheduler(&format!("Failed to execute job {}: {}", job_key, e));
+            return Vec::new();
+        }
+    };
+
+    // Drain stderr concurrently so the child never blocks on a full pipe.
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut s = String::new();
+            let _ = stderr.read_to_string(&mut s).await;
+            s
+        })
+    });
+
+    let mut next_reqs = Vec::new();
+    let mut transcript = String::new();
+    let result = tokio::time::timeout(
+        JOB_TIMEOUT,
+        drive_kernel_job(
+            job_key,
+            &mut child,
+            using_cargo,
+            &mut next_reqs,
+            &mut transcript,
+        ),
+    )
+    .await;
+
+    let status = match result {
+        Ok(Ok(status)) => Some(status),
+        Ok(Err(e)) => {
+            log_scheduler(&format!("Job {} kernel error: {}", job_key, e));
+            let _ = child.kill().await;
+            None
+        }
+        Err(_) => {
+            log_scheduler(&format!(
+                "Job {} timed out after {}s and was killed",
+                job_key,
+                JOB_TIMEOUT.as_secs()
+            ));
+            let _ = child.kill().await;
+            None
+        }
+    };
+
+    let stderr = match stderr_task {
+        Some(t) => t.await.unwrap_or_default(),
+        None => String::new(),
+    };
+
+    match status {
+        Some(status) if status.success() => {
+            log_scheduler(&format!(
+                "Job {} completed successfully: {}",
+                job_key, transcript
+            ));
+        }
+        Some(status) => {
+            log_scheduler(&format!(
+                "Job {} failed with status {:?}: {}{}",
+                job_key, status, transcript, stderr
+            ));
+        }
+        None => {
+            if !transcript.is_empty() || !stderr.is_empty() {
+                log_scheduler(&format!(
+                    "Job {} partial output: {}{}",
+                    job_key, transcript, stderr
+                ));
+            }
+        }
+    }
+
+    next_reqs
+}
+
+/// Wait for kernel readiness, connect + authenticate, then consume server
+/// messages until the kernel exits.
+async fn drive_kernel_job(
+    job_key: &str,
+    child: &mut Child,
+    using_cargo: bool,
+    next_reqs: &mut Vec<NextArg>,
+    transcript: &mut String,
+) -> Result<std::process::ExitStatus, String> {
+    use crate::feature::gateway::{ClientMessageAuthRequest, ClientMessageAuthResponse};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    // 1. Preamble: port & token.
+    let ready_timeout = if using_cargo {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(10)
+    };
+    let ready = crate::feature::kernel::wait_for_kernel_ready(child, ready_timeout).await?;
+
+    // 2. Connect.
+    let url = format!("ws://127.0.0.1:{}", ready.port);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .map_err(|e| format!("failed to connect to kernel: {e}"))?;
+
+    // 3. Authenticate.
+    let auth = serde_json::to_string(&ClientMessageAuthRequest {
+        token: Some(ready.token.clone()),
+    })
+    .expect("serialize auth");
+    ws.send(Message::Text(auth.into()))
+        .await
+        .map_err(|e| format!("failed to send auth to kernel: {e}"))?;
+    match tokio::time::timeout(Duration::from_secs(10), ws.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            match serde_json::from_str::<ClientMessageAuthResponse>(text.as_str()) {
+                Ok(ClientMessageAuthResponse::Ok { .. }) => {}
+                Ok(other) => return Err(format!("kernel rejected auth: {:?}", other)),
+                Err(e) => return Err(format!("malformed kernel auth response: {e}")),
+            }
+        }
+        _ => return Err("no auth response from kernel".to_string()),
+    }
+
+    // 4. Listen for server messages until the kernel exits.
+    let mut exit_status = None;
+    loop {
+        tokio::select! {
+            msg = ws.next() => {
+                let msg = match msg {
+                    Some(Ok(msg)) => msg,
+                    Some(Err(e)) => {
+                        if !is_conn_reset(&e) {
+                            log_scheduler(&format!("Job {}: kernel websocket error: {}", job_key, e));
+                        }
+                        break;
+                    }
+                    None => break,
+                };
+                match msg {
+                    Message::Text(text) => {
+                        if let Some(reply) =
+                            handle_kernel_msg(job_key, text.as_str(), next_reqs, transcript)
+                            && ws.send(Message::Text(reply.into())).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+            // Keep reading the socket after exit: it closes once the
+            // process is gone, so any in-flight messages are still drained.
+            status = child.wait(), if exit_status.is_none() => {
+                exit_status = Some(status.map_err(|e| format!("failed to wait on job: {e}"))?);
+            }
+        }
+    }
+
+    match exit_status {
+        Some(status) => Ok(status),
+        None => child
+            .wait()
+            .await
+            .map_err(|e| format!("failed to wait on job: {e}")),
+    }
+}
+
+/// Handle one kernel server message. Returns a client message to send back,
+/// if any.
+fn handle_kernel_msg(
+    job_key: &str,
+    text: &str,
+    next_reqs: &mut Vec<NextArg>,
+    transcript: &mut String,
+) -> Option<String> {
+    let msg = match serde_json::from_str::<KernelServerMsg>(text) {
+        Ok(msg) => msg,
+        Err(e) => {
+            log_scheduler(&format!(
+                "Job {}: unrecognized kernel message ({}): {}",
+                job_key, e, text
+            ));
+            return None;
+        }
+    };
+    match msg {
+        KernelServerMsg::Out { text } | KernelServerMsg::Err { text } => {
+            transcript.push_str(&text);
+            None
+        }
+        KernelServerMsg::Alert { text } => {
+            transcript.push_str(&text);
+            transcript.push('\n');
+            None
+        }
+        KernelServerMsg::Apply {
+            apply_id,
+            fn_name,
+            fn_arg,
+            expects_result,
+        } => {
+            if fn_name == NEXT_FN_NAME {
+                match serde_json::from_str::<NextArg>(&fn_arg) {
+                    Ok(arg) => next_reqs.push(arg),
+                    Err(e) => log_scheduler(&format!(
+                        "Job {}: invalid `next` arg ({}): {}",
+                        job_key, e, fn_arg
+                    )),
+                }
+            } else {
+                log_scheduler(&format!(
+                    "Job {}: ignoring apply of unknown function '{}'",
+                    job_key, fn_name
+                ));
+            }
+            log_scheduler(&format!(
+                "Job {}: apply of function '{}' with arg '{}'",
+                job_key, fn_name, fn_arg
+            ));
+            expects_result.then(|| {
+                serde_json::json!({
+                    ".tag": "apply_result",
+                    "apply_id": apply_id,
+                    "result": "null",
+                })
+                .to_string()
+            })
+        }
+        KernelServerMsg::Query { query_id, message } => {
+            // Unattended: never block on a prompt.
+            log_scheduler(&format!(
+                "Job {}: cancelling interactive query: {}",
+                job_key, message
+            ));
+            Some(
+                serde_json::json!({
+                    ".tag": "answer",
+                    "query_id": query_id,
+                    "text": null,
+                })
+                .to_string(),
+            )
+        }
+        KernelServerMsg::ReplPrompt {} => {
+            // `bye` should exit on its own once steps are done. If the kernel
+            // waits for input anyway, end the session.
+            Some(
+                serde_json::json!({
+                    ".tag": "eval",
+                    "input": "/quit",
+                })
+                .to_string(),
+            )
+        }
+        KernelServerMsg::Other => None,
     }
 }
 

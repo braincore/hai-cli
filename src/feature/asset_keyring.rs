@@ -19,6 +19,39 @@ use crate::io::Io;
 
 const KEYRING_SERVICE: &str = "hai-asset-keys";
 
+/// If set (to any non-empty value), the macOS Secure Enclave (Touch ID) store
+/// is skipped in favor of the OS keyring. Set by `hai bot start` so the bot
+/// and every hai process it spawns (jobs, daemons, kernels) inherit it and
+/// don't each prompt for Touch ID.
+pub const NO_SECURE_ENCLAVE_ENV: &str = "HAI_NO_SECURE_ENCLAVE";
+
+#[cfg(all(target_os = "macos", hai_se))]
+fn secure_enclave_disabled_by_env() -> bool {
+    std::env::var_os(NO_SECURE_ENCLAVE_ENV).is_some_and(|v| !v.is_empty())
+}
+
+#[cfg(all(target_os = "macos", hai_se))]
+fn se_vault_dir() -> std::path::PathBuf {
+    crate::config::get_config_folder_path()
+        .join("keys")
+        .join("se")
+}
+
+fn delete_os_keyring_entry(rec_key_id: &str) {
+    match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
+        Ok(entry) => {
+            if let Err(e) = entry.delete_credential()
+                && !matches!(e, keyring::Error::NoEntry)
+            {
+                tracing::debug!("error: failed to delete password from keyring: {}", e);
+            }
+        }
+        Err(e) => {
+            tracing::debug!("error: failed to access keyring entry for deletion: {}", e);
+        }
+    }
+}
+
 /// Where key passwords are remembered between sessions.
 enum PasswordStore {
     /// Not persisted: user is prompted once per session.
@@ -103,14 +136,14 @@ impl AssetKeyring {
     }
 
     fn select_store() -> PasswordStore {
+        // On macOS, prefer the Secure Enclave (Touch ID) unless disabled by
+        // env (e.g. the bot), in which case use the login Keychain. The two
+        // stores are separate.
         #[cfg(all(target_os = "macos", hai_se))]
+        if !secure_enclave_disabled_by_env()
+            && let Some(vault) = crate::feature::macos_se::SeVault::open(se_vault_dir())
         {
-            let dir = crate::config::get_config_folder_path()
-                .join("keys")
-                .join("se");
-            if let Some(vault) = crate::feature::macos_se::SeVault::open(dir) {
-                return PasswordStore::SecureEnclave(vault);
-            }
+            return PasswordStore::SecureEnclave(vault);
         }
 
         // Try to replace the default store with one that can use secret-
@@ -202,35 +235,47 @@ impl AssetKeyring {
         }
     }
 
-    /// Whether the persistent store has an entry, without prompting.
-    #[cfg_attr(not(all(target_os = "macos", hai_se)), allow(unused_variables))]
+    /// Whether the persistent store has an entry, without a biometric prompt.
+    /// `None` means unknown.
     fn has_stored_password(&self, rec_key_id: &str) -> Option<bool> {
         match &self.store {
             PasswordStore::None => Some(false),
-            PasswordStore::OsKeyring => None, // unknown without reading
+            PasswordStore::OsKeyring => {
+                // Reading is the only way to check if an entry exists. On
+                // macOS this may trigger a Keychain prompt after a rebuild.
+                let entry = keyring::Entry::new(KEYRING_SERVICE, rec_key_id).ok()?;
+                match entry.get_password() {
+                    Ok(_) => Some(true),
+                    Err(keyring::Error::NoEntry) => Some(false),
+                    Err(_) => None,
+                }
+            }
             #[cfg(all(target_os = "macos", hai_se))]
             PasswordStore::SecureEnclave(vault) => Some(vault.contains(rec_key_id)),
         }
     }
 
-    /// Delete password from the persistent store
+    /// Delete password from the active persistent store
     fn delete_stored_password(&self, rec_key_id: &str) {
         match &self.store {
             PasswordStore::None => {}
-            PasswordStore::OsKeyring => match keyring::Entry::new(KEYRING_SERVICE, rec_key_id) {
-                Ok(entry) => {
-                    if let Err(e) = entry.delete_credential() {
-                        if !matches!(e, keyring::Error::NoEntry) {
-                            tracing::debug!("error: failed to delete password from keyring: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::debug!("error: failed to access keyring entry for deletion: {}", e);
-                }
-            },
+            PasswordStore::OsKeyring => delete_os_keyring_entry(rec_key_id),
             #[cfg(all(target_os = "macos", hai_se))]
             PasswordStore::SecureEnclave(vault) => vault.delete(rec_key_id),
+        }
+    }
+
+    /// Delete password from every persistent store it may be in. On macOS,
+    /// the REPL (Secure Enclave) and kernels (Keychain) use separate stores,
+    /// so an explicit forget clears both.
+    fn forget_stored_password(&self, rec_key_id: &str) {
+        self.delete_stored_password(rec_key_id);
+        #[cfg(all(target_os = "macos", hai_se))]
+        match &self.store {
+            PasswordStore::SecureEnclave(_) => delete_os_keyring_entry(rec_key_id),
+            PasswordStore::OsKeyring | PasswordStore::None => {
+                crate::feature::macos_se::SeVault::for_cleanup(se_vault_dir()).delete(rec_key_id)
+            }
         }
     }
 
@@ -549,14 +594,14 @@ impl AssetKeyring {
     pub fn forget_decrypt_key(&mut self, rec_key_id: &str) {
         self.unlocked_decrypt_keys.remove(rec_key_id);
         self.session_passwords.clear();
-        self.delete_stored_password(rec_key_id);
+        self.forget_stored_password(rec_key_id);
     }
 
     /// Lock and forget a specific key (removes from memory AND keyring)
     pub fn forget_signing_key(&mut self, rec_key_id: &str) {
         self.unlocked_signing_keys.remove(rec_key_id);
         self.session_passwords.clear();
-        self.delete_stored_password(rec_key_id);
+        self.forget_stored_password(rec_key_id);
     }
 
     /// Forget all keys belonging to a user.
@@ -576,12 +621,12 @@ impl AssetKeyring {
             .cloned()
             .collect();
         for key_id in &keys {
-            self.delete_stored_password(key_id);
+            self.forget_stored_password(key_id);
         }
+        // The vault can be enumerated (unlike the Keychain), so clear it by
+        // prefix regardless of which store this process uses.
         #[cfg(all(target_os = "macos", hai_se))]
-        if let PasswordStore::SecureEnclave(vault) = &self.store {
-            vault.delete_prefix(&prefix);
-        }
+        crate::feature::macos_se::SeVault::for_cleanup(se_vault_dir()).delete_prefix(&prefix);
         self.unlocked_decrypt_keys
             .retain(|k, _| !k.starts_with(&prefix));
         self.unlocked_signing_keys
@@ -599,12 +644,10 @@ impl AssetKeyring {
             .cloned()
             .collect();
         for key_id in keys {
-            self.delete_stored_password(&key_id);
+            self.forget_stored_password(&key_id);
         }
         #[cfg(all(target_os = "macos", hai_se))]
-        if let PasswordStore::SecureEnclave(vault) = &self.store {
-            vault.wipe();
-        }
+        crate::feature::macos_se::SeVault::for_cleanup(se_vault_dir()).wipe();
         self.lock_all();
     }
 

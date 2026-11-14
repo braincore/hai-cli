@@ -316,6 +316,15 @@ async fn main() -> process::ExitCode {
         let out = Out::stdio();
         match command {
             BotSubcommand::Start { daemon } => {
+                // The bot and every hai it spawns (jobs, daemons, kernels)
+                // use the OS keyring rather than the Secure Enclave, so that
+                // each process doesn't prompt for Touch ID. Children inherit
+                // this from the environment.
+                // SAFETY: Set before the bot spawns any tasks or threads that
+                // read the environment.
+                unsafe {
+                    std::env::set_var(feature::asset_keyring::NO_SECURE_ENCLAVE_ENV, "1");
+                }
                 let cfg = match crate::feature::config_sync::get_merged_config(
                     config_path_override.as_deref(),
                     db.clone(),
