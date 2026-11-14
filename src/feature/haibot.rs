@@ -13,11 +13,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use zeroize::Zeroizing;
 
+use crate::api::client::HaiClient;
 use crate::api::types::asset::AssetEntry;
-use crate::io::Out;
+use crate::asset_cache::AssetBlobCache;
+use crate::feature::asset_crypt::{self, KeyRecipient};
+use crate::feature::asset_keyring::AssetKeyring;
+use crate::io::{Io, Out};
 use crate::{config, db};
 use crate::{errorln, outln, warnln};
 
@@ -403,10 +407,12 @@ fn get_pid_file() -> PathBuf {
 /// If `launch_as_daemon` is true, the bot is started in a background process
 /// and detached. Otherwise, the bot is started in this process.
 pub async fn start_bot(
-    out: &Out,
+    io: &Io,
     account: Option<db::Account>,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
     access: Option<Vec<crate::feature::access::Perm>>,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
     launch_as_daemon: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let is_daemon_child = std::env::var("HAI_BOT_DAEMON").is_ok();
@@ -415,23 +421,106 @@ pub async fn start_bot(
     if !is_daemon_child {
         if let Some(pid) = read_pid() {
             if is_process_running(pid).await {
-                errorln!(out, "Bot is already running (PID: {})", pid);
+                errorln!(io, "Bot is already running (PID: {})", pid);
                 return Ok(());
             }
         }
     }
 
+    // Refuse to start unless the primary decryption key can be unlocked
+    // non-interactively.
+    {
+        let api_client = crate::session::mk_api_client_from_account(account.as_ref());
+        if let Err(e) = ensure_primary_decrypt_key_unlocked(
+            io,
+            &api_client,
+            asset_blob_cache.clone(),
+            asset_keyring.clone(),
+            account.as_ref().map(|a| a.username.as_str()),
+        )
+        .await
+        {
+            errorln!(io, "Bot not started: {}", e);
+            return Err(e.into());
+        }
+    }
+
     if launch_as_daemon && !is_daemon_child {
         let pid = spawn_background()?;
-        outln!(out, "Bot started (PID: {})", pid);
+        outln!(io, "Bot started (PID: {})", pid);
     } else {
-        match run_bot_loop(out, account, cmd_filters, access).await {
-            Ok(_) => outln!(out, "Bot exited normally"),
-            Err(e) => errorln!(out, "Bot exited with error: {}", e),
+        match run_bot_loop(
+            io,
+            account,
+            cmd_filters,
+            access,
+            asset_blob_cache,
+            asset_keyring,
+        )
+        .await
+        {
+            Ok(_) => outln!(io, "Bot exited normally"),
+            Err(e) => errorln!(io, "Bot exited with error: {}", e),
         }
     }
 
     Ok(())
+}
+
+/// Verify that the user's primary decryption key can be unlocked without a
+/// password prompt (i.e. via the OS keyring / Secure Enclave). The key is left
+/// unlocked in `asset_keyring` on success.
+async fn ensure_primary_decrypt_key_unlocked(
+    io: &Io,
+    api_client: &HaiClient,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    username: Option<&str>,
+) -> Result<(), String> {
+    let Some(username) = username else {
+        warnln!(
+            io,
+            "No account active: encrypted job configs will not be readable"
+        );
+        return Ok(());
+    };
+    let recipient = KeyRecipient::User(username.to_string());
+    let enc_key_info = match asset_crypt::get_encryption_key(
+        asset_blob_cache.clone(),
+        api_client,
+        &recipient,
+        None,
+    )
+    .await
+    {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            warnln!(
+                io,
+                "No encryption key set up for {}: job configs and cursors will be unencrypted",
+                username
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(format!("failed to fetch primary encryption key: {}", e));
+        }
+    };
+    let rec_key_id_parts = enc_key_info.recipient_key_id_parts();
+    if asset_keyring
+        .lock()
+        .await
+        .can_unlock_decrypt_key(asset_blob_cache, api_client, &rec_key_id_parts)
+        .await
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "primary decryption key {} is locked; unlock it in the REPL with a persistent \
+             password store (OS keyring) enabled, then retry",
+            rec_key_id_parts.recipient_key_id()
+        ))
+    }
 }
 
 pub async fn stop_bot(out: &Out) -> Result<(), Box<dyn std::error::Error>> {
@@ -599,12 +688,14 @@ fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
 /// Responsible for fetching list of jobs, setting up a listener to track
 /// changes to jobs, and launching the scheduler to execute them.
 pub async fn run_bot_loop(
-    out: &Out,
+    io: &Io,
     account: Option<db::Account>,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
     access: Option<Vec<crate::feature::access::Perm>>,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    outln!(out, "Bot running...");
+    outln!(io, "Bot running...");
 
     let start_msg = format!("Bot starting at {:?}\n", std::time::SystemTime::now());
     std::fs::write(config::get_bot_log_path(), &start_msg).ok();
@@ -612,12 +703,21 @@ pub async fn run_bot_loop(
     let api_client = crate::session::mk_api_client_from_account(account.as_ref());
     let prefix = "haibot/jobs/".to_string();
 
+    let crypt = CryptCtx {
+        io: io.clone(),
+        asset_blob_cache,
+        asset_keyring,
+        recipient: account
+            .as_ref()
+            .map(|a| KeyRecipient::User(a.username.clone())),
+    };
+
     // Initial fetch of job assets
-    let (initial_jobs, initial_cursor) = fetch_job_assets(out, &api_client, &prefix).await?;
+    let (initial_jobs, initial_cursor) = fetch_job_assets(io, &api_client, &prefix).await?;
 
     if initial_jobs.is_empty() {
         outln!(
-            out,
+            io,
             "No jobs found. Add assets with prefix 'haibot/jobs/' to get started."
         );
     }
@@ -641,10 +741,10 @@ pub async fn run_bot_loop(
         crate::session::get_api_base_url().replace("http", "ws")
     );
 
-    let out_clone = out.clone();
+    let io_clone = io.clone();
     let _listener_handle = tokio::spawn(async move {
         listen_for_job_changes(
-            &out_clone,
+            &io_clone,
             api_client_for_listener,
             prefix_clone,
             initial_cursor,
@@ -661,15 +761,61 @@ pub async fn run_bot_loop(
 
     let api_client_for_scheduler = api_client.clone();
     run_scheduler(
-        out,
+        io,
         account.map(|a| a.username),
         job_assets,
         schedule_notify,
         api_client_for_scheduler,
         cmd_filters,
         access,
+        crypt,
     )
     .await
+}
+
+/// Everything needed to decrypt job configs and encrypt/decrypt cursor
+/// attachments.
+#[derive(Clone)]
+struct CryptCtx {
+    /// Input is noop so the keyring never prompts; keys must already be
+    /// unlockable via the persistent password store.
+    io: Io,
+    asset_blob_cache: Arc<AssetBlobCache>,
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
+    /// `None` if no account: encryption is skipped.
+    recipient: Option<KeyRecipient>,
+}
+
+/// Download an asset's data (and metadata, if any) via the entry's URLs and
+/// decrypt the data if the metadata indicates it's encrypted.
+async fn download_and_decrypt(
+    crypt: &CryptCtx,
+    api_client: &HaiClient,
+    entry: &AssetEntry,
+) -> Result<Vec<u8>, String> {
+    let url = entry.asset.url.as_ref().ok_or("no data url")?;
+    let data = crate::asset_reader::download_with_new_client(url)
+        .await
+        .map_err(|_| "failed to download data".to_string())?;
+    let md = match entry.metadata.as_ref().and_then(|md| md.url.as_ref()) {
+        Some(md_url) => Some(
+            crate::asset_reader::download_with_new_client(md_url)
+                .await
+                .map_err(|_| "failed to download metadata".to_string())?,
+        ),
+        None => None,
+    };
+    asset_crypt::maybe_decrypt_asset_contents(
+        &crypt.io,
+        crypt.asset_blob_cache.clone(),
+        crypt.asset_keyring.clone(),
+        api_client,
+        crypt.recipient.as_ref(),
+        &data,
+        md.as_deref(),
+    )
+    .await
+    .map_err(|e| format!("failed to decrypt: {}", e))
 }
 
 /// Fetching the list of jobs is equivalent to listing all assets at a given
@@ -679,7 +825,7 @@ pub async fn run_bot_loop(
 /// be returned. (Applicable if `prefix` is to a non-private pool that isn't
 /// created by default)
 async fn fetch_job_assets(
-    out: &Out,
+    io: &Io,
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
 ) -> Result<
@@ -718,12 +864,12 @@ async fn fetch_job_assets(
             }
             Err(e) => match &e {
                 crate::api::client::RequestError::Route(AssetEntryIterError::Empty) => {
-                    warnln!(out, "No cursor available, will retry...");
+                    warnln!(io, "No cursor available, will retry...");
                     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                     continue;
                 }
                 _ => {
-                    errorln!(out, "Failed to fetch task list: {}", e);
+                    errorln!(io, "Failed to fetch task list: {}", e);
                     return Err(Box::new(e));
                 }
             },
@@ -736,7 +882,7 @@ async fn fetch_job_assets(
 /// Upon detecting a change, the cursor is advanced and changes are
 /// synchronized to `job_assets`.
 async fn listen_for_job_changes(
-    out: &Out,
+    io: &Io,
     api_client: crate::api::client::HaiClient,
     prefix: String,
     initial_cursor: String,
@@ -760,17 +906,17 @@ async fn listen_for_job_changes(
         let (mut ws_stream, _) = match connect_async(&listen_url).await {
             Ok(res) => res,
             Err(e) => {
-                errorln!(out, "Failed to connect: {}", e);
+                errorln!(io, "Failed to connect: {}", e);
                 attempt += 1;
                 let backoff_duration = reconnect_backoff(attempt);
-                warnln!(out, "Retrying in {} seconds...", backoff_duration.as_secs());
+                warnln!(io, "Retrying in {} seconds...", backoff_duration.as_secs());
                 tokio::time::sleep(backoff_duration).await;
                 continue;
             }
         };
 
         if attempt > 0 {
-            outln!(out, "Listener connected");
+            outln!(io, "Listener connected");
             attempt = 0;
         }
 
@@ -778,7 +924,7 @@ async fn listen_for_job_changes(
             .send(Message::Text(serde_json::to_string(&arg).unwrap().into()))
             .await
         {
-            errorln!(out, "Error sending listen arg: {}", e);
+            errorln!(io, "Error sending listen arg: {}", e);
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
@@ -793,14 +939,14 @@ async fn listen_for_job_changes(
                 _ = ping.tick() => {
                     if last_seen.elapsed() > WS_DEAD_AFTER {
                         warnln!(
-                            out,
+                            io,
                             "Listener websocket silent for {}s, reconnecting...",
                             last_seen.elapsed().as_secs()
                         );
                         break;
                     }
                     if let Err(e) = ws_stream.send(Message::Ping(Default::default())).await {
-                        warnln!(out, "Listener ping failed ({}), reconnecting...", e);
+                        warnln!(io, "Listener ping failed ({}), reconnecting...", e);
                         break;
                     }
                 }
@@ -809,7 +955,7 @@ async fn listen_for_job_changes(
                         Some(Ok(msg)) => msg,
                         Some(Err(e)) => {
                             if !is_conn_reset(&e) {
-                                errorln!(out, "websocket: {}", e);
+                                errorln!(io, "websocket: {}", e);
                             }
                             break;
                         }
@@ -818,9 +964,9 @@ async fn listen_for_job_changes(
                     last_seen = std::time::Instant::now();
                     match msg {
                         Message::Text(_) | Message::Binary(_) => {
-                            outln!(out, "Received change notification, scanning for changes...");
+                            outln!(io, "Received change notification, scanning for changes...");
                             sync_job_changes(
-                                out,
+                                io,
                                 &api_client,
                                 &prefix,
                                 &mut current_cursor,
@@ -845,7 +991,7 @@ async fn listen_for_job_changes(
 ///
 /// Falls back to a full refresh on failure.
 async fn sync_job_changes(
-    out: &Out,
+    io: &Io,
     api_client: &crate::api::client::HaiClient,
     prefix: &str,
     current_cursor: &mut String,
@@ -875,10 +1021,10 @@ async fn sync_job_changes(
             }
             Err(e) => {
                 if cursor == *current_cursor {
-                    errorln!(out, "Error fetching changes via iter_next: {}", e);
+                    errorln!(io, "Error fetching changes via iter_next: {}", e);
                     first_page_failed = true;
                 } else {
-                    errorln!(out, "Error during iter_next pagination: {}", e);
+                    errorln!(io, "Error during iter_next pagination: {}", e);
                 }
                 break;
             }
@@ -887,14 +1033,14 @@ async fn sync_job_changes(
 
     if first_page_failed {
         // Fallback: full refresh
-        match fetch_job_assets(out, api_client, prefix).await {
+        match fetch_job_assets(io, api_client, prefix).await {
             Ok((new_jobs, new_cursor)) => {
                 *job_assets.write().await = new_jobs;
                 *current_cursor = new_cursor;
                 notify.notify_one();
             }
             Err(e2) => {
-                errorln!(out, "Error during fallback refresh: {}", e2);
+                errorln!(io, "Error during fallback refresh: {}", e2);
             }
         }
         return;
@@ -904,7 +1050,7 @@ async fn sync_job_changes(
 
     if !changed_entries.is_empty() {
         outln!(
-            out,
+            io,
             "Detected {} changed entries, updating job list...",
             changed_entries.len()
         );
@@ -916,12 +1062,12 @@ async fn sync_job_changes(
             if changed.asset.url.is_some() {
                 job_assets_guard.push(changed.clone());
             } else {
-                outln!(out, "Entry removed: {}", changed.name);
+                outln!(io, "Entry removed: {}", changed.name);
             }
         }
         drop(job_assets_guard);
         notify.notify_one();
-        outln!(out, "Job list updated");
+        outln!(io, "Job list updated");
     }
 }
 
@@ -1206,13 +1352,14 @@ struct AssetWatcherState {
 //
 
 async fn run_scheduler(
-    out: &Out,
+    io: &Io,
     account_user: Option<String>,
     job_assets: Arc<RwLock<Vec<AssetEntry>>>,
     notify: Arc<Notify>,
     api_client: crate::api::client::HaiClient,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
     access: Option<Vec<crate::feature::access::Perm>>,
+    crypt: CryptCtx,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Track running daemons (always-on tasks)
     let mut daemons: HashMap<String, DaemonState> = HashMap::new();
@@ -1231,7 +1378,7 @@ async fn run_scheduler(
         // Parse current job configurations
         let scheduled_jobs = {
             let assets = job_assets.read().await;
-            parse_all_jobs(&assets).await
+            parse_all_jobs(&crypt, &api_client, &assets).await
         };
 
         // Reconcile daemons (start new ones, stop removed ones)
@@ -1245,6 +1392,7 @@ async fn run_scheduler(
             &scheduled_jobs,
             &mut asset_watchers,
             &api_client,
+            &crypt,
             cmd_filters.clone(),
             access.clone(),
             account_user.clone(),
@@ -1298,7 +1446,7 @@ async fn run_scheduler(
 
                     // Calculate next run time
                     if let Some(next) = calculate_next_run(&job.schedule, &job.timezone, now) {
-                        outln!(out, "Next run at: {:?}", next);
+                        outln!(io, "Next run at: {:?}", next);
                         next_runs.insert(job_key, next);
                     }
                 }
@@ -1372,6 +1520,7 @@ async fn reconcile_asset_watchers(
     jobs: &[ScheduledJob],
     watchers: &mut HashMap<String, AssetWatcherState>,
     api_client: &crate::api::client::HaiClient,
+    crypt: &CryptCtx,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
     access: Option<Vec<crate::feature::access::Perm>>,
     account_user: Option<String>,
@@ -1429,7 +1578,12 @@ async fn reconcile_asset_watchers(
             task: job.task.clone(),
             steps: job.steps.clone(),
         };
-        let handle = tokio::spawn(asset_watcher_loop(api_client.clone(), env, watcher_job));
+        let handle = tokio::spawn(asset_watcher_loop(
+            api_client.clone(),
+            crypt.clone(),
+            env,
+            watcher_job,
+        ));
         watchers.insert(job_key.clone(), AssetWatcherState { job_key, handle });
     }
 }
@@ -1489,6 +1643,7 @@ fn cursor_attachment_name(job_entry_id: &str) -> String {
 /// mismatched asset) yields `None` so the caller falls back to the tip.
 async fn load_stored_cursor(
     api_client: &crate::api::client::HaiClient,
+    crypt: &CryptCtx,
     job: &AssetWatcherJob,
 ) -> Option<String> {
     use crate::api::types::asset::AssetGetArg;
@@ -1508,13 +1663,13 @@ async fn load_stored_cursor(
         }
     };
     // No URL => deleted or no data.
-    let url = entry.asset.url?;
-    let bytes = match crate::asset_reader::download_with_new_client(&url).await {
+    entry.asset.url.as_ref()?;
+    let bytes = match download_and_decrypt(crypt, api_client, &entry).await {
         Ok(bytes) => bytes,
-        Err(_) => {
+        Err(e) => {
             log_scheduler(&format!(
-                "Asset watcher '{}': failed to download stored cursor {}",
-                job.job_key, name
+                "Asset watcher '{}': failed to read stored cursor {}: {}",
+                job.job_key, name, e
             ));
             return None;
         }
@@ -1543,8 +1698,12 @@ async fn load_stored_cursor(
 }
 
 /// Persist the cursor for a job. Returns whether the write succeeded.
+///
+/// The cursor attachment is encrypted following the usual AKM policy: reuse
+/// its existing AKM if it exists, otherwise inherit the job config's.
 async fn save_cursor(
     api_client: &crate::api::client::HaiClient,
+    crypt: &CryptCtx,
     job: &AssetWatcherJob,
     cursor: &str,
 ) -> bool {
@@ -1564,23 +1723,68 @@ async fn save_cursor(
             return false;
         }
     };
-    match api_client
+    let name = cursor_attachment_name(&job.job_entry_id);
+    let akm_info = match asset_crypt::choose_akm_for_asset_by_name(
+        &crypt.io,
+        crypt.asset_blob_cache.clone(),
+        crypt.asset_keyring.clone(),
+        api_client.clone(),
+        crypt.recipient.as_ref(),
+        &name,
+        false,
+    )
+    .await
+    {
+        Ok(akm_info) => akm_info,
+        Err(asset_crypt::AkmSelectionError::Abort(msg)) => {
+            log_scheduler(&format!(
+                "Asset watcher '{}': failed to choose cursor encryption: {}",
+                job.job_key, msg
+            ));
+            return false;
+        }
+    };
+    let data = match akm_info.as_ref() {
+        Some(akm_info) => asset_crypt::encrypt_asset_with_aes_key(
+            &akm_info.unlocked_akm.sym_key_info.aes_key,
+            &data,
+        ),
+        None => data,
+    };
+    let entry = match api_client
         .asset_put(AssetPutArg {
-            name: cursor_attachment_name(&job.job_entry_id),
+            name: name.clone(),
             data,
             conflict_policy: PutConflictPolicy::Override,
         })
         .await
     {
-        Ok(_) => true,
+        Ok(res) => res.entry,
         Err(e) => {
             log_scheduler(&format!(
                 "Asset watcher '{}': failed to save cursor: {}",
                 job.job_key, e
             ));
-            false
+            return false;
         }
+    };
+    // First encrypted write: store the encryption metadata.
+    if let Some(akm_info) = akm_info.as_ref()
+        && entry
+            .metadata
+            .as_ref()
+            .map(|md| md.content_encrypted.is_none())
+            .unwrap_or(true)
+        && let Err(e) =
+            asset_crypt::put_asset_encryption_metadata(api_client, &name, akm_info).await
+    {
+        log_scheduler(&format!(
+            "Asset watcher '{}': failed to save cursor encryption metadata: {}",
+            job.job_key, e
+        ));
+        return false;
     }
+    true
 }
 
 // --
@@ -1717,9 +1921,10 @@ async fn collect_revisions_after(
 /// from.
 async fn resume_watcher(
     api_client: &crate::api::client::HaiClient,
+    crypt: &CryptCtx,
     job: &AssetWatcherJob,
 ) -> RevisionBatch {
-    let Some(stored) = load_stored_cursor(api_client, job).await else {
+    let Some(stored) = load_stored_cursor(api_client, crypt, job).await else {
         let tip = wait_for_tip_cursor(api_client, &job.job_key, &job.asset_name).await;
         log_scheduler(&format!(
             "Asset watcher '{}': starting at tip of '{}'",
@@ -1804,6 +2009,7 @@ async fn resume_watcher(
 /// The main loop for watching an asset for changes
 async fn asset_watcher_loop(
     api_client: crate::api::client::HaiClient,
+    crypt: CryptCtx,
     env: JobExecEnv,
     job: AssetWatcherJob,
 ) {
@@ -1817,7 +2023,7 @@ async fn asset_watcher_loop(
         crate::session::get_api_base_url().replace("http", "ws")
     );
 
-    let initial_batch = resume_watcher(&api_client, &job).await;
+    let initial_batch = resume_watcher(&api_client, &crypt, &job).await;
     let mut current_cursor = initial_batch.cursor_after.clone();
 
     // Jobs run on a separate task so the websocket keeps being read (and
@@ -1826,6 +2032,7 @@ async fn asset_watcher_loop(
     let (job_tx, job_rx) = tokio::sync::mpsc::unbounded_channel::<RevisionBatch>();
     tokio::spawn(run_revision_batches(
         api_client.clone(),
+        crypt,
         env,
         job.clone(),
         job_rx,
@@ -1943,6 +2150,7 @@ async fn asset_watcher_loop(
 /// its revisions have been processed.
 async fn run_revision_batches(
     api_client: crate::api::client::HaiClient,
+    crypt: CryptCtx,
     env: JobExecEnv,
     job: AssetWatcherJob,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<RevisionBatch>,
@@ -1970,7 +2178,7 @@ async fn run_revision_batches(
             .await;
         }
         if saved_cursor.as_deref() != Some(batch.cursor_after.as_str())
-            && save_cursor(&api_client, &job, &batch.cursor_after).await
+            && save_cursor(&api_client, &crypt, &job, &batch.cursor_after).await
         {
             saved_cursor = Some(batch.cursor_after);
         }
@@ -2008,28 +2216,40 @@ async fn enqueue_new_revisions(
 // Job config parsing
 //
 
-async fn parse_all_jobs(asset_entries: &[AssetEntry]) -> Vec<ScheduledJob> {
+async fn parse_all_jobs(
+    crypt: &CryptCtx,
+    api_client: &HaiClient,
+    asset_entries: &[AssetEntry],
+) -> Vec<ScheduledJob> {
     let mut jobs = Vec::new();
     for asset_entry in asset_entries {
-        if let Some(job) = parse_job(asset_entry).await {
+        if let Some(job) = parse_job(crypt, api_client, asset_entry).await {
             jobs.push(job);
         }
     }
     jobs
 }
 
-/// Download and parse a single job asset. Returns `None` (after logging) if
-/// the asset can't be fetched or doesn't define a valid job.
-async fn parse_job(asset_entry: &AssetEntry) -> Option<ScheduledJob> {
-    let Some(data_url) = asset_entry.asset.url.as_ref() else {
+/// Download, decrypt (if needed), and parse a single job asset. Returns `None`
+/// (after logging) if the asset can't be fetched or doesn't define a valid
+/// job.
+async fn parse_job(
+    crypt: &CryptCtx,
+    api_client: &HaiClient,
+    asset_entry: &AssetEntry,
+) -> Option<ScheduledJob> {
+    if asset_entry.asset.url.is_none() {
         log_scheduler(&format!("Asset {} has no URL, skipping", asset_entry.name));
         return None;
-    };
+    }
 
-    let toml_content = match crate::asset_reader::download_with_new_client(data_url).await {
+    let toml_content = match download_and_decrypt(crypt, api_client, asset_entry).await {
         Ok(content) => content,
-        Err(_) => {
-            log_scheduler(&format!("Failed to download asset: {}", asset_entry.name));
+        Err(e) => {
+            log_scheduler(&format!(
+                "Failed to read job asset {}: {}",
+                asset_entry.name, e
+            ));
             return None;
         }
     };

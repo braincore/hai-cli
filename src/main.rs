@@ -316,15 +316,44 @@ async fn main() -> process::ExitCode {
         let out = Out::stdio();
         match command {
             BotSubcommand::Start { daemon } => {
-                let _ = crate::feature::haibot::start_bot(
-                    &out,
+                let cfg = match crate::feature::config_sync::get_merged_config(
+                    config_path_override.as_deref(),
+                    db.clone(),
+                    account.as_ref().map(|a| a.username.as_str()),
+                )
+                .await
+                {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        eprintln!("error: failed to read config: {}", e);
+                        return process::ExitCode::from(1);
+                    }
+                };
+                let (asset_blob_path, disable_asset_cache) = match config::mk_asset_blob_cache() {
+                    Ok(path) => (path, cfg.asset_blob_cache_size == 0),
+                    Err(_e) => (config::get_asset_blob_cache_path(), true),
+                };
+                let asset_blob_cache = Arc::new(
+                    asset_cache::AssetBlobCache::new(asset_blob_path)
+                        .with_cache_disabled(disable_asset_cache)
+                        .with_max_size(cfg.asset_blob_cache_size),
+                );
+                let asset_keyring = Arc::new(Mutex::new(
+                    feature::asset_keyring::AssetKeyring::new(cfg.use_os_keyring),
+                ));
+                // Bot is headless: never prompt for input.
+                let bot_io = Io::new(io::StdioOutput::new(), io::NoopInput::new());
+                let res = crate::feature::haibot::start_bot(
+                    &bot_io,
                     account,
                     cmd_registry.get_filters(),
                     access,
+                    asset_blob_cache,
+                    asset_keyring,
                     daemon,
                 )
                 .await;
-                return process::ExitCode::from(0);
+                return process::ExitCode::from(if res.is_ok() { 0 } else { 1 });
             }
             BotSubcommand::Stop => {
                 let _ = crate::feature::haibot::stop_bot(&out).await;
