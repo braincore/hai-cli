@@ -1,0 +1,12 @@
+<svg width="120" height="140" xmlns="http://www.w3.org/2000/svg">
+  <!-- Left vertical stroke -->
+  <rect x="20" y="10" width="12" height="110" fill="#2c3e50" rx="6" />
+  <!-- Right vertical stroke -->
+  <rect x="68" y="45" width="12" height="75" fill="#2c3e50" rx="6" />
+  <!-- Horizontal crossbar -->
+  <rect x="32" y="55" width="36" height="10" fill="#2c3e50" rx="5" />
+  <!-- Subtle shadow effect -->
+  <rect x="22" y="12" width="12" height="110" fill="#34495e" rx="6" opacity="0.3" />
+  <rect x="70" y="47" width="12" height="75" fill="#34495e" rx="6" opacity="0.3" />
+  <rect x="34" y="57" width="36" height="10" fill="#34495e" rx="5" opacity="0.3" />
+</svg>
