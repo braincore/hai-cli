@@ -3932,10 +3932,12 @@ async fn handle_client_message(
                 .await;
         }
         "repl/perm/get" => {
-            let perm_ctxs_guard = perm_ctxs.lock().await;
+            // Take snapshot to drop lock immediately in case follow up logic
+            // stalls somewhere (e.g. keyring unlock)
+            let perm_ctxs_snapshot = perm_ctxs.lock().await.clone();
 
             // Check if any existing permissions require keyring access.
-            let perm_requires_keyring: bool = perm_ctxs_guard
+            let perm_requires_keyring: bool = perm_ctxs_snapshot
                 .iter()
                 .any(|perm| perm.perm.requires_keyring());
 
@@ -3950,7 +3952,7 @@ async fn handle_client_message(
                 .is_some();
 
             let perm_get_result = ReplPermGetResult {
-                perms: perm_ctxs_guard.iter().map(|p| p.perm.clone()).collect(),
+                perms: perm_ctxs_snapshot.iter().map(|p| p.perm.clone()).collect(),
                 keyring_need_unlock,
             };
             let resp: ClientMessageResponse<ReplPermGetResult, ()> = ClientMessageResponse::Ok {

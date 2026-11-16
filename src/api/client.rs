@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::limiter::ApiLimiter;
 use super::types::{account, asset, bot, messaging, task, web};
@@ -53,7 +54,20 @@ impl HaiClient {
     pub fn new(base_url: &str) -> Self {
         HaiClient {
             base_url: base_url.to_string(),
-            client: Client::new(),
+            // Add timeouts for dropped connections. Specifically, when machine
+            // sleeps/wakes-up, connections can be silently dead and won't be
+            // recovered without timeouts.
+            client: Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .read_timeout(Duration::from_secs(20))
+                .timeout(Duration::from_secs(600))
+                .pool_idle_timeout(Duration::from_secs(20))
+                .tcp_keepalive(Duration::from_secs(15))
+                .http2_keep_alive_interval(Duration::from_secs(10))
+                .http2_keep_alive_timeout(Duration::from_secs(5))
+                .http2_keep_alive_while_idle(true)
+                .build()
+                .expect("failed to build HTTP client"),
             token: None,
             limiter: None,
         }
