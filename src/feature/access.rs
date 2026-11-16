@@ -67,6 +67,8 @@ pub enum Perm {
     /// Access to the local filesystem.
     Filesystem,
     Tasks,
+    /// Allows messaging (email or push notifs).
+    Messaging,
     Bot,
     /// NOTE: This was originally intended to be temporary until kernel's
     /// supported fine-grained capabilities (HEP-85). However, it's being

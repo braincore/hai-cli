@@ -69,6 +69,8 @@ pub struct Traits {
     pub assets_write: bool,
     /// Publishes tasks or modifies task repository.
     pub tasks: bool,
+    /// Sends messages (email or push notifs).
+    pub messaging: bool,
     /// Controls the bot.
     pub bot: bool,
     /// Runs arbitrary code on the user's machine.
@@ -90,6 +92,7 @@ impl Traits {
         assets_read: false,
         assets_write: false,
         tasks: false,
+        messaging: false,
         bot: false,
         executes: false,
         network: false,
@@ -127,6 +130,10 @@ impl Traits {
         self.tasks = true;
         self
     }
+    pub const fn messaging(mut self) -> Self {
+        self.messaging = true;
+        self
+    }
     pub const fn bot(mut self) -> Self {
         self.bot = true;
         self
@@ -162,6 +169,7 @@ pub struct DenyTraits {
     pub assets: bool,
     pub assets_write: bool,
     pub tasks: bool,
+    pub messaging: bool,
     pub bot: bool,
     pub executes: bool,
     pub network: bool,
@@ -177,6 +185,7 @@ impl DenyTraits {
         assets: false,
         assets_write: false,
         tasks: false,
+        messaging: false,
         bot: false,
         executes: false,
         network: false,
@@ -194,6 +203,7 @@ impl DenyTraits {
             || (self.network && t.network)
             || (self.needs_account && t.needs_account)
             || (self.tasks && t.tasks)
+            || (self.messaging && t.messaging)
             || (self.bot && t.bot)
             || (self.interactive && t.interactive)
             || (self.repl_state && t.repl_state)
@@ -1170,13 +1180,16 @@ pub static REGISTRY: &[Entry] = &[
         .with_opts(&[OPT_N, OPT_HQ])
         .with_traits(Traits::NONE.fs_ro()),
     ),
-    Entry::Cmd(cmd(
-        Slash,
-        Cow::Borrowed("cd"),
-        Cow::Borrowed("file"),
-        Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::Dir, glob_ok: false }, Required)]),
-        Doc::new("Change the current working directory"),
-    )),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("cd"),
+            Cow::Borrowed("file"),
+            Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::Dir, glob_ok: false }, Required)]),
+            Doc::new("Change the current working directory"),
+        )
+        .with_traits(Traits::NONE.fs_ro()),
+    ),
     //
     // HTTP
     //
@@ -2307,7 +2320,7 @@ add it to the toolbox.
             Doc::new("Edit a task in the repository").user("Requires /account-login"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.net().account().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2540,7 +2553,7 @@ add it to the toolbox.
             name: "body",
             doc: "The email body",
         })
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.net().messaging()),
     ),
     Entry::Cmd(
         cmd(
@@ -2555,7 +2568,7 @@ add it to the toolbox.
             name: "body",
             doc: "The notification body",
         })
-        .with_traits(Traits::NONE.net()),
+        .with_traits(Traits::NONE.net().messaging()),
     ),
     //
     // Web search
@@ -2632,7 +2645,7 @@ add it to the toolbox.
                     "cmd",
                     Text,
                     Repeated { at_least: 1 },
-                    "Use exact command, asterisk pattern, or capability (`fs`, `fs_write`, `assets`, `assets_write`, `exec`) to match commands.",
+                    "Use exact command, asterisk pattern, or capability (`fs`, `fs_write`, `assets`, `assets_write`, `tasks`, `messaging`, `bot`, `exec`).",
                 )
             ]),
             Doc::new("Specify commands to deny"),
@@ -2984,6 +2997,9 @@ impl Registry {
             } else if cmd == "tasks" {
                 deny_set = true;
                 deny_traits.tasks = true;
+            } else if cmd == "messaging" {
+                deny_set = true;
+                deny_traits.messaging = true;
             } else if cmd == "bot" {
                 deny_set = true;
                 deny_traits.bot = true;

@@ -85,6 +85,9 @@ fn self_invocation(
                 if deny_traits.tasks {
                     cmd_deny_flags.push("tasks".to_string());
                 }
+                if deny_traits.messaging {
+                    cmd_deny_flags.push("messaging".to_string());
+                }
                 if deny_traits.bot {
                     cmd_deny_flags.push("bot".to_string());
                 }

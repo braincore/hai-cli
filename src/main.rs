@@ -84,11 +84,12 @@ struct Cli {
     #[arg(short = 'c', long = "config", value_name = "FILE")]
     config: Option<String>,
 
-    /// Commands allowed
+    /// Allowlist: Use exact command or asterisk pattern to match commands.
     #[arg(long = "cmd-allow")]
     cmd_allow: Option<String>,
 
-    /// Commands denied
+    /// Denylist: Use exact command, asterisk pattern, or capability
+    /// (fs, fs_write, assets, assets_write, tasks, messaging, bot, exec).
     #[arg(long = "cmd-deny")]
     cmd_deny: Option<String>,
 

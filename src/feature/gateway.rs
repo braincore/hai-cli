@@ -3201,6 +3201,7 @@ async fn handle_client_message(
             deny_traits.fs = true;
             deny_traits.bot = true;
             deny_traits.tasks = true;
+            deny_traits.messaging = true;
             deny_traits.executes = true;
 
             for perm in &perms {
@@ -3219,6 +3220,9 @@ async fn handle_client_message(
                     Perm::Tasks => {
                         deny_traits.tasks = false;
                     }
+                    Perm::Messaging => {
+                        deny_traits.messaging = false;
+                    }
                     Perm::Bot => {
                         deny_traits.bot = false;
                     }
@@ -3228,6 +3232,7 @@ async fn handle_client_message(
                         deny_traits.bot = false;
                         deny_traits.tasks = false;
                         deny_traits.executes = false;
+                        deny_traits.messaging = false;
                     }
                     _ => {}
                 }
