@@ -3244,15 +3244,19 @@ async fn handle_client_message(
             }
             args.push("--kernel".into());
 
-            let mut child = match tokio::process::Command::new(&exe)
-                .args(&args)
+            let mut cmd = tokio::process::Command::new(&exe);
+            cmd.args(&args)
                 .stdin(std::process::Stdio::null())
                 // Stdout must be piped to read kernel's ready message
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true) // For clean up on exit
-                .spawn()
-            {
+                .kill_on_drop(true); // For clean up on exit
+            // Share unlocked keys so the kernel doesn't re-prompt for them.
+            let handoff =
+                crate::feature::asset_keyring::attach_handoff(&mut cmd, &asset_keyring).await;
+            let spawn_res = cmd.spawn();
+            drop(handoff);
+            let mut child = match spawn_res {
                 Ok(c) => c,
                 Err(e) => {
                     send_response::<ReplKernelSpawnResult, ReplKernelSpawnError>(

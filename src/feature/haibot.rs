@@ -1450,6 +1450,7 @@ async fn run_scheduler(
                         let steps = job.steps.clone();
                         let cmd_filters = cmd_filters.clone();
                         let access = access.clone();
+                        let asset_keyring = crypt.asset_keyring.clone();
                         let handle = tokio::spawn(async move {
                             execute_job(
                                 account_user,
@@ -1463,6 +1464,7 @@ async fn run_scheduler(
                                     .as_ref()
                                     .map(|a| a.iter().collect::<Vec<_>>())
                                     .as_deref(),
+                                &asset_keyring,
                             )
                             .await;
                         });
@@ -1594,6 +1596,7 @@ async fn reconcile_asset_watchers(
             account_user: account_user.clone(),
             cmd_filters: cmd_filters.clone(),
             access: access.clone(),
+            asset_keyring: crypt.asset_keyring.clone(),
         };
         let watcher_job = AssetWatcherJob {
             job_key: job_key.clone(),
@@ -1631,6 +1634,8 @@ struct JobExecEnv {
     account_user: Option<String>,
     cmd_filters: Vec<crate::cmd_registry::Filter>,
     access: Option<Vec<crate::feature::access::Perm>>,
+    /// Unlocked keys are handed off to job processes.
+    asset_keyring: Arc<Mutex<AssetKeyring>>,
 }
 
 /// A batch of revisions to process. Once every revision has been processed,
@@ -2275,6 +2280,7 @@ async fn run_watcher_job(
         context_step,
         &cmd_filters,
         access.as_deref(),
+        &env.asset_keyring,
     )
     .await;
     pending.absorb(&job.job_key, reqs);
@@ -2805,6 +2811,7 @@ async fn execute_job(
     asset_revision: Option<(&str, &str)>,
     cmd_filters: &[&crate::cmd_registry::Filter],
     access: Option<&[&crate::feature::access::Perm]>,
+    asset_keyring: &Mutex<AssetKeyring>,
 ) {
     log_scheduler(&format!("Executing job: {} ({:?})", job_key, description));
 
@@ -2816,13 +2823,15 @@ async fn execute_job(
 
     log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
 
-    let child = match Command::new(&program)
-        .args(&args)
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    let handoff = crate::feature::asset_keyring::attach_handoff(&mut cmd, asset_keyring).await;
+    let spawn_res = cmd.spawn();
+    drop(handoff);
+    let child = match spawn_res {
         Ok(child) => child,
         Err(e) => {
             log_scheduler(&format!("Failed to execute job {}: {}", job_key, e));
@@ -2943,6 +2952,7 @@ async fn execute_job_with_kernel(
     context_step: Option<String>,
     cmd_filters: &[&crate::cmd_registry::Filter],
     access: Option<&[&crate::feature::access::Perm]>,
+    asset_keyring: &Mutex<AssetKeyring>,
 ) -> Vec<NextArg> {
     log_scheduler(&format!(
         "Executing job (kernel): {} ({:?})",
@@ -2963,15 +2973,17 @@ async fn execute_job_with_kernel(
 
     log_scheduler(&format!("Invoking: {} {}", program, args.join(" ")));
 
-    let mut child = match Command::new(&program)
-        .args(&args)
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
         .stdin(std::process::Stdio::null())
         // Stdout must be piped to read the kernel's ready message.
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
+        .kill_on_drop(true);
+    let handoff = crate::feature::asset_keyring::attach_handoff(&mut cmd, asset_keyring).await;
+    let spawn_res = cmd.spawn();
+    drop(handoff);
+    let mut child = match spawn_res {
         Ok(child) => child,
         Err(e) => {
             log_scheduler(&format!("Failed to execute job {}: {}", job_key, e));

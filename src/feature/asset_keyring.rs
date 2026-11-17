@@ -60,9 +60,16 @@ enum PasswordStore {
     /// unavailable).
     OsKeyring,
     /// macOS: passwords sealed to a Secure Enclave key gated by Touch ID.
-    /// // Also uses system password as fallback.
+    /// Also uses system password as fallback.
     #[cfg(all(target_os = "macos", hai_se))]
     SecureEnclave(crate::feature::macos_se::SeVault),
+    /// A child process that inherited unlocked keys from its parent.
+    /// Specifically useful when the parent process was using SecureEnclave
+    /// since without inheritance every child process would need to trigger
+    /// Touch ID (painful for kernels). Because the entire store is treated as
+    /// inherited, any additional keys that are prompted for are only kept for
+    /// the process's lifetime.
+    Inherited,
 }
 
 impl PasswordStore {
@@ -72,6 +79,7 @@ impl PasswordStore {
             PasswordStore::OsKeyring => "os-keyring",
             #[cfg(all(target_os = "macos", hai_se))]
             PasswordStore::SecureEnclave(_) => "secure-enclave",
+            PasswordStore::Inherited => "inherited",
         }
     }
 }
@@ -119,24 +127,44 @@ impl fmt::Debug for AssetKeyring {
 }
 
 impl AssetKeyring {
+    /// Creates a keyring.
+    ///
+    /// The first keyring created in a process consumes any keys handed off by
+    /// a parent process.
     pub fn new(enable_os_keyring: bool) -> Self {
+        let inherited = INHERITED_KEYS.lock().ok().and_then(|mut g| g.take());
         let store = if enable_os_keyring {
-            Self::select_store()
+            Self::select_store(inherited.is_some())
         } else {
             PasswordStore::None
         };
         tracing::debug!("asset keyring password store: {}", store.name());
-        Self {
+        let mut keyring = Self {
             unlocked_decrypt_keys: HashMap::new(),
             unlocked_signing_keys: HashMap::new(),
             session_passwords: Vec::new(),
             last_used: std::time::Instant::now(),
             store,
+        };
+        if let Some(keys) = inherited {
+            tracing::debug!(
+                "asset keyring seeded by parent: {} decrypt, {} signing",
+                keys.decrypt.len(),
+                keys.signing.len()
+            );
+            keyring.unlocked_decrypt_keys = keys.decrypt;
+            keyring.unlocked_signing_keys = keys.signing;
         }
+        keyring
     }
 
-    fn select_store() -> PasswordStore {
+    fn select_store(inherited: bool) -> PasswordStore {
+        if inherited {
+            return PasswordStore::Inherited;
+        }
         // (macOS) Prefer the Secure Enclave (Touch ID) unless disabled by env.
+        // A child seeded by its parent uses the transient `Inherited` store
+        // instead so it never prompts for Touch ID.
         #[cfg(all(target_os = "macos", hai_se))]
         if !secure_enclave_disabled_by_env()
             && let Some(vault) = crate::feature::macos_se::SeVault::open(se_vault_dir())
@@ -199,6 +227,7 @@ impl AssetKeyring {
                     tracing::debug!("error: failed to seal password: {}", e);
                 }
             }
+            PasswordStore::Inherited => {}
         }
     }
 
@@ -230,6 +259,7 @@ impl AssetKeyring {
                     None
                 }
             },
+            PasswordStore::Inherited => None,
         }
     }
 
@@ -250,6 +280,7 @@ impl AssetKeyring {
             }
             #[cfg(all(target_os = "macos", hai_se))]
             PasswordStore::SecureEnclave(vault) => Some(vault.contains(rec_key_id)),
+            PasswordStore::Inherited => Some(false),
         }
     }
 
@@ -260,6 +291,7 @@ impl AssetKeyring {
             PasswordStore::OsKeyring => delete_os_keyring_entry(rec_key_id),
             #[cfg(all(target_os = "macos", hai_se))]
             PasswordStore::SecureEnclave(vault) => vault.delete(rec_key_id),
+            PasswordStore::Inherited => {}
         }
     }
 
@@ -275,6 +307,11 @@ impl AssetKeyring {
         match &self.store {
             PasswordStore::SecureEnclave(_) => delete_os_keyring_entry(rec_key_id),
             PasswordStore::OsKeyring | PasswordStore::None => {
+                crate::feature::macos_se::SeVault::for_cleanup(se_vault_dir()).delete(rec_key_id)
+            }
+            // Since key was inherited, parent's store is unknown -> clear both
+            PasswordStore::Inherited => {
+                delete_os_keyring_entry(rec_key_id);
                 crate::feature::macos_se::SeVault::for_cleanup(se_vault_dir()).delete(rec_key_id)
             }
         }
@@ -677,6 +714,237 @@ impl Drop for AssetKeyring {
 
 // --
 
+//
+// Parent -> child handoff of unlocked keys.
+//
+// A parent passes its unlocked keys to self-invoked children through an
+// inherited pipe so that children (e.g. kernels) don't re-prompt (Touch ID on
+// macOS) for keys the parent already unlocked. Only the fd number travels in
+// the environment; the secrets only exist in the pipe buffer until the child
+// reads them.
+//
+
+/// Hand off unlocked keys to self-invoked children.
+const HANDOFF_ENABLED: bool = true;
+
+/// Hand off even when `HAI_NO_SECURE_ENCLAVE` is set. It's not necessary since
+/// children share the OS keyring, but done to unify approach.
+const HANDOFF_WITH_NO_SECURE_ENCLAVE: bool = true;
+
+/// Env var holding the file description number of the keyring handoff pipe.
+pub const KEYRING_FD_ENV_VAR: &str = "HAI_KEYRING_FD";
+
+const HANDOFF_MAGIC: &[u8; 4] = b"HAI!";
+
+/// Kept well below the minimum pipe buffer (16 KiB on macOS) so the parent
+/// can write the whole payload before spawning without blocking.
+const HANDOFF_MAX_LEN: usize = 8 * 1024;
+
+const HANDOFF_CHILD_FD: i32 = 3;
+
+struct InheritedKeys {
+    decrypt: HashMap<String, StaticSecret>,
+    signing: HashMap<String, SigningKey>,
+}
+
+/// Keys received from the parent, consumed by the first `AssetKeyring::new`.
+static INHERITED_KEYS: std::sync::Mutex<Option<InheritedKeys>> = std::sync::Mutex::new(None);
+
+fn handoff_enabled() -> bool {
+    HANDOFF_ENABLED
+        && (HANDOFF_WITH_NO_SECURE_ENCLAVE
+            || std::env::var_os(NO_SECURE_ENCLAVE_ENV_VAR).is_none_or(|v| v.is_empty()))
+}
+
+impl AssetKeyring {
+    /// Serialize unlocked keys. `None` if there's nothing to hand off.
+    ///
+    /// Format: [magic]
+    /// [dec_count][[id_len][id][secret]]+
+    /// [sign_count][[id_len][id][secret]]+
+    fn encode_handoff(&self) -> Option<Zeroizing<Vec<u8>>> {
+        if self.unlocked_decrypt_keys.is_empty() && self.unlocked_signing_keys.is_empty() {
+            return None;
+        }
+        fn put(buf: &mut Vec<u8>, id: &str, secret: &[u8; 32]) {
+            buf.extend_from_slice(&(id.len() as u32).to_le_bytes());
+            buf.extend_from_slice(id.as_bytes());
+            buf.extend_from_slice(secret);
+        }
+        // When using zeroize, preallocate vec size b/c vec growth won't be
+        // handled.
+        let mut buf = Zeroizing::new(Vec::with_capacity(HANDOFF_MAX_LEN));
+        buf.extend_from_slice(HANDOFF_MAGIC);
+        buf.extend_from_slice(&(self.unlocked_decrypt_keys.len() as u32).to_le_bytes());
+        for (id, k) in &self.unlocked_decrypt_keys {
+            put(&mut buf, id, &Zeroizing::new(k.to_bytes()));
+        }
+        buf.extend_from_slice(&(self.unlocked_signing_keys.len() as u32).to_le_bytes());
+        for (id, k) in &self.unlocked_signing_keys {
+            put(&mut buf, id, &Zeroizing::new(k.to_bytes()));
+        }
+        if buf.len() > HANDOFF_MAX_LEN {
+            tracing::debug!("keyring handoff too large ({} bytes), skipping", buf.len());
+            return None;
+        }
+        Some(buf)
+    }
+}
+
+fn decode_handoff(bytes: &[u8]) -> Option<InheritedKeys> {
+    fn take<'a>(r: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+        if r.len() < n {
+            return None;
+        }
+        let (a, b) = r.split_at(n);
+        *r = b;
+        Some(a)
+    }
+    fn read_u32(r: &mut &[u8]) -> Option<usize> {
+        Some(u32::from_le_bytes(take(r, 4)?.try_into().ok()?) as usize)
+    }
+    fn entry(r: &mut &[u8]) -> Option<(String, Zeroizing<[u8; 32]>)> {
+        let n = read_u32(r)?;
+        let id = std::str::from_utf8(take(r, n)?).ok()?.to_string();
+        let mut s = Zeroizing::new([0u8; 32]);
+        s.copy_from_slice(take(r, 32)?);
+        Some((id, s))
+    }
+
+    let mut r = bytes.strip_prefix(HANDOFF_MAGIC)?;
+    let mut keys = InheritedKeys {
+        decrypt: HashMap::new(),
+        signing: HashMap::new(),
+    };
+    for _ in 0..read_u32(&mut r)? {
+        let (id, s) = entry(&mut r)?;
+        keys.decrypt.insert(id, StaticSecret::from(*s));
+    }
+    for _ in 0..read_u32(&mut r)? {
+        let (id, s) = entry(&mut r)?;
+        keys.signing.insert(id, SigningKey::from_bytes(&s));
+    }
+    r.is_empty().then_some(keys)
+}
+
+/// Keeps the parent's copy of the handoff pipe's read end alive until the
+/// child has been spawned. Drop it right after `spawn()`.
+pub struct HandoffGuard {
+    #[cfg(unix)]
+    _reader: std::io::PipeReader,
+}
+
+/// Modify tokio Command to setup child to inherit this process's unlocked
+/// keys via the handoff pipe.
+pub async fn attach_handoff(
+    cmd: &mut tokio::process::Command,
+    keyring: &tokio::sync::Mutex<AssetKeyring>,
+) -> Option<HandoffGuard> {
+    if !handoff_enabled() {
+        return None;
+    }
+    let payload = keyring.lock().await.encode_handoff()?;
+    #[cfg(unix)]
+    match attach_handoff_fd(cmd, &payload) {
+        Ok(reader) => return Some(HandoffGuard { _reader: reader }),
+        Err(e) => tracing::debug!("error: failed to set up keyring handoff: {}", e),
+    }
+    #[cfg(not(unix))]
+    let _ = (cmd, payload);
+    None
+}
+
+#[cfg(unix)]
+fn attach_handoff_fd(
+    cmd: &mut tokio::process::Command,
+    payload: &[u8],
+) -> std::io::Result<std::io::PipeReader> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+
+    // Both ends are CLOEXEC, so concurrently spawned processes never see them.
+    let (reader, mut writer) = std::io::pipe()?;
+    // The payload fits in the pipe buffer (max was defined conservatively), so
+    // this won't block.
+    writer.write_all(payload)?;
+    // Send EOF
+    drop(writer);
+
+    let src = reader.as_raw_fd();
+    cmd.env(KEYRING_FD_ENV_VAR, HANDOFF_CHILD_FD.to_string());
+    // SAFETY: only async-signal-safe calls (fcntl, dup2) in the closure.
+    unsafe {
+        cmd.pre_exec(move || {
+            if src == HANDOFF_CHILD_FD {
+                // dup2(fd, fd) is a no-op that would leave CLOEXEC set.
+                let flags = libc::fcntl(src, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(src, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(src, HANDOFF_CHILD_FD) < 0 {
+                // dup2'd fds have CLOEXEC cleared.
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(reader)
+}
+
+/// Child process side: read keys handed off by the parent.
+///
+/// WARN: Call at the start of the child process's main function to consume.
+pub fn init_inherited_keys() {
+    let Some(fd) = std::env::var_os(KEYRING_FD_ENV_VAR) else {
+        return;
+    };
+    // Remove the env var so grandchildren don't try to use it.
+    unsafe { std::env::remove_var(KEYRING_FD_ENV_VAR) };
+    #[cfg(unix)]
+    {
+        let keys = fd
+            .to_str()
+            .and_then(|s| s.parse::<i32>().ok())
+            .and_then(read_handoff_fd)
+            .and_then(|bytes| decode_handoff(&bytes));
+        match keys {
+            Some(keys) => {
+                if let Ok(mut g) = INHERITED_KEYS.lock() {
+                    *g = Some(keys);
+                }
+            }
+            None => tracing::debug!("error: invalid keyring handoff from parent"),
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = fd;
+}
+
+#[cfg(unix)]
+fn read_handoff_fd(fd: i32) -> Option<Zeroizing<Vec<u8>>> {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+
+    if fd < 3 {
+        return None;
+    }
+    // Only take ownership (and later close) the fd if it's really a pipe.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 || (st.st_mode & libc::S_IFMT) != libc::S_IFIFO {
+        return None;
+    }
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    // Preallocated (+1 to detect overflow) so reads never realloc.
+    let mut buf = Zeroizing::new(Vec::with_capacity(HANDOFF_MAX_LEN + 1));
+    file.take(HANDOFF_MAX_LEN as u64 + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+    // `file` dropped here: fd closed.
+    (buf.len() <= HANDOFF_MAX_LEN).then_some(buf)
+}
+
+// --
+
 /// A custom credential builder for linux that tries secret-service first, then
 /// falls back to keyutils. This allows us to use secret-service on desktop
 /// linux (persists credentials between reboot) and keyutils on headless linux
@@ -746,6 +1014,26 @@ mod tests {
     fn test_keyring_disabled() {
         let keyring = AssetKeyring::new(false);
         assert!(!keyring.is_keyring_available());
+    }
+
+    #[test]
+    fn test_handoff_roundtrip() {
+        let mut kr = AssetKeyring::new(false);
+        kr.unlocked_decrypt_keys
+            .insert("u:ken:k1".into(), StaticSecret::from([7u8; 32]));
+        kr.unlocked_signing_keys
+            .insert("u:ken:k1".into(), SigningKey::from_bytes(&[9u8; 32]));
+        let bytes = kr.encode_handoff().expect("payload");
+        let keys = decode_handoff(&bytes).expect("decode");
+        assert_eq!(keys.decrypt["u:ken:k1"].to_bytes(), [7u8; 32]);
+        assert_eq!(keys.signing["u:ken:k1"].to_bytes(), [9u8; 32]);
+        // Truncated / trailing garbage is rejected.
+        assert!(decode_handoff(&bytes[..bytes.len() - 1]).is_none());
+        let mut extra = bytes.to_vec();
+        extra.push(0);
+        assert!(decode_handoff(&extra).is_none());
+        // Nothing to hand off.
+        assert!(AssetKeyring::new(false).encode_handoff().is_none());
     }
 
     #[test]

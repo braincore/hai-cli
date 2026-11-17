@@ -183,6 +183,10 @@ enum BotSubcommand {
 
 #[tokio::main]
 async fn main() -> process::ExitCode {
+    // If this is a child process being spawned by another `hai` process, check
+    // for keyring handoff and consume if available.
+    feature::asset_keyring::init_inherited_keys();
+
     let args = Cli::parse();
 
     let config_path_override = args.config;
