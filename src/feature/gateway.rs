@@ -1366,9 +1366,17 @@ async fn handle_websocket_connection(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
 
     let client_id = next_client_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    clients.lock().await.insert(client_id, tx);
+    clients.lock().await.insert(client_id, tx.clone());
 
     let (mut ws_sink, mut ws_stream) = ws_stream.split();
+
+    // Track in-flight request handlers for this client as multiple requests
+    // can be processed concurrently.
+    let mut in_flight = futures_util::stream::FuturesUnordered::new();
+    const MAX_IN_FLIGHT_PER_CLIENT: usize = 64;
+
+    let api_client = &api_client;
+    let username = username.as_deref();
 
     // Send acknowledgment that auth succeeded
     let _ = ws_sink
@@ -1398,28 +1406,42 @@ async fn handle_websocket_connection(
                     break;
                 }
             }
-            // Messages from the client
-            msg_option = ws_stream.next() => {
+            // This continues running the `handle_client_message` future/handler.
+            Some(()) = in_flight.next(), if !in_flight.is_empty() => {}
+            // The strategy for dealing with too many incoming messages is to
+            // stop reading from ws_stream if too many requests are in-flight.
+            // This applies TCP backpressure.
+            msg_option = ws_stream.next(), if in_flight.len() < MAX_IN_FLIGHT_PER_CLIENT => {
                 match msg_option {
                     Some(Ok(Message::Text(msg))) => {
-                        handle_client_message(
-                            io,
-                            config_path_override,
-                            db.clone(),
-                            perm_addr,
-                            asset_blob_cache.clone(),
-                            asset_keyring.clone(),
-                            &api_client,
-                            cmd_filters,
-                            perm_ctxs.clone(),
-                            perm_request_map.clone(),
-                            kernel_map.clone(),
-                            username.as_deref(),
-                            update_asset_tx.clone(),
-                            mode,
-                            asset_app_open_tokens,
-                            &mut ws_sink,
-                            &msg).await;
+                        let db = db.clone();
+                        let asset_blob_cache = asset_blob_cache.clone();
+                        let asset_keyring = asset_keyring.clone();
+                        let perm_ctxs = perm_ctxs.clone();
+                        let perm_request_map = perm_request_map.clone();
+                        let kernel_map = kernel_map.clone();
+                        let update_asset_tx = update_asset_tx.clone();
+                        let mut handler_sink = WsSink { tx: tx.clone() };
+                        in_flight.push(async move {
+                            handle_client_message(
+                                io,
+                                config_path_override,
+                                db,
+                                perm_addr,
+                                asset_blob_cache,
+                                asset_keyring,
+                                api_client,
+                                cmd_filters,
+                                perm_ctxs,
+                                perm_request_map,
+                                kernel_map,
+                                username,
+                                update_asset_tx,
+                                mode,
+                                asset_app_open_tokens,
+                                &mut handler_sink,
+                                &msg).await;
+                        });
                     }
                     Some(Ok(Message::Binary(_data))) => {
                         // No-op binary data for now as it's unexpected
@@ -1460,6 +1482,12 @@ async fn handle_websocket_connection(
 
     // Remove client from list on disconnect
     clients.lock().await.remove(&client_id);
+
+    // At this point, websocket connection is closed, so clean up and finish
+    // in-flight requests.
+    drop(rx);
+    drop(tx);
+    while in_flight.next().await.is_some() {}
 
     Ok(())
 }
@@ -3003,14 +3031,7 @@ enum ClientMessageResponse<T, U> {
 // Helper functions for sending responses
 //
 
-async fn send_error_response<E: Serialize>(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
-    mid: u64,
-    error: RequestError<E>,
-) {
+async fn send_error_response<E: Serialize>(ws_sink: &mut WsSink, mid: u64, error: RequestError<E>) {
     let resp_err: ClientMessageResponse<(), E> = match error {
         RequestError::Http(http_err) => ClientMessageResponse::HttpError {
             mid: mid,
@@ -3037,10 +3058,7 @@ async fn send_error_response<E: Serialize>(
 }
 
 async fn send_response<T: Serialize, E: Serialize>(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
+    ws_sink: &mut WsSink,
     mid: u64,
     result: Result<T, RequestError<E>>,
     more: bool,
@@ -3066,13 +3084,7 @@ async fn send_response<T: Serialize, E: Serialize>(
     }
 }
 
-async fn send_bad_request_error(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
-    error: &str,
-) {
+async fn send_bad_request_error(ws_sink: &mut WsSink, error: &str) {
     let resp_err = ClientMessageResponse::<(), String>::BadRequestError {
         error: error.to_string(),
     };
@@ -3082,14 +3094,7 @@ async fn send_bad_request_error(
         .await;
 }
 
-async fn send_bad_authorization_error(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
-    mid: u64,
-    error: &str,
-) {
+async fn send_bad_authorization_error(ws_sink: &mut WsSink, mid: u64, error: &str) {
     let resp_err = ClientMessageResponse::<(), String>::AuthorizationError {
         mid,
         error: error.to_string(),
@@ -3100,14 +3105,7 @@ async fn send_bad_authorization_error(
         .await;
 }
 
-async fn send_bad_gateway_error(
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
-    mid: u64,
-    error: &str,
-) {
+async fn send_bad_gateway_error(ws_sink: &mut WsSink, mid: u64, error: &str) {
     let resp_err = ClientMessageResponse::<(), String>::GatewayError {
         mid,
         error: error.to_string(),
@@ -3136,10 +3134,7 @@ async fn handle_client_message(
     _update_asset_tx: tokio::sync::mpsc::Sender<asset_async_writer::WorkerAssetMsg>,
     mode: &GatewayMode,
     asset_app_open_tokens: &AssetAppOpenTokenMap,
-    ws_sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-        Message,
-    >,
+    ws_sink: &mut WsSink,
     msg: &str,
 ) {
     // Deserialize the incoming message
@@ -5161,14 +5156,29 @@ async fn handle_client_message(
 
 // --
 
+/// Used by request handlers to send messages to the websocket client.
+///
+/// Handlers feed into this sink and the connection loop drains it into the
+/// actual websocket. Enables multiplexing of multiple request handlers.
+#[derive(Clone)]
+struct WsSink {
+    tx: UnboundedSender<Message>,
+}
+
+impl WsSink {
+    async fn send(
+        &mut self,
+        msg: Message,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<Message>> {
+        self.tx.send(msg)
+    }
+}
+
+// --
+
 //
 // Perm-gate
 //
-
-type WsSink = futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-    Message,
->;
 
 fn parse_arg<T: DeserializeOwned>(arg: &serde_json::Value) -> Option<T> {
     // NOTE: Cannot use `serde_json::from_value` here b/c of custom deserialization
