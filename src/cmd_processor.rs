@@ -1981,8 +1981,6 @@ pub async fn process_cmd(
                                 return ProcessCmdResult::loop_next();
                             }
                         }
-                        cfg.reload(config_path_override)
-                            .expect("Could not read config");
                         outln!(io, "Task starred: {} [shortcut: {}]", task_fqn, shortcut);
                     }
                     Err(e) => {
