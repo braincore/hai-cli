@@ -6770,8 +6770,11 @@ pub async fn process_cmd(
                 }
             };
 
+            // Waiting for machine boot can exceed usual timeout
+            let api_client_lax_timeout = api_client.lax_timeout();
+
             use crate::api::types::bot::BootArg;
-            let boot_res = match api_client
+            let boot_res = match api_client_lax_timeout
                 .bot_boot(BootArg {
                     pub_key: pub_key.clone(),
                     pub_key_id: key_id.clone(),

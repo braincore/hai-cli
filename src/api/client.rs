@@ -73,6 +73,22 @@ impl HaiClient {
         }
     }
 
+    pub fn lax_timeout(&self) -> Self {
+        let mut c = self.clone();
+        c.client = Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .read_timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(600))
+            .pool_idle_timeout(Duration::from_secs(20))
+            .tcp_keepalive(Duration::from_secs(15))
+            .http2_keep_alive_interval(Duration::from_secs(10))
+            .http2_keep_alive_timeout(Duration::from_secs(5))
+            .http2_keep_alive_while_idle(true)
+            .build()
+            .expect("failed to build HTTP client");
+        c
+    }
+
     /// Returns a clone of this client whose requests are throttled by `limiter`.
     pub fn with_limiter(&self, limiter: Arc<ApiLimiter>) -> Self {
         let mut c = self.clone();
