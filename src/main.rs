@@ -93,7 +93,7 @@ struct Cli {
     #[arg(long = "cmd-deny")]
     cmd_deny: Option<String>,
 
-    /// Commands allowed
+    /// Resources allowed to be accessed
     #[arg(long = "access")]
     access: Option<String>,
 

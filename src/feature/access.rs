@@ -50,7 +50,10 @@ pub enum Perm {
         perm: AssetPerm,
         prefix_perm: AssetPrefixPerm,
     },
-    PublicAsset,
+    PublicAsset {
+        perm: AssetPerm,
+        prefix_perm: AssetPrefixPerm,
+    },
     SharedAssetName {
         name: String,
         perm: AssetPerm,
@@ -137,15 +140,34 @@ impl Perm {
             ) => req_prefix.starts_with(prefix) && prefix_perm.list,
 
             // Public paths
-            (Perm::PublicAsset, AccessRequest::ReadByName { name: req_name }) => {
-                asset_helper::is_in_public_asset_pool(req_name)
-            }
-            (Perm::PublicAsset, AccessRequest::WriteByName { name: req_name }) => {
+            (
+                Perm::PublicAsset {
+                    perm,
+                    prefix_perm: _,
+                },
+                AccessRequest::ReadByName { name: req_name },
+            ) => asset_helper::is_in_public_asset_pool(req_name) && perm.read,
+            (
+                Perm::PublicAsset {
+                    perm,
+                    prefix_perm: _,
+                },
+                AccessRequest::WriteByName { name: req_name },
+            ) => {
                 // Allow an attempt to write to a public path knowing that the
                 // API will reject it unless the owner has given explicit
                 // permission otherwise.
-                asset_helper::is_in_public_asset_pool(req_name)
+                asset_helper::is_in_public_asset_pool(req_name) && perm.write
             }
+            // Prefix permissions for list
+            (
+                Perm::PublicAsset {
+                    perm: _,
+                    prefix_perm,
+                    ..
+                },
+                AccessRequest::ListPrefix { prefix: req_prefix },
+            ) => asset_helper::is_in_public_asset_pool(req_prefix) && prefix_perm.list,
 
             // --- Shared asset name: match the suffix after /s/<participants>/ ---
             (

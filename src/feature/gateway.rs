@@ -854,9 +854,18 @@ pub async fn launch_gateway(
     };
 
     let default_perms = vec![
-        // Default access to all public assets.
+        // Default read access to all public assets.
         PermCtx {
-            perm: Perm::PublicAsset,
+            perm: Perm::PublicAsset {
+                perm: AssetPerm {
+                    read: true,
+                    write: false,
+                },
+                prefix_perm: AssetPrefixPerm {
+                    create: false,
+                    list: true,
+                },
+            },
             lifetime: PermLifetime::Default,
         },
         // Default access to the asset-app for cases where the app is a single
@@ -3204,7 +3213,7 @@ async fn handle_client_message(
                     Perm::AssetName { .. }
                     | Perm::AssetEntryId { .. }
                     | Perm::AssetPrefix { .. }
-                    | Perm::PublicAsset
+                    | Perm::PublicAsset { .. }
                     | Perm::SharedAssetName { .. }
                     | Perm::SharedAssetPrefix { .. } => {
                         deny_traits.assets = false;
