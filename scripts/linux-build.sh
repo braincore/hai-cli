@@ -52,12 +52,12 @@ package_target() {
     
     echo "Building for $target ($os-$arch)..."
     
-    if [[ $target == "x86_64-unknown-linux-gnu" ]]; then
-        # Even for native target, use cross so that an older glibc is built
-        # against.
-        cross build --release --target "$target" || return 1
-    else
-        cross build --release --target "$target" || return 1
+    # Use cross for all targets (even native x86_64 Linux) so that an older
+    # glibc is built against.
+    if ! cross build --release --target "$target"; then
+        echo "❌ Build failed for $target"
+        echo ""
+        return 1
     fi
     
     # Create the package name
@@ -98,18 +98,55 @@ package_target() {
         fi
     else
         echo "❌ Binary not found at $binary_path"
+        echo ""
+        return 1
     fi
     
     echo ""
 }
 
-# Linux targets
-package_target "x86_64-unknown-linux-gnu"
-package_target "aarch64-unknown-linux-gnu"
-package_target "armv7-unknown-linux-gnueabihf"
-package_target "arm-unknown-linux-gnueabihf"
+ALL_TARGETS=(
+    "x86_64-unknown-linux-gnu"
+    "aarch64-unknown-linux-gnu"
+    "armv7-unknown-linux-gnueabihf"
+    "arm-unknown-linux-gnueabihf"
+    "x86_64-pc-windows-gnu"
+)
 
-# Windows target
-package_target "x86_64-pc-windows-gnu"
+TARGETS=()
+if [ $# -eq 0 ]; then
+    TARGETS=("${ALL_TARGETS[@]}")
+else
+    for arg in "$@"; do
+        case "$arg" in
+            all)
+                TARGETS+=("${ALL_TARGETS[@]}") ;;
+            linux|windows)
+                for t in "${ALL_TARGETS[@]}"; do
+                    [[ $t == *"$arg"* ]] && TARGETS+=("$t")
+                done ;;
+            *-*-*)
+                # Treat anything that looks like a target triple as a literal target
+                TARGETS+=("$arg") ;;
+            *)
+                echo "Unknown target/group: $arg"
+                echo "Usage: $0 [all|linux|windows|<target-triple>]..."
+                exit 1 ;;
+        esac
+    done
+fi
 
-echo "All packages have been saved to the 'releases' directory"
+FAILED=()
+for t in "${TARGETS[@]}"; do
+    package_target "$t" || FAILED+=("$t")
+done
+
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "❌ ${#FAILED[@]} of ${#TARGETS[@]} target(s) failed:"
+    for t in "${FAILED[@]}"; do
+        echo "   - $t"
+    done
+    exit 1
+fi
+
+echo "✅ All packages have been saved to the 'releases' directory"

@@ -9,7 +9,9 @@ passthrough = [
 image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:latest"
 
 [target.x86_64-pc-windows-gnu]
-image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:latest"
+# `:main` has a newer MinGW that provides libsynchronization.a, which is
+# required by recent Rust std. `:latest` (cross 0.2.5) is too old.
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:main"
 
 [target.aarch64-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:latest"
