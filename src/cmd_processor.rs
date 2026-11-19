@@ -6828,7 +6828,7 @@ pub async fn process_cmd(
             outln!(io);
 
             ProcessCmdResult::loop_next().with_new_cmds(vec![session::CmdInput::internal(
-                "/bot-probe".to_string(),
+                "/bot-setup".to_string(),
                 cmd_input.who.clone(),
             )])
         }
@@ -7027,7 +7027,7 @@ pub async fn process_cmd(
             }
             outln!(io, "Running haibot...");
             let _ = client
-                .call_interactive(&format!("~/.local/bin/hai bot start -d"))
+                .call_streaming(&format!("~/.local/bin/hai bot start -d"))
                 .await;
             let _ = client.close().await;
 
