@@ -736,7 +736,7 @@ pub async fn run_bot_loop(
     std::fs::write(config::get_bot_log_path(), &start_msg).ok();
 
     let api_client = crate::session::mk_api_client_from_account(account.as_ref());
-    let prefix = "haibot/jobs/".to_string();
+    let prefix = ".app/hai/app/haibot/".to_string();
 
     let crypt = CryptCtx {
         io: io.clone(),
@@ -753,7 +753,7 @@ pub async fn run_bot_loop(
     if initial_jobs.is_empty() {
         outln!(
             io,
-            "No jobs found. Add assets with prefix 'haibot/jobs/' to get started."
+            "No jobs found. Add assets with prefix '.app/hai/app/haibot/' to get started."
         );
     }
 
