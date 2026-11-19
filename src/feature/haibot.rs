@@ -471,7 +471,10 @@ pub async fn start_bot(
     }
 
     if launch_as_daemon && !is_daemon_child {
-        let pid = spawn_background()?;
+        // NOTE: This hands off unlocked keys because the daemon process may
+        // not have access to this process's keyring. This happens with
+        // session-scoped keyutils over SSH.
+        let pid = spawn_background(&asset_keyring).await?;
         outln!(io, "Bot started (PID: {})", pid);
     } else {
         match run_bot_loop(
@@ -654,23 +657,27 @@ async fn is_process_running(pid: u32) -> bool {
 }
 
 #[cfg(not(windows))]
-fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
-    use std::process::{Command, Stdio};
+async fn spawn_background(
+    asset_keyring: &Mutex<AssetKeyring>,
+) -> Result<u32, Box<dyn std::error::Error>> {
+    use std::process::Stdio;
 
     let current_binary = std::env::current_exe()?;
     let log_file = File::create(config::get_bot_log_path())?;
 
     let mut cmd = Command::new(current_binary);
-    cmd.arg("bot").arg("start");
-
-    let child = cmd
+    cmd.arg("bot")
+        .arg("start")
         .stdin(Stdio::null())
         .stdout(log_file.try_clone()?)
         .stderr(log_file)
-        .env("HAI_BOT_DAEMON", "1")
-        .spawn()?;
+        .env("HAI_BOT_DAEMON", "1");
+    let handoff = crate::feature::asset_keyring::attach_handoff(&mut cmd, asset_keyring).await;
+    let spawn_res = cmd.spawn();
+    drop(handoff);
+    let child = spawn_res?;
 
-    let pid = child.id();
+    let pid = child.id().ok_or("daemon exited immediately")?;
 
     let mut pid_file = File::create(get_pid_file())?;
     writeln!(pid_file, "{}", pid)?;
@@ -679,7 +686,10 @@ fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
-fn spawn_background() -> Result<u32, Box<dyn std::error::Error>> {
+async fn spawn_background(
+    // Keyring handoff is unix-only.
+    _asset_keyring: &Mutex<AssetKeyring>,
+) -> Result<u32, Box<dyn std::error::Error>> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
