@@ -1575,6 +1575,21 @@ async fn handle_http_connection(
 
 // -- HTTP request handler --
 
+/// Builds the redirect target for a request to an asset-folder that will
+/// forward to `<path>/` to serve the `folder_index` asset.
+///
+/// Uses the original (still URL-encoded) request path so that prefixes like
+/// `/~/` for private assets are preserved.
+///
+/// # Returns
+///
+/// Always an absolute path.
+fn folder_redirect_location(request_path: &str) -> String {
+    let split_at = request_path.find(['?', '#']).unwrap_or(request_path.len());
+    let (path, rest) = request_path.split_at(split_at);
+    format!("{}/{}", path, rest)
+}
+
 async fn handle_http_request(
     io: &Io,
     request: &HttpRequest,
@@ -1946,7 +1961,9 @@ async fn handle_get(
                             Some("index".to_string()),
                         )
                     } else {
-                        return HttpResponse::redirect_temp(&format!("{}/", asset_name));
+                        return HttpResponse::redirect_temp(&folder_redirect_location(
+                            &request.path,
+                        ));
                     }
                 }
                 Err(_) => {
@@ -2074,9 +2091,8 @@ async fn handle_get(
                                         Some(encode_asset_path(folder_index)),
                                     )
                                 } else {
-                                    return HttpResponse::redirect_temp(&format!(
-                                        "{}/",
-                                        asset_name
+                                    return HttpResponse::redirect_temp(&folder_redirect_location(
+                                        &request.path,
                                     ));
                                 }
                             } else {
