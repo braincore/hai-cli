@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "hai-cli"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "aes-gcm 0.10.3",
  "ansi-width",
