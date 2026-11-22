@@ -33,7 +33,7 @@ use crate::{
     feature::{
         access,
         asset_crypt::{self, KeyRecipient},
-        chat_store, haivar, model_pricing,
+        chat_store, haivar, model_pricing, ssh,
     },
     io::Io,
     io::Out,
@@ -6899,9 +6899,7 @@ pub async fn process_cmd(
                 }
             };
 
-            use crate::feature::haibot;
-
-            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+            let mut client = match ssh::Session::connect(&hostname, 22, "hai", priv_key).await {
                 Ok(client) => client,
                 Err(e) => {
                     errorln!(io, "{:?}", e);
@@ -6909,7 +6907,7 @@ pub async fn process_cmd(
                 }
             };
 
-            let _ = client.call_streaming("~/.local/bin/hai -V").await;
+            let _ = client.call_streaming(io, "~/.local/bin/hai -V").await;
             let _ = client.close().await;
 
             ProcessCmdResult::loop_next()
@@ -6954,9 +6952,7 @@ pub async fn process_cmd(
                 }
             };
 
-            use crate::feature::haibot;
-
-            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+            let mut client = match ssh::Session::connect(&hostname, 22, "hai", priv_key).await {
                 Ok(client) => client,
                 Err(e) => {
                     errorln!(io, "{:?}", e);
@@ -7008,26 +7004,35 @@ pub async fn process_cmd(
             let _ = client
                 .upload(config::get_default_config_path(), "/home/hai/.hai/hai.toml")
                 .await;
+            // Forwarded to the remote as ^C when there's no local terminal.
+            let interrupted = Arc::new(AtomicBool::new(false));
+            let interrupt_handler_id = ctrlc_handler.add_handler({
+                let interrupted = interrupted.clone();
+                move || interrupted.store(true, Ordering::SeqCst)
+            });
             outln!(io, "Logging into your hai account ({})...", username);
             let _ = client
-                .call_interactive(&format!("~/.local/bin/hai login {}", username))
+                .call_interactive(
+                    io,
+                    &interrupted,
+                    &format!("~/.local/bin/hai login {}", username),
+                )
                 .await;
             outln!(io, "Unlocking your asset encryption key...");
             let _ = client
-                .call_interactive(&format!("~/.local/bin/hai bye /asset-crypt-unlock"))
+                .call_interactive(io, &interrupted, "~/.local/bin/hai bye /asset-crypt-unlock")
                 .await;
+            ctrlc_handler.remove_handler(interrupt_handler_id);
             if matches!(
                 session.use_hai_router,
                 session::HaiRouterState::On | session::HaiRouterState::OffForModel
             ) {
                 outln!(io, "Turning on hai-router...");
-                let _ = client
-                    .call(&format!("~/.local/bin/hai bye '/hai-router on'"))
-                    .await;
+                let _ = client.call("~/.local/bin/hai bye '/hai-router on'").await;
             }
             outln!(io, "Running haibot...");
             let _ = client
-                .call_streaming(&format!("~/.local/bin/hai bot start -d"))
+                .call_streaming(io, "~/.local/bin/hai bot start -d")
                 .await;
             let _ = client.close().await;
 
@@ -7077,9 +7082,7 @@ pub async fn process_cmd(
                 }
             };
 
-            use crate::feature::haibot;
-
-            let mut client = match haibot::Session::connect(&hostname, 22, "hai", priv_key).await {
+            let mut client = match ssh::Session::connect(&hostname, 22, "hai", priv_key).await {
                 Ok(client) => client,
                 Err(e) => {
                     errorln!(io, "{:?}", e);
@@ -7087,7 +7090,16 @@ pub async fn process_cmd(
                 }
             };
 
-            let _ = client.call_interactive("/usr/bin/bash").await;
+            // Forwarded to the remote as ^C when there's no local terminal.
+            let interrupted = Arc::new(AtomicBool::new(false));
+            let interrupt_handler_id = ctrlc_handler.add_handler({
+                let interrupted = interrupted.clone();
+                move || interrupted.store(true, Ordering::SeqCst)
+            });
+            let _ = client
+                .call_interactive(io, &interrupted, "/usr/bin/bash")
+                .await;
+            ctrlc_handler.remove_handler(interrupt_handler_id);
             let _ = client.close().await;
 
             ProcessCmdResult::loop_next()
