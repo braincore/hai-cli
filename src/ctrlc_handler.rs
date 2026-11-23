@@ -50,6 +50,19 @@ impl CtrlcHandler {
     pub fn trigger(&self) {
         raise_ctrl_c();
     }
+
+    /// Registers a handler and returns a guard that unregisters it when
+    /// dropped.
+    pub fn add_handler_guarded<F>(&mut self, handler: F) -> CtrlcHandlerGuard
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let id = self.add_handler(handler);
+        CtrlcHandlerGuard {
+            handlers: Arc::clone(&self.handlers),
+            id,
+        }
+    }
 }
 
 impl Default for CtrlcHandler {
@@ -73,5 +86,25 @@ fn raise_ctrl_c() {
     unsafe {
         // 0 = all processes sharing this console (this proc + children)
         GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
+    }
+}
+
+// --
+
+/// Safer way to use CTRL-C handler. Auto-removes when dropped.
+#[must_use]
+pub struct CtrlcHandlerGuard {
+    handlers: Handlers,
+    id: u32,
+}
+
+impl Drop for CtrlcHandlerGuard {
+    fn drop(&mut self) {
+        // Don't panic: if the mutex is poisoned, remove handler.
+        let mut handlers = self
+            .handlers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        handlers.remove(&self.id);
     }
 }

@@ -15,7 +15,7 @@ use crate::api::client::HaiClient;
 use crate::asset_cache::AssetBlobCache;
 use crate::crypt;
 use crate::feature::asset_crypt;
-use crate::io::Io;
+use crate::{errln, io::Io};
 
 const KEYRING_SERVICE: &str = "hai-asset-keys";
 
@@ -448,8 +448,24 @@ impl AssetKeyring {
         let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
             Some(secret) => secret,
             None => {
-                let password = Self::prompt_password(io, rec_key_id_parts)?;
-                self.accept_password(&rec_key_id, &password, unprotect)?
+                let mut attempts = 0;
+                loop {
+                    let password = Self::prompt_password(io, rec_key_id_parts)?;
+                    match self.accept_password(&rec_key_id, &password, unprotect) {
+                        Ok(secret) => break secret,
+                        Err(
+                            e @ (asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(_)
+                            | asset_crypt::AssetKeyMaterialDecryptionError::EncryptionKeyDecryptionError(_)),
+                        ) => {
+                            attempts += 1;
+                            if attempts >= 3 {
+                                return Err(e);
+                            }
+                            errln!(io, "Sorry, try again.");
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
         };
         self.unlocked_decrypt_keys.insert(rec_key_id, secret);
@@ -561,8 +577,24 @@ impl AssetKeyring {
         let secret = match self.try_known_passwords(&rec_key_id, unprotect) {
             Some(secret) => secret,
             None => {
-                let password = Self::prompt_password(io, rec_key_id_parts)?;
-                self.accept_password(&rec_key_id, &password, unprotect)?
+                let mut attempts = 0;
+                loop {
+                    let password = Self::prompt_password(io, rec_key_id_parts)?;
+                    match self.accept_password(&rec_key_id, &password, unprotect) {
+                        Ok(secret) => break secret,
+                        Err(
+                            e @ (asset_crypt::AssetKeyMaterialDecryptionError::DecryptionKeyError(_)
+                            | asset_crypt::AssetKeyMaterialDecryptionError::EncryptionKeyDecryptionError(_)),
+                        ) => {
+                            attempts += 1;
+                            if attempts >= 3 {
+                                return Err(e);
+                            }
+                            errln!(io, "Sorry, try again.");
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
         };
         self.unlocked_signing_keys.insert(rec_key_id, secret);

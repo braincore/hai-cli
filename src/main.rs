@@ -1368,7 +1368,7 @@ async fn repl(
                         out!(io, "{}", transcript);
                     }
                     wrapup_and_cleanup(&session, update_asset_tx).await;
-                    return Ok(0);
+                    return Ok(if cmd_result.error { 1 } else { 0 });
                 };
                 continue;
             }

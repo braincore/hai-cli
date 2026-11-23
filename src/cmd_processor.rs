@@ -5733,13 +5733,13 @@ pub async fn process_cmd(
         }
         cmd::Cmd::AssetCryptUnlock(cmd::AssetCryptUnlockCmd { enc_key_id }) => {
             if !session_check_unrestricted(io, session, "/asset-crypt-unlock") {
-                return ProcessCmdResult::loop_next();
+                return ProcessCmdResult::loop_next().with_error(true);
             }
             let username = if let Some(account) = session.account.as_ref() {
                 account.username.clone()
             } else {
                 errorln!(io, "{}", ASSET_ACCOUNT_REQ_MSG);
-                return ProcessCmdResult::loop_next();
+                return ProcessCmdResult::loop_next().with_error(true);
             };
 
             match asset_crypt::get_encryption_key(
@@ -5768,21 +5768,23 @@ pub async fn process_cmd(
                     {
                         Ok(()) => {
                             outln!(io, "Key '{}' unlocked", key.enc_key_id);
+                            ProcessCmdResult::loop_next()
                         }
                         Err(e) => {
                             errorln!(io, "failed to unlock key: {}", e);
-                            return ProcessCmdResult::loop_next();
+                            ProcessCmdResult::loop_next().with_error(true)
                         }
                     }
                 }
                 Ok(None) => {
                     errorln!(io, "encryption key not found");
+                    ProcessCmdResult::loop_next().with_error(true)
                 }
                 Err(e) => {
                     errorln!(io, "failed to get encryption key: {}", e);
+                    ProcessCmdResult::loop_next().with_error(true)
                 }
-            };
-            ProcessCmdResult::loop_next()
+            }
         }
         cmd::Cmd::AssetCryptLock(cmd::AssetCryptLockCmd { enc_key_id }) => {
             let username = if let Some(account) = session.account.as_ref() {
@@ -7006,23 +7008,74 @@ pub async fn process_cmd(
                 .await;
             // Forwarded to the remote as ^C when there's no local terminal.
             let interrupted = Arc::new(AtomicBool::new(false));
-            let interrupt_handler_id = ctrlc_handler.add_handler({
+            let interrupt_guard = ctrlc_handler.add_handler_guarded({
                 let interrupted = interrupted.clone();
                 move || interrupted.store(true, Ordering::SeqCst)
             });
+
             outln!(io, "Logging into your hai account ({})...", username);
-            let _ = client
+            // No retry here b/c `hai login` handles OTP retries itself
+            match client
                 .call_interactive(
                     io,
                     &interrupted,
                     &format!("~/.local/bin/hai login {}", username),
                 )
-                .await;
+                .await
+            {
+                Ok(0) => {}
+                Ok(code) => {
+                    errorln!(io, "failed to login: exit code {}", code);
+                    return ProcessCmdResult::loop_next()
+                        .with_error(true)
+                        .with_new_cmds(vec![session::CmdInput::internal(
+                            "/bot-shutdown".to_string(),
+                            cmd_input.who.clone(),
+                        )]);
+                }
+                Err(e) => {
+                    errorln!(io, "failed to login: {}", e);
+                    return ProcessCmdResult::loop_next()
+                        .with_error(true)
+                        .with_new_cmds(vec![session::CmdInput::internal(
+                            "/bot-shutdown".to_string(),
+                            cmd_input.who.clone(),
+                        )]);
+                }
+            }
+
             outln!(io, "Unlocking your asset encryption key...");
-            let _ = client
+            // No retry here b/c `/asset-crypt-unlock` gives a few chances
+            match client
                 .call_interactive(io, &interrupted, "~/.local/bin/hai bye /asset-crypt-unlock")
-                .await;
-            ctrlc_handler.remove_handler(interrupt_handler_id);
+                .await
+            {
+                Ok(0) => {}
+                Ok(code) => {
+                    errorln!(
+                        io,
+                        "failed to unlock asset encryption key: exit code {}",
+                        code
+                    );
+                    return ProcessCmdResult::loop_next()
+                        .with_error(true)
+                        .with_new_cmds(vec![session::CmdInput::internal(
+                            "/bot-shutdown".to_string(),
+                            cmd_input.who.clone(),
+                        )]);
+                }
+                Err(e) => {
+                    errorln!(io, "failed to unlock asset encryption key: {}", e);
+                    return ProcessCmdResult::loop_next()
+                        .with_error(true)
+                        .with_new_cmds(vec![session::CmdInput::internal(
+                            "/bot-shutdown".to_string(),
+                            cmd_input.who.clone(),
+                        )]);
+                }
+            }
+            drop(interrupt_guard);
+
             if matches!(
                 session.use_hai_router,
                 session::HaiRouterState::On | session::HaiRouterState::OffForModel
@@ -7313,20 +7366,21 @@ pub async fn process_cmd(
                 // Result text ("code sent") is the input prompt since some
                 // rendering interfaces hide the result text in favor of the
                 // input prompt, and without it, the user will be confused.
-                let otp_code_answer = match io
+                match io
                     .query(&crate::io::Query::line("Code sent to your email:"))
                     .into_option()
                 {
-                    Some(otp_code_answer) => otp_code_answer,
+                    Some(otp_code_answer) => {
+                        if otp_code_answer.trim().is_empty() {
+                            continue;
+                        } else {
+                            break otp_code_answer.trim().to_string();
+                        }
+                    }
                     None => {
                         errorln!(io, "code required");
-                        return ProcessCmdResult::loop_next();
+                        return ProcessCmdResult::loop_next().with_error(true);
                     }
-                };
-                if otp_code_answer.trim().is_empty() {
-                    continue;
-                } else {
-                    break otp_code_answer.trim().to_string();
                 }
             };
 
@@ -7392,7 +7446,7 @@ pub async fn process_cmd(
                     .into_option()
                 {
                     Some(login_id) => login_id,
-                    None => return ProcessCmdResult::loop_next(),
+                    None => return ProcessCmdResult::loop_next().with_error(true),
                 }
             };
 
@@ -7408,76 +7462,95 @@ pub async fn process_cmd(
                 Ok(_) => {}
                 Err(e) => {
                     errorln!(io, "{}", e);
-                    return ProcessCmdResult::loop_next();
+                    return ProcessCmdResult::loop_next().with_error(true);
                 }
             }
 
             outln!(io);
 
-            let otp_code = loop {
-                // Result text ("code sent") is the input prompt since some
-                // rendering interfaces hide the result text in favor of the
-                // input prompt, and without it, the user will be confused.
-                let otp_code_answer = match io
-                    .query(&crate::io::Query::line("Code sent to your email:"))
-                    .into_option()
-                {
-                    Some(otp_code_answer) => otp_code_answer,
-                    None => {
-                        errorln!(io, "code required");
-                        return ProcessCmdResult::loop_next();
-                    }
-                };
-                if otp_code_answer.trim().is_empty() {
-                    continue;
-                } else {
-                    break otp_code_answer.trim().to_string();
+            let mut otp_attempts = 0;
+            loop {
+                otp_attempts += 1;
+                if otp_attempts > 3 {
+                    errorln!(io, "too many attempts");
+                    return ProcessCmdResult::loop_next().with_error(true);
                 }
-            };
-
-            use api::types::account::AccountTokenFromOtpArg;
-            match logged_out_api_client
-                .account_token_from_otp(AccountTokenFromOtpArg {
-                    login_id,
-                    otp: otp_code,
-                })
-                .await
-            {
-                Ok(res) => {
-                    outln!(io, "ハイ {}!", res.username);
-                    session::account_login_setup_session(
-                        &io.out,
-                        session,
-                        db.clone(),
-                        &res.user_id,
-                        &res.username,
-                        &res.token,
-                    )
-                    .await;
-                    let new_api_client = mk_api_client(Some(session));
-                    match new_api_client.account_get_balance(()).await {
-                        Ok(balance_res) => {
-                            if balance_res.remaining > 0 {
-                                hai_router_try_activate(session);
-                                db::set_misc_entry(
-                                    &*db.lock().await,
-                                    &res.username,
-                                    "hai-router",
-                                    "on",
-                                )
-                                .expect("failed to write to db");
+                let otp_code = loop {
+                    // Result text ("code sent") is the input prompt since some
+                    // rendering interfaces hide the result text in favor of the
+                    // input prompt, and without it, the user will be confused.
+                    match io
+                        .query(&crate::io::Query::line("Code sent to your email:"))
+                        .into_option()
+                    {
+                        Some(otp_code_answer) => {
+                            if otp_code_answer.trim().is_empty() {
+                                continue;
+                            } else {
+                                break otp_code_answer.trim().to_string();
                             }
                         }
-                        Err(_) => {
-                            errorln!(io, "could not fetch balance");
+                        None => {
+                            errorln!(io, "code required");
+                            return ProcessCmdResult::loop_next().with_error(true);
                         }
                     }
-                }
-                Err(e) => {
-                    errorln!(io, "{}", e);
+                };
+
+                use api::types::account::{AccountTokenFromOtpArg, AccountTokenFromOtpError};
+                match logged_out_api_client
+                    .account_token_from_otp(AccountTokenFromOtpArg {
+                        login_id: login_id.clone(),
+                        otp: otp_code,
+                    })
+                    .await
+                {
+                    Ok(res) => {
+                        outln!(io, "ハイ {}!", res.username);
+                        session::account_login_setup_session(
+                            &io.out,
+                            session,
+                            db.clone(),
+                            &res.user_id,
+                            &res.username,
+                            &res.token,
+                        )
+                        .await;
+                        let new_api_client = mk_api_client(Some(session));
+                        match new_api_client.account_get_balance(()).await {
+                            Ok(balance_res) => {
+                                if balance_res.remaining > 0 {
+                                    hai_router_try_activate(session);
+                                    db::set_misc_entry(
+                                        &*db.lock().await,
+                                        &res.username,
+                                        "hai-router",
+                                        "on",
+                                    )
+                                    .expect("failed to write to db");
+                                }
+                            }
+                            Err(_) => {
+                                errorln!(io, "could not fetch balance");
+                            }
+                        }
+                        return ProcessCmdResult::loop_next();
+                    }
+                    Err(e) => match e {
+                        RequestError::Route(AccountTokenFromOtpError::BadOtp) => {
+                            errorln!(io, "bad code");
+                        }
+                        RequestError::Route(AccountTokenFromOtpError::TooManyAttempts) => {
+                            errorln!(io, "too many attempts");
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                        _ => {
+                            errorln!(io, "{}", e);
+                            return ProcessCmdResult::loop_next().with_error(true);
+                        }
+                    },
                 }
             }
-            ProcessCmdResult::loop_next()
         }
         cmd::Cmd::AccountLoginLegacy(cmd::AccountLoginLegacyCmd { username, password }) => {
             let username = if let Some(username) = username {
