@@ -7298,7 +7298,6 @@ pub async fn process_cmd(
                     .await
                 {
                     Ok(_) => {
-                        outln!(io, "Code sent to your email.");
                         break email;
                     }
                     Err(e) => {
@@ -7311,7 +7310,12 @@ pub async fn process_cmd(
             outln!(io);
 
             let otp_code = loop {
-                let otp_code_answer = match io.query(&crate::io::Query::line("Code?")).into_option()
+                // Result text ("code sent") is the input prompt since some
+                // rendering interfaces hide the result text in favor of the
+                // input prompt, and without it, the user will be confused.
+                let otp_code_answer = match io
+                    .query(&crate::io::Query::line("Code sent to your email:"))
+                    .into_option()
                 {
                     Some(otp_code_answer) => otp_code_answer,
                     None => {
@@ -7401,9 +7405,7 @@ pub async fn process_cmd(
                 })
                 .await
             {
-                Ok(_) => {
-                    outln!(io, "Code sent to your email.");
-                }
+                Ok(_) => {}
                 Err(e) => {
                     errorln!(io, "{}", e);
                     return ProcessCmdResult::loop_next();
@@ -7413,7 +7415,12 @@ pub async fn process_cmd(
             outln!(io);
 
             let otp_code = loop {
-                let otp_code_answer = match io.query(&crate::io::Query::line("Code?")).into_option()
+                // Result text ("code sent") is the input prompt since some
+                // rendering interfaces hide the result text in favor of the
+                // input prompt, and without it, the user will be confused.
+                let otp_code_answer = match io
+                    .query(&crate::io::Query::line("Code sent to your email:"))
+                    .into_option()
                 {
                     Some(otp_code_answer) => otp_code_answer,
                     None => {
