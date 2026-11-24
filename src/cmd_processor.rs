@@ -267,9 +267,6 @@ pub async fn process_cmd(
     force_yes: bool,
     debug: bool,
 ) -> ProcessCmdResult {
-    // Avoid using this except for caching
-    let raw_user_input = cmd_input.input.as_str();
-
     let task_step_signature = cmd_input.source.get_task_step_signature();
     // Task steps only have a non-standard retention policy when they are
     // actioned as part of a process-wide task-mode.
@@ -823,7 +820,7 @@ pub async fn process_cmd(
                             task_fqn,
                             task_key.as_deref(),
                             step_index,
-                            raw_user_input,
+                            &cmd_input.input,
                         )
                     } else {
                         None
@@ -919,7 +916,7 @@ pub async fn process_cmd(
                     task_fqn,
                     task_key.as_deref(),
                     step_index,
-                    raw_user_input,
+                    &cmd_input.input,
                     &shell_exec_output,
                 )
             }
@@ -947,7 +944,7 @@ pub async fn process_cmd(
                         task_fqn,
                         task_key.as_deref(),
                         step_index,
-                        raw_user_input,
+                        &cmd_input.input,
                     )
                     .map(|a| (Some(a), true))
                     .unwrap_or_else(|| (io.query(&prompt).into_option(), false))
@@ -1003,7 +1000,7 @@ pub async fn process_cmd(
                     task_fqn,
                     task_key.as_deref(),
                     step_index,
-                    raw_user_input,
+                    &cmd_input.input,
                     &answer,
                 )
             }
@@ -6575,6 +6572,17 @@ pub async fn process_cmd(
                     session.add_msg_on_new_day = true;
                 }
                 cmd::StdCmd::Which(prog) => {
+                    if matches!(
+                        session.cmd_registry.lookup(
+                            cmd_input.who.clone(),
+                            cmd_registry::Sigil::Slash,
+                            "exec"
+                        ),
+                        cmd_registry::Lookup::Filtered(_)
+                    ) {
+                        errorln!(io, "`/std which` is disabled in this session");
+                        return ProcessCmdResult::loop_next().with_error(true);
+                    }
                     session.add_msg_on_new_day = true;
                     match which::which(&prog) {
                         Ok(path) => {
