@@ -36,6 +36,11 @@ pub struct KernelReady {
 pub async fn run_kernel(
     ctrlc_handler: CtrlcHandler,
 ) -> std::io::Result<(Io, tokio::task::JoinHandle<()>)> {
+    // Enabled so that when interrupt requests arrive from clients (^C
+    // emulation), the signals affect the kernel subprocess group but not the
+    // parent process group.
+    crate::ctrlc_handler::set_kernel_mode();
+
     // Find an open port
     let mut port = KERNEL_BASE_PORT;
     let listener = loop {

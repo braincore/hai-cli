@@ -3276,6 +3276,9 @@ async fn handle_client_message(
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .kill_on_drop(true); // For clean up on exit
+            // Isolate process group so that signals (e.g. SIGINT) for this
+            // gateway do not crossover to other ones / kernels.
+            crate::ctrlc_handler::isolate_process_group(&mut cmd);
             // Share unlocked keys so the kernel doesn't re-prompt for them.
             let handoff =
                 crate::feature::asset_keyring::attach_handoff(&mut cmd, &asset_keyring).await;

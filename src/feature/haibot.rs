@@ -2639,6 +2639,9 @@ async fn execute_job_with_kernel(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    // Isolates kernel from signals for this parent process. Good practice but
+    // not currently expected to be an issue.
+    crate::ctrlc_handler::isolate_process_group(&mut cmd);
     let handoff = crate::feature::asset_keyring::attach_handoff(&mut cmd, asset_keyring).await;
     let spawn_res = cmd.spawn();
     drop(handoff);

@@ -3682,10 +3682,11 @@ pub async fn process_cmd(
                 .await
                 .unwrap();
 
+            let (_interrupt_guard, interrupt) = ctrlc_handler.interrupt_notify();
             while let Some(msg) = {
                 tokio::select! {
                     msg = ws_stream.next() => msg,
-                    _ = tokio::signal::ctrl_c() => {
+                    _ = interrupt.notified() => {
                         return ProcessCmdResult::loop_next();
                     }
                 }
@@ -3771,6 +3772,8 @@ pub async fn process_cmd(
 
             let mut attempt = 0;
 
+            let (_interrupt_guard, interrupt) = ctrlc_handler.interrupt_notify();
+
             loop {
                 let (mut ws_stream, _) = match connect_async(&listen_url).await {
                     Ok(res) => res,
@@ -3782,7 +3785,7 @@ pub async fn process_cmd(
                         outln!(io, "retrying in {} seconds...", backoff_duration.as_secs());
                         // For ergonomics, support ctrl+c to stop reconnecting
                         tokio::select! {
-                            _ = tokio::signal::ctrl_c() => {
+                            _ = interrupt.notified() => {
                                 return ProcessCmdResult::loop_next();
                             }
                             _ = tokio::time::sleep(backoff_duration) => {
@@ -3804,7 +3807,7 @@ pub async fn process_cmd(
                     // For ergonomics, support ctrl+c to stop listening
                     tokio::select! {
                         msg = ws_stream.next() => msg,
-                        _ = tokio::signal::ctrl_c() => {
+                        _ = interrupt.notified() => {
                             return ProcessCmdResult::loop_next();
                         }
                     }
@@ -8594,7 +8597,7 @@ pub async fn shell_exec(
     if let Some(vars) = env_vars {
         command.envs(vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     tool::collect_and_output_command(out, &mut child).await
 }
 
@@ -8615,7 +8618,7 @@ pub async fn shell_exec_interactive(
     if let Some(vars) = env_vars {
         command.envs(vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     child.wait().await?;
     Ok(())
 }

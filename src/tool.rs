@@ -385,7 +385,7 @@ pub async fn exec_python_script(
     if let Some(env_vars) = env_vars {
         command.envs(env_vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     collect_and_print_command_output(out, &mut child).await
 }
 
@@ -417,7 +417,7 @@ pub async fn exec_python_uv_script(
     if let Some(env_vars) = env_vars {
         command.envs(env_vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     collect_and_print_command_output(out, &mut child).await
 }
 
@@ -461,7 +461,7 @@ pub async fn shell_script_exec(
     if let Some(env_vars) = env_vars {
         command.envs(env_vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     collect_and_print_command_output(out, &mut child).await
 }
 
@@ -497,7 +497,7 @@ pub async fn shell_exec_with_file(
     if let Some(env_vars) = env_vars {
         command.envs(env_vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     collect_and_print_command_output(out, &mut child).await
 }
 
@@ -520,7 +520,7 @@ pub async fn shell_exec_with_stdin(
     if let Some(env_vars) = env_vars {
         command.envs(env_vars);
     }
-    let mut child = command.spawn()?;
+    let (mut child, _child_guard) = crate::ctrlc_handler::spawn_interruptible(&mut command)?;
     if let Some(mut child_stdin) = child.stdin.take() {
         child_stdin.write_all(stdin.as_bytes()).await?;
     } else {
