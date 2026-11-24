@@ -3610,6 +3610,18 @@ pub fn complete(reg: &Registry, line: &str, cursor: usize) -> Completion {
         return Completion::None;
     }
 
+    // HACK: Mirror the `$ <cmd>` and `!!<cmd>` shorthands for `/exec <cmd>`
+    // in `cmd::parse_user_input`. These have no sigil so they can't be
+    // registered as aliases.
+    let rewritten;
+    let head = if let Some(shell_cmd) = head.strip_prefix("$ ").or_else(|| head.strip_prefix("!!"))
+    {
+        rewritten = format!("/exec {}", shell_cmd);
+        rewritten.as_str()
+    } else {
+        head
+    };
+
     let trimmed = head.trim_start();
     if !(trimmed.starts_with('/') || trimmed.starts_with('!')) {
         // It's a prompt -> no completion
