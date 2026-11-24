@@ -78,7 +78,9 @@ pub struct Traits {
     /// Talks to the network.
     pub network: bool,
     /// Requires a logged-in account.
-    pub needs_account: bool,
+    pub authed: bool,
+    /// Related to account management.
+    pub account: bool,
     /// Blocks on a human at a terminal (editors, pickers, prompts).
     pub interactive: bool,
     /// Mutates REPL/conversation state rather than the outside world.
@@ -96,7 +98,8 @@ impl Traits {
         bot: false,
         executes: false,
         network: false,
-        needs_account: false,
+        authed: false,
+        account: false,
         interactive: false,
         repl_state: false,
     };
@@ -146,8 +149,12 @@ impl Traits {
         self.network = true;
         self
     }
+    pub const fn authed(mut self) -> Self {
+        self.authed = true;
+        self
+    }
     pub const fn account(mut self) -> Self {
-        self.needs_account = true;
+        self.account = true;
         self
     }
     pub const fn interactive(mut self) -> Self {
@@ -173,7 +180,8 @@ pub struct DenyTraits {
     pub bot: bool,
     pub executes: bool,
     pub network: bool,
-    pub needs_account: bool,
+    pub authed: bool,
+    pub account: bool,
     pub interactive: bool,
     pub repl_state: bool,
 }
@@ -189,7 +197,8 @@ impl DenyTraits {
         bot: false,
         executes: false,
         network: false,
-        needs_account: false,
+        authed: false,
+        account: false,
         interactive: false,
         repl_state: false,
     };
@@ -199,12 +208,13 @@ impl DenyTraits {
             || (self.fs_write && t.fs_write)
             || (self.assets && (t.assets_read || t.assets_write))
             || (self.assets_write && t.assets_write)
-            || (self.executes && t.executes)
-            || (self.network && t.network)
-            || (self.needs_account && t.needs_account)
             || (self.tasks && t.tasks)
             || (self.messaging && t.messaging)
             || (self.bot && t.bot)
+            || (self.executes && t.executes)
+            || (self.network && t.network)
+            || (self.authed && t.authed)
+            || (self.account && t.account)
             || (self.interactive && t.interactive)
             || (self.repl_state && t.repl_state)
     }
@@ -975,7 +985,7 @@ pub static REGISTRY: &[Entry] = &[
         )
         .with_opts(&[OPT_LOCAL])
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_traits(Traits::NONE.authed()),
     ),
     Entry::Cmd(
         cmd(
@@ -1010,7 +1020,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Agentic mode allows the LLM to loop autonomously"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_traits(Traits::NONE.authed()),
     ),
     Entry::Cmd(
         cmd(
@@ -1027,14 +1037,17 @@ pub static REGISTRY: &[Entry] = &[
     // Account management
     //
     section(Some("Accounts"), None, &[Anchor::Family("account")]),
-    Entry::Cmd(cmd(
-        Slash,
-        Cow::Borrowed("account"),
-        Cow::Borrowed("account"),
-        Cow::Borrowed(&[arg("username", Username, Optional)]),
-        Doc::new("See current and available accounts")
-            .user("If a username is specified, switches to it. Use `_` to switch to no-user"),
-    )),
+    Entry::Cmd(
+        cmd(
+            Slash,
+            Cow::Borrowed("account"),
+            Cow::Borrowed("account"),
+            Cow::Borrowed(&[arg("username", Username, Optional)]),
+            Doc::new("See current and available accounts")
+                .user("If a username is specified, switches to it. Use `_` to switch to no-user"),
+        )
+        .with_traits(Traits::NONE.account()),
+    ),
     Entry::Cmd(
         cmd(
             Slash,
@@ -1044,7 +1057,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Make a new account"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().interactive()),
+        .with_traits(Traits::NONE.account().net().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -1055,7 +1068,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Log in to your account"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().interactive()),
+        .with_traits(Traits::NONE.account().net().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -1067,7 +1080,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Log in to your account using legacy password"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().interactive()),
+        .with_traits(Traits::NONE.account().net().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -1077,7 +1090,8 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed(&[arg("username", Username, Optional)]),
             Doc::new("Remove credentials of a previously logged-in account"),
         )
-        .for_audience(Audience::UserOnly),
+        .for_audience(Audience::UserOnly)
+        .with_traits(Traits::NONE.account()),
     ),
     Entry::Cmd(
         cmd(
@@ -1087,8 +1101,7 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed(&[]),
             Doc::new("Check credits remaining for hai-router"),
         )
-        .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.account().net().authed()),
     ),
     Entry::Cmd(
         cmd(
@@ -1099,7 +1112,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Subscribe for hai-router and asset storage"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().interactive()),
+        .with_traits(Traits::NONE.account().net().interactive()),
     ),
     Entry::Cmd(cmd(
         Slash,
@@ -1118,7 +1131,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Turn hai-router on or off").user("Requires credits"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_traits(Traits::NONE.authed()),
     ),
     //
     // Files
@@ -1298,7 +1311,7 @@ pub static REGISTRY: &[Entry] = &[
             Doc::new("Mock a message as the LLM assistant"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account()),
+        .with_traits(Traits::NONE),
     ),
     Entry::Cmd(
         cmd(
@@ -2026,7 +2039,7 @@ add it to the toolbox.
             Doc::new("List all asset pools available to your account"),
         )
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.account().assets_ro()),
+        .with_traits(Traits::NONE.authed().assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -2037,7 +2050,7 @@ add it to the toolbox.
             Doc::new("Create a new shared asset pool"),
         )
         .for_audience(Audience::Both)
-        .with_traits(Traits::NONE.account().assets()),
+        .with_traits(Traits::NONE.authed().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -2050,7 +2063,7 @@ add it to the toolbox.
             ]),
             Doc::new("Grant a user the ability to decrypt an asset (does not change ACL)"),
         )
-        .with_traits(Traits::NONE.account().assets()),
+        .with_traits(Traits::NONE.authed().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -2063,7 +2076,7 @@ add it to the toolbox.
             ]),
             Doc::new("Remove a user's decryption key for an asset (does not change ACL)"),
         )
-        .with_traits(Traits::NONE.account().assets()),
+        .with_traits(Traits::NONE.authed().assets()),
     ),
     Entry::Cmd(
         cmd(
@@ -2086,7 +2099,7 @@ add it to the toolbox.
             Doc::new("Set up asset encryption for your account"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets().interactive()),
+        .with_traits(Traits::NONE.authed().assets().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2097,7 +2110,7 @@ add it to the toolbox.
             Doc::new("Lock an encryption key (a password is required on next use)"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets_ro().interactive()),
+        .with_traits(Traits::NONE.authed().assets_ro().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2108,7 +2121,7 @@ add it to the toolbox.
             Doc::new("Unlock an encryption key (no password until locked again)"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets_ro().interactive()),
+        .with_traits(Traits::NONE.authed().assets_ro().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2119,7 +2132,7 @@ add it to the toolbox.
             Doc::new("Recover asset encryption keys using your recovery code"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets().interactive()),
+        .with_traits(Traits::NONE.authed().assets().interactive()),
     ),
     Entry::Cmd(
         cmd(
@@ -2130,7 +2143,7 @@ add it to the toolbox.
             Doc::new("Set up your inbox"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets().interactive()),
+        .with_traits(Traits::NONE.authed().assets().interactive()),
     ),
     //
     // Asset-apps
@@ -2309,7 +2322,7 @@ add it to the toolbox.
             Cow::Borrowed(&[arg("path", FilePath { accepts: FilePathAccepts::File, glob_ok: false }, Required)]),
             Doc::new("Publish a task to the repository").user("Requires /account-login"),
         )
-        .with_traits(Traits::NONE.net().account().tasks()),
+        .with_traits(Traits::NONE.net().authed().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2320,7 +2333,7 @@ add it to the toolbox.
             Doc::new("Edit a task in the repository").user("Requires /account-login"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.net().account().tasks()),
+        .with_traits(Traits::NONE.net().authed().tasks()),
     ),
     Entry::Cmd(
         cmd(
@@ -2332,7 +2345,7 @@ add it to the toolbox.
                 .more("To use the cached version, try `/task <name>@<version>`"),
         )
         .for_audience(Audience::Neither)
-        .with_traits(Traits::NONE.net().account()),
+        .with_traits(Traits::NONE.net()),
     ),
     Entry::Cmd(
         cmd(
@@ -2729,7 +2742,7 @@ add it to the toolbox.
             Doc::new("Update local copy of asset-backed config"),
         )
         .for_audience(Audience::UserOnly)
-        .with_traits(Traits::NONE.account().assets_ro()),
+        .with_traits(Traits::NONE.authed().assets_ro()),
     ),
     Entry::Cmd(
         cmd(
@@ -2981,6 +2994,7 @@ impl Registry {
         let mut filter_cmds = vec![];
         let mut deny_traits = DenyTraits::default();
         let mut deny_set = false;
+        // WARNING: Keep sync-ed with `crate::feature::self_invocation()`.
         for cmd in &cmds {
             if cmd == "fs" {
                 deny_set = true;
@@ -3006,6 +3020,9 @@ impl Registry {
             } else if cmd == "exec" {
                 deny_set = true;
                 deny_traits.executes = true;
+            } else if cmd == "account" {
+                deny_set = true;
+                deny_traits.account = true;
             } else {
                 filter_cmds.push(cmd.clone());
             }

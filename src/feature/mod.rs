@@ -95,6 +95,9 @@ fn self_invocation(
                 if deny_traits.executes {
                     cmd_deny_flags.push("exec".to_string());
                 }
+                if deny_traits.account {
+                    cmd_deny_flags.push("account".to_string());
+                }
             }
         }
     }

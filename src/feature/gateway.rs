@@ -3223,6 +3223,7 @@ async fn handle_client_message(
             deny_traits.tasks = true;
             deny_traits.messaging = true;
             deny_traits.executes = true;
+            deny_traits.account = true;
 
             for perm in &perms {
                 match perm {
@@ -3253,6 +3254,7 @@ async fn handle_client_message(
                         deny_traits.tasks = false;
                         deny_traits.executes = false;
                         deny_traits.messaging = false;
+                        deny_traits.account = false;
                     }
                     _ => {}
                 }
