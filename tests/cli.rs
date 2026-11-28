@@ -40,7 +40,7 @@ fn test_exec() {
         .stdout(contains("Cargo.toml"));
 
     default_cmd()
-        .arg("!!ls")
+        .arg("$ ls")
         .assert()
         .stdout(contains("Cargo.toml"));
 }

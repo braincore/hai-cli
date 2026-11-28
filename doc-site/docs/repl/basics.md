@@ -129,10 +129,10 @@ as well.
 
 The LLM is not prompted for a response until your next message.
 
-The shortcut for execution is double-exclamation:
+The shortcut for execution is `$` (just like a terminal prompt) followed by a space:
 
 ```
-!!<prog>
+$ <prog>
 ```
 
 Programs are executed using `bash` or `powershell` on Windows but can be
@@ -145,7 +145,7 @@ changed in [default shell](../config.md#default-shell).
 
 OR
 
-[0]: !!ls ~/Documents
+[0]: $ ls ~/Documents
 ```
 
 ```

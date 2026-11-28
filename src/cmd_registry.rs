@@ -1249,7 +1249,7 @@ pub static REGISTRY: &[Entry] = &[
             Cow::Borrowed("exec"),
             Cow::Borrowed(&[arg("cmd", ShellCmd, Rest)]),
             Doc::new("Execute a shell command and add the output to the conversation")
-                .user("`!!<cmd>` is an alternative to /exec, not to be confused with tools"),
+                .user("`$ <cmd>` is a shorthand alternative to /exec"),
         )
         .alias(&["e"])
         .with_opts(&[

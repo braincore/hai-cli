@@ -778,7 +778,7 @@ async fn repl(
         if let Some(version) = newer_client_version {
             outln!(
                 io,
-                "  - changelog: `/cat /hai/changelog` or `!!cat @/hai/changelog`"
+                "  - changelog: `/cat /hai/changelog` or `$ cat @/hai/changelog`"
             );
             let os_arch = config::get_machine_os_arch();
             if !os_arch.starts_with("windows") {

@@ -174,7 +174,7 @@ description = "A demo task to learn how to write them."
 # List of repl-commands to execute to setup the task
 steps = [
     "/system-prompt you're sherlock holmes",
-    "!!ls ~/Documents",
+    "/exec ls ~/Documents",
     "/prompt based on the documents i keep, which star trek character am i?",
 ]
 ```

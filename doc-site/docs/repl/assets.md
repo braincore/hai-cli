@@ -215,7 +215,7 @@ contents have changed.
 A trailing `/` in the `prefix` syncs the folder's contents (rsync semantics).
 
 No information is added to the conversation history. You will need to inform
-the LLM of relevant files. For example, by listing the files: `!!ls <path>`
+the LLM of relevant files. For example, by listing the files: `/exec ls <path>`
 
 Any assets with metadata will have those synced as separate files with a
 `.metadata` extension.
@@ -342,9 +342,9 @@ When executing a shell command, use `@@name` to reference an asset. The asset
 will be transparently downloaded into a temporary file.
 
 ```
-[0] !!cat @@/hai/changelog | grep -A 2 v1.3.0
+[0] $ cat @@/hai/changelog | grep -A 2 v1.3.0
 equivalent to:
-[0] !!grep -A 2 v1.3.0 @@/hai/changelog
+[0] $ grep -A 2 v1.3.0 @@/hai/changelog
 ```
 
 ```
@@ -359,7 +359,7 @@ If a shell redirects (`>` or `>>`) to an @@asset, the output file will be
 uploaded as well.
 
 ```
-[0] !!grep -A 2 v1.3.0 @@/hai/changelog > @@changes-v1.3.0
+[0] $ grep -A 2 v1.3.0 @@/hai/changelog > @@changes-v1.3.0
 ```
 
 This processes a public asset from the `hai` account and saves a filtered
@@ -371,7 +371,7 @@ Asset references support glob patterns (`*`, `?`, `[...]`) for matching multiple
 assets at once.
 
 ```
-[0] !!cat @@data/*.txt
+[0] $ cat @@data/*.txt
 ```
 
 This expands to all `.txt` files in the `data/` folder, downloading each to a
@@ -380,10 +380,10 @@ temporary file.
 More examples:
 
 ```
-[0] !!wc -l @@logs/2024-*.log
-[0] !!cat @@chapters/part_?.md > @@full-book.md
-[0] !!grep "error" @@logs/[0-9][0-9][0-9].log
-[0] !!grep -l "TODO" @@hai-cli/**/*.rs
+[0] $ wc -l @@logs/2024-*.log
+[0] $ cat @@chapters/part_?.md > @@full-book.md
+[0] $ grep "error" @@logs/[0-9][0-9][0-9].log
+[0] $ grep -l "TODO" @@hai-cli/**/*.rs
 ```
 
 !!!warning "Glob Limitations"
@@ -404,7 +404,7 @@ new asset with the same name as the original but with a random suffix.
 An easy way to see the difference is to:
 
 ```
-!!diff @@file @@file(suffix)
+$ diff @@file @@file(suffix)
 ```
 
 ## Metadata
